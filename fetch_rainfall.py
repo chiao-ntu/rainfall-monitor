@@ -20,10 +20,22 @@ ALPHA        = 0.7                  # ETR2 加權係數
 
 OBS_URL = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0002-001"
 QPF_URLS = [
-    "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0034-007",
-    "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0034-005",
-    "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0034-001",
-    "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-B0046-001",
+    # 非颱風期間：天氣分析與預測圖-定量降水預報（四個時段各12小時）
+    ("F-C0035-015", "0-12h"),
+    ("F-C0035-017", "12-24h"),
+    ("F-C0035-023", "24-36h"),
+    ("F-C0035-024", "36-48h"),
+]
+QPF_TYPHOON_URLS = [
+    # 颱風期間：格點定量降水預報（每6小時一段，共8段）
+    ("F-C0041-001", "0-6h"),
+    ("F-C0041-002", "6-12h"),
+    ("F-C0041-003", "12-18h"),
+    ("F-C0041-004", "18-24h"),
+    ("F-C0041-005", "24-30h"),
+    ("F-C0041-006", "30-36h"),
+    ("F-C0041-007", "36-42h"),
+    ("F-C0041-008", "42-48h"),
 ]
 
 # ── 讀取靜態警戒值表 ──────────────────────────────
@@ -63,70 +75,63 @@ def fetch_obs():
     try:
         all_stations = raw["records"]["Station"]
 
-        # ── 除錯：印出第一筆的完整結構，確認欄位路徑 ──
+        # ── 除錯：印出第一筆結構確認 ──
         if all_stations:
             first = all_stations[0]
-            print("  [除錯] 第一筆觀測站結構：")
-            print(f"    Keys: {list(first.keys())}")
-            geo0 = first.get("GeoInfo", {})
-            print(f"    GeoInfo keys: {list(geo0.keys())}")
-            coords0 = geo0.get("Coordinates", [])
-            print(f"    Coordinates[0]: {coords0[0] if coords0 else '空'}")
-            we0 = first.get("WeatherElement", {})
-            print(f"    WeatherElement keys: {list(we0.keys())[:10]}")
-            # 印出 Now、Past6hours、Past24hours 的完整內容
-            for k in ["Now","Past1hour","Past6hours","Past12hours","Past24hours"]:
-                print(f"    {k}: {we0.get(k, '無此欄位')}")
+            re0 = first.get("RainfallElement", {})
+            print(f"  [除錯] RainfallElement keys: {list(re0.keys())}")
+            for k in list(re0.keys())[:5]:
+                print(f"    {k}: {re0[k]}")
 
         def safe_float(val, default=0.0):
-            try: return float(val)
+            try:
+                f = float(val)
+                return f if f >= 0 else default  # -9999 等無效值過濾
             except: return default
 
         for st in all_stations:
-            sid   = st.get("StationId", "")
-            sname = st.get("StationName", "")
-            geo   = st.get("GeoInfo", {})
+            sid      = st.get("StationId", "")
+            sname    = st.get("StationName", "")
+            geo      = st.get("GeoInfo", {})
+            coords   = geo.get("Coordinates", [{}])
 
-            # 座標：嘗試兩種可能的欄位名稱
-            coords = geo.get("Coordinates", [{}])
-            if coords:
-                lat = safe_float(coords[0].get("StationLatitude",
-                      coords[0].get("Lat", 0)))
-                lng = safe_float(coords[0].get("StationLongitude",
-                      coords[0].get("Lon", 0)))
-            else:
-                lat, lng = 0.0, 0.0
+            # 找 WGS84 座標（TWD67 也可用，差異極小）
+            lat, lng = 0.0, 0.0
+            for coord in coords:
+                lat_v = coord.get("StationLatitude", 0)
+                lng_v = coord.get("StationLongitude", 0)
+                if lat_v and lng_v:
+                    lat = safe_float(lat_v)
+                    lng = safe_float(lng_v)
+                    break
 
-            county   = geo.get("CountyName", geo.get("County", ""))
-            township = geo.get("TownName",   geo.get("Town", ""))
-            we = st.get("WeatherElement", {})
+            county   = geo.get("CountyName", "")
+            township = geo.get("TownName", "")
 
-            # 雨量欄位：嘗試多種可能的結構
-            def get_rain(key):
-                block = we.get(key, {})
-                # 結構一：{Precipitation: 值}
-                v = block.get("Precipitation", None)
-                if v is not None: return safe_float(v)
-                # 結構二：{value: 值}
-                v = block.get("value", None)
-                if v is not None: return safe_float(v)
-                return 0.0
+            # ── 雨量在 RainfallElement，不是 WeatherElement ──
+            re = st.get("RainfallElement", {})
+
+            # 各時距累積雨量欄位名稱
+            # Now=10分鐘, Past10min同, Past1hr, Past3hr, Past6hr, Past12hr, Past24hr
+            rain_10m  = safe_float(re.get("Now",      {}).get("Precipitation", -9999))
+            rain_1h   = safe_float(re.get("Past1hr",  re.get("Past1hour",  {})).get("Precipitation", -9999))
+            rain_6h   = safe_float(re.get("Past6hr",  re.get("Past6hours", {})).get("Precipitation", -9999))
+            rain_12h  = safe_float(re.get("Past12hr", re.get("Past12hours",{})).get("Precipitation", -9999))
+            rain_24h  = safe_float(re.get("Past24hr", re.get("Past24hours",{})).get("Precipitation", -9999))
 
             stations[sid] = {
-                "name":     sname,
-                "lat":      lat, "lng": lng,
-                "county":   county, "township": township,
-                "rain_10m": get_rain("Now"),
-                "rain_1h":  get_rain("Past1hour"),
-                "rain_6h":  get_rain("Past6hours"),
-                "rain_12h": get_rain("Past12hours"),
-                "rain_24h": get_rain("Past24hours"),
+                "name": sname, "lat": lat, "lng": lng,
+                "county": county, "township": township,
+                "rain_10m": rain_10m, "rain_1h": rain_1h,
+                "rain_6h": rain_6h, "rain_12h": rain_12h,
+                "rain_24h": rain_24h,
             }
+
     except Exception as e:
         print(f"  觀測解析失敗：{e}")
         import traceback; traceback.print_exc()
+
     print(f"  取得 {len(stations)} 個觀測站")
-    # 印出有雨量的站數
     nonzero = sum(1 for s in stations.values() if s["rain_24h"] > 0)
     print(f"  有24h雨量的站：{nonzero}")
     return stations
@@ -182,59 +187,122 @@ def calc_etr2(station_id, history, now_tpe):
 
 # ── 抓 QPF 格點預報 ───────────────────────────────
 def fetch_qpf():
+    """
+    QPF 抓取策略：
+    1. 先嘗試颱風格點資料 F-C0041-001~008（颱風期間有效，每6h一段）
+    2. 失敗則嘗試非颱風期間 F-C0035 系列
+    3. 全失敗則回傳 None（使用模擬資料）
+    """
     if not CWA_API_KEY:
         print("未設定 CWA_API_KEY，QPF 使用模擬"); return None
-    print("抓取 CWA QPF（嘗試多個端點）...")
-    for url in QPF_URLS:
+    print("抓取 CWA QPF...")
+    base_url = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/"
+
+    # ── 方案A：颱風格點 F-C0041（每6h，共8段，颱風期間才有資料）──
+    typhoon_segs = []
+    for code, label in QPF_TYPHOON_URLS:
         try:
-            resp = requests.get(url, params={
+            resp = requests.get(base_url + code, params={
                 "Authorization": CWA_API_KEY, "format": "JSON"
-            }, timeout=60)
+            }, timeout=30)
             if resp.status_code == 404:
-                print(f"  {url.split('/')[-1]}: 404 跳過"); continue
+                continue
             resp.raise_for_status()
             raw = resp.json()
-            print(f"  ✓ 端點：{url.split('/')[-1]}")
+            # F-C0041 格式：records > dataset > contents > contentText（CSV矩陣）
+            dataset = raw.get("records", {}).get("dataset", [])
+            if not dataset:
+                continue
+            content_text = dataset[0].get("contents", {}).get("contentText", "")
+            if not content_text:
+                continue
+            # 解析 130×130 CSV 矩陣
+            rows = content_text.strip().split("\n")
+            pts = []
+            for r_idx, row in enumerate(rows):
+                lat_pt = 20.8 + r_idx * 0.045
+                vals   = row.split(",")
+                for c_idx, v in enumerate(vals):
+                    lng_pt = 117.56 + c_idx * 0.049
+                    if 21.5<=lat_pt<=26.5 and 119<=lng_pt<=123:
+                        try: pts.append((lat_pt, lng_pt, float(v)))
+                        except: pass
+            typhoon_segs.append({"label": label, "points": pts})
+            print(f"  F-C0041 {label}: {len(pts)} 格點")
         except Exception as e:
-            print(f"  {url.split('/')[-1]}: {e}"); continue
+            print(f"  F-C0041 {label}: {e}")
 
-        # 印出結構供除錯
-        rec = raw.get("records", {})
-        print(f"  records keys: {list(rec.keys())[:5]}")
-
-        try:
-            locations = rec["locations"][0]["location"]
-        except (KeyError, IndexError):
-            try:
-                locations = rec["location"]
-            except KeyError:
-                print(f"  無法解析格式：{list(rec.keys())}"); continue
-
-        grid, base_time = [], None
-        for loc in locations:
-            lat = float(loc.get("lat", loc.get("Latitude",  0)))
-            lon = float(loc.get("lon", loc.get("Longitude", 0)))
-            if not (21.5<=lat<=26.5 and 119<=lon<=123): continue
+    if len(typhoon_segs) >= 4:
+        # 颱風資料足夠，組裝成 grid
+        print(f"  使用颱風格點資料（{len(typhoon_segs)} 段）")
+        # 取第一段的格點位置為基準
+        base_pts = [(p[0], p[1]) for p in typhoon_segs[0]["points"]]
+        grid = []
+        for lat, lng in base_pts:
             qpf_6h = []
-            for elem in loc.get("weatherElement", loc.get("WeatherElement", [])):
-                name = elem.get("elementName", elem.get("ElementName",""))
-                if name not in ("Precipitation","APCP","QPF"): continue
-                times = elem.get("time", elem.get("Time", []))
-                if not base_time and times:
-                    base_time = times[0].get("startTime", times[0].get("StartTime",""))
-                for t in times[:8]:
-                    ev = t.get("elementValue", t.get("ElementValue",[{}]))
-                    if isinstance(ev, list): ev = ev[0]
-                    v  = ev.get("value", ev.get("Value","0"))
-                    try: qpf_6h.append(round(float(v),1))
-                    except: qpf_6h.append(0.0)
-            if qpf_6h: grid.append({"lat":lat,"lng":lon,"qpf_6h":qpf_6h})
+            for seg in typhoon_segs[:8]:
+                match = next((p[2] for p in seg["points"]
+                              if abs(p[0]-lat)<0.03 and abs(p[1]-lng)<0.03), 0.0)
+                qpf_6h.append(round(match, 1))
+            grid.append({"lat": lat, "lng": lng, "qpf_6h": qpf_6h})
+        return {"base_time": None, "grid": grid}
 
-        if grid:
-            print(f"  QPF：{len(grid)} 格點，基準：{base_time}")
-            return {"base_time": base_time, "grid": grid}
-        else:
-            print(f"  此端點無格點資料")
+    # ── 方案B：非颱風 F-C0035（縣市預報，非格點，提取數值近似）──
+    print("  颱風資料不足，嘗試 F-C0035 縣市預報...")
+    county_rain = {}  # {縣市名: [seg0, seg1, ...]} 每12h一段
+    seg_idx = 0
+    for code, label in QPF_URLS:
+        try:
+            resp = requests.get(base_url + code, params={
+                "Authorization": CWA_API_KEY, "format": "JSON"
+            }, timeout=30)
+            if resp.status_code == 404:
+                print(f"  {code}: 404 跳過"); continue
+            resp.raise_for_status()
+            raw = resp.json()
+            locations = raw["records"]["locations"][0]["location"]
+            for loc in locations:
+                name = loc.get("locationName", "")
+                for elem in loc.get("weatherElement", []):
+                    if elem.get("elementName") not in ("Precipitation","QPF","PoP12h"):
+                        continue
+                    times = elem.get("time", [])
+                    total = 0.0
+                    for t in times:
+                        ev = t.get("elementValue", [{}])
+                        v  = ev[0].get("value", "0") if ev else "0"
+                        try: total += float(v)
+                        except: pass
+                    if name not in county_rain:
+                        county_rain[name] = [0.0] * 8
+                    # 每個端點代表12h，拆成兩個6h時段
+                    county_rain[name][seg_idx*2]   = round(total/2, 1)
+                    county_rain[name][seg_idx*2+1] = round(total/2, 1)
+            print(f"  {code}({label}): {len(county_rain)} 縣市")
+            seg_idx += 1
+        except Exception as e:
+            print(f"  {code}: {e}")
+            seg_idx += 1
+
+    if county_rain:
+        # 把縣市資料展開成假格點（用縣市中心座標）
+        county_centers = {
+            "臺北市":(25.04,121.52),"新北市":(24.97,121.54),"基隆市":(25.13,121.74),
+            "桃園市":(24.99,121.30),"新竹縣":(24.70,121.16),"新竹市":(24.80,120.97),
+            "苗栗縣":(24.56,120.82),"臺中市":(24.15,120.68),"彰化縣":(24.05,120.54),
+            "南投縣":(23.96,120.97),"雲林縣":(23.71,120.54),"嘉義縣":(23.48,120.58),
+            "嘉義市":(23.48,120.45),"臺南市":(23.00,120.21),"高雄市":(22.63,120.31),
+            "屏東縣":(22.67,120.49),"宜蘭縣":(24.70,121.74),"花蓮縣":(23.99,121.60),
+            "臺東縣":(22.75,121.14),"澎湖縣":(23.57,119.58),"金門縣":(24.44,118.32),
+            "連江縣":(26.16,119.95),
+        }
+        grid = []
+        for county, segs in county_rain.items():
+            ctr = county_centers.get(county)
+            if ctr:
+                grid.append({"lat": ctr[0], "lng": ctr[1], "qpf_6h": segs})
+        print(f"  F-C0035 組裝：{len(grid)} 個縣市格點")
+        return {"base_time": None, "grid": grid}
 
     print("  所有QPF端點均失敗，使用模擬資料")
     return None
