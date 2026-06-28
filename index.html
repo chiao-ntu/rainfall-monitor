@@ -77,8 +77,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <div class="ctrl-row">
     <span class="cl">圖層</span>
     <div class="bg">
-      <button class="b on" id="bRain" onclick="setMode('rain')">累積雨量</button>
-      <button class="b"    id="bEtr"  onclick="setMode('etr')">ETR2%</button>
+      <button class="b on" id="bRain"  onclick="setMode('rain')">累積雨量</button>
+      <button class="b"    id="bEtr"   onclick="setMode('etr')">ETR2%</button>
+      <button class="b"    id="bRiskA" onclick="setMode('riskA')">複合風險A</button>
+      <button class="b"    id="bRiskB" onclick="setMode('riskB')">複合風險B</button>
     </div>
     <span class="cl" style="margin-left:6px">過去</span>
     <div class="bg">
@@ -180,9 +182,17 @@ const ETR_SCALE=[
   {max:100, color:'#DD2222',label:'90–100%'},
   {max:1e9, color:'#BB00BB',label:'≥ 100%'},
 ];
+// 複合風險色階
+const RISK_SCALE=[
+  {max:40,  color:'#FFFFFF', label:'< 40%（低風險）'},
+  {max:70,  color:'#DDDD00', label:'40–70%（中風險）'},
+  {max:1e9, color:'#DD2222', label:'≥ 70%（高風險）'},
+];
 function rainColor(v){for(const s of RAIN_SCALE)if(v<s.max)return s.color;return'#DDA0DD'}
 function etrColor(v) {for(const s of ETR_SCALE) if(v<s.max)return s.color;return'#BB00BB'}
+function riskColor(v){for(const s of RISK_SCALE)if(v<s.max)return s.color;return'#DD2222'}
 function wCls(v){return v>=100?'w4':v>=90?'w3':v>=70?'w2':v>=50?'w1':'ok'}
+function riskCls(v){return v>=70?'w3':v>=40?'w1':'ok'}
 
 // ════════════════════════════════════════════════
 //  累積計算
@@ -194,6 +204,14 @@ function wCls(v){return v>=100?'w4':v>=90?'w3':v>=70?'w2':v>=50?'w1':'ok'}
 function getAccum(t){
   // 無觀測資料的鄉鎮（etr2_pct===null）→ 回傳 null 讓地圖顯示白色
   const hasObs = t.rain_24h !== null && t.rain_24h !== undefined;
+
+  // 複合風險模式：取對應 6h 時段的風險值
+  if(mode==='riskA'||mode==='riskB'){
+    const segIdx = Math.max(0, dayFrom*4);  // 取範圍起始時段
+    const riskList = mode==='riskA' ? (t.risk_a||[]) : (t.risk_b||[]);
+    const riskVal = riskList[segIdx] !== undefined ? riskList[segIdx] : null;
+    return {totalRain: riskVal, etrPct: riskVal, isRisk: true};
+  }
 
   // 過去時段：用觀測值
   if(dayFrom < 0 && dayTo < 0){
@@ -247,8 +265,10 @@ function renderLayer(){
     if(t){
       const {totalRain,etrPct} = getAccum(t);
       if(totalRain === null){
-        // 無觀測資料 → 白色（透明）
         fillColor='#ffffff'; fillOp=0.0;
+      } else if(v.isRisk){
+        fillColor = riskColor(totalRain);
+        fillOp    = isSel?0.93:0.78;
       } else {
         fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#ffffff':etrColor(etrPct));
         fillOp    = isSel?0.93:0.78;
@@ -304,6 +324,14 @@ function updateInfo(t){
   const obsEtr = getObsEtr(t);
   const hasObs = t.rain_24h !== null && t.rain_24h !== undefined;
 
+  // 複合風險模式：取對應 6h 時段的風險值
+  if(mode==='riskA'||mode==='riskB'){
+    const segIdx = Math.max(0, dayFrom*4);  // 取範圍起始時段
+    const riskList = mode==='riskA' ? (t.risk_a||[]) : (t.risk_b||[]);
+    const riskVal = riskList[segIdx] !== undefined ? riskList[segIdx] : null;
+    return {totalRain: riskVal, etrPct: riskVal, isRisk: true};
+  }
+
   document.getElementById('iCont').innerHTML=`
     <div class="ir" style="background:#0d2535;margin:-2px -0px 4px;padding:3px 4px;border-radius:3px">
       <span class="l" style="color:#6bc8e8;font-weight:700">現況觀測</span>
@@ -318,6 +346,25 @@ function updateInfo(t){
     <div class="ir"><span class="l">預測累積QPF</span>${wv('', totalRain !== null ? totalRain+' mm' : '—')}</div>
     <div class="ir"><span class="l">預測ETR2%</span>${etrPct!==null ? wv(wCls(etrPct), etrPct.toFixed(0)+'%') : wv('','—')}</div>
   `;
+  // PoP 和複合風險
+  const pop6h    = t.pop_6h    || [];
+  const risk_a   = t.risk_a    || [];
+  const risk_b   = t.risk_b    || [];
+  const segIdx   = Math.max(0, dayFrom*4);
+  const curPop   = pop6h[segIdx];
+  const curRiskA = risk_a[segIdx];
+  const curRiskB = risk_b[segIdx];
+
+  const riskBlock = document.createElement('div');
+  riskBlock.innerHTML = `
+    <div class="ir" style="background:#1a2a10;margin:4px 0;padding:3px 4px;border-radius:3px">
+      <span class="l" style="color:#8ad040;font-weight:700">複合風險指標（當前時段）</span>
+    </div>
+    <div class="ir"><span class="l">PoP降雨機率</span>${wv('', curPop!==null&&curPop!==undefined ? curPop.toFixed(0)+'%' : '—')}</div>
+    <div class="ir"><span class="l">風險A（PoP×ETR2%）</span>${curRiskA!==null&&curRiskA!==undefined ? wv(riskCls(curRiskA), curRiskA.toFixed(0)+'%') : wv('','—')}</div>
+    <div class="ir"><span class="l">風險B（PoP×複合）</span>${curRiskB!==null&&curRiskB!==undefined ? wv(riskCls(curRiskB), curRiskB.toFixed(0)+'%') : wv('','—')}</div>
+  `;
+  document.getElementById('iCont').appendChild(riskBlock);
   drawChart(t); drawSegs(t);
 }
 
@@ -357,9 +404,11 @@ function drawSegs(t){
 }
 
 function renderLegend(){
-  const sc=mode==='rain'?RAIN_SCALE:ETR_SCALE;
+  const sc = mode==='rain'?RAIN_SCALE : mode==='etr'?ETR_SCALE : RISK_SCALE;
   const days=dayTo-dayFrom+1;
-  document.getElementById('leg-title').textContent=mode==='rain'?`累積雨量 (mm)・${days}天`:`ETR2%・${days}天`;
+  const titles = {rain:`累積雨量(mm)・${days}天`, etr:`ETR2%・${days}天`,
+                  riskA:'複合風險A（PoP×ETR2%）', riskB:'複合風險B（PoP×(ETR2+QPF)/警戒值）'};
+  document.getElementById('leg-title').textContent = titles[mode] || '';
   document.getElementById('leg-items').innerHTML=sc.map(s=>`<div class="li"><div class="lsw" style="background:${s.color}"></div>${s.label}</div>`).join('');
 }
 
@@ -413,8 +462,13 @@ function clearBtns(){
 }
 function setMode(m){
   mode=m;
-  document.getElementById('bRain').classList.toggle('on',m==='rain');
-  document.getElementById('bEtr').classList.toggle('on',m==='etr');
+  ['bRain','bEtr','bRiskA','bRiskB'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.classList.remove('on');
+  });
+  const modeMap={rain:'bRain',etr:'bEtr',riskA:'bRiskA',riskB:'bRiskB'};
+  const el=document.getElementById(modeMap[m]);
+  if(el) el.classList.add('on');
   renderLayer();renderLegend();if(selected)updateInfo(selected);
 }
 function setWin(key){
