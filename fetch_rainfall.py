@@ -19,7 +19,12 @@ OUTPUT_FILE  = "data.json"          # 輸出給地圖
 ALPHA        = 0.7                  # ETR2 加權係數
 
 OBS_URL = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0002-001"
-QPF_URL = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0034-007"
+QPF_URLS = [
+    "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0034-007",
+    "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0034-005",
+    "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0034-001",
+    "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-B0046-001",
+]
 
 # ── 讀取靜態警戒值表 ──────────────────────────────
 def load_static():
@@ -56,36 +61,74 @@ def fetch_obs():
 
     stations = {}
     try:
-        for st in raw["records"]["Station"]:
+        all_stations = raw["records"]["Station"]
+
+        # ── 除錯：印出第一筆的完整結構，確認欄位路徑 ──
+        if all_stations:
+            first = all_stations[0]
+            print("  [除錯] 第一筆觀測站結構：")
+            print(f"    Keys: {list(first.keys())}")
+            geo0 = first.get("GeoInfo", {})
+            print(f"    GeoInfo keys: {list(geo0.keys())}")
+            coords0 = geo0.get("Coordinates", [])
+            print(f"    Coordinates[0]: {coords0[0] if coords0 else '空'}")
+            we0 = first.get("WeatherElement", {})
+            print(f"    WeatherElement keys: {list(we0.keys())[:10]}")
+            # 印出 Now、Past6hours、Past24hours 的完整內容
+            for k in ["Now","Past1hour","Past6hours","Past12hours","Past24hours"]:
+                print(f"    {k}: {we0.get(k, '無此欄位')}")
+
+        def safe_float(val, default=0.0):
+            try: return float(val)
+            except: return default
+
+        for st in all_stations:
             sid   = st.get("StationId", "")
             sname = st.get("StationName", "")
             geo   = st.get("GeoInfo", {})
+
+            # 座標：嘗試兩種可能的欄位名稱
             coords = geo.get("Coordinates", [{}])
-            lat = float(coords[0].get("StationLatitude",  0))
-            lng = float(coords[0].get("StationLongitude", 0))
-            county   = geo.get("CountyName", "")
-            township = geo.get("TownName", "")
+            if coords:
+                lat = safe_float(coords[0].get("StationLatitude",
+                      coords[0].get("Lat", 0)))
+                lng = safe_float(coords[0].get("StationLongitude",
+                      coords[0].get("Lon", 0)))
+            else:
+                lat, lng = 0.0, 0.0
+
+            county   = geo.get("CountyName", geo.get("County", ""))
+            township = geo.get("TownName",   geo.get("Town", ""))
             we = st.get("WeatherElement", {})
 
-            def safe_float(val, default=0.0):
-                try: return float(val)
-                except: return default
+            # 雨量欄位：嘗試多種可能的結構
+            def get_rain(key):
+                block = we.get(key, {})
+                # 結構一：{Precipitation: 值}
+                v = block.get("Precipitation", None)
+                if v is not None: return safe_float(v)
+                # 結構二：{value: 值}
+                v = block.get("value", None)
+                if v is not None: return safe_float(v)
+                return 0.0
 
             stations[sid] = {
-                "name":      sname,
-                "lat":       lat,
-                "lng":       lng,
-                "county":    county,
-                "township":  township,
-                "rain_10m":  safe_float(we.get("Now",{}).get("Precipitation", 0)),
-                "rain_1h":   safe_float(we.get("Past1hour",{}).get("Precipitation", 0)),
-                "rain_6h":   safe_float(we.get("Past6hours",{}).get("Precipitation", 0)),
-                "rain_12h":  safe_float(we.get("Past12hours",{}).get("Precipitation", 0)),
-                "rain_24h":  safe_float(we.get("Past24hours",{}).get("Precipitation", 0)),
+                "name":     sname,
+                "lat":      lat, "lng": lng,
+                "county":   county, "township": township,
+                "rain_10m": get_rain("Now"),
+                "rain_1h":  get_rain("Past1hour"),
+                "rain_6h":  get_rain("Past6hours"),
+                "rain_12h": get_rain("Past12hours"),
+                "rain_24h": get_rain("Past24hours"),
             }
     except Exception as e:
         print(f"  觀測解析失敗：{e}")
+        import traceback; traceback.print_exc()
     print(f"  取得 {len(stations)} 個觀測站")
+    # 印出有雨量的站數
+    nonzero = sum(1 for s in stations.values() if s["rain_24h"] > 0)
+    print(f"  有24h雨量的站：{nonzero}")
     return stations
 
 # ── 更新歷史日雨量（obs_history.json）────────────
@@ -141,37 +184,60 @@ def calc_etr2(station_id, history, now_tpe):
 def fetch_qpf():
     if not CWA_API_KEY:
         print("未設定 CWA_API_KEY，QPF 使用模擬"); return None
-    print("抓取 CWA QPF（F-C0034-007）...")
-    try:
-        resp = requests.get(QPF_URL, params={
-            "Authorization": CWA_API_KEY,
-            "format": "JSON",
-        }, timeout=60)
-        resp.raise_for_status()
-        raw = resp.json()
-    except Exception as e:
-        print(f"  QPF 失敗：{e}"); return None
-    try:
-        locations = raw["records"]["locations"][0]["location"]
-    except Exception as e:
-        print(f"  QPF 格式錯誤：{e}"); return None
+    print("抓取 CWA QPF（嘗試多個端點）...")
+    for url in QPF_URLS:
+        try:
+            resp = requests.get(url, params={
+                "Authorization": CWA_API_KEY, "format": "JSON"
+            }, timeout=60)
+            if resp.status_code == 404:
+                print(f"  {url.split('/')[-1]}: 404 跳過"); continue
+            resp.raise_for_status()
+            raw = resp.json()
+            print(f"  ✓ 端點：{url.split('/')[-1]}")
+        except Exception as e:
+            print(f"  {url.split('/')[-1]}: {e}"); continue
 
-    grid, base_time = [], None
-    for loc in locations:
-        lat, lon = float(loc.get("lat",0)), float(loc.get("lon",0))
-        if not (21.5<=lat<=26.5 and 119<=lon<=123): continue
-        qpf_6h = []
-        for elem in loc.get("weatherElement",[]):
-            if elem.get("elementName") != "Precipitation": continue
-            times = elem.get("time",[])
-            if not base_time and times:
-                base_time = times[0].get("startTime","")
-            for t in times[:8]:
-                try: qpf_6h.append(round(float(t.get("elementValue",[{}])[0].get("value","0")),1))
-                except: qpf_6h.append(0.0)
-        if qpf_6h: grid.append({"lat":lat,"lng":lon,"qpf_6h":qpf_6h})
-    print(f"  QPF：{len(grid)} 格點，基準：{base_time}")
-    return {"base_time": base_time, "grid": grid}
+        # 印出結構供除錯
+        rec = raw.get("records", {})
+        print(f"  records keys: {list(rec.keys())[:5]}")
+
+        try:
+            locations = rec["locations"][0]["location"]
+        except (KeyError, IndexError):
+            try:
+                locations = rec["location"]
+            except KeyError:
+                print(f"  無法解析格式：{list(rec.keys())}"); continue
+
+        grid, base_time = [], None
+        for loc in locations:
+            lat = float(loc.get("lat", loc.get("Latitude",  0)))
+            lon = float(loc.get("lon", loc.get("Longitude", 0)))
+            if not (21.5<=lat<=26.5 and 119<=lon<=123): continue
+            qpf_6h = []
+            for elem in loc.get("weatherElement", loc.get("WeatherElement", [])):
+                name = elem.get("elementName", elem.get("ElementName",""))
+                if name not in ("Precipitation","APCP","QPF"): continue
+                times = elem.get("time", elem.get("Time", []))
+                if not base_time and times:
+                    base_time = times[0].get("startTime", times[0].get("StartTime",""))
+                for t in times[:8]:
+                    ev = t.get("elementValue", t.get("ElementValue",[{}]))
+                    if isinstance(ev, list): ev = ev[0]
+                    v  = ev.get("value", ev.get("Value","0"))
+                    try: qpf_6h.append(round(float(v),1))
+                    except: qpf_6h.append(0.0)
+            if qpf_6h: grid.append({"lat":lat,"lng":lon,"qpf_6h":qpf_6h})
+
+        if grid:
+            print(f"  QPF：{len(grid)} 格點，基準：{base_time}")
+            return {"base_time": base_time, "grid": grid}
+        else:
+            print(f"  此端點無格點資料")
+
+    print("  所有QPF端點均失敗，使用模擬資料")
+    return None
 
 # ── IDW 空間插值 ──────────────────────────────────
 def idw(lat, lng, points, value_key, seg=None):
