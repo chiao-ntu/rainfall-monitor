@@ -108,23 +108,31 @@ def fetch_obs():
             county   = geo.get("CountyName", "")
             township = geo.get("TownName", "")
 
-            # ── 雨量在 RainfallElement，不是 WeatherElement ──
+            # ── 雨量在 RainfallElement，欄位名稱注意大小寫 ──
             re = st.get("RainfallElement", {})
 
-            # 各時距累積雨量欄位名稱
-            # Now=10分鐘, Past10min同, Past1hr, Past3hr, Past6hr, Past12hr, Past24hr
-            rain_10m  = safe_float(re.get("Now",      {}).get("Precipitation", -9999))
-            rain_1h   = safe_float(re.get("Past1hr",  re.get("Past1hour",  {})).get("Precipitation", -9999))
-            rain_6h   = safe_float(re.get("Past6hr",  re.get("Past6hours", {})).get("Precipitation", -9999))
-            rain_12h  = safe_float(re.get("Past12hr", re.get("Past12hours",{})).get("Precipitation", -9999))
-            rain_24h  = safe_float(re.get("Past24hr", re.get("Past24hours",{})).get("Precipitation", -9999))
+            def get_precip(key):
+                """讀雨量值，過濾 -9999 等無效值"""
+                block = re.get(key, {})
+                v = block.get("Precipitation", None)
+                if v is None: return 0.0
+                try:
+                    f = float(v)
+                    return f if f >= 0 else 0.0
+                except: return 0.0
 
             stations[sid] = {
                 "name": sname, "lat": lat, "lng": lng,
                 "county": county, "township": township,
-                "rain_10m": rain_10m, "rain_1h": rain_1h,
-                "rain_6h": rain_6h, "rain_12h": rain_12h,
-                "rain_24h": rain_24h,
+                "rain_now":  get_precip("Now"),
+                "rain_10m":  get_precip("Past10Min"),
+                "rain_1h":   get_precip("Past1hr"),
+                "rain_3h":   get_precip("Past3hr"),
+                "rain_6h":   get_precip("Past6Hr"),    # 注意：大寫 H
+                "rain_12h":  get_precip("Past12hr"),
+                "rain_24h":  get_precip("Past24hr"),
+                "rain_2d":   get_precip("Past2days"),
+                "rain_3d":   get_precip("Past3days"),
             }
 
     except Exception as e:
@@ -139,34 +147,45 @@ def fetch_obs():
 # ── 更新歷史日雨量（obs_history.json）────────────
 def update_history(stations, now_tpe):
     """
-    每次執行時把今天的 rain_24h 存入歷史，保留最近8天
-    格式：{站號: {日期字串: rain_24h, ...}}
+    每次執行存入當日 rain_24h，並利用 Past2days/Past3days 補充歷史
+    保留最近 8 天
     """
     today_str = now_tpe.strftime("%Y-%m-%d")
+    yesterday = (now_tpe - timedelta(days=1)).strftime("%Y-%m-%d")
+    day2ago   = (now_tpe - timedelta(days=2)).strftime("%Y-%m-%d")
 
-    # 讀取既有歷史
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, encoding="utf-8") as f:
             history = json.load(f)
     else:
         history = {}
 
-    # 更新今日數值
     for sid, st in stations.items():
         if sid not in history:
             history[sid] = {}
-        # 只在每天 05/11/17/23 時的第一次執行更新日雨量
-        # 實際上每次都更新最新值（覆蓋同一天）
-        history[sid][today_str] = st["rain_24h"]
 
-    # 清理8天前的舊資料
+        # 今日：用 Past24hr
+        history[sid][today_str] = st.get("rain_24h", 0.0)
+
+        # 昨日補充：Past2days - Past24hr（若昨日尚無記錄）
+        r2d = st.get("rain_2d", 0.0)
+        r1d = st.get("rain_24h", 0.0)
+        if yesterday not in history[sid] and r2d > 0:
+            history[sid][yesterday] = max(0.0, round(r2d - r1d, 1))
+
+        # 前日補充：Past3days - Past2days
+        r3d = st.get("rain_3d", 0.0)
+        if day2ago not in history[sid] and r3d > 0:
+            history[sid][day2ago] = max(0.0, round(r3d - r2d, 1))
+
+    # 清理 9 天前資料
     cutoff = (now_tpe - timedelta(days=9)).strftime("%Y-%m-%d")
     for sid in history:
         history[sid] = {d: v for d, v in history[sid].items() if d > cutoff}
 
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(history, f, ensure_ascii=False, separators=(",",":"))
-    print(f"  歷史檔案更新：{len(history)} 站 × 最近8天")
+        json.dump(history, f, ensure_ascii=False, separators=(",", ":"))
+    print(f"  歷史檔更新：{len(history)} 站，今日={today_str}")
     return history
 
 # ── 計算 ETR2 ──────────────────────────────────
