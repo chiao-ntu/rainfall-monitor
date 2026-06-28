@@ -86,14 +86,14 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div class="bg">
       <button class="b" id="bP2d"   onclick="setWin('past2d')">過去2天</button>
       <button class="b" id="bP1d"   onclick="setWin('past1d')">過去1天</button>
-      <button class="b" id="bToday" onclick="setWin('today')">今天</button>
+      <button class="b on" id="bToday" onclick="setWin('today')">今天</button>
     </div>
     <span class="cl" style="margin-left:6px">未來（6h段）</span>
     <div class="bg">
       <button class="b" id="bN6"  onclick="setWin('n6h')">+6h</button>
       <button class="b" id="bN12" onclick="setWin('n12h')">+12h</button>
       <button class="b" id="bN24" onclick="setWin('n24h')">+24h</button>
-      <button class="b on" id="bN48" onclick="setWin('n48h')">+48h</button>
+      <button class="b"    id="bN48" onclick="setWin('n48h')">+48h</button>
     </div>
   </div>
   <div class="ctrl-row">
@@ -214,18 +214,35 @@ function getAccum(t){
   }
 
   // 過去時段：用觀測值
-  if(dayFrom < 0 && dayTo < 0){
+  if(dayFrom < 0 && dayTo <= 0){
     if(!hasObs) return {totalRain:null, etrPct:null};
-    // 過去1天 → rain_24h；過去2天 → rain_24h * 2（近似）
-    const days = dayTo - dayFrom + 1;
-    const totalRain = Math.round((t.rain_24h||0) * days * 10) / 10;
+    // 選取對應時距的觀測累積值
+    const totalDays = Math.abs(dayFrom);  // 1=昨天, 2=前天...
+    let totalRain;
+    if(totalDays <= 1)      totalRain = t.rain_24h || 0;
+    else if(totalDays <= 2) totalRain = t.rain_2d  || t.rain_24h || 0;
+    else                    totalRain = t.rain_3d  || t.rain_2d  || t.rain_24h || 0;
+    // 加上今天（如果 dayTo=0）
+    if(dayTo === 0) totalRain = Math.round(((t.rain_24h||0) + totalRain)*10)/10;
+    totalRain = Math.round(totalRain*10)/10;
+    const days = Math.abs(dayFrom) + (dayTo>=0?1:0);
     const etrPct = t.alert_val > 0
-      ? Math.round(totalRain / (t.alert_val * days) * 1000) / 10
+      ? Math.round(totalRain / (t.alert_val * Math.max(1,days)) * 1000) / 10
       : null;
     return {totalRain, etrPct};
   }
 
-  // 今天/未來：用 QPF
+  // 今天（dayFrom=0,dayTo=0）：優先用觀測值
+  if(dayFrom === 0 && dayTo === 0 && hasObs){
+    const totalRain = t.rain_24h || 0;
+    const etrPct = (t.etr2_pct !== null && t.etr2_pct !== undefined)
+      ? Math.round(t.etr2_pct * 1000) / 10
+      : (t.alert_val > 0 ? Math.round(totalRain / t.alert_val * 1000) / 10 : null);
+    return {totalRain, etrPct};
+  }
+
+  // 未來：用 QPF（qpf_15d）
+  // 非颱風期 qpf_15d[0-7]=0，第3天後才有 Open-Meteo 資料
   const qpf = t.qpf_15d || [];
   let total = 0;
   for(let day = Math.max(0,dayFrom); day <= dayTo; day++){
@@ -236,6 +253,7 @@ function getAccum(t){
   const etrPct = t.alert_val > 0
     ? Math.round(total / (t.alert_val * days) * 1000) / 10
     : null;
+  // 無QPF資料（全為0且非降雨期）→ 仍然顯示，不回傳null
   return {totalRain: total, etrPct};
 }
 

@@ -176,51 +176,6 @@ def fetch_pop3d():
     try:
         r = requests.get(POP3D_URL, params={
             "Authorization": CWA_API_KEY, "format":"JSON",
-            "elementName": "PoP6h",
-        }, timeout=60)
-        r.raise_for_status()
-        raw = r.json()
-    except Exception as e:
-        print(f"  失敗：{e}"); return {}
-
-    pop_map = {}  # {鄉鎮名: [(startTime, endTime, pop_value), ...]}
-    try:
-        locs = raw["records"]["Locations"][0]["Location"]
-        if locs:
-            # 印第一筆結構
-            we0 = locs[0].get("WeatherElement",[])
-            print(f"  [結構] WeatherElement[0]: {we0[0].get('ElementName','')} 時段數={len(we0[0].get('Time',[]))}")
-            t0  = we0[0].get("Time",[{}])[0]
-            print(f"  [結構] 時段格式: {list(t0.keys())} val={t0.get('ElementValue','')}")
-
-        for loc in locs:
-            name = loc.get("LocationName","")
-            pop_segs = []
-            for we in loc.get("WeatherElement",[]):
-                if we.get("ElementName") != "PoP6h": continue
-                for t in we.get("Time",[]):
-                    start = t.get("StartTime","")
-                    end   = t.get("EndTime","")
-                    ev    = t.get("ElementValue",[{}])
-                    v     = ev[0].get("Value","-") if isinstance(ev,list) else ev.get("Value","-")
-                    try: pop = float(v)
-                    except: pop = None
-                    pop_segs.append({"start":start,"end":end,"pop":pop,"hours":6})
-            if pop_segs: pop_map[name] = pop_segs
-
-        print(f"  PoP6h：{len(pop_map)} 個鄉鎮，各 {len(next(iter(pop_map.values()),[]))} 時段")
-    except Exception as e:
-        print(f"  解析失敗：{e}"); import traceback; traceback.print_exc()
-    return pop_map
-
-# ── 抓 PoP（後4天 F-D0047-091，PoP12h → 6h）──────
-def fetch_pop7d():
-    if not CWA_API_KEY: return {}
-    print("抓取 PoP 後4天（F-D0047-091）...")
-    try:
-        r = requests.get(POP7D_URL, params={
-            "Authorization": CWA_API_KEY, "format":"JSON",
-            "elementName": "PoP",
         }, timeout=60)
         r.raise_for_status()
         raw = r.json()
@@ -229,33 +184,129 @@ def fetch_pop7d():
 
     pop_map = {}
     try:
-        locs = raw["records"]["Locations"][0]["Location"]
+        # 嘗試不同大小寫的 key
+        rec = raw.get("records",{})
+        print(f"  [除錯] records keys: {list(rec.keys())[:6]}")
+
+        # 取 locations（試多種大小寫）
+        locs_wrap = rec.get("Locations", rec.get("locations", []))
+        if not locs_wrap:
+            print("  [除錯] 找不到 Locations"); return {}
+        locs = locs_wrap[0].get("Location", locs_wrap[0].get("location",[]))
+        if not locs:
+            print("  [除錯] 找不到 Location"); return {}
+
+        print(f"  [除錯] 鄉鎮數: {len(locs)}")
+        # 印第一筆所有 WeatherElement 名稱
+        we_all = locs[0].get("WeatherElement", locs[0].get("weatherElement",[]))
+        we_names = [we.get("ElementName", we.get("elementName","")) for we in we_all]
+        print(f"  [除錯] WeatherElement names: {we_names}")
+
+        if not we_all:
+            print("  [除錯] 無 WeatherElement"); return {}
+
+        # 印第一個 PoP 相關欄位的時段格式
+        for we in we_all:
+            en = we.get("ElementName", we.get("elementName",""))
+            if "PoP" in en or "pop" in en.lower():
+                times = we.get("Time", we.get("time",[]))
+                if times:
+                    t0 = times[0]
+                    print(f"  [除錯] {en} 時段格式: {list(t0.keys())}")
+                    print(f"  [除錯] {en} 第一段: {t0}")
+                break
+
         for loc in locs:
-            name = loc.get("LocationName","")
+            name = loc.get("LocationName", loc.get("locationName",""))
+            we_list = loc.get("WeatherElement", loc.get("weatherElement",[]))
             pop_segs = []
-            for we in loc.get("WeatherElement",[]):
-                if we.get("ElementName") != "PoP": continue
-                for t in we.get("Time",[]):
-                    start = t.get("StartTime","")
-                    end   = t.get("EndTime","")
-                    ev    = t.get("ElementValue",[{}])
-                    v     = ev[0].get("Value","-") if isinstance(ev,list) else ev.get("Value","-")
+            for we in we_list:
+                en = we.get("ElementName", we.get("elementName",""))
+                # 接受 PoP6h 或 PoP（6小時分段）
+                if en not in ("PoP6h","PoP6H","Pop6h"): continue
+                times = we.get("Time", we.get("time",[]))
+                for t in times:
+                    # 時段可能是 StartTime/EndTime 或 DataTime
+                    start = t.get("StartTime", t.get("startTime",
+                            t.get("DataTime",  t.get("dataTime",""))))
+                    end   = t.get("EndTime",   t.get("endTime",   start))
+                    ev    = t.get("ElementValue", t.get("elementValue",[{}]))
+                    if isinstance(ev, list): ev = ev[0] if ev else {}
+                    v = ev.get("Value", ev.get("value",
+                        ev.get("Probability", ev.get("probability","-"))))
+                    try: pop = float(v)
+                    except: pop = None
+                    if pop is not None:
+                        pop_segs.append({"start":start,"end":end,"pop":pop,"hours":6})
+            if pop_segs:
+                pop_map[name] = pop_segs
+
+        total_segs = len(next(iter(pop_map.values()),[]))
+        print(f"  PoP6h：{len(pop_map)} 個鄉鎮，各 {total_segs} 時段")
+    except Exception as e:
+        print(f"  解析失敗：{e}"); import traceback; traceback.print_exc()
+    return pop_map
+
+
+def fetch_pop7d():
+    if not CWA_API_KEY: return {}
+    print("抓取 PoP 後4天（F-D0047-091）...")
+    try:
+        r = requests.get(POP7D_URL, params={
+            "Authorization": CWA_API_KEY, "format":"JSON",
+        }, timeout=60)
+        r.raise_for_status()
+        raw = r.json()
+    except Exception as e:
+        print(f"  失敗：{e}"); return {}
+
+    pop_map = {}
+    try:
+        rec = raw.get("records",{})
+        locs_wrap = rec.get("Locations", rec.get("locations",[]))
+        if not locs_wrap: return {}
+        locs = locs_wrap[0].get("Location", locs_wrap[0].get("location",[]))
+
+        # 除錯：印 WeatherElement 名稱
+        if locs:
+            we_all = locs[0].get("WeatherElement", locs[0].get("weatherElement",[]))
+            we_names = [we.get("ElementName", we.get("elementName","")) for we in we_all]
+            print(f"  [除錯] F-D0047-091 WE names: {we_names}")
+
+        for loc in locs:
+            name = loc.get("LocationName", loc.get("locationName",""))
+            we_list = loc.get("WeatherElement", loc.get("weatherElement",[]))
+            pop_segs = []
+            for we in we_list:
+                en = we.get("ElementName", we.get("elementName",""))
+                # 1週預報只有 PoP（12h分段）
+                if en not in ("PoP","POP","pop"): continue
+                times = we.get("Time", we.get("time",[]))
+                for t in times:
+                    start = t.get("StartTime", t.get("startTime",
+                            t.get("DataTime",  t.get("dataTime",""))))
+                    end   = t.get("EndTime",   t.get("endTime", start))
+                    ev    = t.get("ElementValue", t.get("elementValue",[{}]))
+                    if isinstance(ev,list): ev = ev[0] if ev else {}
+                    v = ev.get("Value", ev.get("value",
+                        ev.get("Probability", ev.get("probability","-"))))
                     try:
                         pop12 = float(v)
-                        # PoP12h → PoP6h：p = 1 - √(1 - pop12/100)
-                        pop6  = round((1 - math.sqrt(max(0, 1 - pop12/100))) * 100, 1)
+                        pop6  = round((1-math.sqrt(max(0,1-pop12/100)))*100,1)
                     except:
-                        pop12 = None; pop6 = None
-                    # 一個12h時段拆成兩個6h
-                    pop_segs.append({"start":start,"end":end,"pop":pop6,
-                                     "pop12h":pop12,"hours":6,"derived":True})
-        if pop_segs: pop_map[name] = pop_segs
+                        pop12=None; pop6=None
+                    pop_segs.append({"start":start,"end":end,
+                                     "pop":pop6,"pop12h":pop12,
+                                     "hours":6,"derived":True})
+            if pop_segs:
+                pop_map[name] = pop_segs
+
         print(f"  PoP12h→6h：{len(pop_map)} 個鄉鎮")
     except Exception as e:
         print(f"  解析失敗：{e}"); import traceback; traceback.print_exc()
     return pop_map
 
-# ── 合併 PoP（前3天6h直接用，後4天用12h轉換）────
+
 def merge_pop(pop3d, pop7d, now_tpe):
     """
     回傳 {鄉鎮名: [pop_6h_list]}
