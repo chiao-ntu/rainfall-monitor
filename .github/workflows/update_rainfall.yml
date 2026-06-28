@@ -1,0 +1,45 @@
+name: 自動更新降雨資料
+
+on:
+  schedule:
+    # 每6小時執行一次（UTC時間）
+    # 台灣時間 05/11/17/23 時 對應 UTC 21/03/09/15 時（前一天）
+    - cron: '0 21 * * *'   # 台灣 05:00
+    - cron: '0 3  * * *'   # 台灣 11:00
+    - cron: '0 9  * * *'   # 台灣 17:00
+    - cron: '0 15 * * *'   # 台灣 23:00
+  workflow_dispatch:         # 允許手動觸發
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 取得 repository 內容
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. 安裝 Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 3. 安裝套件
+      - name: Install dependencies
+        run: pip install requests
+
+      # 4. 執行抓取腳本（API Key 從 Secrets 注入）
+      - name: Run fetch_rainfall.py
+        env:
+          CWA_API_KEY: ${{ secrets.CWA_API_KEY }}
+        run: python fetch_rainfall.py
+
+      # 5. 把 data.json 推回 GitHub
+      - name: Commit and push data.json
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data.json
+          git diff --staged --quiet || git commit -m "自動更新：$(date '+%Y-%m-%d %H:%M') TST"
+          git push
