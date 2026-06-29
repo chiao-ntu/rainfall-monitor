@@ -205,9 +205,17 @@ function getAccum(t){
   // 無觀測資料的鄉鎮（etr2_pct===null）→ 回傳 null 讓地圖顯示白色
   const hasObs = t.rain_24h !== null && t.rain_24h !== undefined;
 
+  // ETR2% 模式：永遠用現況觀測值（etr2_pct），與時間範圍無關
+  if(mode==='etr'){
+    const obsEtrPct = (t.etr2_pct !== null && t.etr2_pct !== undefined)
+      ? Math.round(t.etr2_pct * 1000) / 10  // 小數→%
+      : null;
+    return {totalRain: obsEtrPct, etrPct: obsEtrPct, isEtrMode: true};
+  }
+
   // 複合風險模式：取對應 6h 時段的風險值
   if(mode==='riskA'||mode==='riskB'){
-    const segIdx = Math.max(0, dayFrom*4);  // 取範圍起始時段
+    const segIdx = Math.max(0, dayFrom*4);
     const riskList = mode==='riskA' ? (t.risk_a||[]) : (t.risk_b||[]);
     const riskVal = riskList[segIdx] !== undefined ? riskList[segIdx] : null;
     return {totalRain: riskVal, etrPct: riskVal, isRisk: true};
@@ -284,12 +292,17 @@ function renderLayer(){
       const acc = getAccum(t);
       const {totalRain, etrPct} = acc;
       if(totalRain === null || totalRain === undefined){
-        fillColor='#ffffff'; fillOp=0.0;
+        // 無資料：顯示淡灰色，保留視覺邊界（不設為0.0，否則鄉鎮消失）
+        fillColor='#ccddee'; fillOp=0.12;
       } else if(acc.isRisk){
         fillColor = riskColor(totalRain);
         fillOp    = isSel?0.93:0.78;
+      } else if(acc.isEtrMode){
+        // ETR2%模式：用 etrColor 對應現況 etr2_pct
+        fillColor = totalRain===null ? '#ccddee' : etrColor(totalRain);
+        fillOp    = totalRain===null ? 0.12 : (isSel?0.93:0.78);
       } else {
-        fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#ffffff':etrColor(etrPct));
+        fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#ccddee':etrColor(etrPct));
         fillOp    = isSel?0.93:0.78;
       }
     }
@@ -307,9 +320,10 @@ function renderLayer(){
       const obsEtr2 = getObsEtr(t);
       const rainStr = totalRain !== null ? totalRain+' mm' : '—';
       const etrStr  = obsEtr2  !== null ? obsEtr2.toFixed(0)+'%' : '—';
-      const rainLabel = (dayFrom===0&&dayTo===0) ? '24h觀測' : 'QPF';
+      const rainLabel = (mode==='etr') ? 'ETR2%' : (dayFrom===0&&dayTo===0) ? '24h觀測' : 'QPF';
+      const dispStr   = (mode==='etr') ? etrStr : rainStr;
       poly.bindTooltip(
-        `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>${rainLabel} ${rainStr} &nbsp;ETR2% ${etrStr}`,
+        `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>${rainLabel}：${dispStr}`,
         {sticky:true,opacity:.92}
       );
       poly.on('click',()=>{selected=t;renderLayer();updateInfo(t);});
@@ -345,9 +359,17 @@ function updateInfo(t){
   const obsEtr = getObsEtr(t);
   const hasObs = t.rain_24h !== null && t.rain_24h !== undefined;
 
+  // ETR2% 模式：永遠用現況觀測值（etr2_pct），與時間範圍無關
+  if(mode==='etr'){
+    const obsEtrPct = (t.etr2_pct !== null && t.etr2_pct !== undefined)
+      ? Math.round(t.etr2_pct * 1000) / 10  // 小數→%
+      : null;
+    return {totalRain: obsEtrPct, etrPct: obsEtrPct, isEtrMode: true};
+  }
+
   // 複合風險模式：取對應 6h 時段的風險值
   if(mode==='riskA'||mode==='riskB'){
-    const segIdx = Math.max(0, dayFrom*4);  // 取範圍起始時段
+    const segIdx = Math.max(0, dayFrom*4);
     const riskList = mode==='riskA' ? (t.risk_a||[]) : (t.risk_b||[]);
     const riskVal = riskList[segIdx] !== undefined ? riskList[segIdx] : null;
     return {totalRain: riskVal, etrPct: riskVal, isRisk: true};
