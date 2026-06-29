@@ -304,7 +304,8 @@ def fetch_openmeteo_model(townships, model='best_match'):
         # 全部15天轉成6h時段（60個）
         segs_6h = []
         for j in range(0, len(precip), 6):
-            segs_6h.append(round(sum(precip[j:j+6]),1))
+            chunk = [v for v in precip[j:j+6] if v is not None]
+            segs_6h.append(round(sum(chunk), 1))
         result[key] = segs_6h[:60]  # 最多60個（15天）
     n = len(next(iter(result.values()),[]))
     print(f"    {len(result)} 個點，各 {n} 個6h時段")
