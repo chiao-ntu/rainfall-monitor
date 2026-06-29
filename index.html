@@ -449,17 +449,31 @@ async function tryLoadLive(){
   if(isPaused) return;
   try{
     const r=await fetch('data.json?t='+Date.now());
-    if(!r.ok) throw new Error('no data.json');
+    if(!r.ok) throw new Error(`data.json HTTP ${r.status}`);
     const d=await r.json();
-    if(d.townships) d.townships.forEach(t=>{
-      const f=TOWNSHIPS.find(x=>x.county===t.county&&x.township===t.township);
-      if(f) Object.assign(f,t);
-    });
-    BASE_TIME=new Date(d.base_time);
+    console.log('data.json 載入：', d.township_count, '個鄉鎮，來源：', d.source);
+
+    // 更新各鄉鎮資料
+    if(d.townships){
+      d.townships.forEach(live=>{
+        const found = TOWNSHIPS.find(x=>x.county===live.county&&x.township===live.township);
+        if(found){
+          Object.assign(found, live);
+        } else {
+          TOWNSHIPS.push(live);  // 新增不在示範資料中的鄉鎮
+          TMAP[live.county+live.township] = live;
+        }
+      });
+    }
+
+    BASE_TIME = new Date(d.base_time);
     document.getElementById('data-tag').className='tag live';
     document.getElementById('data-tag').textContent='● 即時資料';
-    document.getElementById('data-note').textContent=`CWA QPF(前48h)+GFS(3-15天)・${d.generated_at?d.generated_at.slice(0,16).replace('T',' '):''}`;
+    const src = d.source || '';
+    document.getElementById('data-note').textContent=
+      `${src} · 產製：${d.generated_at ? d.generated_at.slice(0,16).replace('T',' ') : ''}`;
   }catch(e){
+    console.warn('data.json 載入失敗（使用示範資料）：', e.message);
     document.getElementById('data-tag').className='tag sim';
     document.getElementById('data-tag').textContent='⚑ 示範資料';
   }
@@ -531,22 +545,43 @@ function buildDayBtns(){
 //  啟動：先載入兩個 GeoJSON，再初始化地圖
 // ════════════════════════════════════════════════
 async function init(){
+  const loading = document.getElementById('loading');
+
+  // 1. 載入 GeoJSON
+  loading.textContent = '⏳ 載入行政區圖資...';
   try{
     const [tr, cr] = await Promise.all([
       fetch('town_moi.geojson'),
       fetch('county_moi.geojson')
     ]);
+    if(!tr.ok) throw new Error(`town_moi.geojson: HTTP ${tr.status}`);
+    if(!cr.ok) throw new Error(`county_moi.geojson: HTTP ${cr.status}`);
     TOWN_GEO   = await tr.json();
     COUNTY_GEO = await cr.json();
+    console.log('GeoJSON 載入：', TOWN_GEO.features.length, '鄉鎮，', COUNTY_GEO.features.length, '縣市');
   } catch(e){
-    document.getElementById('loading').textContent = '⚠ 請用本機伺服器開啟（見說明）';
+    console.error('GeoJSON 載入失敗：', e);
+    loading.innerHTML = `<div style="color:#f04040">⚠ 圖資載入失敗<br><small>${e.message}</small><br><br>
+      請確認以下檔案在同一資料夾：<br>
+      town_moi.geojson<br>county_moi.geojson<br><br>
+      若在本機開啟，請執行：<br>
+      <code>python -m http.server 8080</code><br>
+      再用瀏覽器開啟 http://localhost:8080</div>`;
     return;
   }
-  document.getElementById('loading').style.display='none';
+
+  // 2. 隱藏 loading，顯示地圖
+  loading.style.display='none';
+
+  // 3. 建立時間按鈕（先用預設時間）
   buildDayBtns();
-  setWin('n48h');
-  tryLoadLive();
-  setInterval(()=>{if(!isPaused)tryLoadLive();}, 30*60*1000);
+  setWin('today');  // 預設顯示今天（用觀測值）
+
+  // 4. 嘗試載入即時資料（若失敗則繼續用示範資料）
+  await tryLoadLive();
+
+  // 5. 每30分鐘自動更新
+  setInterval(()=>{ if(!isPaused) tryLoadLive(); }, 30*60*1000);
 }
 init();
 </script>

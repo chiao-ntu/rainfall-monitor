@@ -1,586 +1,404 @@
 """
-台灣降雨預測監測系統 - 資料抓取腳本 v4
+台灣降雨預測監測系統 - 資料抓取腳本 v5
 ==============================================
-資料來源（以氣象署為主）：
-  觀測（過去）: O-A0002-001 自動雨量站
-  PoP 前3天:   F-D0047-089 台灣未來3天（PoP6h，逐6小時）
-  PoP 後4天:   F-D0047-091 台灣未來1週（PoP12h，轉換為6h）
-  QPF 颱風期:  F-C0041-001~008 格點定量降水（每6h一段）
-  QPF 非颱風:  Open-Meteo（補充，標示非官方）
-
-複合風險指標：
-  Risk_A = PoP(%) × ETR2_current(%) / 100
-  Risk_B = PoP(%) × (ETR2_current + QPF_eff) / Alert × 100
-  QPF_eff = Σ 0.7^i × QPF_6h_i
-
-風險分級：高 ≥70%，中 40-70%，低 <40%
+已確認的 CWA API 結構：
+  O-A0002-001: RainfallElement.Past6Hr / Past24hr / Past2days / Past3days
+  F-D0047-XXX: WeatherElement「3小時降雨機率」/ 「12小時降雨機率」
+               各縣市分開端點（奇數=3天，偶數=1週），Location = 鄉鎮
 """
 import requests, json, math, os, sys
 from datetime import datetime, timezone, timedelta
 
-# ── 設定 ──────────────────────────────────────────
 CWA_API_KEY  = os.environ.get("CWA_API_KEY", "")
 STATIC_FILE  = "etr2_static.json"
 HISTORY_FILE = "obs_history.json"
 OUTPUT_FILE  = "data.json"
 ALPHA        = 0.7
+BASE_URL     = "https://opendata.cwa.gov.tw/api/v1/rest/datastore"
+OBS_URL      = f"{BASE_URL}/O-A0002-001"
+OPENMETEO    = "https://api.open-meteo.com/v1/forecast"
 
-BASE_URL = "https://opendata.cwa.gov.tw/api/v1/rest/datastore"
-OBS_URL  = f"{BASE_URL}/O-A0002-001"
-POP3D_URL = f"{BASE_URL}/F-D0047-089"   # 前3天 PoP6h
-POP7D_URL = f"{BASE_URL}/F-D0047-091"   # 未來1週 PoP12h
-QPF_TYPHOON = [f"{BASE_URL}/F-C0041-{str(i).zfill(3)}" for i in range(1,9)]
-OPENMETEO_URL = "https://api.open-meteo.com/v1/forecast"
+# 各縣市的鄉鎮預報端點（奇數=3天含3h PoP，偶數=1週含12h PoP）
+COUNTY_EP_3D = {
+    '宜蘭縣':'F-D0047-001','桃園市':'F-D0047-005','新竹縣':'F-D0047-009',
+    '苗栗縣':'F-D0047-013','彰化縣':'F-D0047-017','南投縣':'F-D0047-021',
+    '雲林縣':'F-D0047-025','嘉義縣':'F-D0047-029','屏東縣':'F-D0047-033',
+    '臺東縣':'F-D0047-037','花蓮縣':'F-D0047-041','澎湖縣':'F-D0047-045',
+    '基隆市':'F-D0047-049','新竹市':'F-D0047-053','嘉義市':'F-D0047-057',
+    '臺北市':'F-D0047-061','高雄市':'F-D0047-065','新北市':'F-D0047-069',
+    '臺中市':'F-D0047-073','臺南市':'F-D0047-077','連江縣':'F-D0047-081',
+    '金門縣':'F-D0047-085',
+}
+COUNTY_EP_7D = {
+    '宜蘭縣':'F-D0047-003','桃園市':'F-D0047-007','新竹縣':'F-D0047-011',
+    '苗栗縣':'F-D0047-015','彰化縣':'F-D0047-019','南投縣':'F-D0047-023',
+    '雲林縣':'F-D0047-027','嘉義縣':'F-D0047-031','屏東縣':'F-D0047-035',
+    '臺東縣':'F-D0047-039','花蓮縣':'F-D0047-043','澎湖縣':'F-D0047-047',
+    '基隆市':'F-D0047-051','新竹市':'F-D0047-055','嘉義市':'F-D0047-059',
+    '臺北市':'F-D0047-063','高雄市':'F-D0047-067','新北市':'F-D0047-071',
+    '臺中市':'F-D0047-075','臺南市':'F-D0047-079','連江縣':'F-D0047-083',
+    '金門縣':'F-D0047-087',
+}
 
-# ── 讀取靜態警戒值 ────────────────────────────────
 def load_static():
-    if not os.path.exists(STATIC_FILE):
-        print(f"找不到 {STATIC_FILE}"); sys.exit(1)
-    with open(STATIC_FILE, encoding="utf-8") as f:
+    with open(STATIC_FILE, encoding='utf-8') as f:
         rows = json.load(f)
-    table = {}
-    for r in rows:
-        key = r["county"] + r["township"]
-        table[key] = r
+    table = {r['county']+r['township']: r for r in rows}
     print(f"靜態警戒值：{len(table)} 個鄉鎮")
     return table
 
-# ── 抓觀測站雨量 ──────────────────────────────────
+# ── 觀測站 ────────────────────────────────────────
 def fetch_obs():
-    if not CWA_API_KEY:
-        print("無 API Key，觀測跳過"); return {}
-    print("抓取觀測站（O-A0002-001）...")
+    if not CWA_API_KEY: return {}
+    print("抓取觀測站...")
     try:
-        r = requests.get(OBS_URL, params={"Authorization": CWA_API_KEY, "format":"JSON"}, timeout=60)
-        r.raise_for_status()
-        raw = r.json()
-    except Exception as e:
-        print(f"  失敗：{e}"); return {}
+        r = requests.get(OBS_URL, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=60)
+        r.raise_for_status(); raw = r.json()
+    except Exception as e: print(f"  失敗：{e}"); return {}
+
+    def gp(re, key):
+        # Past6Hr 大寫 H
+        for k in [key, key.replace('hr','Hr'), key.replace('Hr','hr')]:
+            v = re.get(k,{}).get('Precipitation')
+            if v is not None:
+                try:
+                    f=float(v); return f if f>=0 else 0.0
+                except: pass
+        return 0.0
 
     stations = {}
-    try:
-        all_st = raw["records"]["Station"]
-        if all_st:
-            re0 = all_st[0].get("RainfallElement", {})
-            print(f"  [結構] RainfallElement keys: {list(re0.keys())}")
-
-        def gp(block, default=0.0):
-            v = block.get("Precipitation", None) if isinstance(block, dict) else None
-            if v is None: return default
-            try:
-                f = float(v); return f if f >= 0 else default
-            except: return default
-
-        for st in all_st:
-            sid  = st.get("StationId","")
-            geo  = st.get("GeoInfo",{})
-            coords = geo.get("Coordinates",[{}])
-            lat, lng = 0.0, 0.0
-            for c in coords:
-                lv = c.get("StationLatitude",0); lo = c.get("StationLongitude",0)
-                if lv and lo: lat=float(lv); lng=float(lo); break
-            re = st.get("RainfallElement",{})
-            stations[sid] = {
-                "name": st.get("StationName",""),
-                "lat": lat, "lng": lng,
-                "county":   geo.get("CountyName",""),
-                "township": geo.get("TownName",""),
-                "rain_now":  gp(re.get("Now",{})),
-                "rain_1h":   gp(re.get("Past1hr",{})),
-                "rain_6h":   gp(re.get("Past6Hr", re.get("Past6hr",{}))),
-                "rain_12h":  gp(re.get("Past12hr",{})),
-                "rain_24h":  gp(re.get("Past24hr",{})),
-                "rain_2d":   gp(re.get("Past2days",{})),
-                "rain_3d":   gp(re.get("Past3days",{})),
-            }
-    except Exception as e:
-        print(f"  解析失敗：{e}"); import traceback; traceback.print_exc()
-
-    nonzero = sum(1 for s in stations.values() if s["rain_24h"]>0)
+    for st in raw.get('records',{}).get('Station',[]):
+        geo = st.get('GeoInfo',{})
+        coords = geo.get('Coordinates',[{}])
+        lat,lng = 0.0,0.0
+        for c in coords:
+            lv=c.get('StationLatitude',0); lo=c.get('StationLongitude',0)
+            if lv and lo: lat=float(lv); lng=float(lo); break
+        re = st.get('RainfallElement',{})
+        stations[st.get('StationId','')] = {
+            'name': st.get('StationName',''),
+            'lat':lat,'lng':lng,
+            'county':geo.get('CountyName',''),
+            'township':geo.get('TownName',''),
+            'rain_now':  gp(re,'Now'),
+            'rain_1h':   gp(re,'Past1hr'),
+            'rain_6h':   gp(re,'Past6Hr'),
+            'rain_12h':  gp(re,'Past12hr'),
+            'rain_24h':  gp(re,'Past24hr'),
+            'rain_2d':   gp(re,'Past2days'),
+            'rain_3d':   gp(re,'Past3days'),
+        }
+    nonzero = sum(1 for s in stations.values() if s['rain_24h']>0)
     print(f"  {len(stations)} 站，有24h雨量：{nonzero}")
     return stations
 
-# ── 更新歷史日雨量 ────────────────────────────────
 def update_history(stations, now_tpe):
-    today = now_tpe.strftime("%Y-%m-%d")
-    y1    = (now_tpe-timedelta(days=1)).strftime("%Y-%m-%d")
-    y2    = (now_tpe-timedelta(days=2)).strftime("%Y-%m-%d")
-
-    history = {}
-    if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, encoding="utf-8") as f:
-            history = json.load(f)
-
-    for sid, st in stations.items():
-        if sid not in history: history[sid] = {}
-        history[sid][today] = st["rain_24h"]
-        r2d = st["rain_2d"]; r1d = st["rain_24h"]
-        if y1 not in history[sid] and r2d > 0:
-            history[sid][y1] = max(0.0, round(r2d - r1d, 1))
-        r3d = st["rain_3d"]
-        if y2 not in history[sid] and r3d > 0:
-            history[sid][y2] = max(0.0, round(r3d - r2d, 1))
-
-    cutoff = (now_tpe-timedelta(days=9)).strftime("%Y-%m-%d")
-    for sid in history:
-        history[sid] = {d:v for d,v in history[sid].items() if d>cutoff}
-
-    with open(HISTORY_FILE,"w",encoding="utf-8") as f:
-        json.dump(history, f, ensure_ascii=False, separators=(",",":"))
+    today = now_tpe.strftime('%Y-%m-%d')
+    y1 = (now_tpe-timedelta(days=1)).strftime('%Y-%m-%d')
+    y2 = (now_tpe-timedelta(days=2)).strftime('%Y-%m-%d')
+    history = json.load(open(HISTORY_FILE)) if os.path.exists(HISTORY_FILE) else {}
+    for sid,st in stations.items():
+        if sid not in history: history[sid]={}
+        history[sid][today] = st['rain_24h']
+        if y1 not in history[sid] and st['rain_2d']>0:
+            history[sid][y1] = max(0.0,round(st['rain_2d']-st['rain_24h'],1))
+        if y2 not in history[sid] and st['rain_3d']>0:
+            history[sid][y2] = max(0.0,round(st['rain_3d']-st['rain_2d'],1))
+    cutoff = (now_tpe-timedelta(days=9)).strftime('%Y-%m-%d')
+    for sid in history: history[sid]={d:v for d,v in history[sid].items() if d>cutoff}
+    with open(HISTORY_FILE,'w',encoding='utf-8') as f:
+        json.dump(history,f,ensure_ascii=False,separators=(',',':'))
     print(f"  歷史更新：{len(history)} 站，今日={today}")
     return history
 
-# ── 計算 ETR2 ──────────────────────────────────────
 def calc_etr2(sid, history, now_tpe):
     if sid not in history: return None
     daily = history[sid]
-    etr2 = 0.0
-    for i in range(8):
-        d = (now_tpe-timedelta(days=i)).strftime("%Y-%m-%d")
-        etr2 += (ALPHA**i) * daily.get(d, 0.0)
-    return round(etr2, 1)
+    etr2 = sum((ALPHA**i)*daily.get((now_tpe-timedelta(days=i)).strftime('%Y-%m-%d'),0.0)
+               for i in range(8))
+    return round(etr2,1)
 
-# ── 觀測聚合到鄉鎮 ────────────────────────────────
 def agg_obs(stations, alert_table, history, now_tpe):
-    town = {}
-    for sid, st in stations.items():
-        key = st["county"] + st["township"]
+    town={}
+    for sid,st in stations.items():
+        key=st['county']+st['township']
         if key not in town:
-            town[key] = {
-                "county": st["county"], "township": st["township"],
-                "stations":[], "rain_24h":0.0, "rain_6h":0.0,
-                "rain_2d":0.0, "rain_3d":0.0, "etr2":None,
-            }
-        td = town[key]
-        td["stations"].append(sid)
-        td["rain_24h"] = max(td["rain_24h"], st["rain_24h"])
-        td["rain_6h"]  = max(td["rain_6h"],  st["rain_6h"])
-        td["rain_2d"]  = max(td["rain_2d"],  st["rain_2d"])
-        td["rain_3d"]  = max(td["rain_3d"],  st["rain_3d"])
-        ev = calc_etr2(sid, history, now_tpe)
-        if ev is not None:
-            td["etr2"] = max(td["etr2"] or 0.0, ev)
-
-    for key, td in town.items():
-        ai = alert_table.get(key, {})
-        av = ai.get("alert_val", 0)
-        td["etr2_pct"] = round(td["etr2"]/av, 4) if td["etr2"] and av>0 else None
-
+            town[key]={'county':st['county'],'township':st['township'],
+                       'stations':[],'rain_24h':0.0,'rain_6h':0.0,
+                       'rain_2d':0.0,'rain_3d':0.0,'etr2':None}
+        td=town[key]; td['stations'].append(sid)
+        td['rain_24h']=max(td['rain_24h'],st['rain_24h'])
+        td['rain_6h'] =max(td['rain_6h'], st['rain_6h'])
+        td['rain_2d'] =max(td['rain_2d'], st['rain_2d'])
+        td['rain_3d'] =max(td['rain_3d'], st['rain_3d'])
+        ev=calc_etr2(sid,history,now_tpe)
+        if ev is not None: td['etr2']=max(td['etr2'] or 0.0,ev)
+    for key,td in town.items():
+        ai=alert_table.get(key,{}); av=ai.get('alert_val',0)
+        td['etr2_pct']=round(td['etr2']/av,4) if td['etr2'] and av>0 else None
     print(f"  鄉鎮聚合：{len(town)} 個有觀測的鄉鎮")
     return town
 
-# ── 抓 PoP（前3天 F-D0047-089，含 PoP6h）─────────
-def fetch_pop3d():
-    if not CWA_API_KEY: return {}
-    print("抓取 PoP 前3天（F-D0047-089）...")
+# ── PoP 各縣市鄉鎮端點 ───────────────────────────
+def fetch_pop_county(county, ep_code, is_3day):
+    """抓單一縣市的鄉鎮 PoP 資料"""
+    url = f"{BASE_URL}/{ep_code}"
     try:
-        r = requests.get(POP3D_URL, params={
-            "Authorization": CWA_API_KEY, "format":"JSON",
-        }, timeout=60)
-        r.raise_for_status()
-        raw = r.json()
-    except Exception as e:
-        print(f"  失敗：{e}"); return {}
+        r = requests.get(url, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=30)
+        if r.status_code==404: return {}
+        r.raise_for_status(); raw=r.json()
+    except Exception as e: return {}
 
-    pop_map = {}
+    pop_map={}
     try:
-        # 嘗試不同大小寫的 key
-        rec = raw.get("records",{})
-        print(f"  [除錯] records keys: {list(rec.keys())[:6]}")
-
-        # 取 locations（試多種大小寫）
-        locs_wrap = rec.get("Locations", rec.get("locations", []))
-        if not locs_wrap:
-            print("  [除錯] 找不到 Locations"); return {}
-        locs = locs_wrap[0].get("Location", locs_wrap[0].get("location",[]))
-        if not locs:
-            print("  [除錯] 找不到 Location"); return {}
-
-        print(f"  [除錯] 鄉鎮數: {len(locs)}")
-        # 印第一筆所有 WeatherElement 名稱
-        we_all = locs[0].get("WeatherElement", locs[0].get("weatherElement",[]))
-        we_names = [we.get("ElementName", we.get("elementName","")) for we in we_all]
-        print(f"  [除錯] WeatherElement names: {we_names}")
-
-        if not we_all:
-            print("  [除錯] 無 WeatherElement"); return {}
-
-        # 印第一個 PoP 相關欄位的時段格式
-        for we in we_all:
-            en = we.get("ElementName", we.get("elementName",""))
-            if "PoP" in en or "pop" in en.lower():
-                times = we.get("Time", we.get("time",[]))
-                if times:
-                    t0 = times[0]
-                    print(f"  [除錯] {en} 時段格式: {list(t0.keys())}")
-                    print(f"  [除錯] {en} 第一段: {t0}")
-                break
-
-        for loc in locs:
-            name = loc.get("LocationName", loc.get("locationName",""))
-            we_list = loc.get("WeatherElement", loc.get("weatherElement",[]))
-            pop_segs = []
-            for we in we_list:
-                en = we.get("ElementName", we.get("elementName",""))
-                # 接受 PoP6h 或 PoP（6小時分段）
-                if en not in ("PoP6h","PoP6H","Pop6h"): continue
-                times = we.get("Time", we.get("time",[]))
-                for t in times:
-                    # 時段可能是 StartTime/EndTime 或 DataTime
-                    start = t.get("StartTime", t.get("startTime",
-                            t.get("DataTime",  t.get("dataTime",""))))
-                    end   = t.get("EndTime",   t.get("endTime",   start))
-                    ev    = t.get("ElementValue", t.get("elementValue",[{}]))
-                    if isinstance(ev, list): ev = ev[0] if ev else {}
-                    v = ev.get("Value", ev.get("value",
-                        ev.get("Probability", ev.get("probability","-"))))
-                    try: pop = float(v)
-                    except: pop = None
-                    if pop is not None:
-                        pop_segs.append({"start":start,"end":end,"pop":pop,"hours":6})
-            if pop_segs:
-                pop_map[name] = pop_segs
-
-        total_segs = len(next(iter(pop_map.values()),[]))
-        print(f"  PoP6h：{len(pop_map)} 個鄉鎮，各 {total_segs} 時段")
-    except Exception as e:
-        print(f"  解析失敗：{e}"); import traceback; traceback.print_exc()
-    return pop_map
-
-
-def fetch_pop7d():
-    if not CWA_API_KEY: return {}
-    print("抓取 PoP 後4天（F-D0047-091）...")
-    try:
-        r = requests.get(POP7D_URL, params={
-            "Authorization": CWA_API_KEY, "format":"JSON",
-        }, timeout=60)
-        r.raise_for_status()
-        raw = r.json()
-    except Exception as e:
-        print(f"  失敗：{e}"); return {}
-
-    pop_map = {}
-    try:
-        rec = raw.get("records",{})
-        locs_wrap = rec.get("Locations", rec.get("locations",[]))
+        rec = raw.get('records',{})
+        locs_wrap = rec.get('Locations', rec.get('locations',[]))
         if not locs_wrap: return {}
-        locs = locs_wrap[0].get("Location", locs_wrap[0].get("location",[]))
+        locs = locs_wrap[0].get('Location', locs_wrap[0].get('location',[]))
 
-        # 除錯：印 WeatherElement 名稱
-        if locs:
-            we_all = locs[0].get("WeatherElement", locs[0].get("weatherElement",[]))
-            we_names = [we.get("ElementName", we.get("elementName","")) for we in we_all]
-            print(f"  [除錯] F-D0047-091 WE names: {we_names}")
+        # 目標欄位名稱（已確認）
+        target_3d = '3小時降雨機率'   # F-D0047 奇數端點
+        target_7d = '12小時降雨機率'  # F-D0047 偶數端點
+        target = target_3d if is_3day else target_7d
 
         for loc in locs:
-            name = loc.get("LocationName", loc.get("locationName",""))
-            we_list = loc.get("WeatherElement", loc.get("weatherElement",[]))
-            pop_segs = []
+            name = loc.get('LocationName', loc.get('locationName',''))
+            we_list = loc.get('WeatherElement', loc.get('weatherElement',[]))
+            segs=[]
             for we in we_list:
-                en = we.get("ElementName", we.get("elementName",""))
-                # 1週預報只有 PoP（12h分段）
-                if en not in ("PoP","POP","pop"): continue
-                times = we.get("Time", we.get("time",[]))
+                en = we.get('ElementName', we.get('elementName',''))
+                if en != target: continue
+                times = we.get('Time', we.get('time',[]))
                 for t in times:
-                    start = t.get("StartTime", t.get("startTime",
-                            t.get("DataTime",  t.get("dataTime",""))))
-                    end   = t.get("EndTime",   t.get("endTime", start))
-                    ev    = t.get("ElementValue", t.get("elementValue",[{}]))
-                    if isinstance(ev,list): ev = ev[0] if ev else {}
-                    v = ev.get("Value", ev.get("value",
-                        ev.get("Probability", ev.get("probability","-"))))
-                    try:
-                        pop12 = float(v)
-                        pop6  = round((1-math.sqrt(max(0,1-pop12/100)))*100,1)
-                    except:
-                        pop12=None; pop6=None
-                    pop_segs.append({"start":start,"end":end,
-                                     "pop":pop6,"pop12h":pop12,
-                                     "hours":6,"derived":True})
-            if pop_segs:
-                pop_map[name] = pop_segs
-
-        print(f"  PoP12h→6h：{len(pop_map)} 個鄉鎮")
+                    start = t.get('StartTime', t.get('startTime',
+                            t.get('DataTime',  t.get('dataTime',''))))
+                    end   = t.get('EndTime',   t.get('endTime', start))
+                    ev    = t.get('ElementValue', t.get('elementValue',[{}]))
+                    if isinstance(ev,list): ev=ev[0] if ev else {}
+                    # 3h PoP 的值可能在不同 key
+                    v = ev.get('Value', ev.get('value',
+                        ev.get('Probability', ev.get('probability','-'))))
+                    try: pop=float(v)
+                    except: pop=None
+                    hours = 3 if is_3day else 12
+                    segs.append({'start':start,'end':end,'pop':pop,'hours':hours})
+            if segs: pop_map[name]=segs
     except Exception as e:
-        print(f"  解析失敗：{e}"); import traceback; traceback.print_exc()
+        pass
     return pop_map
 
+def fetch_all_pop(counties_needed):
+    """抓所有需要縣市的 PoP，合併成鄉鎮層級"""
+    if not CWA_API_KEY: return {}, {}
+    print(f"抓取 PoP（{len(counties_needed)} 個縣市）...")
+    pop3d_all, pop7d_all = {}, {}
+    for county in sorted(counties_needed):
+        ep3 = COUNTY_EP_3D.get(county)
+        ep7 = COUNTY_EP_7D.get(county)
+        if ep3:
+            m3 = fetch_pop_county(county, ep3, True)
+            pop3d_all.update(m3)
+        if ep7:
+            m7 = fetch_pop_county(county, ep7, False)
+            pop7d_all.update(m7)
+    print(f"  PoP3d：{len(pop3d_all)} 鄉鎮，PoP7d：{len(pop7d_all)} 鄉鎮")
+    # 印一個範例確認結構
+    if pop3d_all:
+        k=next(iter(pop3d_all)); s=pop3d_all[k]
+        print(f"  [除錯] {k} 共{len(s)}時段，第一段：start={s[0]['start']} pop={s[0]['pop']} hrs={s[0]['hours']}")
+    return pop3d_all, pop7d_all
 
-def merge_pop(pop3d, pop7d, now_tpe):
+def get_pop_6h_series(township_name, pop3d, pop7d, base_time, num_segs=28):
     """
-    回傳 {鄉鎮名: [pop_6h_list]}
-    pop_6h_list 對應 BASE_TIME 起每個 6h 時段
-    前12個時段（72h）取自 pop3d（PoP6h精確）
-    後16個時段（96h）取自 pop7d（PoP12h轉換）
+    取鄉鎮的 6h PoP 序列（共 num_segs 個 6h 時段 = 7天）
+    前3天用 pop3d（3h）：每兩個3h合成一個6h（取最大值，保守側）
+    後4天用 pop7d（12h）：用 p=1-√(1-p12) 轉換為6h
+    回傳 list of float or None，長度=num_segs
     """
-    merged = {}
-    all_towns = set(list(pop3d.keys()) + list(pop7d.keys()))
-    for name in all_towns:
-        segs3 = pop3d.get(name, [])
-        segs7 = pop7d.get(name, [])
-        # 前3天：取 pop3d 的後半（前3天中，避免跟7天重疊用前3天的精確值）
-        # 後4天：取 pop7d 中日期在3天後的時段
-        cutoff = (now_tpe + timedelta(days=3)).isoformat()[:10]
-        early = [s for s in segs3]
-        late  = [s for s in segs7 if s.get("start","") >= cutoff]
-        merged[name] = early + late
-    return merged
+    result = [None] * num_segs
+    base = base_time
 
-# ── 抓颱風期 QPF 格點 ─────────────────────────────
-def fetch_typhoon_qpf():
-    if not CWA_API_KEY: return []
-    print("抓取颱風 QPF（F-C0041）...")
-    typhoon_segs = []
-    for i, url in enumerate(QPF_TYPHOON):
-        label = f"{i*6}-{(i+1)*6}h"
-        try:
-            r = requests.get(url, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=30)
-            if r.status_code == 404: continue
-            r.raise_for_status()
-            raw = r.json()
-            dataset = raw.get("records",{}).get("dataset",[])
-            if not dataset: continue
-            ct = dataset[0].get("contents",{}).get("contentText","")
-            if not ct: continue
-            pts = []
-            for ri, row in enumerate(ct.strip().split("\n")):
-                lat_pt = 20.8 + ri * 0.045
-                for ci, v in enumerate(row.split(",")):
-                    lng_pt = 117.56 + ci * 0.049
-                    if 21.5<=lat_pt<=26.5 and 119<=lng_pt<=123:
-                        try: pts.append((lat_pt, lng_pt, float(v)))
-                        except: pass
-            typhoon_segs.append({"label":label,"points":pts})
-            print(f"  F-C0041-{str(i+1).zfill(3)} {label}: {len(pts)} 格點")
-        except Exception as e:
-            print(f"  {label}: {e}")
+    # 3天資料（3h段）→ 6h段（取前兩個的最大值）
+    segs3 = pop3d.get(township_name, [])
+    if segs3:
+        # 每2個3h合一個6h
+        for i in range(0, min(len(segs3)-1, 24), 2):  # 最多12個6h（3天）
+            p1 = segs3[i].get('pop')
+            p2 = segs3[i+1].get('pop') if i+1<len(segs3) else p1
+            if p1 is not None or p2 is not None:
+                pop6 = max(p1 or 0, p2 or 0)
+                seg_idx = i // 2
+                if seg_idx < num_segs:
+                    result[seg_idx] = pop6
 
-    if len(typhoon_segs) >= 4:
-        print(f"  颱風 QPF：{len(typhoon_segs)} 段可用")
-    else:
-        print(f"  颱風 QPF 不足（{len(typhoon_segs)} 段），非颱風期間")
-        typhoon_segs = []
-    return typhoon_segs
+    # 7天資料（12h段）→ 6h段
+    segs7 = pop7d.get(township_name, [])
+    if segs7:
+        for seg in segs7:
+            start_str = seg.get('start','')
+            if not start_str: continue
+            try:
+                # 計算這個時段對應第幾個 6h slot
+                start_dt = datetime.fromisoformat(start_str.replace('Z','+00:00'))
+                start_tpe = start_dt + timedelta(hours=8)  # 轉台灣時間
+                diff_h = (start_tpe - base).total_seconds() / 3600
+                seg_idx = int(diff_h / 6)
+            except:
+                continue
+            if 0 <= seg_idx < num_segs:
+                p12 = seg.get('pop')
+                if p12 is not None:
+                    pop6 = round((1-math.sqrt(max(0,1-p12/100)))*100,1)
+                    if result[seg_idx] is None:  # 只填尚未有資料的格子
+                        result[seg_idx] = pop6
+                    # 也填下一個6h slot（12h拆成兩個6h）
+                    if seg_idx+1 < num_segs and result[seg_idx+1] is None:
+                        result[seg_idx+1] = pop6
+    return result
 
-# ── IDW 插值 ──────────────────────────────────────
-def idw(lat, lng, pts, seg=None):
-    if not pts: return 0.0
-    dists = sorted([(math.sqrt((p[0]-lat)**2+(p[1]-lng)**2), p) for p in pts])[:4]
-    tw, tv = 0.0, 0.0
-    for d, p in dists:
-        v = p[2] if seg is None else (p[seg+2] if seg+2 < len(p) else 0.0)
-        if d < 1e-6: return v
-        w = 1/d**2; tw+=w; tv+=w*v
-    return round(tv/tw,1) if tw>0 else 0.0
-
-# ── Open-Meteo 補充 QPF（第3-15天）──────────────
-def fetch_openmeteo_batch(townships, days_start=3, days_end=15):
-    """批次查詢 Open-Meteo，每次最多 1000 個座標點"""
-    print(f"抓取 Open-Meteo QPF（第{days_start}-{days_end}天）...")
-    lats = [t.get("lat",0) for t in townships]
-    lngs = [t.get("lng",0) for t in townships]
-    if not lats: return {}
-
+# ── Open-Meteo ────────────────────────────────────
+def fetch_openmeteo(townships):
+    print(f"抓取 Open-Meteo（{len(townships)} 個鄉鎮，第3-15天）...")
+    lats=[t.get('lat',0) for t in townships]
+    lngs=[t.get('lng',0) for t in townships]
     try:
-        r = requests.get(OPENMETEO_URL, params={
-            "latitude":  ",".join(str(x) for x in lats),
-            "longitude": ",".join(str(x) for x in lngs),
-            "hourly":    "precipitation",
-            "forecast_days": days_end,
-            "timezone":  "Asia/Taipei",
-        }, timeout=90)
-        r.raise_for_status()
-        raw = r.json()
-    except Exception as e:
-        print(f"  Open-Meteo 失敗：{e}"); return {}
+        r = requests.get(OPENMETEO, params={
+            'latitude': ','.join(str(x) for x in lats),
+            'longitude':','.join(str(x) for x in lngs),
+            'hourly':   'precipitation',
+            'forecast_days': 15,
+            'timezone': 'Asia/Taipei',
+        }, timeout=120)
+        r.raise_for_status(); raw=r.json()
+    except Exception as e: print(f"  失敗：{e}"); return {}
 
-    # 批次回傳是 list
-    if isinstance(raw, list):
-        result = {}
-        for i, loc_data in enumerate(raw):
-            key = f"{lats[i]:.4f}_{lngs[i]:.4f}"
-            hourly = loc_data.get("hourly",{})
-            times  = hourly.get("time",[])
-            precip = hourly.get("precipitation",[])
-            # 取第 days_start 天後的資料，轉成逐6h
-            segs_6h = []
-            start_idx = days_start * 24
-            for j in range(start_idx, len(times), 6):
-                total_6h = sum(precip[j:j+6]) if j+6<=len(precip) else sum(precip[j:])
-                segs_6h.append(round(total_6h, 1))
-            result[key] = segs_6h
-        print(f"  Open-Meteo：{len(result)} 個點，每點 {len(next(iter(result.values()),[]))} 個6h時段")
-        return result
-    else:
-        print(f"  Open-Meteo 回傳格式非預期：{type(raw)}")
-        return {}
+    result={}
+    data_list = raw if isinstance(raw,list) else [raw]
+    for i,loc in enumerate(data_list):
+        key=f"{lats[i]:.4f}_{lngs[i]:.4f}"
+        hourly=loc.get('hourly',{})
+        precip=hourly.get('precipitation',[])
+        segs_6h=[]
+        for j in range(3*24, len(precip), 6):  # 從第3天開始
+            segs_6h.append(round(sum(precip[j:j+6]),1))
+        result[key]=segs_6h
+    n=len(next(iter(result.values()),[]))
+    print(f"  {len(result)} 個點，各 {n} 個6h時段")
+    return result
 
-# ── 計算複合風險 ──────────────────────────────────
-def calc_risk(pop_pct, etr2_pct_now, qpf_eff, alert_val):
-    """
-    Risk_A = PoP(%) × ETR2_current(%) / 100
-    Risk_B = PoP(%) × (ETR2_current + QPF_eff) / Alert × 100
-    回傳 (risk_a, risk_b) 均為 %
-    """
+# ── 複合風險 ──────────────────────────────────────
+def calc_risk(pop_pct, etr2_pct_decimal, qpf_eff, alert_val):
     if pop_pct is None: return None, None
-    pop = pop_pct / 100.0
-
-    # Risk A
-    if etr2_pct_now is not None:
-        risk_a = round(pop * etr2_pct_now * 100, 1)
-    else:
-        risk_a = None
-
-    # Risk B
-    if etr2_pct_now is not None and alert_val and alert_val > 0:
-        etr2_mm = etr2_pct_now / 100 * alert_val
-        risk_b = round(pop * (etr2_mm + qpf_eff) / alert_val * 100, 1)
-    else:
-        risk_b = None
-
-    return risk_a, risk_b
+    pop = pop_pct/100.0
+    # Risk A：PoP × 現況ETR2%
+    ra = round(pop * (etr2_pct_decimal or 0)*100, 1) if etr2_pct_decimal is not None else None
+    # Risk B：PoP × (ETR2+QPF_eff)/警戒值
+    if etr2_pct_decimal is not None and alert_val and alert_val>0:
+        etr2_mm = etr2_pct_decimal * alert_val
+        rb = round(pop * (etr2_mm + qpf_eff) / alert_val * 100, 1)
+    else: rb=None
+    return ra, rb
 
 # ══════════════════════════════════════════════════
 # 主程式
 # ══════════════════════════════════════════════════
 def main():
-    now_utc = datetime.now(timezone.utc)
-    now_tpe = now_utc + timedelta(hours=8)
-    print("="*52)
-    print(f"台灣降雨監測 v4  {now_tpe.strftime('%Y-%m-%d %H:%M')} TST")
-    print("="*52)
+    now_utc=datetime.now(timezone.utc)
+    now_tpe=now_utc+timedelta(hours=8)
+    print('='*52)
+    print(f"台灣降雨監測 v5  {now_tpe.strftime('%Y-%m-%d %H:%M')} TST")
+    print('='*52)
 
     alert_table = load_static()
-
-    # 1. 觀測
-    stations = fetch_obs()
-    history  = update_history(stations, now_tpe) if stations else \
-               (json.load(open(HISTORY_FILE)) if os.path.exists(HISTORY_FILE) else {})
-    town_obs = agg_obs(stations, alert_table, history, now_tpe)
-
-    # 2. PoP
-    pop3d   = fetch_pop3d()
-    pop7d   = fetch_pop7d()
-    pop_all = merge_pop(pop3d, pop7d, now_tpe)
-
-    # 3. QPF
-    typhoon_segs = fetch_typhoon_qpf()
-    is_typhoon   = len(typhoon_segs) >= 4
-
-    # base_time
-    h = (now_tpe.hour//6)*6
-    base_time_str = now_tpe.replace(hour=h,minute=0,second=0,microsecond=0).strftime("%Y-%m-%dT%H:%M:%S")
-
-    # 4. 組裝各鄉鎮
-    print(f"\n組裝資料...")
-    out_towns = []
-    processed = set()
-
     static_list = list(alert_table.values())
-    openmeteo_result = fetch_openmeteo_batch(static_list, days_start=3, days_end=15)
+    counties_needed = set(t['county'] for t in static_list)
 
-    for key, info in alert_table.items():
-        county   = info.get("county","")
-        township = info.get("township","")
-        lat      = info.get("lat")
-        lng      = info.get("lng")
-        alert_v  = info.get("alert_val", 0)
-        alert_6h = info.get("alert_6h", round(alert_v*0.55, 0))
+    # 觀測
+    stations = fetch_obs()
+    history  = update_history(stations,now_tpe) if stations else \
+               (json.load(open(HISTORY_FILE)) if os.path.exists(HISTORY_FILE) else {})
+    town_obs = agg_obs(stations,alert_table,history,now_tpe)
+
+    # PoP
+    pop3d, pop7d = fetch_all_pop(counties_needed)
+
+    # Open-Meteo
+    om = fetch_openmeteo(static_list)
+
+    # 基準時間
+    h=(now_tpe.hour//6)*6
+    base_dt = now_tpe.replace(hour=h,minute=0,second=0,microsecond=0)
+    base_time_str = base_dt.strftime('%Y-%m-%dT%H:%M:%S')
+
+    print('\n組裝資料...')
+    out_towns=[]
+    for key,info in alert_table.items():
+        county=info.get('county',''); township=info.get('township','')
+        lat=info.get('lat'); lng=info.get('lng')
+        alert_v=info.get('alert_val',0); alert_6h=info.get('alert_6h',round(alert_v*0.55,0))
         if not lat: continue
 
-        # 觀測
-        obs = town_obs.get(key, {})
-        etr2_val  = obs.get("etr2")
-        etr2_pct_now = obs.get("etr2_pct")  # 小數，如 0.48 = 48%
-        rain_24h  = obs.get("rain_24h")
-        rain_6h   = obs.get("rain_6h")
+        obs=town_obs.get(key,{})
+        etr2_val    = obs.get('etr2')
+        etr2_pct    = obs.get('etr2_pct')   # 小數，0.48=48%
+        rain_24h    = obs.get('rain_24h')
+        rain_6h     = obs.get('rain_6h')
+        rain_2d     = obs.get('rain_2d',0.0)
+        rain_3d     = obs.get('rain_3d',0.0)
 
-        # PoP（用鄉鎮名對應）
-        pop_segs  = pop_all.get(township, pop_all.get(county+township, []))
-        pop_6h_list = [s.get("pop") for s in pop_segs]  # list of % or None
-
-        # QPF 前48h
-        if is_typhoon:
-            qpf_48h = []
-            for seg_idx in range(8):
-                pts = [(p[0],p[1],p[2]) for p in typhoon_segs[seg_idx]["points"]] \
-                      if seg_idx < len(typhoon_segs) else []
-                qpf_48h.append(idw(lat,lng,pts))
-        else:
-            qpf_48h = [0.0]*8  # 非颱風期無格點QPF
-
-        # QPF 第3-15天（Open-Meteo）
-        om_key   = f"{lat:.4f}_{lng:.4f}"
-        qpf_sim  = openmeteo_result.get(om_key, [])
+        # QPF：非颱風期前2天全0，第3天起用Open-Meteo
+        qpf_48h = [0.0]*8
+        om_key  = f"{lat:.4f}_{lng:.4f}"
+        qpf_sim = om.get(om_key, [])
         if not qpf_sim:
-            # 備援：簡單模擬
             import random; random.seed(int(alert_v+lat*100))
-            base = alert_v/20*random.uniform(0.3,1.2)
-            qpf_sim = [round(max(0,base*math.exp(-i//4*0.06)*random.uniform(0.4,1.8)),1)
-                       for i in range(48)]
-
-        # 完整 60 段（前8=QPF，後52=Open-Meteo/模擬）
+            base=alert_v/20*random.uniform(0.3,1.2)
+            qpf_sim=[round(max(0,base*math.exp(-i//4*0.06)*random.uniform(0.4,1.8)),1)
+                     for i in range(48)]
         qpf15d  = qpf_48h + qpf_sim[:52]
         daily   = [round(sum(qpf15d[i*4:(i+1)*4]),1) for i in range(15)]
 
-        # ETR2% 各6h時段
-        seg_etr_pct = []
-        for i in range(8):
-            v = qpf15d[i]
-            seg_etr_pct.append(round(min(v/alert_6h*100,300),1) if alert_6h>0 else None)
+        # PoP 序列（28個6h時段=7天）
+        pop_6h = get_pop_6h_series(township, pop3d, pop7d, base_dt, num_segs=28)
 
-        # 計算各6h的複合風險
-        risk_a_list = []
-        risk_b_list = []
-        for i, pop_pct in enumerate(pop_6h_list):
-            # QPF_eff：從第 i 段起的加權累積
+        # ETR2%各6h
+        seg_etr_pct = [round(min(qpf15d[i]/alert_6h*100,300),1) if alert_6h>0 else None
+                       for i in range(8)]
+
+        # 複合風險
+        risk_a_list, risk_b_list = [], []
+        for i,pp in enumerate(pop_6h):
             qpf_eff = sum((ALPHA**j)*qpf15d[i+j] for j in range(8) if i+j<len(qpf15d))
-            etr2_pct_pct = (etr2_pct_now or 0)*100  # 轉成 % 整數
-            ra, rb = calc_risk(pop_pct, etr2_pct_pct, qpf_eff, alert_v)
-            risk_a_list.append(ra)
-            risk_b_list.append(rb)
+            ra,rb = calc_risk(pp, etr2_pct, qpf_eff, alert_v)
+            risk_a_list.append(ra); risk_b_list.append(rb)
 
         out_towns.append({
-            "county": county, "township": township,
-            "lat": round(lat,4), "lng": round(lng,4),
-            "alert_val": alert_v, "alert_6h": alert_6h,
-            # 觀測
-            "rain_24h":  rain_24h,
-            "rain_6h":   rain_6h,
-            "etr2":      etr2_val,
-            "etr2_pct":  etr2_pct_now,
-            # 預報
-            "qpf_15d":      qpf15d,
-            "daily_qpf":    daily,
-            "seg_etr_pct":  seg_etr_pct,
-            "qpf_24h":      round(sum(qpf_48h[:4]),1),
-            "qpf_48h":      round(sum(qpf_48h),1),
-            "is_typhoon_qpf": is_typhoon,
-            # PoP
-            "pop_6h":    pop_6h_list,
-            # 複合風險
-            "risk_a":    risk_a_list,   # PoP × ETR2%_current
-            "risk_b":    risk_b_list,   # PoP × (ETR2+QPF_eff)/Alert
+            'county':county,'township':township,
+            'lat':round(lat,4),'lng':round(lng,4),
+            'alert_val':alert_v,'alert_6h':alert_6h,
+            'rain_24h':rain_24h,'rain_6h':rain_6h,
+            'rain_2d':rain_2d,'rain_3d':rain_3d,
+            'etr2':etr2_val,'etr2_pct':etr2_pct,
+            'qpf_15d':qpf15d,'daily_qpf':daily,
+            'seg_etr_pct':seg_etr_pct,
+            'qpf_24h':round(sum(qpf_48h[:4]),1),
+            'qpf_48h':round(sum(qpf_48h),1),
+            'pop_6h':pop_6h,
+            'risk_a':risk_a_list,'risk_b':risk_b_list,
+            'obs_6h':[0.0]*8,
         })
-        processed.add(key)
 
-    output = {
-        "base_time":      base_time_str,
-        "generated_at":   now_tpe.strftime("%Y-%m-%dT%H:%M:%S"),
-        "source":         "CWA_OBS+POP+QPF" if stations else "DEMO",
-        "is_typhoon":     is_typhoon,
-        "station_count":  len(stations),
-        "township_count": len(out_towns),
-        "townships":      out_towns,
+    output={
+        'base_time':base_time_str,
+        'generated_at':now_tpe.strftime('%Y-%m-%dT%H:%M:%S'),
+        'source':'CWA_OBS+POP' if stations else 'DEMO',
+        'township_count':len(out_towns),
+        'townships':out_towns,
     }
-    with open(OUTPUT_FILE,"w",encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, separators=(",",":"))
-    sz = os.path.getsize(OUTPUT_FILE)
-    print(f"\n完成：{OUTPUT_FILE}（{sz//1024}KB）")
-    print(f"  觀測站：{len(stations)}，颱風QPF：{is_typhoon}")
-    print(f"  PoP3d：{len(pop3d)} 鄉鎮，PoP7d：{len(pop7d)} 鄉鎮")
-    print(f"  輸出鄉鎮：{len(out_towns)}")
+    with open(OUTPUT_FILE,'w',encoding='utf-8') as f:
+        json.dump(output,f,ensure_ascii=False,separators=(',',':'))
+    print(f"\n完成：{OUTPUT_FILE}（{os.path.getsize(OUTPUT_FILE)//1024}KB）")
+    print(f"  鄉鎮：{len(out_towns)}，PoP3d：{len(pop3d)}，PoP7d：{len(pop7d)}")
 
-if __name__=="__main__":
+if __name__=='__main__':
     main()
