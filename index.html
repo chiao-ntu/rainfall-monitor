@@ -456,15 +456,6 @@ function updateInfo(t){
     <div class="ir"><span class="l">預測累積QPF</span>${wv('', totalRain !== null ? totalRain+' mm' : '—')}</div>
     <div class="ir"><span class="l">預測ETR2%</span>${etrPct!==null ? wv(wCls(etrPct), etrPct.toFixed(0)+'%') : wv('','—')}</div>
   `;
-  // PoP 和複合風險
-  const pop6h    = t.pop_6h    || [];
-  const risk_a   = t.risk_a    || [];
-  const risk_b   = t.risk_b    || [];
-  const segIdx   = Math.max(0, dayFrom*4);
-  const curPop   = pop6h[segIdx];
-  const curRiskA = risk_a[segIdx];
-  const curRiskB = risk_b[segIdx];
-
   // S* 風險分數區塊
   const pop6h    = t.pop_6h     || [];
   const scoreArr = t.risk_score || [];
