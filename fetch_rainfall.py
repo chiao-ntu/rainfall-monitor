@@ -184,9 +184,11 @@ def fetch_pop_county(county, ep_code, is_3day):
                             v = candidate; break
                     try: pop=float(v) if v is not None else None
                     except: pop=None
-                    # 除錯：若前幾筆仍是 None，印出 ev 結構
-                    if pop is None and len(segs) < 2:
-                        print(f"    [除錯] {name} ElementValue={ev} → v={v}")
+                    # 除錯：第一筆 None 時印出完整時段結構
+                    if pop is None and len(segs) == 0:
+                        t_keys = list(t.keys())
+                        print(f"    [除錯] 第一時段 keys={t_keys}")
+                        print(f"    [除錯] ElementValue原始={t.get('ElementValue', t.get('elementValue','無'))}")
                     hours = 3 if is_3day else 12
                     segs.append({'start':start,'end':end,'pop':pop,'hours':hours})
             if segs: pop_map[name]=segs
