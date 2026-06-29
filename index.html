@@ -80,7 +80,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 </style>
 </head>
 <body>
-<div id="loading">⏳ 載入地圖資料中...</div>
+<div id="loading" style="display:none">⏳ 載入地圖資料中...</div>
 <div id="hdr">
   <div><h1>台灣降雨預測監測系統</h1><div class="sub">QPF × ETR2% · 水保署</div></div>
   <span class="tag agency">農業部水土保持署</span>
@@ -689,16 +689,19 @@ function buildDayBtns(){
 // ════════════════════════════════════════════════
 //  啟動：先載入兩個 GeoJSON，再初始化地圖
 // ════════════════════════════════════════════════
-async function init(){
-  const loading = document.getElementById('loading');
-  // GeoJSON 已嵌入，直接使用
-  loading.style.display='none';
+function init(){
+  // GeoJSON 已嵌入，直接使用，無需 fetch
   buildDayBtns();
   setWin('today');
-  await tryLoadLive();
+  tryLoadLive();
   setInterval(()=>{ if(!isPaused) tryLoadLive(); }, 30*60*1000);
 }
-init();
+// 等 DOM 完全載入後執行
+if(document.readyState === 'loading'){
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
 </script>
 </body>
 </html>
