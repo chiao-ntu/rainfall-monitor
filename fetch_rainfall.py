@@ -178,17 +178,14 @@ def fetch_pop_county(county, ep_code, is_3day):
                     # F-D0047 的 ElementValue 結構可能是：
                     # {"Value":"70","Measures":"%"} 或 {"Probability":"70"}
                     v = None
-                    for k in ['Value','value','Probability','probability','MaxCI','MinCI']:
+                    for k in ['ProbabilityOfPrecipitation','Value','value',
+                              'Probability','probability','MaxCI','MinCI']:
                         candidate = ev.get(k)
                         if candidate is not None and candidate != '' and candidate != ' ':
                             v = candidate; break
                     try: pop=float(v) if v is not None else None
                     except: pop=None
-                    # 除錯：第一筆 None 時印出完整時段結構
-                    if pop is None and len(segs) == 0:
-                        t_keys = list(t.keys())
-                        print(f"    [除錯] 第一時段 keys={t_keys}")
-                        print(f"    [除錯] ElementValue原始={t.get('ElementValue', t.get('elementValue','無'))}")
+
                     hours = 3 if is_3day else 12
                     segs.append({'start':start,'end':end,'pop':pop,'hours':hours})
             if segs: pop_map[name]=segs

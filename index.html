@@ -232,7 +232,7 @@ function getAccum(t){
     return {totalRain, etrPct};
   }
 
-  // 今天（dayFrom=0,dayTo=0）：優先用觀測值
+  // 今天（dayFrom=0,dayTo=0）：用 Past24hr（過去24小時，非今日零時起）
   if(dayFrom === 0 && dayTo === 0 && hasObs){
     const totalRain = t.rain_24h || 0;
     const etrPct = (t.etr2_pct !== null && t.etr2_pct !== undefined)
@@ -302,12 +302,14 @@ function renderLayer(){
       poly=L.layerGroup(g.coordinates.map(part=>L.polygon(part.map(toLL),opts)));
     }
     if(t){
-      const {totalRain,etrPct}=getAccum(t);
+      const acc2 = getAccum(t);
+      const {totalRain,etrPct} = acc2;
       const obsEtr2 = getObsEtr(t);
       const rainStr = totalRain !== null ? totalRain+' mm' : '—';
       const etrStr  = obsEtr2  !== null ? obsEtr2.toFixed(0)+'%' : '—';
+      const rainLabel = (dayFrom===0&&dayTo===0) ? '24h觀測' : 'QPF';
       poly.bindTooltip(
-        `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>QPF ${rainStr} &nbsp;ETR2% ${etrStr}`,
+        `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>${rainLabel} ${rainStr} &nbsp;ETR2% ${etrStr}`,
         {sticky:true,opacity:.92}
       );
       poly.on('click',()=>{selected=t;renderLayer();updateInfo(t);});
@@ -472,7 +474,7 @@ async function tryLoadLive(){
     document.getElementById('data-tag').textContent='● 即時資料';
     const src = d.source || '';
     document.getElementById('data-note').textContent=
-      `${src} · 產製：${d.generated_at ? d.generated_at.slice(0,16).replace('T',' ') : ''}`;
+      `${src} · 產製：${d.generated_at ? d.generated_at.slice(0,16).replace('T',' ') : ''} | 雨量=過去24h觀測`;
   }catch(e){
     console.warn('data.json 載入失敗（使用示範資料）：', e.message);
     document.getElementById('data-tag').className='tag sim';
