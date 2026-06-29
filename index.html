@@ -62,6 +62,21 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 .leaflet-popup-content-wrapper{background:#091520!important;border:1px solid #2060a0!important;border-radius:5px!important;color:#b0d0f0!important;box-shadow:0 4px 16px rgba(0,0,0,.7)!important}
 .leaflet-popup-tip{background:#091520!important}
 .leaflet-popup-content{margin:8px 12px!important;font-size:11px!important;line-height:1.7}
+/* 切換動畫遮罩 */
+#map-overlay{position:absolute;top:0;left:0;width:100%;height:100%;background:#000;
+  opacity:0;pointer-events:none;z-index:500;transition:opacity 0.18s ease;}
+#map-overlay.dimming{opacity:0.45;}
+/* 無資料提示 */
+#no-data-msg{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:rgba(10,20,35,0.92);border:1px solid #3a6090;border-radius:8px;
+  padding:16px 24px;z-index:600;text-align:center;color:#8ac8e8;font-size:13px;
+  pointer-events:none;}
+#no-data-msg .nd-icon{font-size:24px;margin-bottom:6px;}
+/* 預報模式列 */
+#model-row{display:none;align-items:center;gap:5px;flex-wrap:wrap;}
+#model-row.show{display:flex;}
+.b.model-btn{border-color:#2a4a6a;background:#0d1f35;color:#5a88aa;}
+.b.model-btn.on{background:#0a3a5a;border-color:#3a7aaa;color:#5ab8e8;}
 </style>
 </head>
 <body>
@@ -79,8 +94,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div class="bg">
       <button class="b on" id="bRain"  onclick="setMode('rain')">累積雨量</button>
       <button class="b"    id="bEtr"   onclick="setMode('etr')">ETR2%</button>
-      <button class="b"    id="bRiskA" onclick="setMode('riskA')">複合風險A</button>
-      <button class="b"    id="bRiskB" onclick="setMode('riskB')">複合風險B</button>
+      <button class="b"    id="bRisk"  onclick="setMode('risk')">S*風險分數</button>
     </div>
     <span class="cl" style="margin-left:6px">過去</span>
     <div class="bg">
@@ -115,9 +129,26 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     </div>
     <span id="rng-disp"></span>
   </div>
+  <!-- 預報模式選擇列（未來時段才顯示） -->
+  <div class="ctrl-row" id="model-row-wrap" style="display:none">
+    <span class="cl">預報來源</span>
+    <div class="bg" id="model-row">
+      <button class="b model-btn on" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
+      <button class="b model-btn"    id="mEcmwf" onclick="setModel('ecmwf')">ECMWF</button>
+      <button class="b model-btn"    id="mGfs"   onclick="setModel('gfs')">GFS</button>
+      <button class="b model-btn"    id="mIcon"  onclick="setModel('icon')">ICON</button>
+    </div>
+    <span id="model-src-note" style="font-size:10px;color:#3a6080;margin-left:4px"></span>
+  </div>
 </div>
 <div id="main">
-  <div id="map"></div>
+  <div id="map" style="position:relative">
+    <div id="map-overlay"></div>
+    <div id="no-data-msg">
+      <div class="nd-icon">⚠</div>
+      <div id="no-data-text">此模式目前無資料</div>
+    </div>
+  </div>
   <div id="sb">
     <div id="ip">
       <h3 id="iTitle">點選鄉鎮查看詳情</h3>
@@ -142,11 +173,43 @@ let TOWN_GEO = null, COUNTY_GEO = null;
 let BASE_TIME = new Date(2025,5,26,5,0,0);
 let isPaused = false, refreshTimer = null;
 let mode = 'rain', dayFrom = 0, dayTo = 1, winKey = 'n48h';
+let forecastModel = 'best';   // 'best' | 'ecmwf' | 'gfs' | 'icon'
+const MODEL_FIELD = {
+  best:  'qpf_best',
+  ecmwf: 'qpf_ecmwf',
+  gfs:   'qpf_gfs',
+  icon:  'qpf_icon',
+};
+const MODEL_NOTE = {
+  best:  'Open-Meteo Best（ECMWF+GFS 融合）',
+  ecmwf: 'ECMWF IFS 0.25° · 時效 10 天',
+  gfs:   'NOAA GFS · 時效 16 天',
+  icon:  'DWD ICON · 時效 7 天',
+};
 let selected = null;
 let townLayer = null, countyLayer = null;
 
 const TMAP = {};
 TOWNSHIPS.forEach(t => { TMAP[t.county + t.township] = t; });
+
+// ── 切換動畫 ─────────────────────────────────────
+function withTransition(fn){
+  const overlay = document.getElementById('map-overlay');
+  overlay.classList.add('dimming');
+  setTimeout(()=>{
+    fn();
+    setTimeout(()=> overlay.classList.remove('dimming'), 60);
+  }, 180);
+}
+// ── 無資料提示 ───────────────────────────────────
+function showNoData(msg){
+  const el = document.getElementById('no-data-msg');
+  document.getElementById('no-data-text').textContent = msg;
+  el.style.display = 'block';
+}
+function hideNoData(){
+  document.getElementById('no-data-msg').style.display = 'none';
+}
 
 function fmtDT(d){ return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}時`; }
 function fmtDay(d){ return `${d.getMonth()+1}/${d.getDate()}`; }
@@ -184,9 +247,11 @@ const ETR_SCALE=[
 ];
 // 複合風險色階
 const RISK_SCALE=[
-  {max:40,  color:'#FFFFFF', label:'< 40%（低風險）'},
-  {max:70,  color:'#DDDD00', label:'40–70%（中風險）'},
-  {max:1e9, color:'#DD2222', label:'≥ 70%（高風險）'},
+  {max:25,  color:'#FFFFFF', label:'S* < 25（無風險）'},
+  {max:45,  color:'#00CC44', label:'S* 25–45（注意）'},
+  {max:75,  color:'#DDDD00', label:'S* 45–75（警戒）'},
+  {max:100, color:'#DD2222', label:'S* 75–100（應變）'},
+  {max:1e9, color:'#BB00BB', label:'S* ≥ 100（緊急）'},
 ];
 function rainColor(v){for(const s of RAIN_SCALE)if(v<s.max)return s.color;return'#DDA0DD'}
 function etrColor(v) {for(const s of ETR_SCALE) if(v<s.max)return s.color;return'#BB00BB'}
@@ -213,12 +278,12 @@ function getAccum(t){
     return {totalRain: obsEtrPct, etrPct: obsEtrPct, isEtrMode: true};
   }
 
-  // 複合風險模式：取對應 6h 時段的風險值
-  if(mode==='riskA'||mode==='riskB'){
+  // S* 風險分數模式：取對應 6h 時段的 S* 值
+  if(mode==='risk'){
     const segIdx = Math.max(0, dayFrom*4);
-    const riskList = mode==='riskA' ? (t.risk_a||[]) : (t.risk_b||[]);
-    const riskVal = riskList[segIdx] !== undefined ? riskList[segIdx] : null;
-    return {totalRain: riskVal, etrPct: riskVal, isRisk: true};
+    const scoreList = t.risk_score || [];
+    const scoreVal = scoreList[segIdx] !== undefined ? scoreList[segIdx] : null;
+    return {totalRain: scoreVal, etrPct: scoreVal, isRisk: true};
   }
 
   // 過去時段：用觀測值
@@ -249,9 +314,9 @@ function getAccum(t){
     return {totalRain, etrPct};
   }
 
-  // 未來：用 QPF（qpf_15d）
-  // 非颱風期 qpf_15d[0-7]=0，第3天後才有 Open-Meteo 資料
-  const qpf = t.qpf_15d || [];
+  // 未來：依 forecastModel 選擇對應的 QPF 欄位
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const qpf = t[qpfField] || t.qpf_15d || [];
   let total = 0;
   for(let day = Math.max(0,dayFrom); day <= dayTo; day++){
     for(let i = day*4; i < day*4+4; i++) total += qpf[i]||0;
@@ -367,12 +432,12 @@ function updateInfo(t){
     return {totalRain: obsEtrPct, etrPct: obsEtrPct, isEtrMode: true};
   }
 
-  // 複合風險模式：取對應 6h 時段的風險值
-  if(mode==='riskA'||mode==='riskB'){
+  // S* 風險分數模式：取對應 6h 時段的 S* 值
+  if(mode==='risk'){
     const segIdx = Math.max(0, dayFrom*4);
-    const riskList = mode==='riskA' ? (t.risk_a||[]) : (t.risk_b||[]);
-    const riskVal = riskList[segIdx] !== undefined ? riskList[segIdx] : null;
-    return {totalRain: riskVal, etrPct: riskVal, isRisk: true};
+    const scoreList = t.risk_score || [];
+    const scoreVal = scoreList[segIdx] !== undefined ? scoreList[segIdx] : null;
+    return {totalRain: scoreVal, etrPct: scoreVal, isRisk: true};
   }
 
   document.getElementById('iCont').innerHTML=`
@@ -398,14 +463,32 @@ function updateInfo(t){
   const curRiskA = risk_a[segIdx];
   const curRiskB = risk_b[segIdx];
 
+  // S* 風險分數區塊
+  const pop6h    = t.pop_6h     || [];
+  const scoreArr = t.risk_score || [];
+  const levelArr = t.risk_level || [];
+  const segIdx   = Math.max(0, dayFrom*4);
+  const curPop   = pop6h[segIdx];
+  const curScore = scoreArr[segIdx];
+  const curLevel = levelArr[segIdx];
+
+  function scoreStyle(s){
+    if(s===null||s===undefined) return 'ok';
+    if(s>=100) return 'w4';
+    if(s>=75)  return 'w3';
+    if(s>=45)  return 'w2';
+    if(s>=25)  return 'w1';
+    return 'ok';
+  }
+
   const riskBlock = document.createElement('div');
   riskBlock.innerHTML = `
     <div class="ir" style="background:#1a2a10;margin:4px 0;padding:3px 4px;border-radius:3px">
-      <span class="l" style="color:#8ad040;font-weight:700">複合風險指標（當前時段）</span>
+      <span class="l" style="color:#8ad040;font-weight:700">S* 風險分數（當前時段）</span>
     </div>
-    <div class="ir"><span class="l">PoP降雨機率</span>${wv('', curPop!==null&&curPop!==undefined ? curPop.toFixed(0)+'%' : '—')}</div>
-    <div class="ir"><span class="l">風險A（PoP×ETR2%）</span>${curRiskA!==null&&curRiskA!==undefined ? wv(riskCls(curRiskA), curRiskA.toFixed(0)+'%') : wv('','—')}</div>
-    <div class="ir"><span class="l">風險B（PoP×複合）</span>${curRiskB!==null&&curRiskB!==undefined ? wv(riskCls(curRiskB), curRiskB.toFixed(0)+'%') : wv('','—')}</div>
+    <div class="ir"><span class="l">PoP 降雨機率</span>${wv('', curPop!=null ? curPop.toFixed(0)+'%' : '—')}</div>
+    <div class="ir"><span class="l">S* 風險分數</span>${curScore!=null ? wv(scoreStyle(curScore), curScore.toFixed(1)) : wv('','—')}</div>
+    <div class="ir"><span class="l">風險等級</span>${wv(scoreStyle(curScore||0), curLevel||'—')}</div>
   `;
   document.getElementById('iCont').appendChild(riskBlock);
   drawChart(t); drawSegs(t);
@@ -449,8 +532,8 @@ function drawSegs(t){
 function renderLegend(){
   const sc = mode==='rain'?RAIN_SCALE : mode==='etr'?ETR_SCALE : RISK_SCALE;
   const days=dayTo-dayFrom+1;
-  const titles = {rain:`累積雨量(mm)・${days}天`, etr:`ETR2%・${days}天`,
-                  riskA:'複合風險A（PoP×ETR2%）', riskB:'複合風險B（PoP×(ETR2+QPF)/警戒值）'};
+  const titles = {rain:`累積雨量(mm)・${days}天`, etr:`ETR2% 現況觀測`,
+                  risk:'S* 風險分數（ETR2 Risk Score）'};
   document.getElementById('leg-title').textContent = titles[mode] || '';
   document.getElementById('leg-items').innerHTML=sc.map(s=>`<div class="li"><div class="lsw" style="background:${s.color}"></div>${s.label}</div>`).join('');
 }
@@ -517,16 +600,39 @@ function clearBtns(){
   ALL_BTNS.forEach(id=>{const el=document.getElementById(id);if(el)el.classList.remove('on');});
   document.querySelectorAll('#day-btns .b').forEach(b=>b.classList.remove('on'));
 }
+function setModel(m){
+  forecastModel = m;
+  // 更新按鈕狀態
+  ['mBest','mEcmwf','mGfs','mIcon'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.classList.remove('on');
+  });
+  const btnMap={best:'mBest',ecmwf:'mEcmwf',gfs:'mGfs',icon:'mIcon'};
+  const el=document.getElementById(btnMap[m]); if(el) el.classList.add('on');
+  // 更新說明文字
+  const note = document.getElementById('model-src-note');
+  if(note) note.textContent = MODEL_NOTE[m] || '';
+  // 動畫切換
+  withTransition(()=>{
+    hideNoData();
+    renderLayer();
+    renderLegend();
+    if(selected) updateInfo(selected);
+  });
+}
+
 function setMode(m){
   mode=m;
-  ['bRain','bEtr','bRiskA','bRiskB'].forEach(id=>{
+  ['bRain','bEtr','bRisk'].forEach(id=>{
     const el=document.getElementById(id);
     if(el) el.classList.remove('on');
   });
-  const modeMap={rain:'bRain',etr:'bEtr',riskA:'bRiskA',riskB:'bRiskB'};
+  const modeMap={rain:'bRain',etr:'bEtr',risk:'bRisk'};
   const el=document.getElementById(modeMap[m]);
   if(el) el.classList.add('on');
-  renderLayer();renderLegend();if(selected)updateInfo(selected);
+  withTransition(()=>{
+    renderLayer(); renderLegend();
+    if(selected) updateInfo(selected);
+  });
 }
 function setWin(key){
   winKey=key; clearBtns();
@@ -541,7 +647,16 @@ function setWin(key){
     if(pm[key]){[dayFrom,dayTo]=pm[key];}
     const el=document.getElementById(bm[key]);if(el)el.classList.add('on');
   }
-  renderLayer();renderLegend();if(selected)updateInfo(selected);
+  // 顯示/隱藏預報模式列（未來時段才需要）
+  const isFuture = !(['past2d','past1d','today'].includes(key));
+  const modelWrap = document.getElementById('model-row-wrap');
+  if(modelWrap) modelWrap.style.display = isFuture ? 'flex' : 'none';
+
+  withTransition(()=>{
+    hideNoData();
+    renderLayer(); renderLegend();
+    if(selected) updateInfo(selected);
+  });
 }
 function onSlider(){
   let s=+document.getElementById('slS').value;
@@ -553,7 +668,10 @@ function onSlider(){
   const t0=new Date(BASE_TIME.getTime()+dayFrom*86400000);
   const t1=new Date(BASE_TIME.getTime()+(dayTo+1)*86400000);
   document.getElementById('rng-disp').textContent=`第${s}天(${fmtDay(t0)})→第${e}天(${fmtDay(t1)})，共${e-s+1}天`;
-  renderLayer();renderLegend();if(selected)updateInfo(selected);
+  withTransition(()=>{
+    renderLayer(); renderLegend();
+    if(selected) updateInfo(selected);
+  });
 }
 function buildDayBtns(){
   const c=document.getElementById('day-btns');c.innerHTML='';

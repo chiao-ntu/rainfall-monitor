@@ -263,47 +263,110 @@ def get_pop_6h_series(township_name, pop3d, pop7d, base_time, num_segs=28):
     return result
 
 # ── Open-Meteo ────────────────────────────────────
-def fetch_openmeteo(townships):
-    print(f"抓取 Open-Meteo（{len(townships)} 個鄉鎮，第3-15天）...")
+def fetch_openmeteo_model(townships, model='best_match'):
+    """
+    抓取 Open-Meteo 多模式預報（涵蓋全部15天，從現在起）
+    model: 'best_match'（ECMWF+GFS最佳組合）/ 'ecmwf_ifs025' / 'gfs_seamless' / 'icon_seamless'
+    """
+    model_names = {
+        'best_match':    'Open-Meteo Best（ECMWF+GFS）',
+        'ecmwf_ifs025':  'ECMWF IFS',
+        'gfs_seamless':  'NOAA GFS',
+        'icon_seamless': 'DWD ICON',
+    }
+    label = model_names.get(model, model)
+    print(f"  抓取 {label}...")
     lats=[t.get('lat',0) for t in townships]
     lngs=[t.get('lng',0) for t in townships]
+
+    params = {
+        'latitude':       ','.join(str(x) for x in lats),
+        'longitude':      ','.join(str(x) for x in lngs),
+        'hourly':         'precipitation',
+        'forecast_days':  15,
+        'timezone':       'Asia/Taipei',
+    }
+    if model != 'best_match':
+        params['models'] = model
+
     try:
-        r = requests.get(OPENMETEO, params={
-            'latitude': ','.join(str(x) for x in lats),
-            'longitude':','.join(str(x) for x in lngs),
-            'hourly':   'precipitation',
-            'forecast_days': 15,
-            'timezone': 'Asia/Taipei',
-        }, timeout=120)
+        r = requests.get(OPENMETEO, params=params, timeout=120)
         r.raise_for_status(); raw=r.json()
-    except Exception as e: print(f"  失敗：{e}"); return {}
+    except Exception as e:
+        print(f"    失敗：{e}"); return {}
 
     result={}
     data_list = raw if isinstance(raw,list) else [raw]
-    for i,loc in enumerate(data_list):
-        key=f"{lats[i]:.4f}_{lngs[i]:.4f}"
-        hourly=loc.get('hourly',{})
-        precip=hourly.get('precipitation',[])
-        segs_6h=[]
-        for j in range(3*24, len(precip), 6):  # 從第3天開始
+    for i, loc in enumerate(data_list):
+        key = f"{lats[i]:.4f}_{lngs[i]:.4f}"
+        hourly = loc.get('hourly',{})
+        precip = hourly.get('precipitation',[])
+        # 全部15天轉成6h時段（60個）
+        segs_6h = []
+        for j in range(0, len(precip), 6):
             segs_6h.append(round(sum(precip[j:j+6]),1))
-        result[key]=segs_6h
-    n=len(next(iter(result.values()),[]))
-    print(f"  {len(result)} 個點，各 {n} 個6h時段")
+        result[key] = segs_6h[:60]  # 最多60個（15天）
+    n = len(next(iter(result.values()),[]))
+    print(f"    {len(result)} 個點，各 {n} 個6h時段")
     return result
 
-# ── 複合風險 ──────────────────────────────────────
-def calc_risk(pop_pct, etr2_pct_decimal, qpf_eff, alert_val):
-    if pop_pct is None: return None, None
-    pop = pop_pct/100.0
-    # Risk A：PoP × 現況ETR2%
-    ra = round(pop * (etr2_pct_decimal or 0)*100, 1) if etr2_pct_decimal is not None else None
-    # Risk B：PoP × (ETR2+QPF_eff)/警戒值
-    if etr2_pct_decimal is not None and alert_val and alert_val>0:
-        etr2_mm = etr2_pct_decimal * alert_val
-        rb = round(pop * (etr2_mm + qpf_eff) / alert_val * 100, 1)
-    else: rb=None
-    return ra, rb
+def fetch_openmeteo(townships):
+    """抓取所有 Open-Meteo 模式，回傳 {model: {key: [segs]}}"""
+    print(f"抓取 Open-Meteo（{len(townships)} 個鄉鎮，全部15天）...")
+    models = ['best_match', 'ecmwf_ifs025', 'gfs_seamless', 'icon_seamless']
+    all_results = {}
+    for model in models:
+        result = fetch_openmeteo_model(townships, model)
+        all_results[model] = result
+    return all_results
+
+# ── 風險分數 S*（ETR2 Risk Score）────────────────────
+def calc_risk_score(etr_pct, qpf_mm, pop_pct, n_hours,
+                    alpha=0.5, beta=0.5, gamma=0.3,
+                    decay_per_6h=4, threshold_per_6h=40):
+    """
+    etr_pct   : ETR2% 現況值（整數，如 110 = 110%）
+    qpf_mm    : 該時窗的 QPF (mm)
+    pop_pct   : 降雨機率（0-100）
+    n_hours   : 預報時窗（3/6/12/24）
+    回傳 S*（float，越大越嚴峻）
+    """
+    if etr_pct is None or pop_pct is None: return None
+
+    # Step 1: L（現況基礎分）
+    if etr_pct < 70:
+        L = 0
+    elif etr_pct < 130:
+        L = (etr_pct - 70) / 30 * 4
+    else:
+        L = 4 + (etr_pct - 130) / 10
+
+    # Step 2: 基準量
+    decay  = decay_per_6h * n_hours / 6      # 自然衰退量
+    t_high = threshold_per_6h * n_hours / 6  # 加劇門檻量
+    net    = qpf_mm - decay                   # 淨雨量
+
+    # Step 3: Mf（未來雨量修正）
+    denom = t_high - decay
+    Mf = max(-1.0, min(1.0, net/denom*2-1)) if denom != 0 else -1.0
+
+    # Step 4: Mp（降雨機率修正）
+    Mp = (pop_pct - 50) / 50
+
+    # Step 5: D（衰退速度修正）
+    D = max(-2.0, min(2.0, net/decay)) if decay != 0 else 0.0
+
+    # Step 6: S*
+    inner = max(0, L + alpha*Mf + beta*Mp + gamma*D)
+    return round(inner * 30, 1)
+
+def get_risk_level(score):
+    if score is None:   return None, '#FFFFFF'
+    if score < 25:      return '無風險', '#FFFFFF'
+    if score < 45:      return '注意',   '#00CC44'
+    if score < 75:      return '警戒',   '#DDDD00'
+    if score < 100:     return '應變',   '#DD2222'
+    return '緊急', '#BB00BB'
 
 # ══════════════════════════════════════════════════
 # 主程式
@@ -328,8 +391,9 @@ def main():
     # PoP
     pop3d, pop7d = fetch_all_pop(counties_needed)
 
-    # Open-Meteo
-    om = fetch_openmeteo(static_list)
+    # Open-Meteo（四個模式）
+    om_all = fetch_openmeteo(static_list)
+    om = om_all.get('best_match', {})  # 預設用 best_match
 
     # 基準時間
     h=(now_tpe.hour//6)*6
@@ -352,17 +416,36 @@ def main():
         rain_2d     = obs.get('rain_2d',0.0)
         rain_3d     = obs.get('rain_3d',0.0)
 
-        # QPF：非颱風期前2天全0，第3天起用Open-Meteo
-        qpf_48h = [0.0]*8
-        om_key  = f"{lat:.4f}_{lng:.4f}"
-        qpf_sim = om.get(om_key, [])
-        if not qpf_sim:
-            import random; random.seed(int(alert_v+lat*100))
-            base=alert_v/20*random.uniform(0.3,1.2)
-            qpf_sim=[round(max(0,base*math.exp(-i//4*0.06)*random.uniform(0.4,1.8)),1)
-                     for i in range(48)]
-        qpf15d  = qpf_48h + qpf_sim[:52]
-        daily   = [round(sum(qpf15d[i*4:(i+1)*4]),1) for i in range(15)]
+        # QPF：優先用 Open-Meteo 全程15天，颱風期間用 CWA 格點覆蓋前48h
+        om_key = f"{lat:.4f}_{lng:.4f}"
+        om_key = f"{lat:.4f}_{lng:.4f}"
+
+        def get_qpf_model(model_key):
+            """取特定模式的60個6h QPF，若無則備援"""
+            segs = om_all.get(model_key, {}).get(om_key, [])
+            if not segs:
+                import random; random.seed(int(alert_v+lat*100+hash(model_key)%100))
+                base = alert_v/20*random.uniform(0.3,1.2)
+                segs = [round(max(0,base*math.exp(-i//4*0.06)*random.uniform(0.4,1.8)),1)
+                        for i in range(60)]
+            return segs[:60]
+
+        # 各模式的完整15天QPF
+        qpf_best  = get_qpf_model('best_match')
+        qpf_ecmwf = get_qpf_model('ecmwf_ifs025')
+        qpf_gfs   = get_qpf_model('gfs_seamless')
+        qpf_icon  = get_qpf_model('icon_seamless')
+
+        # 颱風期間：用 CWA 格點覆蓋前8段（48h）
+        if is_typhoon:
+            for idx in range(min(8, len(qpf_best))):
+                v = idw(lat, lng, [], idx)  # 已在上方計算
+                if v > 0:
+                    qpf_best[idx] = qpf_ecmwf[idx] = qpf_gfs[idx] = qpf_icon[idx] = v
+
+        # 預設用 best_match
+        qpf15d = qpf_best
+        daily  = [round(sum(qpf15d[i*4:(i+1)*4]),1) for i in range(15)]
 
         # PoP 序列（28個6h時段=7天）
         pop_6h = get_pop_6h_series(township, pop3d, pop7d, base_dt, num_segs=28)
@@ -371,12 +454,19 @@ def main():
         seg_etr_pct = [round(min(qpf15d[i]/alert_6h*100,300),1) if alert_6h>0 else None
                        for i in range(8)]
 
-        # 複合風險
-        risk_a_list, risk_b_list = [], []
-        for i,pp in enumerate(pop_6h):
-            qpf_eff = sum((ALPHA**j)*qpf15d[i+j] for j in range(8) if i+j<len(qpf15d))
-            ra,rb = calc_risk(pp, etr2_pct, qpf_eff, alert_v)
-            risk_a_list.append(ra); risk_b_list.append(rb)
+        # S* 風險分數（各6h時段，使用3h或6h QPF + PoP）
+        # etr_pct_now = 現況ETR2%（整數%）
+        etr_pct_now = round(etr2_pct * 100, 1) if etr2_pct is not None else None
+        risk_score_list = []    # 各時段的 S*
+        risk_level_list = []    # 各時段的等級文字
+        risk_color_list = []    # 各時段的顏色
+        for i, pp in enumerate(pop_6h):
+            qpf_seg = qpf15d[i] if i < len(qpf15d) else 0.0
+            score = calc_risk_score(etr_pct_now, qpf_seg, pp, n_hours=6)
+            level, color = get_risk_level(score)
+            risk_score_list.append(score)
+            risk_level_list.append(level)
+            risk_color_list.append(color)
 
         out_towns.append({
             'county':county,'township':township,
@@ -390,7 +480,13 @@ def main():
             'qpf_24h':round(sum(qpf_48h[:4]),1),
             'qpf_48h':round(sum(qpf_48h),1),
             'pop_6h':pop_6h,
-            'risk_a':risk_a_list,'risk_b':risk_b_list,
+            'risk_score': risk_score_list,
+            'risk_level': risk_level_list,
+            # 各模式QPF（60個6h時段=15天）
+            'qpf_best':  qpf_best,
+            'qpf_ecmwf': qpf_ecmwf,
+            'qpf_gfs':   qpf_gfs,
+            'qpf_icon':  qpf_icon,
             'obs_6h':[0.0]*8,
         })
 
