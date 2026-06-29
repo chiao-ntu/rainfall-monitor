@@ -38,11 +38,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 #map{flex:1}
 /* 純白底 */
 .leaflet-container{background:#ffffff!important}
-#sb{width:270px;background:#091520;border-left:1px solid #1a3348;display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
-#ip{padding:10px;border-bottom:1px solid #1a3348;flex-shrink:0}
-#ip h3{font-size:12px;color:#6bc8e8;margin-bottom:5px}
-.hint{font-size:10px;color:#2a5070}
-.ir{display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #0d2030;font-size:10px}
+#sb{width:300px;background:#091520;border-left:1px solid #1a3348;display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
+#ip{padding:12px;border-bottom:1px solid #1a3348;flex-shrink:0;overflow-y:auto;max-height:55vh}
+#ip h3{font-size:14px;color:#6bc8e8;margin-bottom:8px}
+.hint{font-size:11px;color:#2a5070}
+.ir{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #0d2030;font-size:12px}
 .ir .l{color:#3a7090}.ir .v{font-weight:700;color:#b0cce0}
 .v.ok{color:#50d080}.v.w1{color:#c8c830}.v.w2{color:#e08030}.v.w3{color:#e03030}.v.w4{color:#c030c0}
 #chart-wrap{padding:8px 10px;border-bottom:1px solid #1a3348;flex-shrink:0;display:none}
@@ -94,7 +94,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div class="bg">
       <button class="b on" id="bRain"  onclick="setMode('rain')">累積雨量</button>
       <button class="b"    id="bEtr"   onclick="setMode('etr')">ETR2%</button>
-      <button class="b"    id="bRisk"  onclick="setMode('risk')">S*風險分數</button>
+      <button class="b"    id="bRisk"  onclick="setMode('risk')">風險指標</button>
     </div>
     <span class="cl" style="margin-left:6px">過去</span>
     <div class="bg">
@@ -249,11 +249,11 @@ const ETR_SCALE=[
 ];
 // 複合風險色階
 const RISK_SCALE=[
-  {max:25,  color:'#FFFFFF', label:'S* < 25（無風險）'},
-  {max:45,  color:'#00CC44', label:'S* 25–45（注意）'},
-  {max:75,  color:'#DDDD00', label:'S* 45–75（警戒）'},
-  {max:100, color:'#DD2222', label:'S* 75–100（應變）'},
-  {max:1e9, color:'#BB00BB', label:'S* ≥ 100（緊急）'},
+  {max:25,  color:'#FFFFFF', label:'< 25（無風險）'},
+  {max:45,  color:'#00CC44', label:'25–45（注意）'},
+  {max:75,  color:'#DDDD00', label:'45–75（警戒）'},
+  {max:100, color:'#DD2222', label:'75–100（應變）'},
+  {max:1e9, color:'#BB00BB', label:'≥ 100（緊急）'},
 ];
 function rainColor(v){for(const s of RAIN_SCALE)if(v<s.max)return s.color;return'#DDA0DD'}
 function etrColor(v) {for(const s of ETR_SCALE) if(v<s.max)return s.color;return'#BB00BB'}
@@ -280,7 +280,7 @@ function getAccum(t){
     return {totalRain: obsEtrPct, etrPct: obsEtrPct, isEtrMode: true};
   }
 
-  // S* 風險分數模式：取對應 6h 時段的 S* 值
+  // 風險指標模式：取對應 6h 時段的 S* 值
   if(mode==='risk'){
     const segIdx = Math.max(0, dayFrom*4);
     const scoreList = t.risk_score || [];
@@ -458,10 +458,10 @@ function updateInfo(t){
     <div class="ir"><span class="l">預測累積QPF</span>${wv('', totalRain!==null ? totalRain+' mm' : '—')}</div>
     <div class="ir"><span class="l">預測ETR2%</span>${etrPct!==null ? wv(wCls(etrPct), etrPct.toFixed(0)+'%') : wv('','—')}</div>
     <div class="ir" style="background:#1a2a10;margin:4px 0;padding:3px 4px;border-radius:3px">
-      <span class="l" style="color:#8ad040;font-weight:700">S* 風險分數（當前時段）</span>
+      <span class="l" style="color:#8ad040;font-weight:700">風險指標（當前時段）</span>
     </div>
     <div class="ir"><span class="l">PoP 降雨機率</span>${wv('', curPop!=null ? curPop.toFixed(0)+'%' : '—')}</div>
-    <div class="ir"><span class="l">S* 風險分數</span>${curScore!=null ? wv(scoreStyle(curScore), curScore.toFixed(1)) : wv('','—')}</div>
+    <div class="ir"><span class="l">風險指標</span>${curScore!=null ? wv(scoreStyle(curScore), curScore.toFixed(1)) : wv('','—')}</div>
     <div class="ir"><span class="l">風險等級</span>${wv(scoreStyle(curScore||0), curLevel||'—')}</div>
   `;
   drawChart(t); drawSegs(t);
@@ -505,8 +505,13 @@ function drawSegs(t){
 function renderLegend(){
   const sc = mode==='rain'?RAIN_SCALE : mode==='etr'?ETR_SCALE : RISK_SCALE;
   const days=dayTo-dayFrom+1;
-  const titles = {rain:`累積雨量(mm)・${days}天`, etr:`ETR2% 現況觀測`,
-                  risk:'S* 風險分數（ETR2 Risk Score）'};
+  const modelLabel = (['today','past1d','past2d'].includes(winKey))
+    ? 'CWA觀測' : (MODEL_NOTE[forecastModel] || forecastModel);
+  const titles = {
+    rain: `累積雨量(mm)・${days}天・${modelLabel}`,
+    etr:  `ETR2% 現況觀測`,
+    risk: `風險指標（ETR2 Risk Score）・${modelLabel}`,
+  };
   document.getElementById('leg-title').textContent = titles[mode] || '';
   document.getElementById('leg-items').innerHTML=sc.map(s=>`<div class="li"><div class="lsw" style="background:${s.color}"></div>${s.label}</div>`).join('');
 }
@@ -664,7 +669,7 @@ function init(){
   // GeoJSON 已嵌入，直接使用，無需 fetch
   document.getElementById('loading').style.display = 'none';
   buildDayBtns();
-  setWin('today');
+  setWin('n24h');   // 預設顯示未來24h預測
   tryLoadLive();
   setInterval(()=>{ if(!isPaused) tryLoadLive(); }, 30*60*1000);
 }
