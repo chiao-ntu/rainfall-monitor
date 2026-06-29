@@ -51,10 +51,15 @@ def load_static():
 def fetch_obs():
     if not CWA_API_KEY: return {}
     print("抓取觀測站...")
-    try:
-        r = requests.get(OBS_URL, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=60)
-        r.raise_for_status(); raw = r.json()
-    except Exception as e: print(f"  失敗：{e}"); return {}
+    raw = None
+    for attempt in range(2):
+        try:
+            r = requests.get(OBS_URL, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=30)
+            r.raise_for_status(); raw = r.json(); break
+        except Exception as e:
+            if attempt == 0: print(f"  第1次失敗，重試：{e}")
+            else: print(f"  失敗：{e}"); return {}
+    if raw is None: return {}
 
     def gp(re, key):
         # Past6Hr 大寫 H
@@ -144,7 +149,7 @@ def fetch_pop_county(county, ep_code, is_3day):
     """抓單一縣市的鄉鎮 PoP 資料"""
     url = f"{BASE_URL}/{ep_code}"
     try:
-        r = requests.get(url, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=30)
+        r = requests.get(url, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=15)
         if r.status_code==404: return {}
         r.raise_for_status(); raw=r.json()
     except Exception as e: return {}
@@ -321,6 +326,42 @@ def fetch_openmeteo(townships):
         all_results[model] = result
     return all_results
 
+
+# ── 颱風期 QPF 格點 ──────────────────────────────
+QPF_TYPHOON = [f"{BASE_URL}/F-C0041-{str(i).zfill(3)}" for i in range(1,9)]
+
+def fetch_typhoon_qpf():
+    if not CWA_API_KEY: return []
+    print("抓取颱風 QPF（F-C0041）...")
+    typhoon_segs = []
+    for i, url in enumerate(QPF_TYPHOON):
+        label = f"{i*6}-{(i+1)*6}h"
+        try:
+            r = requests.get(url, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=20)
+            if r.status_code == 404: continue
+            r.raise_for_status(); raw=r.json()
+            dataset = raw.get("records",{}).get("dataset",[])
+            if not dataset: continue
+            ct = dataset[0].get("contents",{}).get("contentText","")
+            if not ct: continue
+            pts = []
+            for ri, row in enumerate(ct.strip().split("\n")):
+                lat_pt = 20.8 + ri * 0.045
+                for ci, v in enumerate(row.split(",")):
+                    lng_pt = 117.56 + ci * 0.049
+                    if 21.5<=lat_pt<=26.5 and 119<=lng_pt<=123:
+                        try: pts.append((lat_pt, lng_pt, float(v)))
+                        except: pass
+            typhoon_segs.append({"label":label,"points":pts})
+        except Exception as e:
+            pass
+    if len(typhoon_segs) >= 4:
+        print(f"  颱風 QPF：{len(typhoon_segs)} 段")
+    else:
+        print(f"  非颱風期間（{len(typhoon_segs)} 段）")
+        typhoon_segs = []
+    return typhoon_segs
+
 # ── 風險分數 S*（ETR2 Risk Score）────────────────────
 def calc_risk_score(etr_pct, qpf_mm, pop_pct, n_hours,
                     alpha=0.5, beta=0.5, gamma=0.3,
@@ -392,6 +433,10 @@ def main():
     # PoP
     pop3d, pop7d = fetch_all_pop(counties_needed)
 
+    # 颱風 QPF（先抓，決定 is_typhoon 旗標）
+    typhoon_segs = fetch_typhoon_qpf() if CWA_API_KEY else []
+    is_typhoon   = len(typhoon_segs) >= 4
+
     # Open-Meteo（四個模式）
     om_all = fetch_openmeteo(static_list)
     om = om_all.get('best_match', {})  # 預設用 best_match
@@ -418,7 +463,6 @@ def main():
         rain_3d     = obs.get('rain_3d',0.0)
 
         # QPF：優先用 Open-Meteo 全程15天，颱風期間用 CWA 格點覆蓋前48h
-        om_key = f"{lat:.4f}_{lng:.4f}"
         om_key = f"{lat:.4f}_{lng:.4f}"
 
         def get_qpf_model(model_key):
