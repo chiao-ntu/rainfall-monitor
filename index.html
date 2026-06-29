@@ -80,7 +80,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 </style>
 </head>
 <body>
-<div id="loading" style="display:none">⏳ 載入地圖資料中...</div>
+<div id="loading" style="display:block">⏳ 載入地圖資料中...</div>
 <div id="hdr">
   <div><h1>台灣降雨預測監測系統</h1><div class="sub">QPF × ETR2% · 水保署</div></div>
   <span class="tag agency">農業部水土保持署</span>
@@ -419,51 +419,21 @@ function renderLayer(){
 function wv(cls,txt){return`<span class="v ${cls}">${txt}</span>`;}
 function updateInfo(t){
   document.getElementById('iTitle').textContent=`${t.county} ${t.township}`;
-  const {totalRain,etrPct}=getAccum(t);
-  const days=dayTo-dayFrom+1;
-  const t0=new Date(BASE_TIME.getTime()+Math.max(0,dayFrom)*86400000);
-  const t1=new Date(BASE_TIME.getTime()+(dayTo+1)*86400000);
+  const {totalRain, etrPct} = getAccum(t);
   const obsEtr = getObsEtr(t);
   const hasObs = t.rain_24h !== null && t.rain_24h !== undefined;
+  const days   = dayTo - dayFrom + 1;
+  const t0     = new Date(BASE_TIME.getTime() + Math.max(0,dayFrom)*86400000);
+  const t1     = new Date(BASE_TIME.getTime() + (dayTo+1)*86400000);
 
-  // ETR2% 模式：永遠用現況觀測值（etr2_pct），與時間範圍無關
-  if(mode==='etr'){
-    const obsEtrPct = (t.etr2_pct !== null && t.etr2_pct !== undefined)
-      ? Math.round(t.etr2_pct * 1000) / 10  // 小數→%
-      : null;
-    return {totalRain: obsEtrPct, etrPct: obsEtrPct, isEtrMode: true};
-  }
-
-  // S* 風險分數模式：取對應 6h 時段的 S* 值
-  if(mode==='risk'){
-    const segIdx = Math.max(0, dayFrom*4);
-    const scoreList = t.risk_score || [];
-    const scoreVal = scoreList[segIdx] !== undefined ? scoreList[segIdx] : null;
-    return {totalRain: scoreVal, etrPct: scoreVal, isRisk: true};
-  }
-
-  document.getElementById('iCont').innerHTML=`
-    <div class="ir" style="background:#0d2535;margin:-2px -0px 4px;padding:3px 4px;border-radius:3px">
-      <span class="l" style="color:#6bc8e8;font-weight:700">現況觀測</span>
-    </div>
-    <div class="ir"><span class="l">ETR2警戒值</span>${wv('', t.alert_val ? t.alert_val+' mm' : '—')}</div>
-    <div class="ir"><span class="l">近24h累積雨量</span>${wv('', hasObs ? (t.rain_24h)+' mm' : '無資料')}</div>
-    <div class="ir"><span class="l">有效累積(ETR2)</span>${wv('', t.etr2 !== null && t.etr2 !== undefined ? t.etr2+' mm' : '—')}</div>
-    <div class="ir"><span class="l">現況ETR2%</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','—')}</div>
-    <div class="ir" style="background:#0d2535;margin:4px -0px 4px;padding:3px 4px;border-radius:3px">
-      <span class="l" style="color:#6bc8e8;font-weight:700">QPF預報（${fmtDay(t0)}→${fmtDay(t1)}，${days}天）</span>
-    </div>
-    <div class="ir"><span class="l">預測累積QPF</span>${wv('', totalRain !== null ? totalRain+' mm' : '—')}</div>
-    <div class="ir"><span class="l">預測ETR2%</span>${etrPct!==null ? wv(wCls(etrPct), etrPct.toFixed(0)+'%') : wv('','—')}</div>
-  `;
-  // S* 風險分數區塊
-  const pop6h    = t.pop_6h     || [];
-  const scoreArr = t.risk_score || [];
-  const levelArr = t.risk_level || [];
-  const segIdx   = Math.max(0, dayFrom*4);
-  const curPop   = pop6h[segIdx];
-  const curScore = scoreArr[segIdx];
-  const curLevel = levelArr[segIdx];
+  // 取 S* 風險資料（函式作用域頂層，避免重複宣告）
+  const pop6hArr   = t.pop_6h      || [];
+  const scoreArr   = t.risk_score  || [];
+  const levelArr   = t.risk_level  || [];
+  const riskSegIdx = Math.max(0, dayFrom * 4);
+  const curPop     = pop6hArr[riskSegIdx];
+  const curScore   = scoreArr[riskSegIdx];
+  const curLevel   = levelArr[riskSegIdx];
 
   function scoreStyle(s){
     if(s===null||s===undefined) return 'ok';
@@ -474,8 +444,19 @@ function updateInfo(t){
     return 'ok';
   }
 
-  const riskBlock = document.createElement('div');
-  riskBlock.innerHTML = `
+  document.getElementById('iCont').innerHTML=`
+    <div class="ir" style="background:#0d2535;margin:-2px 0 4px;padding:3px 4px;border-radius:3px">
+      <span class="l" style="color:#6bc8e8;font-weight:700">現況觀測</span>
+    </div>
+    <div class="ir"><span class="l">ETR2警戒值</span>${wv('', t.alert_val ? t.alert_val+' mm' : '—')}</div>
+    <div class="ir"><span class="l">過去24h累積雨量</span>${wv('', hasObs ? t.rain_24h+' mm' : '無資料')}</div>
+    <div class="ir"><span class="l">有效累積(ETR2)</span>${wv('', t.etr2!=null ? t.etr2+' mm' : '—')}</div>
+    <div class="ir"><span class="l">現況ETR2%</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','—')}</div>
+    <div class="ir" style="background:#0d2535;margin:4px 0;padding:3px 4px;border-radius:3px">
+      <span class="l" style="color:#6bc8e8;font-weight:700">QPF預報（${fmtDay(t0)}→${fmtDay(t1)}，${days}天）</span>
+    </div>
+    <div class="ir"><span class="l">預測累積QPF</span>${wv('', totalRain!==null ? totalRain+' mm' : '—')}</div>
+    <div class="ir"><span class="l">預測ETR2%</span>${etrPct!==null ? wv(wCls(etrPct), etrPct.toFixed(0)+'%') : wv('','—')}</div>
     <div class="ir" style="background:#1a2a10;margin:4px 0;padding:3px 4px;border-radius:3px">
       <span class="l" style="color:#8ad040;font-weight:700">S* 風險分數（當前時段）</span>
     </div>
@@ -483,7 +464,6 @@ function updateInfo(t){
     <div class="ir"><span class="l">S* 風險分數</span>${curScore!=null ? wv(scoreStyle(curScore), curScore.toFixed(1)) : wv('','—')}</div>
     <div class="ir"><span class="l">風險等級</span>${wv(scoreStyle(curScore||0), curLevel||'—')}</div>
   `;
-  document.getElementById('iCont').appendChild(riskBlock);
   drawChart(t); drawSegs(t);
 }
 
@@ -682,6 +662,7 @@ function buildDayBtns(){
 // ════════════════════════════════════════════════
 function init(){
   // GeoJSON 已嵌入，直接使用，無需 fetch
+  document.getElementById('loading').style.display = 'none';
   buildDayBtns();
   setWin('today');
   tryLoadLive();
