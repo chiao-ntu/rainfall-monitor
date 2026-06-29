@@ -175,11 +175,18 @@ def fetch_pop_county(county, ep_code, is_3day):
                     end   = t.get('EndTime',   t.get('endTime', start))
                     ev    = t.get('ElementValue', t.get('elementValue',[{}]))
                     if isinstance(ev,list): ev=ev[0] if ev else {}
-                    # 3h PoP 的值可能在不同 key
-                    v = ev.get('Value', ev.get('value',
-                        ev.get('Probability', ev.get('probability','-'))))
-                    try: pop=float(v)
+                    # F-D0047 的 ElementValue 結構可能是：
+                    # {"Value":"70","Measures":"%"} 或 {"Probability":"70"}
+                    v = None
+                    for k in ['Value','value','Probability','probability','MaxCI','MinCI']:
+                        candidate = ev.get(k)
+                        if candidate is not None and candidate != '' and candidate != ' ':
+                            v = candidate; break
+                    try: pop=float(v) if v is not None else None
                     except: pop=None
+                    # 除錯：若前幾筆仍是 None，印出 ev 結構
+                    if pop is None and len(segs) < 2:
+                        print(f"    [除錯] {name} ElementValue={ev} → v={v}")
                     hours = 3 if is_3day else 12
                     segs.append({'start':start,'end':end,'pop':pop,'hours':hours})
             if segs: pop_map[name]=segs

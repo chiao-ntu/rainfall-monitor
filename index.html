@@ -281,10 +281,11 @@ function renderLayer(){
     const isSel = selected && selected.county===p.COUNTYNAME && selected.township===p.TOWNNAME;
     let fillColor='#e8eef2', fillOp=0.05;
     if(t){
-      const {totalRain,etrPct} = getAccum(t);
-      if(totalRain === null){
+      const acc = getAccum(t);
+      const {totalRain, etrPct} = acc;
+      if(totalRain === null || totalRain === undefined){
         fillColor='#ffffff'; fillOp=0.0;
-      } else if(v.isRisk){
+      } else if(acc.isRisk){
         fillColor = riskColor(totalRain);
         fillOp    = isSel?0.93:0.78;
       } else {
