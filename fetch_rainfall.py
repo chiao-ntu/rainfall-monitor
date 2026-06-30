@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 
 CWA_API_KEY  = os.environ.get("CWA_API_KEY", "")
 STATIC_FILE  = "etr2_static.json"
+ALL_TOWNSHIPS_FILE = "all_townships.json"  # 全台368個行政區（含座標），不依賴是否有觀測站
 HISTORY_FILE = "obs_history.json"
 OUTPUT_FILE  = "data.json"
 ETR2_WEIGHTS = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1]  # R0~R6 固定權重
@@ -46,6 +47,16 @@ def load_static():
     table = {r['county']+r['township']: r for r in rows}
     print(f"靜態警戒值：{len(table)} 個鄉鎮")
     return table
+
+def load_all_townships():
+    """載入全台368個行政區的座標清單（不依賴是否有觀測站回報資料）"""
+    if not os.path.exists(ALL_TOWNSHIPS_FILE):
+        print(f"警告：找不到 {ALL_TOWNSHIPS_FILE}，將只處理有觀測站的鄉鎮")
+        return []
+    with open(ALL_TOWNSHIPS_FILE, encoding='utf-8') as f:
+        rows = json.load(f)
+    print(f"全台行政區清單：{len(rows)} 個")
+    return rows
 
 # ── 觀測站 ────────────────────────────────────────
 def fetch_obs():
@@ -648,38 +659,31 @@ def main():
             'daily_rain': obs.get('daily_rain', [0.0]*8),  # 過去8天逐日雨量，供前端滾動計算未來ETR2%
         })
 
-    # 加入「非靜態表鄉鎮」：有觀測資料但無ETR2警戒值
-    # 這些鄉鎮顯示雨量+QPF預測，ETR2 相關欄位為 null（因無警戒值無法計算）
+    # 加入「全台所有行政區」中尚未處理的：用 all_townships.json 為基準
+    # 確保即使該行政區完全沒有CWA觀測站，也能用座標補上QPF預測資料
     processed = {t['county']+t['township'] for t in out_towns}
-    non_static_coords = []  # 收集需要額外抓 Open-Meteo 的座標
-    non_static_keys = []
+    all_towns = load_all_townships()
+    non_static_list = []  # 待補的行政區清單（含座標）
 
-    for key, obs in town_obs.items():
+    for at in all_towns:
+        key = at['county'] + at['township']
         if key in processed: continue
-        st_list = [stations[s] for s in obs.get('stations', []) if s in stations]
-        if st_list:
-            avg_lat = round(sum(s['lat'] for s in st_list)/len(st_list), 4)
-            avg_lng = round(sum(s['lng'] for s in st_list)/len(st_list), 4)
-        else:
-            avg_lat, avg_lng = None, None
-        if avg_lat is None:
-            continue  # 無座標的鄉鎮無法定位於地圖，略過
-        non_static_coords.append({'lat': avg_lat, 'lng': avg_lng, 'alert_val': 0})
-        non_static_keys.append(key)
+        non_static_list.append(at)
 
-    print(f"  非靜態表鄉鎮（有觀測但無警戒值）：{len(non_static_keys)} 個，補抓 QPF...")
+    print(f"  非靜態表行政區（含完全無觀測站的）：{len(non_static_list)} 個，補抓 QPF...")
+    non_static_coords = [{'lat': at['lat'], 'lng': at['lng'], 'alert_val': 0} for at in non_static_list]
+
     if non_static_coords:
-        time.sleep(3)  # 與前一批 Open-Meteo 呼叫間隔，避免連續觸發限流
+        time.sleep(3)
         non_static_om, non_static_maxh = fetch_openmeteo(non_static_coords)
     else:
         non_static_om, non_static_maxh = {}, {}
 
-    for key in non_static_keys:
-        obs = town_obs[key]
-        idx = non_static_keys.index(key)
-        coord = non_static_coords[idx]
-        avg_lat, avg_lng = coord['lat'], coord['lng']
+    for i, at in enumerate(non_static_list):
+        key = at['county'] + at['township']
+        avg_lat, avg_lng = at['lat'], at['lng']
         om_key = f"{avg_lat:.4f}_{avg_lng:.4f}"
+        obs = town_obs.get(key, {})  # 可能完全沒有觀測資料
 
         def get_ns_qpf(model_key):
             segs = non_static_om.get(model_key, {}).get(om_key, [])
@@ -694,13 +698,12 @@ def main():
         qpf_icon_ns  = get_ns_qpf('icon_seamless')
         daily_ns = [round(sum(qpf_best_ns[d*4:(d+1)*4]),1) for d in range(15)]
 
-        # 觀測站清單（含名稱，沒有 alert_val 因為非靜態表鄉鎮無警戒值資料）
         station_list = [{'name': stations[s]['name'], 'alert_val': None,
-                          'village': f"{obs['county']}{obs['township']}"}
+                          'village': f"{at['county']}{at['township']}"}
                          for s in obs.get('stations', []) if s in stations]
 
         out_towns.append({
-            'county':   obs['county'], 'township': obs['township'],
+            'county':   at['county'], 'township': at['township'],
             'lat': avg_lat, 'lng': avg_lng,
             'alert_val': None, 'alert_6h': None,
             'rain_24h':  obs.get('rain_24h'),

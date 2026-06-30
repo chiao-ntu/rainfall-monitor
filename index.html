@@ -322,7 +322,7 @@ const MODEL_FIELD = {
   icon:  'qpf_icon',
 };
 const MODEL_NOTE = {
-  best:  'Open-Meteo Best（ECMWF+GFS 融合）',
+  best:  '',
   ecmwf: 'ECMWF IFS 0.25° · 時效 10 天',
   gfs:   'NOAA GFS · 時效 16 天',
   icon:  'DWD ICON · 時效 7 天',
@@ -563,6 +563,11 @@ function getRangeRain(t, sFrom, sTo){
   return total;
 }
 
+// 明確判斷目前是否為「今天」按鈕（避免用 segFrom/segTo 範圍誤判，因為 fut6_1 的 segTo=0 容易與過去邊界混淆）
+function key_is_today_window(sf, st){
+  return winKey === 'today';
+}
+
 function getAccum(t){
   const hasObs = t.rain_24h !== null && t.rain_24h !== undefined;
   const hasEtr = t.alert_val !== null && t.alert_val !== undefined && t.alert_val > 0;
@@ -576,8 +581,8 @@ function getAccum(t){
     return {totalRain: v, etrPct: v, isRisk: true};
   }
 
-  // ── 過去整天（segFrom/segTo 同一個負數天，表示某一天0-24h）──
-  if(segTo <= 0){
+  // ── 過去整天（segTo < 0，表示某一天的0-24h，已結束的整天）──
+  if(segTo < 0){
     if(!hasObs) return {totalRain:null, etrPct:null};
     const dailyObs = t.daily_rain || [];
     const dayIdx = Math.abs(Math.floor(segTo/4));  // 0=今天
@@ -591,8 +596,8 @@ function getAccum(t){
     return {totalRain, etrPct};
   }
 
-  // ── 今天（segFrom<=0<=segTo 跨越現在）：觀測至今 + 預測補滿24h ──
-  if(segFrom <= 0 && segTo > 0 && segTo <= 3){
+  // ── 今天（segFrom<=0<=segTo 跨越現在，且僅限「今天」按鈕本身 segTo=3）──
+  if(key_is_today_window(segFrom, segTo)){
     const obsToday = (t.daily_rain && t.daily_rain[0]) || 0;
     const qpfArr = getQpfArr(t, qpfField);
     let futureSum = 0;
@@ -1064,7 +1069,7 @@ function drawChartHQ(t, canvasId){
   const ext = getNationwideExtremes();
   const mx = ext.rainMax;
   const districtColor = getDistrictColor(t.county);
-  const FS = 16, FS_TITLE = 26;  // 統一字體大小（除標題外）
+  const FS = 20, FS_TITLE = 30;  // 統一字體大小（標籤20px，標題30px，約大4號）
 
   const pL=90, pR=50, pT=60, pB=80, cw=W-pL-pR, ch=H-pT-pB, xS=cw/(d.length-1);
 
@@ -1154,8 +1159,8 @@ function drawHyetograph(t, canvasId, scale){
   ctx.fillRect(0,0,W,H);
 
   // 字體大小依畫布尺寸自動縮放
-  const fs = scale >= 3 ? 16 : Math.max(8, Math.round(8*scale));  // 放大模式統一用16px，與drawChartHQ一致
-  const fsTitle = scale >= 3 ? 26 : Math.max(9, Math.round(10*scale));
+  const fs = scale >= 3 ? 20 : Math.max(8, Math.round(8*scale));  // 放大模式統一用20px，與drawChartHQ一致
+  const fsTitle = scale >= 3 ? 30 : Math.max(9, Math.round(10*scale));
 
   // ── 橫軸資料：過去2天(日觀測) + 未來2天(逐6h QPF) ──
   const dailyObs = t.daily_rain || [];
@@ -1337,7 +1342,7 @@ function renderLegend(){
            : mode==='rain' ? RAIN_SCALE
            : mode==='etr'  ? ETR_SCALE
            : RISK_SCALE;
-  const titles = { rain: isFuture6h ? '降雨強度(時雨量mm/h)' : '累積雨量(mm)', etr: 'ETR2%', risk: '風險指標' };
+  const titles = { rain: isFuture6h ? '降雨強度' : '累積雨量(mm)', etr: 'ETR2%', risk: '風險指標' };
   const titleText = titles[mode] || '';
 
   function rangeLabel(scale, idx){
