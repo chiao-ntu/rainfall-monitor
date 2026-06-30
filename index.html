@@ -10,7 +10,7 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Microsoft JhengHei',sans-serif;background:#0c1822;color:#dde8f2;height:100vh;display:flex;flex-direction:column;overflow:hidden}
 #hdr{background:#091520;border-bottom:1px solid #1a3348;padding:6px 14px;display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap}
-#hdr h1{font-size:14px;font-weight:700;color:#6bc8e8}
+#hdr h1{font-size:12px;font-weight:700;color:#6bc8e8}
 #hdr .sub{font-size:10px;color:#3a6080}
 .tag{border-radius:3px;padding:2px 7px;font-size:10px;border:1px solid}
 .tag.agency{background:#0e2a42;border-color:#1e5070;color:#6bc8e8}
@@ -82,10 +82,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 <body>
 <div id="loading" style="display:block">⏳ 載入地圖資料中...</div>
 <div id="hdr">
-  <div><h1>台灣降雨預測監測系統</h1><div class="sub">QPF × ETR2% · 水保署</div></div>
-  <span class="tag agency">農業部水土保持署</span>
+  <div><h1>台灣降雨預測監測系統</h1><div class="sub">臺大天災研究中心</div></div>
+  
   <span class="tag sim" id="data-tag">⚑ 示範資料</span>
   <span class="tag time" id="base-tag"></span>
+  <button class="b" id="btn-refresh" onclick="manualRefresh()" title="立即重新抓取所有模式資料" style="border-color:#2a6a3a;color:#4ae490;font-size:10px">⟳ 立即更新</button>
   <button class="b pbtn" id="btn-pause" onclick="togglePause()">⏸ 暫停更新</button>
 </div>
 <div id="ctrl">
@@ -143,20 +144,39 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 </div>
 <div id="main">
   <div id="map" style="position:relative">
+    <!-- Color bar 固定在右下角 -->
+    <div id="colorbar" style="position:absolute;bottom:30px;right:12px;z-index:400;
+      background:rgba(9,21,32,0.88);border:1px solid #1a3348;border-radius:5px;
+      padding:8px 10px;min-width:150px;font-size:11px;pointer-events:none;">
+      <div id="cb-title" style="color:#6bc8e8;font-weight:700;margin-bottom:5px;font-size:11px"></div>
+      <div id="cb-items"></div>
+    </div>
     <div id="map-overlay"></div>
     <div id="no-data-msg">
       <div class="nd-icon">⚠</div>
       <div id="no-data-text">此模式目前無資料</div>
     </div>
   </div>
-  <div id="sb">
+  <div id="sb" style="transition:width 0.25s ease;position:relative">
+  <button id="sb-toggle" onclick="toggleSidebar()" title="收合/展開側欄"
+    style="position:absolute;left:-22px;top:50%;transform:translateY(-50%);
+    z-index:500;background:#091520;border:1px solid #1a3348;border-radius:4px 0 0 4px;
+    color:#6bc8e8;cursor:pointer;padding:6px 3px;font-size:12px;line-height:1;
+    writing-mode:vertical-rl;letter-spacing:2px;">◀</button>
     <div id="ip">
-      <h3 id="iTitle">點選鄉鎮查看詳情</h3>
-      <div id="iCont" class="hint">在地圖點選任一區域，可查看累積雨量、ETR2% 及逐日趨勢。</div>
+      <!-- 固定標題 -->
+      <h3 id="iTitle" style="font-size:14px;color:#6bc8e8;padding:10px 12px 5px;
+        border-bottom:1px solid #1a3348;flex-shrink:0;cursor:default">點選鄉鎮查看詳情</h3>
+      <!-- 可捲動內容區 -->
+      <div id="iCont-wrap" style="overflow-y:auto;flex:1">
+        <div id="iCont" class="hint" style="padding:8px 12px">
+          在地圖點選任一區域，可查看累積雨量、ETR2% 及逐日趨勢。
+        </div>
+      </div>
     </div>
     <div id="chart-wrap"><h4>逐日雨量（15天）</h4><canvas id="cv"></canvas></div>
     <div id="seg-tbl"><h4>6小時分段（前48h）</h4><div id="seg-rows"></div></div>
-    <div id="leg"><h4 id="leg-title">累積雨量 (mm)</h4><div class="li-wrap" id="leg-items"></div></div>
+    <div id="leg" style="display:none"><h4 id="leg-title">累積雨量 (mm)</h4><div class="li-wrap" id="leg-items"></div></div>
     <div class="dn" id="data-note">資料來源：示範資料</div>
   </div>
 </div>
@@ -190,6 +210,40 @@ const MODEL_NOTE = {
 };
 let selected = null;
 let townLayer = null, countyLayer = null;
+
+// 右側欄收合/展開
+let sidebarOpen = true;
+function toggleSidebar(){
+  sidebarOpen = !sidebarOpen;
+  const sb  = document.getElementById('sb');
+  const btn = document.getElementById('sb-toggle');
+  if(sidebarOpen){
+    sb.style.width  = '300px';
+    sb.style.overflow = 'hidden';
+    btn.textContent = '◀';
+  } else {
+    sb.style.width  = '0px';
+    sb.style.overflow = 'hidden';
+    btn.textContent = '▶';
+  }
+  // 收合時 colorbar 往右靠近邊緣
+  const cb = document.getElementById('colorbar');
+  if(cb) cb.style.right = sidebarOpen ? '12px' : '12px';
+  // 通知 Leaflet 重新計算地圖大小
+  setTimeout(()=> map.invalidateSize(), 280);
+}
+
+// 點選海洋（空白處）取消選取
+map.on('click', function(){
+  if(selected){
+    selected = null;
+    renderLayer();
+    document.getElementById('iTitle').textContent = '點選鄉鎮查看詳情';
+    document.getElementById('iCont').innerHTML = '<div class="hint">在地圖點選任一區域，可查看累積雨量、ETR2% 及逐日趨勢。</div>';
+    document.getElementById('chart-wrap').style.display='none';
+    document.getElementById('seg-tbl').style.display='none';
+  }
+});
 
 const TMAP = {};
 TOWNSHIPS.forEach(t => { TMAP[t.county + t.township] = t; });
@@ -389,8 +443,9 @@ function renderLayer(){
       const etrStr  = obsEtr2  !== null ? obsEtr2.toFixed(0)+'%' : '—';
       const rainLabel = (mode==='etr') ? 'ETR2%' : (dayFrom===0&&dayTo===0) ? '24h觀測' : 'QPF';
       const dispStr   = (mode==='etr') ? etrStr : rainStr;
+      const obsEtrStr = obsEtr2 !== null ? obsEtr2.toFixed(0)+'%' : '—';
       poly.bindTooltip(
-        `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>${rainLabel}：${dispStr}`,
+        `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>${rainLabel}：${dispStr} ｜ ETR2%：${obsEtrStr}`,
         {sticky:true,opacity:.92}
       );
       poly.on('click',()=>{selected=t;renderLayer();updateInfo(t);});
@@ -512,8 +567,23 @@ function renderLegend(){
     etr:  `ETR2% 現況觀測`,
     risk: `風險指標（ETR2 Risk Score）・${modelLabel}`,
   };
-  document.getElementById('leg-title').textContent = titles[mode] || '';
+  const titleText = titles[mode] || '';
+  // 右側欄圖例（隱藏）
+  document.getElementById('leg-title').textContent = titleText;
   document.getElementById('leg-items').innerHTML=sc.map(s=>`<div class="li"><div class="lsw" style="background:${s.color}"></div>${s.label}</div>`).join('');
+  // 地圖右下角 colorbar
+  const cb = document.getElementById('colorbar');
+  const cbTitle = document.getElementById('cb-title');
+  const cbItems = document.getElementById('cb-items');
+  if(cb && cbTitle && cbItems){
+    cbTitle.textContent = titleText;
+    cbItems.innerHTML = sc.map(s=>`
+      <div style="display:flex;align-items:center;gap:5px;margin:2px 0">
+        <div style="width:14px;height:10px;border-radius:1px;background:${s.color};
+          border:1px solid rgba(255,255,255,.15);flex-shrink:0"></div>
+        <span style="color:#8ab8d0;font-size:10px">${s.label}</span>
+      </div>`).join('');
+  }
 }
 
 // ════════════════════════════════════════════════
@@ -563,7 +633,7 @@ async function tryLoadLive(){
     document.getElementById('data-tag').className='tag sim';
     document.getElementById('data-tag').textContent='⚑ 示範資料';
   }
-  document.getElementById('base-tag').textContent=`基準：${fmtDT(BASE_TIME)}`;
+  document.getElementById('base-tag').textContent=`更新：${fmtDT(BASE_TIME)}`;
   buildDayBtns();
   renderLayer();
   renderLegend();
@@ -669,10 +739,18 @@ function init(){
   // GeoJSON 已嵌入，直接使用，無需 fetch
   document.getElementById('loading').style.display = 'none';
   buildDayBtns();
-  setWin('n24h');   // 預設顯示未來24h預測
+  setWin('today');  // 預設顯示今天觀測
   tryLoadLive();
   setInterval(()=>{ if(!isPaused) tryLoadLive(); }, 30*60*1000);
 }
+// 手動立即更新
+async function manualRefresh(){
+  const btn = document.getElementById('btn-refresh');
+  if(btn){ btn.textContent='⟳ 更新中...'; btn.disabled=true; }
+  await tryLoadLive();
+  if(btn){ btn.textContent='⟳ 立即更新'; btn.disabled=false; }
+}
+
 // 等 DOM 完全載入後執行
 if(document.readyState === 'loading'){
   document.addEventListener('DOMContentLoaded', init);
