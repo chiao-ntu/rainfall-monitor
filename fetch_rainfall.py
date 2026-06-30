@@ -596,18 +596,53 @@ def main():
         })
 
     # 加入「非靜態表鄉鎮」：有觀測資料但無ETR2警戒值
-    # 這些鄉鎮顯示雨量，ETR2 相關欄位為 null
+    # 這些鄉鎮顯示雨量+QPF預測，ETR2 相關欄位為 null（因無警戒值無法計算）
     processed = {t['county']+t['township'] for t in out_towns}
+    non_static_coords = []  # 收集需要額外抓 Open-Meteo 的座標
+    non_static_keys = []
+
     for key, obs in town_obs.items():
-        if key in processed: continue  # 靜態表已處理過
-        # 座標：取該鄉鎮所有觀測站座標的平均值作為代表點
-        st_coords = [(stations[s]['lat'], stations[s]['lng'])
-                     for s in obs.get('stations', []) if s in stations]
-        if st_coords:
-            avg_lat = round(sum(c[0] for c in st_coords)/len(st_coords), 4)
-            avg_lng = round(sum(c[1] for c in st_coords)/len(st_coords), 4)
+        if key in processed: continue
+        st_list = [stations[s] for s in obs.get('stations', []) if s in stations]
+        if st_list:
+            avg_lat = round(sum(s['lat'] for s in st_list)/len(st_list), 4)
+            avg_lng = round(sum(s['lng'] for s in st_list)/len(st_list), 4)
         else:
             avg_lat, avg_lng = None, None
+        if avg_lat is None:
+            continue  # 無座標的鄉鎮無法定位於地圖，略過
+        non_static_coords.append({'lat': avg_lat, 'lng': avg_lng, 'alert_val': 0})
+        non_static_keys.append(key)
+
+    print(f"  非靜態表鄉鎮（有觀測但無警戒值）：{len(non_static_keys)} 個，補抓 QPF...")
+    non_static_om, non_static_maxh = (fetch_openmeteo(non_static_coords)
+                                        if non_static_coords else ({}, {}))
+
+    for key in non_static_keys:
+        obs = town_obs[key]
+        idx = non_static_keys.index(key)
+        coord = non_static_coords[idx]
+        avg_lat, avg_lng = coord['lat'], coord['lng']
+        om_key = f"{avg_lat:.4f}_{avg_lng:.4f}"
+
+        def get_ns_qpf(model_key):
+            segs = non_static_om.get(model_key, {}).get(om_key, [])
+            return segs[:60] if segs else [0.0]*60
+        def get_ns_maxh(model_key):
+            arr = non_static_maxh.get(model_key, {}).get(om_key, [])
+            return arr[:60] if arr else [0.0]*60
+
+        qpf_best_ns  = get_ns_qpf('best_match')
+        qpf_ecmwf_ns = get_ns_qpf('ecmwf_ifs025')
+        qpf_gfs_ns   = get_ns_qpf('gfs_seamless')
+        qpf_icon_ns  = get_ns_qpf('icon_seamless')
+        daily_ns = [round(sum(qpf_best_ns[d*4:(d+1)*4]),1) for d in range(15)]
+
+        # 觀測站清單（含名稱，沒有 alert_val 因為非靜態表鄉鎮無警戒值資料）
+        station_list = [{'name': stations[s]['name'], 'alert_val': None,
+                          'village': f"{obs['county']}{obs['township']}"}
+                         for s in obs.get('stations', []) if s in stations]
+
         out_towns.append({
             'county':   obs['county'], 'township': obs['township'],
             'lat': avg_lat, 'lng': avg_lng,
@@ -616,18 +651,19 @@ def main():
             'rain_6h':   obs.get('rain_6h'),
             'rain_2d':   obs.get('rain_2d', 0.0),
             'rain_3d':   obs.get('rain_3d', 0.0),
-            'etr2':      None, 'etr2_pct': None,  # 無警戒值，無法計算
-            'qpf_15d':   [0.0]*60, 'daily_qpf': [0.0]*15,
+            'etr2':      None, 'etr2_pct': None,
+            'qpf_15d':   qpf_best_ns, 'daily_qpf': daily_ns,
             'seg_etr_pct': [None]*8,
-            'qpf_24h': 0.0, 'qpf_48h': 0.0,
+            'qpf_24h': round(sum(qpf_best_ns[:4]),1),
+            'qpf_48h': round(sum(qpf_best_ns[:8]),1),
             'pop_6h':   [None]*28,
             'risk_score': [None]*28, 'risk_level': [None]*28,
             'obs_6h':   [0.0]*8,
-            'qpf_best':  [0.0]*60, 'qpf_ecmwf': [0.0]*60,
-            'qpf_gfs':   [0.0]*60, 'qpf_icon':  [0.0]*60,
-            'maxh_best': [0.0]*60, 'maxh_ecmwf': [0.0]*60,
-            'maxh_gfs':  [0.0]*60, 'maxh_icon':  [0.0]*60,
-            'stations':  [],
+            'qpf_best':  qpf_best_ns,  'qpf_ecmwf': qpf_ecmwf_ns,
+            'qpf_gfs':   qpf_gfs_ns,   'qpf_icon':  qpf_icon_ns,
+            'maxh_best': get_ns_maxh('best_match'),  'maxh_ecmwf': get_ns_maxh('ecmwf_ifs025'),
+            'maxh_gfs':  get_ns_maxh('gfs_seamless'), 'maxh_icon': get_ns_maxh('icon_seamless'),
+            'stations':  station_list,
             'daily_rain': obs.get('daily_rain', [0.0]*8),
         })
 

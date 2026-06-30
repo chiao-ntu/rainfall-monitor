@@ -110,6 +110,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div class="bg" id="day-btns"></div>
     <span class="cl" style="margin-left:6px">自訂</span>
     <button class="b" id="bCust" onclick="setWin('custom')">自訂範圍</button>
+    <button class="b" id="bCustomScale" onclick="toggleCustomScaleEditor()"
+      style="border-color:#5a3a8a;color:#b08ae8">自訂色階級距</button>
   </div>
   <div id="cust-ctrl">
     <div class="sl-wrap">
@@ -123,8 +125,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <span id="slE-v" style="font-size:10px;color:#6bc8e8;width:60px"></span>
     </div>
     <span id="rng-disp"></span>
-    <button class="b" id="bCustomScale" onclick="toggleCustomScaleEditor()"
-      style="margin-left:8px;border-color:#5a3a8a;color:#b08ae8">自訂色階級距</button>
   </div>
   <div id="custom-scale-editor" style="display:none;padding:6px 14px;background:#0a1828;border-bottom:1px solid #1a3348">
     <div style="font-size:10px;color:#6bc8e8;margin-bottom:5px">
@@ -184,6 +184,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div id="no-data-msg">
       <div class="nd-icon">⚠</div>
       <div id="no-data-text">此模式目前無資料</div>
+    </div>
+  </div>
+  <!-- 觀測站組體雨量圖（懸停顯示，固定於右下方避免遮擋） -->
+  <div id="hyeto-popup" style="display:none;position:fixed;z-index:2000;
+    background:#0a1828;border:1px solid #2a5a8a;border-radius:8px;
+    box-shadow:0 4px 20px rgba(0,0,0,.5);padding:10px 12px;width:340px;
+    pointer-events:none;">
+    <div id="hyeto-title" style="font-size:12px;font-weight:700;color:#7bd0f0;margin-bottom:2px"></div>
+    <div id="hyeto-sub" style="font-size:9px;color:#3a6080;margin-bottom:6px"></div>
+    <canvas id="hyeto-canvas" width="316" height="140" style="display:block;background:#040c14;border-radius:4px"></canvas>
+    <div style="display:flex;gap:10px;margin-top:5px;font-size:9px;color:#5a8aaa">
+      <span><span style="display:inline-block;width:8px;height:8px;background:#4a7ab0;margin-right:3px"></span>觀測(日)</span>
+      <span><span style="display:inline-block;width:8px;height:8px;background:#6ad8f0;margin-right:3px"></span>QPF預測(6h)</span>
+      <span><span style="display:inline-block;width:14px;height:2px;background:#ff9933;margin-right:3px;vertical-align:middle"></span>ETR2%</span>
     </div>
   </div>
   <button id="sb-toggle" onclick="toggleSidebar()" title="收合/展開側欄"
@@ -298,8 +312,11 @@ let sidebarOpen = true;
 const DEFAULT_RAIN_BREAKS = [20,40,70,130,250];
 function toggleCustomScaleEditor(){
   const el = document.getElementById('custom-scale-editor');
+  const btn = document.getElementById('bCustomScale');
   if(!el) return;
-  el.style.display = (el.style.display==='none'||!el.style.display) ? 'block' : 'none';
+  const willShow = (el.style.display==='none'||!el.style.display);
+  el.style.display = willShow ? 'block' : 'none';
+  if(btn) btn.classList.toggle('on', willShow);
 }
 function applyCustomScale(){
   const vals = [0,1,2,3,4].map(i=>{
@@ -780,9 +797,23 @@ function updateInfo(t){
 
   if(t.stations && t.stations.length){
     document.getElementById('sec-stations').style.display = 'block';
-    document.getElementById('body-stations').innerHTML = t.stations.map(s=>
-      `<div class="station-row"><span class="sn">${s.name}</span><span class="sw">${s.alert_val} mm</span></div>`
-    ).join('') + `<div style="font-size:10px;color:#3a6080;margin-top:4px">共 ${t.stations.length} 個測站，警戒值取最大值</div>`;
+    const wrap = document.getElementById('body-stations');
+    wrap.innerHTML = '';
+    t.stations.forEach(s=>{
+      const row = document.createElement('div');
+      row.className = 'station-row';
+      row.style.cursor = 'pointer';
+      const alertStr = (s.alert_val!=null) ? s.alert_val+' mm' : '—';
+      row.innerHTML = `<span class="sn">${s.name}</span><span class="sw">${alertStr}</span>`;
+      row.addEventListener('mouseenter', (e)=> showHyetograph(t, s, e));
+      row.addEventListener('mousemove',  (e)=> positionHyetograph(e));
+      row.addEventListener('mouseleave', hideHyetograph);
+      wrap.appendChild(row);
+    });
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:10px;color:#3a6080;margin-top:4px';
+    note.textContent = `共 ${t.stations.length} 個測站，警戒值取最大值（滑鼠移到測站可看雨量趨勢圖）`;
+    wrap.appendChild(note);
   } else {
     document.getElementById('sec-stations').style.display = 'none';
   }
@@ -835,6 +866,145 @@ function drawChart(t){
       const dt=new Date(BASE_TIME.getTime()+i*86400000);
       ctx.fillText(fmtDay(dt), pL+i*xS, H-2);
     }
+  });
+}
+
+// ════════════════════════════════════════════════
+//  觀測站組體雨量圖（懸停顯示）
+//  橫軸：過去2天（日觀測，每天1根長條）+ 未來2天（逐6h QPF，每段1根長條）
+//  共 2+8=10 格；左側2格=過去2天觀測，右側8格=未來2天逐6h預測
+//  疊加 ETR2% 折線（用該鄉鎮 daily_rain + 目前模式 QPF 滾動計算）
+// ════════════════════════════════════════════════
+let hyetoCurrentKey = null;
+
+function showHyetograph(t, station, evt){
+  hyetoCurrentKey = t.county + t.township + station.name;
+  const popup = document.getElementById('hyeto-popup');
+  popup.style.display = 'block';
+  document.getElementById('hyeto-title').textContent = `${station.name}（${t.county}${t.township}）`;
+  document.getElementById('hyeto-sub').textContent =
+    `過去2天觀測（日累積）+ 未來2天預測（每6h）`;
+  drawHyetograph(t);
+  positionHyetograph(evt);
+}
+function positionHyetograph(evt){
+  const popup = document.getElementById('hyeto-popup');
+  if(popup.style.display !== 'block') return;
+  const margin = 16;
+  let x = evt.clientX + margin;
+  let y = evt.clientY - 80;
+  if(x + 350 > window.innerWidth)  x = evt.clientX - 350 - margin;
+  if(y < 10) y = 10;
+  if(y + 220 > window.innerHeight) y = window.innerHeight - 220;
+  popup.style.left = x + 'px';
+  popup.style.top  = y + 'px';
+}
+function hideHyetograph(){
+  document.getElementById('hyeto-popup').style.display = 'none';
+  hyetoCurrentKey = null;
+}
+
+function drawHyetograph(t){
+  const cv = document.getElementById('hyeto-canvas');
+  const W = cv.width, H = cv.height;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+
+  // ── 組裝橫軸資料：過去2天(日) + 未來2天(逐6h) ──
+  const dailyObs = t.daily_rain || [];           // index0=今天,1=昨天...
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const qpfArr   = getQpfArr(t, qpfField);        // 60個6h段
+
+  // 過去2格：昨天、前天（用日觀測值，不拆6h）
+  const pastBars = [
+    {label:'前天', value: dailyObs[2]||0, isObs:true},
+    {label:'昨天', value: dailyObs[1]||0, isObs:true},
+  ];
+  // 未來8格：+6h ~ +48h（逐6h QPF）
+  const futureBars = [];
+  for(let i=0;i<8;i++){
+    futureBars.push({label:`+${(i+1)*6}h`, value: qpfArr[i]||0, isObs:false});
+  }
+  const allBars = pastBars.concat(futureBars);
+  const n = allBars.length;
+
+  // ── ETR2% 折線（每一格都算一次滾動ETR2）──
+  const hasEtr = t.alert_val && t.alert_val>0;
+  const etrLine = [];
+  if(hasEtr){
+    // 過去2格：用 calcEtr2AtSeg 對應 segTo = -8(前天), -4(昨天) 的概念，
+    // 這裡簡化為直接用「該日之前7天」公式（沿用 daily_rain）
+    for(let i=0;i<2;i++){
+      const dayIdx = 2-i; // 前天=2, 昨天=1
+      let etr2=0;
+      for(let k=0;k<=6;k++){
+        const idx = dayIdx-1+k; // 從該天往前推
+        etr2 += ETR2_WEIGHTS[k]*(dailyObs[idx]||0);
+      }
+      etrLine.push(Math.round(etr2/t.alert_val*1000)/10);
+    }
+    // 未來8格：用 calcEtr2AtSeg(seg)
+    for(let i=0;i<8;i++){
+      const etr2 = calcEtr2AtSeg(t, i, qpfField);
+      etrLine.push(Math.round(etr2/t.alert_val*1000)/10);
+    }
+  }
+
+  // ── 繪圖 ──
+  const padL=30, padR=8, padT=10, padB=22;
+  const cw=W-padL-padR, ch=H-padT-padB;
+  const barW = cw/n * 0.62;
+  const gap  = cw/n;
+
+  const maxRain = Math.max(...allBars.map(b=>b.value), 5);
+  const maxEtr  = hasEtr ? Math.max(...etrLine, 10) : 100;
+
+  // 格線
+  ctx.strokeStyle='#1a3a5a'; ctx.lineWidth=0.5;
+  [0.25,0.5,0.75,1].forEach(r=>{
+    const y = padT+ch*(1-r);
+    ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke();
+    ctx.fillStyle='#3a6080'; ctx.font='8px sans-serif'; ctx.textAlign='right';
+    ctx.fillText(Math.round(maxRain*r), padL-3, y+3);
+  });
+
+  // 分隔線（過去/未來交界）
+  const splitX = padL + 2*gap;
+  ctx.strokeStyle='#ff9933'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.moveTo(splitX,padT); ctx.lineTo(splitX,padT+ch); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 長條
+  allBars.forEach((b,i)=>{
+    const x = padL + i*gap + (gap-barW)/2;
+    const barH = (b.value/maxRain)*ch;
+    const y = padT+ch-barH;
+    ctx.fillStyle = b.isObs ? '#4a7ab0' : '#6ad8f0';
+    ctx.fillRect(x,y,barW,barH);
+  });
+
+  // ETR2% 折線
+  if(hasEtr){
+    ctx.beginPath(); ctx.strokeStyle='#ff9933'; ctx.lineWidth=1.8;
+    etrLine.forEach((v,i)=>{
+      const x = padL + i*gap + gap/2;
+      const y = padT+ch*(1-Math.min(v,maxEtr)/maxEtr);
+      i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+    etrLine.forEach((v,i)=>{
+      const x = padL + i*gap + gap/2;
+      const y = padT+ch*(1-Math.min(v,maxEtr)/maxEtr);
+      ctx.beginPath(); ctx.arc(x,y,2,0,Math.PI*2);
+      ctx.fillStyle='#ffb866'; ctx.fill();
+    });
+  }
+
+  // X軸標籤
+  ctx.fillStyle='#5a8aaa'; ctx.font='8px sans-serif'; ctx.textAlign='center';
+  allBars.forEach((b,i)=>{
+    const x = padL + i*gap + gap/2;
+    ctx.fillText(b.label, x, H-8);
   });
 }
 
