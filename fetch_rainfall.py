@@ -141,6 +141,40 @@ def get_daily_rain_array(sid, history, now_tpe, days=8):
         for i in range(days)
     ]
 
+def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
+    """
+    把 Excel 靜態表的測站清單（只有站名+警戒值）
+    跟即時觀測站資料（用站號為key）做站名比對，
+    補上每個測站「個別」的 ETR2 值與 ETR2%（不是行政區最大值）
+    """
+    station_etr2 = obs.get('station_etr2', {})  # {站號: etr2值}
+    station_daily = obs.get('station_daily', {})  # {站號: [逐日雨量]}
+    obs_station_ids = obs.get('stations', [])     # 該行政區所有觀測站號清單
+
+    # 建立「站名 → 站號」對照（從 all_stations 反查）
+    name_to_sid = {}
+    for sid in obs_station_ids:
+        if sid in all_stations:
+            name = all_stations[sid]['name']
+            name_to_sid[name] = sid
+
+    enriched = []
+    for st in excel_stations:
+        name = st.get('name', '')
+        sid = name_to_sid.get(name)
+        etr2_val = station_etr2.get(sid) if sid else None
+        etr2_pct = round(etr2_val/alert_val, 4) if (etr2_val is not None and alert_val and alert_val>0) else None
+        daily = station_daily.get(sid, [0.0]*8) if sid else [0.0]*8
+        enriched.append({
+            'name': name,
+            'alert_val': st.get('alert_val'),
+            'village': st.get('village', ''),
+            'etr2': round(etr2_val,1) if etr2_val is not None else None,
+            'etr2_pct': etr2_pct,
+            'daily_rain': daily,
+        })
+    return enriched
+
 def agg_obs(stations, alert_table, history, now_tpe):
     town={}
     for sid,st in stations.items():
@@ -149,17 +183,22 @@ def agg_obs(stations, alert_table, history, now_tpe):
             town[key]={'county':st['county'],'township':st['township'],
                        'stations':[],'rain_24h':0.0,'rain_6h':0.0,
                        'rain_2d':0.0,'rain_3d':0.0,'etr2':None,
-                       'daily_rain':[0.0]*8}
+                       'daily_rain':[0.0]*8, 'station_etr2':{}}
         td=town[key]; td['stations'].append(sid)
         td['rain_24h']=max(td['rain_24h'],st['rain_24h'])
         td['rain_6h'] =max(td['rain_6h'], st['rain_6h'])
         td['rain_2d'] =max(td['rain_2d'], st['rain_2d'])
         td['rain_3d'] =max(td['rain_3d'], st['rain_3d'])
         ev=calc_etr2(sid,history,now_tpe)
-        if ev is not None: td['etr2']=max(td['etr2'] or 0.0,ev)
+        if ev is not None:
+            td['etr2']=max(td['etr2'] or 0.0,ev)
+            td['station_etr2'][sid] = ev  # 個別測站的 ETR2（不取最大，各自獨立）
         # 取各站每日雨量的最大值，組成鄉鎮代表性的逐日雨量陣列
         st_daily = get_daily_rain_array(sid, history, now_tpe, days=8)
         td['daily_rain'] = [max(a,b) for a,b in zip(td['daily_rain'], st_daily)]
+        # 個別測站的逐日雨量（供前端逐站滾動計算未來ETR2%用）
+        if 'station_daily' not in td: td['station_daily'] = {}
+        td['station_daily'][sid] = st_daily
     for key,td in town.items():
         ai=alert_table.get(key,{}); av=ai.get('alert_val',0)
         td['etr2_pct']=round(td['etr2']/av,4) if td['etr2'] and av>0 else None
@@ -605,7 +644,7 @@ def main():
             'maxh_gfs':   maxh_gfs,
             'maxh_icon':  maxh_icon,
             'obs_6h':[0.0]*8,
-            'stations':  info.get('stations', []),
+            'stations':  enrich_stations_with_etr2(info.get('stations', []), obs, stations, alert_v),
             'daily_rain': obs.get('daily_rain', [0.0]*8),  # 過去8天逐日雨量，供前端滾動計算未來ETR2%
         })
 
