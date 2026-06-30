@@ -118,11 +118,14 @@ def update_history(stations, now_tpe):
     return history
 
 def calc_etr2(sid, history, now_tpe):
+    """ETR2 = OBS_TO_EFF × Σ(i=0~6) ALPHA_DECAY^i × R_i"""
     if sid not in history: return None
     daily = history[sid]
-    etr2 = sum((ALPHA**i)*daily.get((now_tpe-timedelta(days=i)).strftime('%Y-%m-%d'),0.0)
-               for i in range(8))
-    return round(etr2,1)
+    etr2 = OBS_TO_EFF * sum(
+        (ALPHA_DECAY**i) * daily.get((now_tpe-timedelta(days=i)).strftime('%Y-%m-%d'), 0.0)
+        for i in range(7)
+    )
+    return round(etr2, 1)
 
 def agg_obs(stations, alert_table, history, now_tpe):
     town={}
@@ -534,6 +537,31 @@ def main():
             'qpf_gfs':   qpf_gfs,
             'qpf_icon':  qpf_icon,
             'obs_6h':[0.0]*8,
+        })
+
+    # 加入「非靜態表鄉鎮」：有觀測資料但無ETR2警戒值
+    # 這些鄉鎮顯示雨量，ETR2 相關欄位為 null
+    processed = {t['county']+t['township'] for t in out_towns}
+    for key, obs in town_obs.items():
+        if key in processed: continue  # 靜態表已處理過
+        # 從 GeoJSON 中心取座標（可能沒有，先跳過）
+        out_towns.append({
+            'county':   obs['county'], 'township': obs['township'],
+            'lat': None, 'lng': None,   # 座標待補
+            'alert_val': None, 'alert_6h': None,
+            'rain_24h':  obs.get('rain_24h'),
+            'rain_6h':   obs.get('rain_6h'),
+            'rain_2d':   obs.get('rain_2d', 0.0),
+            'rain_3d':   obs.get('rain_3d', 0.0),
+            'etr2':      None, 'etr2_pct': None,  # 無警戒值，無法計算
+            'qpf_15d':   [0.0]*60, 'daily_qpf': [0.0]*15,
+            'seg_etr_pct': [None]*8,
+            'qpf_24h': 0.0, 'qpf_48h': 0.0,
+            'pop_6h':   [None]*28,
+            'risk_score': [None]*28, 'risk_level': [None]*28,
+            'obs_6h':   [0.0]*8,
+            'qpf_best':  [0.0]*60, 'qpf_ecmwf': [0.0]*60,
+            'qpf_gfs':   [0.0]*60, 'qpf_icon':  [0.0]*60,
         })
 
     output={

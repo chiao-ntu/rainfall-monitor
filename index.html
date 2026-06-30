@@ -226,24 +226,10 @@ function toggleSidebar(){
     sb.style.overflow = 'hidden';
     btn.textContent = '▶';
   }
-  // 收合時 colorbar 往右靠近邊緣
   const cb = document.getElementById('colorbar');
-  if(cb) cb.style.right = sidebarOpen ? '12px' : '12px';
-  // 通知 Leaflet 重新計算地圖大小
+  if(cb) cb.style.right = '12px';
   setTimeout(()=> map.invalidateSize(), 280);
 }
-
-// 點選海洋（空白處）取消選取
-map.on('click', function(){
-  if(selected){
-    selected = null;
-    renderLayer();
-    document.getElementById('iTitle').textContent = '點選鄉鎮查看詳情';
-    document.getElementById('iCont').innerHTML = '<div class="hint">在地圖點選任一區域，可查看累積雨量、ETR2% 及逐日趨勢。</div>';
-    document.getElementById('chart-wrap').style.display='none';
-    document.getElementById('seg-tbl').style.display='none';
-  }
-});
 
 const TMAP = {};
 TOWNSHIPS.forEach(t => { TMAP[t.county + t.township] = t; });
@@ -738,6 +724,19 @@ function buildDayBtns(){
 function init(){
   // GeoJSON 已嵌入，直接使用，無需 fetch
   document.getElementById('loading').style.display = 'none';
+
+  // 點選海洋取消選取（在 map 初始化後才能呼叫）
+  map.on('click', function(){
+    if(selected){
+      selected = null;
+      renderLayer();
+      document.getElementById('iTitle').textContent = '點選鄉鎮查看詳情';
+      document.getElementById('iCont').innerHTML = '<div class="hint">在地圖點選任一區域，可查看累積雨量、ETR2% 及逐日趨勢。</div>';
+      document.getElementById('chart-wrap').style.display='none';
+      document.getElementById('seg-tbl').style.display='none';
+    }
+  });
+
   buildDayBtns();
   setWin('today');  // 預設顯示今天觀測
   tryLoadLive();
