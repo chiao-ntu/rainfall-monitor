@@ -98,19 +98,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bEtr"   onclick="setMode('etr')">ETR2%</button>
       <button class="b"    id="bRisk"  onclick="setMode('risk')">風險指標</button>
     </div>
-    <span class="cl" style="margin-left:6px">過去</span>
-    <div class="bg">
-      <button class="b" id="bP2d"   onclick="setWin('past2d')">前天</button>
-      <button class="b" id="bP1d"   onclick="setWin('past1d')">昨天</button>
-      <button class="b on" id="bToday" onclick="setWin('today')">今天</button>
-    </div>
-    <span class="cl" style="margin-left:6px">未來（6h段）</span>
-    <div class="bg">
-      <button class="b" id="bN6"  onclick="setWin('n6h')">+6h</button>
-      <button class="b" id="bN12" onclick="setWin('n12h')">+12h</button>
-      <button class="b" id="bN24" onclick="setWin('n24h')">+24h</button>
-      <button class="b"    id="bN48" onclick="setWin('n48h')">+48h</button>
-    </div>
+    <span class="cl" style="margin-left:6px">過去7天</span>
+    <div class="bg" id="past-btns"></div>
+  </div>
+  <div class="ctrl-row">
+    <span class="cl">未來6h段</span>
+    <div class="bg" id="future6h-btns"></div>
   </div>
   <div class="ctrl-row">
     <span class="cl">逐日</span>
@@ -120,14 +113,14 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   </div>
   <div id="cust-ctrl">
     <div class="sl-wrap">
-      <label>起始天</label>
-      <input type="range" id="slS" min="1" max="15" value="1" oninput="onSlider()">
-      <span id="slS-v" style="font-size:10px;color:#6bc8e8;width:18px">1</span>
+      <label>起始（6h段）</label>
+      <input type="range" id="slS" min="-28" max="59" value="0" oninput="onSlider()">
+      <span id="slS-v" style="font-size:10px;color:#6bc8e8;width:60px"></span>
     </div>
     <div class="sl-wrap">
-      <label>結束天</label>
-      <input type="range" id="slE" min="1" max="15" value="15" oninput="onSlider()">
-      <span id="slE-v" style="font-size:10px;color:#6bc8e8;width:18px">15</span>
+      <label>結束（6h段）</label>
+      <input type="range" id="slE" min="-27" max="60" value="3" oninput="onSlider()">
+      <span id="slE-v" style="font-size:10px;color:#6bc8e8;width:60px"></span>
     </div>
     <span id="rng-disp"></span>
   </div>
@@ -256,7 +249,11 @@ const TOWNSHIPS = [{"county":"屏東縣","township":"來義鄉","alert_val":450.
 // TOWN_GEO and COUNTY_GEO are embedded as const above
 let BASE_TIME = new Date(2025,5,26,5,0,0);
 let refreshTimer = null;
-let mode = 'rain', dayFrom = 0, dayTo = 1, winKey = 'n48h';
+// 時間座標系統：用「6h段索引」(segFrom/segTo) 取代天數
+// seg=0 是「現在所在的6h段」之起點，正值=未來，負值=過去
+// 過去資料來自 daily_rain[]（逐日觀測，index 0=今天）
+// 未來資料來自 qpf_15d 等（逐6h預測，index 0=現在這一段）
+let mode = 'rain', segFrom = 0, segTo = 3, winKey = 'today';
 let forecastModel = 'best';   // 'best' | 'ecmwf' | 'gfs' | 'icon'
 const MODEL_FIELD = {
   best:  'qpf_best',
@@ -403,87 +400,33 @@ function riskCls(v){return v>=70?'w3':v>=40?'w1':'ok'}
 //   today/n*h/nXXh → 用 QPF（qpf_15d）
 //   day*   → 用 QPF（qpf_15d）
 // ════════════════════════════════════════════════
-function getAccum(t){
-  // 無觀測資料的鄉鎮（etr2_pct===null）→ 回傳 null 讓地圖顯示白色
-  const hasObs = t.rain_24h !== null && t.rain_24h !== undefined;
+// ════════════════════════════════════════════════
+//  核心時間軸計算（以 6h 段為單位）
+//  ETR2 = R0 + 0.7R1 + 0.5R2 + 0.4R3 + 0.3R4 + 0.2R5 + 0.1R6
+//  R0~R6 為「以目標時刻為基準，往前推算的逐日累積雨量」
+// ════════════════════════════════════════════════
+const ETR2_WEIGHTS = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1];
 
-  // ETR2% 模式：永遠用現況觀測值（etr2_pct），與時間範圍無關
-  if(mode==='etr'){
-    const obsEtrPct = (t.etr2_pct !== null && t.etr2_pct !== undefined)
-      ? Math.round(t.etr2_pct * 1000) / 10  // 小數→%
-      : null;
-    return {totalRain: obsEtrPct, etrPct: obsEtrPct, isEtrMode: true};
-  }
-
-  // 風險指標模式：取對應 6h 時段的 S* 值
-  if(mode==='risk'){
-    const segIdx = Math.max(0, dayFrom*4);
-    const scoreList = t.risk_score || [];
-    const scoreVal = scoreList[segIdx] !== undefined ? scoreList[segIdx] : null;
-    return {totalRain: scoreVal, etrPct: scoreVal, isRisk: true};
-  }
-
-  // 過去時段：用觀測值
-  if(dayFrom < 0 && dayTo <= 0){
-    if(!hasObs) return {totalRain:null, etrPct:null};
-    // 選取對應時距的觀測累積值
-    const totalDays = Math.abs(dayFrom);  // 1=昨天, 2=前天...
-    let totalRain;
-    if(totalDays <= 1)      totalRain = t.rain_24h || 0;
-    else if(totalDays <= 2) totalRain = t.rain_2d  || t.rain_24h || 0;
-    else                    totalRain = t.rain_3d  || t.rain_2d  || t.rain_24h || 0;
-    // 加上今天（如果 dayTo=0）
-    if(dayTo === 0) totalRain = Math.round(((t.rain_24h||0) + totalRain)*10)/10;
-    totalRain = Math.round(totalRain*10)/10;
-    const days = Math.abs(dayFrom) + (dayTo>=0?1:0);
-    const etrPct = t.alert_val > 0
-      ? Math.round(totalRain / (t.alert_val * Math.max(1,days)) * 1000) / 10
-      : null;
-    return {totalRain, etrPct};
-  }
-
-  // 今天（dayFrom=0,dayTo=0）：用 Past24hr（過去24小時，非今日零時起）
-  if(dayFrom === 0 && dayTo === 0 && hasObs){
-    const totalRain = t.rain_24h || 0;
-    const etrPct = (t.etr2_pct !== null && t.etr2_pct !== undefined)
-      ? Math.round(t.etr2_pct * 1000) / 10
-      : (t.alert_val > 0 ? Math.round(totalRain / t.alert_val * 1000) / 10 : null);
-    return {totalRain, etrPct};
-  }
-
-  // 未來：依 forecastModel 選擇對應的 QPF 欄位
-  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
-  const qpf = t[qpfField] || t.qpf_15d || [];
-  let total = 0;
-  for(let day = Math.max(0,dayFrom); day <= dayTo; day++){
-    for(let i = day*4; i < day*4+4; i++) total += qpf[i]||0;
-  }
-  total = Math.round(total*10)/10;
-
-  // ── 未來時段的 ETR2% 用滾動衰退計算 ──
-  // 目標日 D 的 ETR2% = OBS_TO_EFF × Σ(i=0~6) 0.88^i × R_{D-i} / alert_val
-  // R_{D-i}：往前推第 i 天的雨量。若 D-i ≤ 0（含今天）用觀測 daily_rain；
-  //          若 D-i > 0（未來）用對應模式的逐日 QPF
-  const targetDay = dayTo;  // 以範圍結束日作為計算基準日
-  const etrPct = calcFutureEtrPct(t, targetDay, qpfField);
-
-  return {totalRain: total, etrPct};
+// 取得某鄉鎮在指定模式下、未來 60 個 6h 段的 QPF 陣列
+function getQpfArr(t, qpfField){
+  return t[qpfField] || t.qpf_15d || new Array(60).fill(0);
 }
 
-// 未來日期的 ETR2% 滾動衰退計算
-function calcFutureEtrPct(t, targetDay, qpfField){
-  if(!t.alert_val || t.alert_val<=0) return null;
-  // ETR2 = R0 + 0.7×R1 + 0.5×R2 + 0.4×R3 + 0.3×R4 + 0.2×R5 + 0.1×R6
-  const ETR2_WEIGHTS = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1];
-  const dailyObs = t.daily_rain || [];      // index 0=今天，1=昨天...
-  const qpfArr   = t[qpfField] || t.qpf_15d || [];  // 60個6h時段
+// 計算「以 seg 為基準時刻」的 ETR2（往前推7天，過去用觀測、未來用QPF）
+// seg: 6h段索引，0=現在這一段，正值=未來，負值=過去
+function calcEtr2AtSeg(t, seg, qpfField){
+  const dailyObs = t.daily_rain || [];          // index 0=今天, 1=昨天...
+  const qpfArr   = getQpfArr(t, qpfField);       // 60個6h段
+  // 把 qpfArr 轉成逐日陣列（每4段=1天）
   const dailyQpf = [];
   for(let d=0; d<15; d++){
     dailyQpf.push(qpfArr.slice(d*4,(d+1)*4).reduce((a,b)=>a+(b||0),0));
   }
+  // seg 所在的「天」（0=今天, 正值=未來第N天）
+  const segDay = Math.floor(seg/4);
   let etr2 = 0;
   for(let i=0; i<=6; i++){
-    const day = targetDay - i;  // 0=今天, 正值=未來第day天, 負值=過去
+    const day = segDay - i;
     let rainVal;
     if(day <= 0){
       const obsIdx = -day;
@@ -493,10 +436,97 @@ function calcFutureEtrPct(t, targetDay, qpfField){
     }
     etr2 += ETR2_WEIGHTS[i] * rainVal;
   }
-  return Math.round(etr2/t.alert_val*1000)/10;
+  return etr2;
 }
 
-// 取「現況 ETR2%」（觀測值，顯示在側欄）
+// 取得指定 6h 段的 QPF 累積值（單一段，非累加）
+function getQpfSeg(t, seg, qpfField){
+  const qpfArr = getQpfArr(t, qpfField);
+  if(seg < 0) return null;  // 過去無QPF概念
+  return qpfArr[seg] !== undefined ? qpfArr[seg] : 0;
+}
+
+// 取得範圍 [segFrom, segTo] 的累積雨量（觀測+預測自動切換）
+function getRangeRain(t, sFrom, sTo){
+  const dailyObs = t.daily_rain || [];
+  let total = 0;
+  for(let s=sFrom; s<=sTo; s++){
+    if(s < 0){
+      // 過去：用觀測，換算回「日」再除以4取6h均攤（簡化：直接用當天觀測/4）
+      const day = Math.floor(-s/4) + (((-s)%4===0)?0:1) - 1;
+      // 簡化作法：過去的「每一天」用該日觀測雨量，6h段不再切分（避免失真）
+    }
+  }
+  return total;
+}
+
+function getAccum(t){
+  const hasObs = t.rain_24h !== null && t.rain_24h !== undefined;
+  const hasEtr = t.alert_val !== null && t.alert_val !== undefined && t.alert_val > 0;
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+
+  // ── 風險指標模式 ──
+  if(mode==='risk'){
+    const idx = Math.max(0, segTo);
+    const scoreList = t.risk_score || [];
+    const v = scoreList[idx] !== undefined ? scoreList[idx] : null;
+    return {totalRain: v, etrPct: v, isRisk: true};
+  }
+
+  // ── 過去整天（segFrom/segTo 同一個負數天，表示某一天0-24h）──
+  if(segTo <= 0){
+    if(!hasObs) return {totalRain:null, etrPct:null};
+    const dailyObs = t.daily_rain || [];
+    const dayIdx = Math.abs(Math.floor(segTo/4));  // 0=今天
+    const totalRain = dailyObs[dayIdx] !== undefined ? dailyObs[dayIdx] : null;
+    let etrPct = null;
+    if(hasEtr){
+      const etr2 = calcEtr2AtSeg(t, segTo, qpfField);
+      etrPct = Math.round(etr2/t.alert_val*1000)/10;
+    }
+    if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
+    return {totalRain, etrPct};
+  }
+
+  // ── 今天（segFrom<=0<=segTo 跨越現在）：觀測至今 + 預測補滿24h ──
+  if(segFrom <= 0 && segTo > 0 && segTo <= 3){
+    const obsToday = (t.daily_rain && t.daily_rain[0]) || 0;
+    const qpfArr = getQpfArr(t, qpfField);
+    let futureSum = 0;
+    for(let s=0; s<=segTo; s++) futureSum += qpfArr[s]||0;
+    const totalRain = Math.round((obsToday + futureSum)*10)/10;
+    let etrPct = null;
+    if(hasEtr){
+      const etr2 = calcEtr2AtSeg(t, segTo, qpfField);
+      // 今天的ETR2用：今天觀測+預測 取代 R0
+      const dailyObs = t.daily_rain || [];
+      const qpfArrFull = getQpfArr(t, qpfField);
+      const dailyQpf = [];
+      for(let d=0; d<15; d++) dailyQpf.push(qpfArrFull.slice(d*4,(d+1)*4).reduce((a,b)=>a+(b||0),0));
+      let etr2Today = totalRain; // R0 = 今天最終預估總量
+      for(let i=1;i<=6;i++) etr2Today += ETR2_WEIGHTS[i] * (dailyObs[i]||0);
+      etrPct = Math.round(etr2Today/t.alert_val*1000)/10;
+    }
+    if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
+    return {totalRain, etrPct};
+  }
+
+  // ── 未來6h段／逐日／自訂範圍：用 QPF 累加 ──
+  const qpfArr = getQpfArr(t, qpfField);
+  let total = 0;
+  const sf = Math.max(0, segFrom), st = Math.max(0, segTo);
+  for(let s=sf; s<=st; s++) total += qpfArr[s]||0;
+  total = Math.round(total*10)/10;
+
+  let etrPct = null;
+  if(hasEtr){
+    const etr2 = calcEtr2AtSeg(t, st, qpfField);
+    etrPct = Math.round(etr2/t.alert_val*1000)/10;
+  }
+  if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
+  return {totalRain: total, etrPct};
+}
+
 function getObsEtr(t){
   if(t.etr2_pct === null || t.etr2_pct === undefined) return null;
   return Math.round(t.etr2_pct * 1000) / 10;  // 轉成 %
@@ -551,7 +581,7 @@ function renderLayer(){
     if(t){
       const acc2 = getAccum(t);
       const {totalRain, etrPct} = acc2;
-      const isToday = (dayFrom===0 && dayTo===0);
+      const isFuture6h = winKey.startsWith('fut6_');
       const rainStr = totalRain !== null ? totalRain+' mm' : '—';
       const etrStr  = etrPct    !== null ? etrPct.toFixed(0)+'%' : '—';
 
@@ -560,8 +590,21 @@ function renderLayer(){
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>ETR2%：${etrStr}`;
       } else if(mode==='risk'){
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>風險指標：${totalRain!=null?totalRain.toFixed(1):'—'}`;
+      } else if(isFuture6h){
+        // 未來6h段：顯示目前ETR2、預計增加量、N小時後ETR2%
+        const nHours = segTo+1; // segTo從0起算
+        const curEtrPct = getObsEtr(t);
+        const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+        const qpfArr = getQpfArr(t, qpfField);
+        let addRain = 0;
+        for(let s=0;s<=segTo;s++) addRain += qpfArr[s]||0;
+        tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
+          `目前ETR2%：${curEtrPct!=null?curEtrPct.toFixed(0)+'%':'—'}<br>`+
+          `預計${nHours}h增加：${addRain.toFixed(1)} mm<br>`+
+          `${nHours}h後ETR2%：${etrStr}`;
       } else {
-        const rainLabel = isToday ? '過去24h觀測' : 'QPF預測';
+        const isPastOrToday = (winKey.startsWith('past') || winKey==='today');
+        const rainLabel = isPastOrToday ? '過去24h觀測' : 'QPF預測';
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>${rainLabel}：${rainStr} ｜ ETR2%：${etrStr}`;
       }
       poly.bindTooltip(tooltipHtml, {sticky:true, opacity:.92});
@@ -607,14 +650,14 @@ function updateInfo(t){
   const obsEtr  = getObsEtr(t);
   const hasObs  = t.rain_24h !== null && t.rain_24h !== undefined;
   const hasEtr  = t.alert_val !== null && t.alert_val !== undefined;
-  const days    = dayTo - dayFrom + 1;
-  const t0      = new Date(BASE_TIME.getTime() + Math.max(0,dayFrom)*86400000);
-  const t1      = new Date(BASE_TIME.getTime() + (dayTo+1)*86400000);
+  const days    = Math.max(1, Math.round((segTo - segFrom + 1) / 4));
+  const t0      = new Date(BASE_TIME.getTime() + segFrom*6*3600000);
+  const t1      = new Date(BASE_TIME.getTime() + (segTo+1)*6*3600000);
 
   const pop6hArr   = t.pop_6h      || [];
   const scoreArr   = t.risk_score  || [];
   const levelArr   = t.risk_level  || [];
-  const riskSegIdx = Math.max(0, dayFrom * 4);
+  const riskSegIdx = Math.max(0, segTo);
   const curPop     = pop6hArr[riskSegIdx];
   const curScore   = scoreArr[riskSegIdx];
   const curLevel   = levelArr[riskSegIdx];
@@ -698,7 +741,7 @@ function drawChart(t){
     ctx.fillStyle='#3a6080';ctx.font='7px sans-serif';ctx.textAlign='left';
     ctx.fillText(Math.round(mx*r),2,y+3);
   });
-  const dF=Math.max(0,dayFrom), dT=Math.min(d.length-1,dayTo);
+  const dF=Math.max(0,Math.floor(segFrom/4)), dT=Math.min(d.length-1,Math.floor(segTo/4));
   if(dT>=dF){ ctx.fillStyle='rgba(60,140,220,.18)'; ctx.fillRect(pL+dF*xS,pT,(dT-dF+1)*xS,ch); }
   ctx.beginPath(); ctx.strokeStyle='#4aaae8'; ctx.lineWidth=1.5;
   d.forEach((v,i)=>{ const x=pL+i*xS,y=pT+ch*(1-v/mx); i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
@@ -792,6 +835,8 @@ async function tryLoadLive(){
   }
   const baseTag = document.getElementById('base-tag');
   if(baseTag) baseTag.textContent = `更新時間：${fmtDT(BASE_TIME)}`;
+  buildPastBtns();
+  buildFuture6hBtns();
   buildDayBtns();
   renderLayer();
   renderLegend();
@@ -801,23 +846,25 @@ async function tryLoadLive(){
 // ════════════════════════════════════════════════
 //  時間控制
 // ════════════════════════════════════════════════
-const ALL_BTNS=['bP2d','bP1d','bToday','bN6','bN12','bN24','bN48','bCust'];
+let ALL_DYNAMIC_BTN_IDS = [];  // 動態產生的按鈕id清單（過去7天+未來6h段+逐日）
+
 function clearBtns(){
-  ALL_BTNS.forEach(id=>{const el=document.getElementById(id);if(el)el.classList.remove('on');});
-  document.querySelectorAll('#day-btns .b').forEach(b=>b.classList.remove('on'));
+  ALL_DYNAMIC_BTN_IDS.forEach(id=>{
+    const el=document.getElementById(id); if(el) el.classList.remove('on');
+  });
+  const cust = document.getElementById('bCust');
+  if(cust) cust.classList.remove('on');
 }
+
 function setModel(m){
   forecastModel = m;
-  // 更新按鈕狀態
   ['mBest','mEcmwf','mGfs','mIcon'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.classList.remove('on');
   });
   const btnMap={best:'mBest',ecmwf:'mEcmwf',gfs:'mGfs',icon:'mIcon'};
   const el=document.getElementById(btnMap[m]); if(el) el.classList.add('on');
-  // 更新說明文字
   const note = document.getElementById('model-src-note');
   if(note) note.textContent = MODEL_NOTE[m] || '';
-  // 動畫切換
   withTransition(()=>{
     hideNoData();
     renderLayer();
@@ -840,44 +887,47 @@ function setMode(m){
     if(selected) updateInfo(selected);
   });
 }
+
+// key 格式：
+//   'past{N}'   N=0~6，過去第N天（0=昨天往前算的index，這裡 0=最近一天）
+//   'today'     今天（觀測至今+預測補滿24h）
+//   'fut6_{N}'  N=1~8，未來第N個6h段（+6h, +12h...+48h）
+//   'day{N}'    N=2~15，逐日未來第N天（從第2天起，第1天已被「今天」取代）
+//   'custom'    自訂範圍
 function setWin(key){
   winKey=key; clearBtns();
   document.getElementById('cust-ctrl').classList.remove('show');
+
   if(key==='custom'){
     document.getElementById('bCust').classList.add('on');
     document.getElementById('cust-ctrl').classList.add('show');
     onSlider();
+    updateModelRowVisibility(true);
     return;
   }
-  if(key.startsWith('day')){
-    const di=parseInt(key.slice(3))-1; dayFrom=di;dayTo=di;
-    const el=document.getElementById('b'+key);if(el)el.classList.add('on');
-  } else {
-    // dayFrom/dayTo 採用「日界」定義：
-    //   past2d: 前天整天（dayFrom=dayTo=-2）
-    //   past1d: 昨天整天（dayFrom=dayTo=-1）
-    //   today : 今天00:00至今（dayFrom=dayTo=0，內部會限制到目前時刻）
-    //   n6h/n12h/n24h/n48h: 從現在起算的未來時數，仍用 day 0 起算的整數天近似
-    const pm={
-      'past2d':[-2,-2], 'past1d':[-1,-1], 'today':[0,0],
-      'n6h':[0,0], 'n12h':[0,0], 'n24h':[0,0], 'n48h':[0,1]
-    };
-    const bm={'past2d':'bP2d','past1d':'bP1d','today':'bToday','n6h':'bN6','n12h':'bN12','n24h':'bN24','n48h':'bN48'};
-    if(pm[key]) [dayFrom,dayTo] = pm[key];
-    const el=document.getElementById(bm[key]); if(el) el.classList.add('on');
-  }
 
-  // 顯示/隱藏預報模式列：只要牽涉到未來（dayTo >= 0 且非單純今天觀測）就顯示
-  // 規則：past2d/past1d → 純觀測，不顯示模式列
-  //       today          → 觀測為主，不顯示模式列（無預報模式可選）
-  //       n6h/n12h/n24h/n48h/day*/custom → 顯示模式列
-  const noModelKeys = ['past2d','past1d','today'];
-  const isFuture = !noModelKeys.includes(key);
-  const modelWrap = document.getElementById('model-row-wrap');
-  if(modelWrap) modelWrap.style.display = isFuture ? 'flex' : 'none';
-  if(isFuture){
-    const modelNote = document.getElementById('model-src-note');
-    if(modelNote) modelNote.textContent = MODEL_NOTE[forecastModel] || '';
+  if(key==='today'){
+    segFrom = -100; segTo = 3;  // segFrom設極小值代表「含今天起點」，實際運算見getAccum
+    segFrom = 0; segTo = 3;
+    const btn=document.getElementById('bToday'); if(btn) btn.classList.add('on');
+    updateModelRowVisibility(false);
+  } else if(key.startsWith('past')){
+    const n = parseInt(key.slice(4));  // 0=昨天, 1=前天...6=七天前
+    segTo   = -(n*4+1);
+    segFrom = -(n*4+4);
+    const btn=document.getElementById('bpast'+n); if(btn) btn.classList.add('on');
+    updateModelRowVisibility(false);
+  } else if(key.startsWith('fut6_')){
+    const n = parseInt(key.slice(5));  // 1~8
+    segFrom = 0; segTo = n-1;  // 0~(n-1)段，共n個6h段 = n*6小時
+    const btn=document.getElementById('bfut6_'+n); if(btn) btn.classList.add('on');
+    updateModelRowVisibility(true);
+  } else if(key.startsWith('day')){
+    const n = parseInt(key.slice(3));  // 2~15
+    const dayIdx = n-1;  // 0-based天數
+    segFrom = dayIdx*4; segTo = dayIdx*4+3;
+    const btn=document.getElementById('bday'+n); if(btn) btn.classList.add('on');
+    updateModelRowVisibility(true);
   }
 
   withTransition(()=>{
@@ -886,37 +936,86 @@ function setWin(key){
     if(selected) updateInfo(selected);
   });
 }
+
+function updateModelRowVisibility(show){
+  const modelWrap = document.getElementById('model-row-wrap');
+  if(modelWrap) modelWrap.style.display = show ? 'flex' : 'none';
+  if(show){
+    const note = document.getElementById('model-src-note');
+    if(note) note.textContent = MODEL_NOTE[forecastModel] || '';
+  }
+}
+
 function onSlider(){
-  let s=+document.getElementById('slS').value;
-  let e=+document.getElementById('slE').value;
-  if(e<s){e=s;document.getElementById('slE').value=e;}
-  document.getElementById('slS-v').textContent=s;
-  document.getElementById('slE-v').textContent=e;
-  dayFrom=s-1;dayTo=e-1;
-  const t0=new Date(BASE_TIME.getTime()+dayFrom*86400000);
-  const t1=new Date(BASE_TIME.getTime()+(dayTo+1)*86400000);
-  document.getElementById('rng-disp').textContent=`第${s}天(${fmtDay(t0)})→第${e}天(${fmtDay(t1)})，共${e-s+1}天`;
+  let s=parseInt(document.getElementById('slS').value);
+  let e=parseInt(document.getElementById('slE').value);
+  if(e<=s){ e=s+1; document.getElementById('slE').value=e; }
+  segFrom=s; segTo=e;
+
+  function segLabel(seg){
+    const t = new Date(BASE_TIME.getTime() + seg*6*3600000);
+    return `${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,'0')}時`;
+  }
+  document.getElementById('slS-v').textContent = segLabel(s);
+  document.getElementById('slE-v').textContent = segLabel(e);
+  document.getElementById('rng-disp').textContent =
+    `${segLabel(s)} → ${segLabel(e)}（共${((e-s+1)*6/24).toFixed(1)}天）`;
+
+  updateModelRowVisibility(true);
   withTransition(()=>{
     renderLayer(); renderLegend();
     if(selected) updateInfo(selected);
   });
 }
+
+// 建立「過去7天」按鈕（每天=實際觀測，今天不算在內）
+function buildPastBtns(){
+  const c = document.getElementById('past-btns');
+  if(!c) return;
+  c.innerHTML = '';
+  ALL_DYNAMIC_BTN_IDS = ALL_DYNAMIC_BTN_IDS.filter(id=>!id.startsWith('bpast'));
+  for(let n=0; n<=6; n++){
+    const dt = new Date(BASE_TIME.getTime() - (n+1)*86400000);
+    const btn = document.createElement('button');
+    btn.className = 'b';
+    btn.id = 'bpast'+n;
+    btn.textContent = n===0 ? `昨天(${fmtDay(dt)})` : `${fmtDay(dt)}`;
+    btn.onclick = (nn=>()=>setWin('past'+nn))(n);
+    c.appendChild(btn);
+    ALL_DYNAMIC_BTN_IDS.push('bpast'+n);
+  }
+}
+
+// 建立「未來6h段」按鈕（+6h ~ +48h，共8個）
+function buildFuture6hBtns(){
+  const c = document.getElementById('future6h-btns');
+  if(!c) return;
+  c.innerHTML = '';
+  ALL_DYNAMIC_BTN_IDS = ALL_DYNAMIC_BTN_IDS.filter(id=>!id.startsWith('bfut6_'));
+  for(let n=1; n<=8; n++){
+    const btn = document.createElement('button');
+    btn.className = 'b';
+    btn.id = 'bfut6_'+n;
+    btn.textContent = `+${n*6}h`;
+    btn.onclick = (nn=>()=>setWin('fut6_'+nn))(n);
+    c.appendChild(btn);
+    ALL_DYNAMIC_BTN_IDS.push('bfut6_'+n);
+  }
+}
+
+// 建立「逐日」按鈕（第2天起，第1天已被「今天」按鈕取代）
 function buildDayBtns(){
-  const c=document.getElementById('day-btns');c.innerHTML='';
-  for(let i=1;i<=15;i++){
+  const c=document.getElementById('day-btns'); if(!c) return;
+  c.innerHTML='';
+  ALL_DYNAMIC_BTN_IDS = ALL_DYNAMIC_BTN_IDS.filter(id=>!id.startsWith('bday'));
+  for(let i=2;i<=15;i++){
     const dt=new Date(BASE_TIME.getTime()+(i-1)*86400000);
     const btn=document.createElement('button');
     btn.className='b';btn.id=`bday${i}`;btn.textContent=fmtDay(dt);
     btn.onclick=(d=>()=>setWin('day'+d))(i);
     c.appendChild(btn);
+    ALL_DYNAMIC_BTN_IDS.push('bday'+i);
   }
-  // 同步更新前天/昨天按鈕為具體日期
-  const dY = new Date(BASE_TIME.getTime() - 86400000);
-  const d2Y = new Date(BASE_TIME.getTime() - 2*86400000);
-  const bP1 = document.getElementById('bP1d');
-  const bP2 = document.getElementById('bP2d');
-  if(bP1) bP1.textContent = `昨天(${fmtDay(dY)})`;
-  if(bP2) bP2.textContent = `前天(${fmtDay(d2Y)})`;
 }
 
 // ════════════════════════════════════════════════
@@ -949,8 +1048,10 @@ function init(){
     }
   });
 
+  buildPastBtns();
+  buildFuture6hBtns();
   buildDayBtns();
-  setWin('today');  // 預設顯示今天觀測
+  setWin('today');  // 預設顯示今天（觀測至今+預測補滿24h）
   tryLoadLive();
   setInterval(()=>{ tryLoadLive(); }, 30*60*1000);
 }
