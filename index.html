@@ -39,25 +39,25 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 /* 純白底 */
 .leaflet-container{background:#ffffff!important}
 #sb{width:300px;background:#091520;border-left:1px solid #1a3348;display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
-#ip{padding:12px;border-bottom:1px solid #1a3348;flex-shrink:0;overflow-y:auto;max-height:55vh}
-#ip h3{font-size:14px;color:#6bc8e8;margin-bottom:8px}
-.hint{font-size:11px;color:#2a5070}
+.hint{font-size:11px;color:#2a5070;line-height:1.6}
 .ir{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #0d2030;font-size:12px}
 .ir .l{color:#3a7090}.ir .v{font-weight:700;color:#b0cce0}
 .v.ok{color:#50d080}.v.w1{color:#c8c830}.v.w2{color:#e08030}.v.w3{color:#e03030}.v.w4{color:#c030c0}
-#chart-wrap{padding:8px 10px;border-bottom:1px solid #1a3348;flex-shrink:0;display:none}
-#chart-wrap h4{font-size:10px;color:#3a6080;margin-bottom:4px}
+/* 可摺疊分區 */
+.sec{margin:6px 6px;border:1px solid #16314a;border-radius:6px;overflow:hidden;background:#0a1c2e}
+.sec-h{display:flex;justify-content:space-between;align-items:center;cursor:pointer;
+  padding:8px 10px;font-size:13px;font-weight:700;color:#7bd0f0;background:#0d2536;
+  user-select:none}
+.sec-h:hover{background:#0f2c40}
+.sec-arrow{font-size:10px;color:#4a90b8}
+.sec-body{padding:8px 10px}
 #cv{display:block;width:100%;height:90px;background:#060f18;border-radius:3px}
-#seg-tbl{padding:6px 10px;flex:1;overflow-y:auto;display:none}
-#seg-tbl h4{font-size:10px;color:#3a6080;margin-bottom:5px}
-.sr{display:grid;grid-template-columns:72px 1fr 44px;align-items:center;gap:4px;margin-bottom:4px;font-size:9px}
+.sr{display:grid;grid-template-columns:72px 1fr 44px;align-items:center;gap:4px;margin-bottom:4px;font-size:10px}
 .sl2{color:#3a7090}.sbw{background:#050e18;border-radius:2px;height:6px;overflow:hidden}.sb2{height:100%;border-radius:2px}.sv{text-align:right;color:#9ab8d0}
-#leg{padding:8px 10px;border-top:1px solid #1a3348;flex-shrink:0}
-#leg h4{font-size:10px;color:#3a6080;margin-bottom:4px}
-.li-wrap{display:flex;flex-direction:column;gap:2px}
-.li{display:flex;align-items:center;gap:5px;font-size:10px;color:#5a8aaa}
-.lsw{width:16px;height:10px;border-radius:1px;flex-shrink:0;border:1px solid rgba(255,255,255,.1)}
-.dn{font-size:9px;color:#1e4060;padding:3px 10px;border-top:1px solid #1a3348}
+.station-row{display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px dashed #16314a}
+.station-row .sn{color:#7bb8d8}
+.station-row .sw{color:#c8c830;font-weight:700}
+.dn{font-size:9px;color:#1e4060;padding:6px 10px;border-top:1px solid #1a3348;flex-shrink:0}
 #loading{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#091520;border:1px solid #2a5a8a;border-radius:8px;padding:20px 30px;font-size:13px;color:#6bc8e8;z-index:9999;text-align:center}
 .leaflet-popup-content-wrapper{background:#091520!important;border:1px solid #2060a0!important;border-radius:5px!important;color:#b0d0f0!important;box-shadow:0 4px 16px rgba(0,0,0,.7)!important}
 .leaflet-popup-tip{background:#091520!important}
@@ -99,8 +99,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     </div>
     <span class="cl" style="margin-left:6px">過去</span>
     <div class="bg">
-      <button class="b" id="bP2d"   onclick="setWin('past2d')">過去2天</button>
-      <button class="b" id="bP1d"   onclick="setWin('past1d')">過去1天</button>
+      <button class="b" id="bP2d"   onclick="setWin('past2d')">前天</button>
+      <button class="b" id="bP1d"   onclick="setWin('past1d')">昨天</button>
       <button class="b on" id="bToday" onclick="setWin('today')">今天</button>
     </div>
     <span class="cl" style="margin-left:6px">未來（6h段）</span>
@@ -144,40 +144,104 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 </div>
 <div id="main">
   <div id="map" style="position:relative">
-    <!-- Color bar 固定在右下角 -->
-    <div id="colorbar" style="position:absolute;bottom:30px;right:12px;z-index:400;
-      background:rgba(9,21,32,0.88);border:1px solid #1a3348;border-radius:5px;
+    <!-- 指北針（右上角）-->
+    <div id="compass" style="position:absolute;top:12px;right:12px;z-index:400;
+      background:rgba(255,255,255,0.85);border:1px solid #99aabb;border-radius:50%;
+      width:40px;height:40px;display:flex;align-items:center;justify-content:center;
+      pointer-events:none;box-shadow:0 1px 4px rgba(0,0,0,.3)">
+      <svg width="22" height="22" viewBox="0 0 24 24">
+        <polygon points="12,2 16,12 12,9 8,12" fill="#cc2222"/>
+        <polygon points="12,22 8,12 12,15 16,12" fill="#444"/>
+        <text x="12" y="2" font-size="0" />
+      </svg>
+      <span style="position:absolute;top:1px;left:50%;transform:translateX(-50%);
+        font-size:9px;font-weight:700;color:#222">N</span>
+    </div>
+    <!-- Color bar 固定在右下角（半透明白底配黑字） -->
+    <div id="colorbar" style="position:absolute;bottom:55px;right:12px;z-index:400;
+      background:rgba(255,255,255,0.85);border:1px solid #99aabb;border-radius:5px;
       padding:8px 10px;min-width:150px;font-size:11px;pointer-events:none;">
-      <div id="cb-title" style="color:#6bc8e8;font-weight:700;margin-bottom:5px;font-size:11px"></div>
+      <div id="cb-title" style="color:#111;font-weight:700;margin-bottom:5px;font-size:11px"></div>
       <div id="cb-items"></div>
     </div>
+    <!-- 比例尺（color bar 正下方）-->
+    <div id="scalebar-wrap" style="position:absolute;bottom:12px;right:12px;z-index:400;
+      pointer-events:none;"></div>
     <div id="map-overlay"></div>
     <div id="no-data-msg">
       <div class="nd-icon">⚠</div>
       <div id="no-data-text">此模式目前無資料</div>
     </div>
   </div>
-  <div id="sb" style="transition:width 0.25s ease;position:relative">
+  <div id="sb" style="transition:width 0.25s ease;position:relative;display:flex;flex-direction:column;overflow:hidden">
   <button id="sb-toggle" onclick="toggleSidebar()" title="收合/展開側欄"
     style="position:absolute;left:-22px;top:50%;transform:translateY(-50%);
     z-index:500;background:#091520;border:1px solid #1a3348;border-radius:4px 0 0 4px;
     color:#6bc8e8;cursor:pointer;padding:6px 3px;font-size:12px;line-height:1;
     writing-mode:vertical-rl;letter-spacing:2px;">◀</button>
-    <div id="ip">
-      <!-- 固定標題 -->
-      <h3 id="iTitle" style="font-size:14px;color:#6bc8e8;padding:10px 12px 5px;
-        border-bottom:1px solid #1a3348;flex-shrink:0;cursor:default">點選鄉鎮查看詳情</h3>
-      <!-- 可捲動內容區 -->
-      <div id="iCont-wrap" style="overflow-y:auto;flex:1">
-        <div id="iCont" class="hint" style="padding:8px 12px">
-          在地圖點選任一區域，可查看累積雨量、ETR2% 及逐日趨勢。
-        </div>
+
+  <!-- 固定標題：縣市鄉鎮 -->
+  <h3 id="iTitle" style="font-size:15px;font-weight:700;color:#6bc8e8;padding:12px 14px 8px;
+    border-bottom:1px solid #1a3348;flex-shrink:0;cursor:default;margin:0">點選鄉鎮查看詳情</h3>
+
+  <!-- 可捲動的分區內容 -->
+  <div id="sb-scroll" style="overflow-y:auto;flex:1;padding:0 4px">
+    <div id="iCont-hint" class="hint" style="padding:10px 10px">
+      在地圖點選任一區域，可查看累積雨量、ETR2% 及逐日趨勢。
+    </div>
+
+    <!-- 區塊：現況觀測（預設展開） -->
+    <div class="sec" id="sec-obs" style="display:none">
+      <div class="sec-h" onclick="toggleSec('obs')">
+        <span>現況觀測</span><span class="sec-arrow" id="arrow-obs">▾</span>
+      </div>
+      <div class="sec-body" id="body-obs"></div>
+    </div>
+
+    <!-- 區塊：QPF預測（預設展開） -->
+    <div class="sec" id="sec-qpf" style="display:none">
+      <div class="sec-h" onclick="toggleSec('qpf')">
+        <span>QPF 預測</span><span class="sec-arrow" id="arrow-qpf">▾</span>
+      </div>
+      <div class="sec-body" id="body-qpf"></div>
+    </div>
+
+    <!-- 區塊：風險指標（預設展開） -->
+    <div class="sec" id="sec-risk" style="display:none">
+      <div class="sec-h" onclick="toggleSec('risk')">
+        <span>風險指標</span><span class="sec-arrow" id="arrow-risk">▾</span>
+      </div>
+      <div class="sec-body" id="body-risk"></div>
+    </div>
+
+    <!-- 區塊：逐日趨勢（預設收合） -->
+    <div class="sec" id="sec-chart" style="display:none">
+      <div class="sec-h" onclick="toggleSec('chart')">
+        <span>逐日雨量（15天）</span><span class="sec-arrow" id="arrow-chart">▸</span>
+      </div>
+      <div class="sec-body" id="body-chart" style="display:none">
+        <canvas id="cv" style="width:100%;height:90px;display:block;background:#060f18;border-radius:3px"></canvas>
       </div>
     </div>
-    <div id="chart-wrap"><h4>逐日雨量（15天）</h4><canvas id="cv"></canvas></div>
-    <div id="seg-tbl"><h4>6小時分段（前48h）</h4><div id="seg-rows"></div></div>
-    <div id="leg" style="display:none"><h4 id="leg-title">累積雨量 (mm)</h4><div class="li-wrap" id="leg-items"></div></div>
-    <div class="dn" id="data-note">資料來源：示範資料</div>
+
+    <!-- 區塊：6h分段（預設收合） -->
+    <div class="sec" id="sec-seg" style="display:none">
+      <div class="sec-h" onclick="toggleSec('seg')">
+        <span>6小時分段（前48h）</span><span class="sec-arrow" id="arrow-seg">▸</span>
+      </div>
+      <div class="sec-body" id="seg-rows" style="display:none"></div>
+    </div>
+
+    <!-- 區塊：測站清單（預設收合） -->
+    <div class="sec" id="sec-stations" style="display:none">
+      <div class="sec-h" onclick="toggleSec('stations')">
+        <span>觀測站清單</span><span class="sec-arrow" id="arrow-stations">▸</span>
+      </div>
+      <div class="sec-body" id="body-stations" style="display:none"></div>
+    </div>
+  </div>
+
+  <div class="dn" id="data-note" style="flex-shrink:0">資料來源：示範資料</div>
   </div>
 </div>
 <script>
@@ -458,16 +522,28 @@ function renderLayer(){
 //  側欄
 // ════════════════════════════════════════════════
 function wv(cls,txt){return`<span class="v ${cls}">${txt}</span>`;}
-function updateInfo(t){
-  document.getElementById('iTitle').textContent=`${t.county} ${t.township}`;
-  const {totalRain, etrPct} = getAccum(t);
-  const obsEtr = getObsEtr(t);
-  const hasObs = t.rain_24h !== null && t.rain_24h !== undefined;
-  const days   = dayTo - dayFrom + 1;
-  const t0     = new Date(BASE_TIME.getTime() + Math.max(0,dayFrom)*86400000);
-  const t1     = new Date(BASE_TIME.getTime() + (dayTo+1)*86400000);
+// 分區展開/收合狀態
+const secOpen = {obs:true, qpf:true, risk:true, chart:false, seg:false, stations:false};
+function toggleSec(name){
+  secOpen[name] = !secOpen[name];
+  const body  = document.getElementById('body-'+name) || document.getElementById(name+'-rows');
+  const arrow = document.getElementById('arrow-'+name);
+  if(body)  body.style.display  = secOpen[name] ? 'block' : 'none';
+  if(arrow) arrow.textContent   = secOpen[name] ? '▾' : '▸';
+}
 
-  // 取 S* 風險資料（函式作用域頂層，避免重複宣告）
+function updateInfo(t){
+  document.getElementById('iTitle').textContent = `${t.county} ${t.township}`;
+  document.getElementById('iCont-hint').style.display = 'none';
+
+  const {totalRain, etrPct} = getAccum(t);
+  const obsEtr  = getObsEtr(t);
+  const hasObs  = t.rain_24h !== null && t.rain_24h !== undefined;
+  const hasEtr  = t.alert_val !== null && t.alert_val !== undefined;
+  const days    = dayTo - dayFrom + 1;
+  const t0      = new Date(BASE_TIME.getTime() + Math.max(0,dayFrom)*86400000);
+  const t1      = new Date(BASE_TIME.getTime() + (dayTo+1)*86400000);
+
   const pop6hArr   = t.pop_6h      || [];
   const scoreArr   = t.risk_score  || [];
   const levelArr   = t.risk_level  || [];
@@ -478,96 +554,147 @@ function updateInfo(t){
 
   function scoreStyle(s){
     if(s===null||s===undefined) return 'ok';
-    if(s>=100) return 'w4';
-    if(s>=75)  return 'w3';
-    if(s>=45)  return 'w2';
-    if(s>=25)  return 'w1';
+    if(s>=100) return 'w4'; if(s>=75) return 'w3';
+    if(s>=45)  return 'w2'; if(s>=25) return 'w1';
     return 'ok';
   }
 
-  document.getElementById('iCont').innerHTML=`
-    <div class="ir" style="background:#0d2535;margin:-2px 0 4px;padding:3px 4px;border-radius:3px">
-      <span class="l" style="color:#6bc8e8;font-weight:700">現況觀測</span>
-    </div>
-    <div class="ir"><span class="l">ETR2警戒值</span>${wv('', t.alert_val ? t.alert_val+' mm' : '—')}</div>
+  // ── 區塊：現況觀測 ──
+  document.getElementById('sec-obs').style.display = 'block';
+  document.getElementById('body-obs').innerHTML = `
+    <div class="ir"><span class="l">ETR2警戒值</span>${wv('', hasEtr ? t.alert_val+' mm' : '無資料')}</div>
     <div class="ir"><span class="l">過去24h累積雨量</span>${wv('', hasObs ? t.rain_24h+' mm' : '無資料')}</div>
-    <div class="ir"><span class="l">有效累積(ETR2)</span>${wv('', t.etr2!=null ? t.etr2+' mm' : '—')}</div>
-    <div class="ir"><span class="l">現況ETR2%</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','—')}</div>
-    <div class="ir" style="background:#0d2535;margin:4px 0;padding:3px 4px;border-radius:3px">
-      <span class="l" style="color:#6bc8e8;font-weight:700">QPF預報（${fmtDay(t0)}→${fmtDay(t1)}，${days}天）</span>
-    </div>
-    <div class="ir"><span class="l">預測累積QPF</span>${wv('', totalRain!==null ? totalRain+' mm' : '—')}</div>
-    <div class="ir"><span class="l">預測ETR2%</span>${etrPct!==null ? wv(wCls(etrPct), etrPct.toFixed(0)+'%') : wv('','—')}</div>
-    <div class="ir" style="background:#1a2a10;margin:4px 0;padding:3px 4px;border-radius:3px">
-      <span class="l" style="color:#8ad040;font-weight:700">風險指標（當前時段）</span>
-    </div>
-    <div class="ir"><span class="l">PoP 降雨機率</span>${wv('', curPop!=null ? curPop.toFixed(0)+'%' : '—')}</div>
-    <div class="ir"><span class="l">風險指標</span>${curScore!=null ? wv(scoreStyle(curScore), curScore.toFixed(1)) : wv('','—')}</div>
-    <div class="ir"><span class="l">風險等級</span>${wv(scoreStyle(curScore||0), curLevel||'—')}</div>
+    <div class="ir"><span class="l">有效累積(ETR2)</span>${wv('', t.etr2!=null ? t.etr2+' mm' : '無資料')}</div>
+    <div class="ir"><span class="l">現況ETR2%</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','無資料')}</div>
   `;
-  drawChart(t); drawSegs(t);
+
+  // ── 區塊：QPF預測 ──
+  document.getElementById('sec-qpf').style.display = 'block';
+  document.getElementById('body-qpf').innerHTML = `
+    <div class="ir"><span class="l">時段</span><span class="v" style="font-size:10px">${fmtDay(t0)}→${fmtDay(t1)}（${days}天）</span></div>
+    <div class="ir"><span class="l">預測累積QPF</span>${wv('', totalRain!==null ? totalRain+' mm' : '—')}</div>
+    <div class="ir"><span class="l">預測ETR2%</span>${(etrPct!==null && hasEtr) ? wv(wCls(etrPct), etrPct.toFixed(0)+'%') : wv('','無資料')}</div>
+  `;
+
+  // ── 區塊：風險指標 ──
+  document.getElementById('sec-risk').style.display = 'block';
+  document.getElementById('body-risk').innerHTML = `
+    <div class="ir"><span class="l">PoP 降雨機率</span>${wv('', curPop!=null ? curPop.toFixed(0)+'%' : '無資料')}</div>
+    <div class="ir"><span class="l">風險指標</span>${curScore!=null ? wv(scoreStyle(curScore), curScore.toFixed(1)) : wv('','無資料')}</div>
+    <div class="ir"><span class="l">風險等級</span>${curLevel ? wv(scoreStyle(curScore||0), curLevel) : wv('','無資料')}</div>
+  `;
+
+  // ── 區塊：逐日趨勢 + 6h分段 + 測站清單 ──
+  document.getElementById('sec-chart').style.display = 'block';
+  document.getElementById('sec-seg').style.display   = 'block';
+  drawChart(t);
+  drawSegs(t);
+
+  if(t.stations && t.stations.length){
+    document.getElementById('sec-stations').style.display = 'block';
+    document.getElementById('body-stations').innerHTML = t.stations.map(s=>
+      `<div class="station-row"><span class="sn">${s.name}</span><span class="sw">${s.alert_val} mm</span></div>`
+    ).join('') + `<div style="font-size:10px;color:#3a6080;margin-top:4px">共 ${t.stations.length} 個測站，警戒值取最大值</div>`;
+  } else {
+    document.getElementById('sec-stations').style.display = 'none';
+  }
+
+  // 套用展開/收合狀態
+  Object.keys(secOpen).forEach(name=>{
+    const body  = document.getElementById('body-'+name) || document.getElementById('seg-rows');
+    const arrow = document.getElementById('arrow-'+name);
+    if(name==='seg'){
+      const segBody = document.getElementById('seg-rows');
+      if(segBody) segBody.style.display = secOpen.seg ? 'block' : 'none';
+    } else if(body){
+      body.style.display = secOpen[name] ? 'block' : 'none';
+    }
+    if(arrow) arrow.textContent = secOpen[name] ? '▾' : '▸';
+  });
 }
 
 function drawChart(t){
-  document.getElementById('chart-wrap').style.display='block';
-  const cv=document.getElementById('cv');
-  const W=cv.offsetWidth||240,H=90;
-  cv.width=W;cv.height=H;
-  const ctx=cv.getContext('2d');
+  const cv = document.getElementById('cv');
+  if(!cv) return;
+  const W = cv.offsetWidth || 260, H = 90;
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
   ctx.clearRect(0,0,W,H);
-  const d=t.daily_qpf||[];if(!d.length)return;
-  const mx=Math.max(...d,10);
+  const d = t.daily_qpf || [];
+  if(!d.length) return;
+  const mx = Math.max(...d, 10);
   const pL=28,pR=6,pT=6,pB=18,cw=W-pL-pR,ch=H-pT-pB,xS=cw/(d.length-1);
-  ctx.strokeStyle='#1a3a5a';ctx.lineWidth=0.4;
-  [.25,.5,.75,1].forEach(r=>{const y=pT+ch*(1-r);ctx.beginPath();ctx.moveTo(pL,y);ctx.lineTo(W-pR,y);ctx.stroke();ctx.fillStyle='#3a6080';ctx.font='7px sans-serif';ctx.textAlign='left';ctx.fillText(Math.round(mx*r),2,y+3);});
-  const dF=Math.max(0,dayFrom),dT=Math.min(d.length-1,dayTo);
-  if(dT>=dF){ctx.fillStyle='rgba(60,140,220,.18)';ctx.fillRect(pL+dF*xS,pT,(dT-dF+1)*xS,ch);}
-  ctx.beginPath();ctx.strokeStyle='#4aaae8';ctx.lineWidth=1.5;
-  d.forEach((v,i)=>{const x=pL+i*xS,y=pT+ch*(1-v/mx);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
+  ctx.strokeStyle='#1a3a5a'; ctx.lineWidth=0.4;
+  [.25,.5,.75,1].forEach(r=>{
+    const y=pT+ch*(1-r);
+    ctx.beginPath();ctx.moveTo(pL,y);ctx.lineTo(W-pR,y);ctx.stroke();
+    ctx.fillStyle='#3a6080';ctx.font='7px sans-serif';ctx.textAlign='left';
+    ctx.fillText(Math.round(mx*r),2,y+3);
+  });
+  const dF=Math.max(0,dayFrom), dT=Math.min(d.length-1,dayTo);
+  if(dT>=dF){ ctx.fillStyle='rgba(60,140,220,.18)'; ctx.fillRect(pL+dF*xS,pT,(dT-dF+1)*xS,ch); }
+  ctx.beginPath(); ctx.strokeStyle='#4aaae8'; ctx.lineWidth=1.5;
+  d.forEach((v,i)=>{ const x=pL+i*xS,y=pT+ch*(1-v/mx); i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
   ctx.stroke();
-  d.forEach((v,i)=>{const x=pL+i*xS,y=pT+ch*(1-v/mx);ctx.beginPath();ctx.arc(x,y,2.5,0,Math.PI*2);ctx.fillStyle=(i>=dF&&i<=dT)?'#6af0ff':'#2a6090';ctx.fill();});
-  ctx.fillStyle='#3a6080';ctx.font='7px sans-serif';ctx.textAlign='center';
-  d.forEach((v,i)=>{if(i%3===0||i===d.length-1){const dt=new Date(BASE_TIME.getTime()+i*86400000);ctx.fillText(fmtDay(dt),pL+i*xS,H-2);}});
+  d.forEach((v,i)=>{
+    const x=pL+i*xS,y=pT+ch*(1-v/mx);
+    ctx.beginPath(); ctx.arc(x,y,2.5,0,Math.PI*2);
+    ctx.fillStyle=(i>=dF&&i<=dT)?'#6af0ff':'#2a6090'; ctx.fill();
+  });
+  ctx.fillStyle='#3a6080'; ctx.font='7px sans-serif'; ctx.textAlign='center';
+  d.forEach((v,i)=>{
+    if(i%3===0||i===d.length-1){
+      const dt=new Date(BASE_TIME.getTime()+i*86400000);
+      ctx.fillText(fmtDay(dt), pL+i*xS, H-2);
+    }
+  });
 }
 
 function drawSegs(t){
-  document.getElementById('seg-tbl').style.display='block';
-  const segs=(t.qpf_15d||[]).slice(0,8);
-  const maxV=Math.max(...segs,1);
-  document.getElementById('seg-rows').innerHTML=segs.map((v,i)=>{
-    const ep=(t.seg_etr_pct||[])[i]||0;
-    const col=mode==='rain'?rainColor(v):etrColor(ep);
-    const bw=Math.round(v/maxV*100);
-    const t0=new Date(BASE_TIME.getTime()+i*6*3600000);
-    return`<div class="sr"><span class="sl2">${fmtDT(t0)}</span><div class="sbw"><div class="sb2" style="width:${bw}%;background:${col}"></div></div><span class="sv">${mode==='rain'?v+'mm':ep+'%'}</span></div>`;
+  const segs = (t.qpf_15d||[]).slice(0,8);
+  const maxV = Math.max(...segs, 1);
+  const el = document.getElementById('seg-rows');
+  if(!el) return;
+  el.innerHTML = segs.map((v,i)=>{
+    const ep  = (t.seg_etr_pct||[])[i];
+    const col = mode==='rain' ? rainColor(v) : (ep!=null ? etrColor(ep) : '#ccddee');
+    const bw  = Math.round(v/maxV*100);
+    const t0  = new Date(BASE_TIME.getTime()+i*6*3600000);
+    const dispV = mode==='rain' ? v+'mm' : (ep!=null ? ep+'%' : '—');
+    return `<div class="sr"><span class="sl2">${fmtDT(t0)}</span><div class="sbw"><div class="sb2" style="width:${bw}%;background:${col}"></div></div><span class="sv">${dispV}</span></div>`;
   }).join('');
 }
 
 function renderLegend(){
   const sc = mode==='rain'?RAIN_SCALE : mode==='etr'?ETR_SCALE : RISK_SCALE;
-  const days=dayTo-dayFrom+1;
-  const modelLabel = (['today','past1d','past2d'].includes(winKey))
-    ? 'CWA觀測' : (MODEL_NOTE[forecastModel] || forecastModel);
-  const titles = {
-    rain: `累積雨量(mm)・${days}天・${modelLabel}`,
-    etr:  `ETR2% 現況觀測`,
-    risk: `風險指標（ETR2 Risk Score）・${modelLabel}`,
-  };
+  // 問題6：圖例標題只顯示基本名稱
+  const titles = { rain: '累積雨量(mm)', etr: 'ETR2%', risk: '風險指標' };
   const titleText = titles[mode] || '';
-  // 右側欄圖例（隱藏）
+
+  // 問題6：色塊標籤只顯示數字範圍，不顯示文字說明（無風險/注意等）
+  function rangeLabel(scale, idx){
+    const s = scale[idx];
+    const prevMax = idx>0 ? scale[idx-1].max : (mode==='etr'||mode==='risk' ? 0 : 0);
+    if(s.max >= 1e9) return `≥ ${prevMax}`;
+    return idx===0 ? `< ${s.max}` : `${prevMax}–${s.max}`;
+  }
+
   document.getElementById('leg-title').textContent = titleText;
-  document.getElementById('leg-items').innerHTML=sc.map(s=>`<div class="li"><div class="lsw" style="background:${s.color}"></div>${s.label}</div>`).join('');
-  // 地圖右下角 colorbar
+  document.getElementById('leg-items').innerHTML = sc.map((s,i)=>
+    `<div class="li"><div class="lsw" style="background:${s.color}"></div>${rangeLabel(sc,i)}</div>`
+  ).join('');
+
+  // 地圖右下角 colorbar（黑色文字，純數字範圍）
   const cb = document.getElementById('colorbar');
   const cbTitle = document.getElementById('cb-title');
   const cbItems = document.getElementById('cb-items');
   if(cb && cbTitle && cbItems){
     cbTitle.textContent = titleText;
-    cbItems.innerHTML = sc.map(s=>`
+    cbItems.innerHTML = sc.map((s,i)=>`
       <div style="display:flex;align-items:center;gap:5px;margin:2px 0">
         <div style="width:14px;height:10px;border-radius:1px;background:${s.color};
-          border:1px solid rgba(255,255,255,.15);flex-shrink:0"></div>
-        <span style="color:#8ab8d0;font-size:10px">${s.label}</span>
+          border:1px solid rgba(0,0,0,.25);flex-shrink:0"></div>
+        <span style="color:#111;font-size:10px;font-weight:600">${rangeLabel(sc,i)}</span>
       </div>`).join('');
   }
 }
@@ -619,7 +746,7 @@ async function tryLoadLive(){
     document.getElementById('data-tag').className='tag sim';
     document.getElementById('data-tag').textContent='⚑ 示範資料';
   }
-  document.getElementById('base-tag').textContent=`更新：${fmtDT(BASE_TIME)}`;
+  document.getElementById('base-tag').textContent=`更新時間：${fmtDT(BASE_TIME)}`;
   buildDayBtns();
   renderLayer();
   renderLegend();
@@ -671,20 +798,42 @@ function setMode(m){
 function setWin(key){
   winKey=key; clearBtns();
   document.getElementById('cust-ctrl').classList.remove('show');
-  if(key==='custom'){document.getElementById('bCust').classList.add('on');document.getElementById('cust-ctrl').classList.add('show');onSlider();return;}
+  if(key==='custom'){
+    document.getElementById('bCust').classList.add('on');
+    document.getElementById('cust-ctrl').classList.add('show');
+    onSlider();
+    return;
+  }
   if(key.startsWith('day')){
     const di=parseInt(key.slice(3))-1; dayFrom=di;dayTo=di;
     const el=document.getElementById('b'+key);if(el)el.classList.add('on');
   } else {
-    const pm={'past2d':[-2,-1],'past1d':[-1,-1],'today':[0,0],'n6h':[0,0],'n12h':[0,0],'n24h':[0,0],'n48h':[0,1]};
+    // dayFrom/dayTo 採用「日界」定義：
+    //   past2d: 前天整天（dayFrom=dayTo=-2）
+    //   past1d: 昨天整天（dayFrom=dayTo=-1）
+    //   today : 今天00:00至今（dayFrom=dayTo=0，內部會限制到目前時刻）
+    //   n6h/n12h/n24h/n48h: 從現在起算的未來時數，仍用 day 0 起算的整數天近似
+    const pm={
+      'past2d':[-2,-2], 'past1d':[-1,-1], 'today':[0,0],
+      'n6h':[0,0], 'n12h':[0,0], 'n24h':[0,0], 'n48h':[0,1]
+    };
     const bm={'past2d':'bP2d','past1d':'bP1d','today':'bToday','n6h':'bN6','n12h':'bN12','n24h':'bN24','n48h':'bN48'};
-    if(pm[key]){[dayFrom,dayTo]=pm[key];}
-    const el=document.getElementById(bm[key]);if(el)el.classList.add('on');
+    if(pm[key]) [dayFrom,dayTo] = pm[key];
+    const el=document.getElementById(bm[key]); if(el) el.classList.add('on');
   }
-  // 顯示/隱藏預報模式列（未來時段才需要）
-  const isFuture = !(['past2d','past1d','today'].includes(key));
+
+  // 顯示/隱藏預報模式列：只要牽涉到未來（dayTo >= 0 且非單純今天觀測）就顯示
+  // 規則：past2d/past1d → 純觀測，不顯示模式列
+  //       today          → 觀測為主，不顯示模式列（無預報模式可選）
+  //       n6h/n12h/n24h/n48h/day*/custom → 顯示模式列
+  const noModelKeys = ['past2d','past1d','today'];
+  const isFuture = !noModelKeys.includes(key);
   const modelWrap = document.getElementById('model-row-wrap');
   if(modelWrap) modelWrap.style.display = isFuture ? 'flex' : 'none';
+  if(isFuture){
+    const modelNote = document.getElementById('model-src-note');
+    if(modelNote) modelNote.textContent = MODEL_NOTE[forecastModel] || '';
+  }
 
   withTransition(()=>{
     hideNoData();
@@ -716,6 +865,13 @@ function buildDayBtns(){
     btn.onclick=(d=>()=>setWin('day'+d))(i);
     c.appendChild(btn);
   }
+  // 同步更新前天/昨天按鈕為具體日期
+  const dY = new Date(BASE_TIME.getTime() - 86400000);
+  const d2Y = new Date(BASE_TIME.getTime() - 2*86400000);
+  const bP1 = document.getElementById('bP1d');
+  const bP2 = document.getElementById('bP2d');
+  if(bP1) bP1.textContent = `昨天(${fmtDay(dY)})`;
+  if(bP2) bP2.textContent = `前天(${fmtDay(d2Y)})`;
 }
 
 // ════════════════════════════════════════════════
@@ -725,15 +881,26 @@ function init(){
   // GeoJSON 已嵌入，直接使用，無需 fetch
   document.getElementById('loading').style.display = 'none';
 
+  // 加入比例尺（固定顯示在我們自訂的位置容器內）
+  L.control.scale({position:'bottomright', imperial:false, metric:true}).addTo(map);
+  // 將 Leaflet 自動產生的比例尺移入我們的容器，確保位置在 colorbar 正下方
+  setTimeout(()=>{
+    const leafletScale = document.querySelector('.leaflet-control-scale');
+    const wrap = document.getElementById('scalebar-wrap');
+    if(leafletScale && wrap) wrap.appendChild(leafletScale);
+  }, 100);
+
   // 點選海洋取消選取（在 map 初始化後才能呼叫）
   map.on('click', function(){
     if(selected){
       selected = null;
       renderLayer();
       document.getElementById('iTitle').textContent = '點選鄉鎮查看詳情';
-      document.getElementById('iCont').innerHTML = '<div class="hint">在地圖點選任一區域，可查看累積雨量、ETR2% 及逐日趨勢。</div>';
-      document.getElementById('chart-wrap').style.display='none';
-      document.getElementById('seg-tbl').style.display='none';
+      document.getElementById('iCont-hint').style.display = 'block';
+      ['obs','qpf','risk','chart','seg','stations'].forEach(name=>{
+        const sec = document.getElementById('sec-'+name);
+        if(sec) sec.style.display = 'none';
+      });
     }
   });
 

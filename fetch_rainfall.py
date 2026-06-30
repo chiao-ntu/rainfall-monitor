@@ -118,11 +118,11 @@ def update_history(stations, now_tpe):
     return history
 
 def calc_etr2(sid, history, now_tpe):
-    """ETR2 = OBS_TO_EFF × Σ(i=0~6) ALPHA_DECAY^i × R_i"""
+    """ETR2 = OBS_TO_EFF × Σ(i=0~6) R_i（不含時間衰退）"""
     if sid not in history: return None
     daily = history[sid]
     etr2 = OBS_TO_EFF * sum(
-        (ALPHA_DECAY**i) * daily.get((now_tpe-timedelta(days=i)).strftime('%Y-%m-%d'), 0.0)
+        daily.get((now_tpe-timedelta(days=i)).strftime('%Y-%m-%d'), 0.0)
         for i in range(7)
     )
     return round(etr2, 1)
@@ -531,12 +531,12 @@ def main():
             'pop_6h':pop_6h,
             'risk_score': risk_score_list,
             'risk_level': risk_level_list,
-            # 各模式QPF（60個6h時段=15天）
             'qpf_best':  qpf_best,
             'qpf_ecmwf': qpf_ecmwf,
             'qpf_gfs':   qpf_gfs,
             'qpf_icon':  qpf_icon,
             'obs_6h':[0.0]*8,
+            'stations':  info.get('stations', []),
         })
 
     # 加入「非靜態表鄉鎮」：有觀測資料但無ETR2警戒值
