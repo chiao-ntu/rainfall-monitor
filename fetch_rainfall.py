@@ -118,7 +118,7 @@ def update_history(stations, now_tpe):
     return history
 
 def calc_etr2(sid, history, now_tpe):
-    """ETR2 = OBS_TO_EFF × Σ(i=0~6) R_i（不含時間衰退）"""
+    """現況 ETR2 = OBS_TO_EFF × Σ(i=0~6) R_i（不含時間衰退，僅用於現況觀測）"""
     if sid not in history: return None
     daily = history[sid]
     etr2 = OBS_TO_EFF * sum(
@@ -127,6 +127,18 @@ def calc_etr2(sid, history, now_tpe):
     )
     return round(etr2, 1)
 
+def get_daily_rain_array(sid, history, now_tpe, days=8):
+    """
+    回傳過去 N 天的逐日觀測雨量陣列（給前端做未來ETR2%滾動計算用）
+    array[0] = 今天, array[1] = 昨天, ... array[7] = 7天前
+    """
+    if sid not in history: return [0.0]*days
+    daily = history[sid]
+    return [
+        daily.get((now_tpe-timedelta(days=i)).strftime('%Y-%m-%d'), 0.0)
+        for i in range(days)
+    ]
+
 def agg_obs(stations, alert_table, history, now_tpe):
     town={}
     for sid,st in stations.items():
@@ -134,7 +146,8 @@ def agg_obs(stations, alert_table, history, now_tpe):
         if key not in town:
             town[key]={'county':st['county'],'township':st['township'],
                        'stations':[],'rain_24h':0.0,'rain_6h':0.0,
-                       'rain_2d':0.0,'rain_3d':0.0,'etr2':None}
+                       'rain_2d':0.0,'rain_3d':0.0,'etr2':None,
+                       'daily_rain':[0.0]*8}
         td=town[key]; td['stations'].append(sid)
         td['rain_24h']=max(td['rain_24h'],st['rain_24h'])
         td['rain_6h'] =max(td['rain_6h'], st['rain_6h'])
@@ -142,6 +155,9 @@ def agg_obs(stations, alert_table, history, now_tpe):
         td['rain_3d'] =max(td['rain_3d'], st['rain_3d'])
         ev=calc_etr2(sid,history,now_tpe)
         if ev is not None: td['etr2']=max(td['etr2'] or 0.0,ev)
+        # 取各站每日雨量的最大值，組成鄉鎮代表性的逐日雨量陣列
+        st_daily = get_daily_rain_array(sid, history, now_tpe, days=8)
+        td['daily_rain'] = [max(a,b) for a,b in zip(td['daily_rain'], st_daily)]
     for key,td in town.items():
         ai=alert_table.get(key,{}); av=ai.get('alert_val',0)
         td['etr2_pct']=round(td['etr2']/av,4) if td['etr2'] and av>0 else None
@@ -366,6 +382,19 @@ def fetch_typhoon_qpf():
         typhoon_segs = []
     return typhoon_segs
 
+# ── IDW 空間插值 ──────────────────────────────────
+def idw(lat, lng, pts, seg=None):
+    """pts = [(lat,lng,value), ...]，回傳反距離加權插值結果"""
+    if not pts: return 0.0
+    dists = sorted([(math.sqrt((p[0]-lat)**2+(p[1]-lng)**2), p) for p in pts])[:4]
+    tw, tv = 0.0, 0.0
+    for d, p in dists:
+        v = p[2]
+        if d < 1e-6: return v
+        w = 1.0/d**2
+        tw += w; tv += w*v
+    return round(tv/tw, 1) if tw > 0 else 0.0
+
 # ── 風險分數 S*（ETR2 Risk Score）────────────────────
 def calc_risk_score(etr_pct, qpf_mm, pop_pct, n_hours,
                     alpha=0.5, beta=0.5, gamma=0.3,
@@ -479,20 +508,24 @@ def main():
                         for i in range(60)]
             return segs[:60]
 
-        # 各模式的完整15天QPF
+        # 各模式的完整15天QPF（依優先序：CWA > ECMWF > GFS/ICON）
         qpf_best  = get_qpf_model('best_match')
         qpf_ecmwf = get_qpf_model('ecmwf_ifs025')
         qpf_gfs   = get_qpf_model('gfs_seamless')
         qpf_icon  = get_qpf_model('icon_seamless')
 
-        # 颱風期間：用 CWA 格點覆蓋前8段（48h）
-        if is_typhoon:
+        # 颱風期間：CWA 格點 QPF 優先覆蓋前8段（48h），其餘時段仍用 Open-Meteo
+        if is_typhoon and typhoon_segs:
             for idx in range(min(8, len(qpf_best))):
-                v = idw(lat, lng, [], idx)  # 已在上方計算
-                if v > 0:
-                    qpf_best[idx] = qpf_ecmwf[idx] = qpf_gfs[idx] = qpf_icon[idx] = v
+                seg_pts = [(p[0],p[1],p[2]) for p in typhoon_segs[idx]["points"]] \
+                          if idx < len(typhoon_segs) else []
+                if seg_pts:
+                    v = idw(lat, lng, seg_pts, idx)
+                    if v is not None:
+                        # CWA 為最高優先，所有模式統一覆蓋為 CWA 觀測值
+                        qpf_best[idx] = qpf_ecmwf[idx] = qpf_gfs[idx] = qpf_icon[idx] = v
 
-        # 預設用 best_match
+        # 預設用 best_match（CWA優先 > ECMWF > GFS=ICON 的綜合判斷已含在模式選擇邏輯中）
         qpf15d = qpf_best
         daily  = [round(sum(qpf15d[i*4:(i+1)*4]),1) for i in range(15)]
 
@@ -537,6 +570,7 @@ def main():
             'qpf_icon':  qpf_icon,
             'obs_6h':[0.0]*8,
             'stations':  info.get('stations', []),
+            'daily_rain': obs.get('daily_rain', [0.0]*8),  # 過去8天逐日雨量，供前端滾動計算未來ETR2%
         })
 
     # 加入「非靜態表鄉鎮」：有觀測資料但無ETR2警戒值

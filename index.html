@@ -62,6 +62,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 .leaflet-popup-content-wrapper{background:#091520!important;border:1px solid #2060a0!important;border-radius:5px!important;color:#b0d0f0!important;box-shadow:0 4px 16px rgba(0,0,0,.7)!important}
 .leaflet-popup-tip{background:#091520!important}
 .leaflet-popup-content{margin:8px 12px!important;font-size:11px!important;line-height:1.7}
+.leaflet-control-scale{margin:0!important}
+.leaflet-control-scale-line{color:#111!important;border-color:#333!important;background:transparent!important;font-weight:600;font-size:10px!important}
 /* 切換動畫遮罩 */
 #map-overlay{position:absolute;top:0;left:0;width:100%;height:100%;background:#000;
   opacity:0;pointer-events:none;z-index:500;transition:opacity 0.18s ease;}
@@ -86,7 +88,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   
   <span class="tag sim" id="data-tag">⚑ 示範資料</span>
   <span class="tag time" id="base-tag"></span>
-  <button class="b" id="btn-refresh" onclick="manualRefresh()" title="立即重新抓取所有模式資料" style="border-color:#2a6a3a;color:#4ae490;font-size:10px">⟳ 立即更新</button>
+  <button class="b" id="btn-refresh" onclick="manualRefresh()" title="重新讀取 GitHub 上最新的 data.json（後端每6小時自動更新一次，此按鈕不會立即觸發抓取）" style="border-color:#2a6a3a;color:#4ae490;font-size:10px">⟳ 重新讀取</button>
   <button class="b pbtn" id="btn-pause" onclick="togglePause()">⏸ 暫停更新</button>
 </div>
 <div id="ctrl">
@@ -165,8 +167,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div id="cb-items"></div>
     </div>
     <!-- 比例尺（color bar 正下方）-->
-    <div id="scalebar-wrap" style="position:absolute;bottom:12px;right:12px;z-index:400;
-      pointer-events:none;"></div>
+    <div id="scalebar-wrap" style="position:absolute;bottom:32px;right:12px;z-index:400;
+      pointer-events:none;background:rgba(255,255,255,0.85);border:1px solid #99aabb;
+      border-radius:4px;padding:2px 6px;"></div>
     <div id="map-overlay"></div>
     <div id="no-data-msg">
       <div class="nd-icon">⚠</div>
@@ -428,12 +431,44 @@ function getAccum(t){
     for(let i = day*4; i < day*4+4; i++) total += qpf[i]||0;
   }
   total = Math.round(total*10)/10;
-  const days = dayTo - Math.max(0,dayFrom) + 1;
-  const etrPct = t.alert_val > 0
-    ? Math.round(total / (t.alert_val * days) * 1000) / 10
-    : null;
-  // 無QPF資料（全為0且非降雨期）→ 仍然顯示，不回傳null
+
+  // ── 未來時段的 ETR2% 用滾動衰退計算 ──
+  // 目標日 D 的 ETR2% = OBS_TO_EFF × Σ(i=0~6) 0.88^i × R_{D-i} / alert_val
+  // R_{D-i}：往前推第 i 天的雨量。若 D-i ≤ 0（含今天）用觀測 daily_rain；
+  //          若 D-i > 0（未來）用對應模式的逐日 QPF
+  const targetDay = dayTo;  // 以範圍結束日作為計算基準日
+  const etrPct = calcFutureEtrPct(t, targetDay, qpfField);
+
   return {totalRain: total, etrPct};
+}
+
+// 未來日期的 ETR2% 滾動衰退計算
+function calcFutureEtrPct(t, targetDay, qpfField){
+  if(!t.alert_val || t.alert_val<=0) return null;
+  const ALPHA_DECAY = 0.88, OBS_TO_EFF = 0.7;
+  const dailyObs = t.daily_rain || [];      // index 0=今天，1=昨天...
+  const qpfArr   = t[qpfField] || t.qpf_15d || [];  // 60個6h時段
+  const dailyQpf = [];
+  for(let d=0; d<15; d++){
+    dailyQpf.push(qpfArr.slice(d*4,(d+1)*4).reduce((a,b)=>a+(b||0),0));
+  }
+  let etr2 = 0;
+  for(let i=0; i<=6; i++){
+    const day = targetDay - i;  // 0=今天, 正值=未來第day天, 負值=過去
+    let rainVal;
+    if(day <= 0){
+      // 今天或過去：用觀測 daily_rain（index = -day）
+      const obsIdx = -day;
+      rainVal = (obsIdx < dailyObs.length) ? dailyObs[obsIdx] : 0;
+      etr2 += rainVal;  // 觀測值不做日衰退（已是當日真實值）
+    } else {
+      // 未來：用 QPF，乘上衰退係數
+      rainVal = (day-1 < dailyQpf.length) ? dailyQpf[day-1] : 0;
+      etr2 += Math.pow(ALPHA_DECAY, i) * rainVal;
+    }
+  }
+  etr2 *= OBS_TO_EFF;
+  return Math.round(etr2/t.alert_val*1000)/10;
 }
 
 // 取「現況 ETR2%」（觀測值，顯示在側欄）
@@ -487,17 +522,22 @@ function renderLayer(){
     }
     if(t){
       const acc2 = getAccum(t);
-      const {totalRain,etrPct} = acc2;
-      const obsEtr2 = getObsEtr(t);
+      const {totalRain, etrPct} = acc2;   // etrPct：該時段對應的 ETR2%（觀測模式=現況；未來模式=預測）
+      const isToday = (dayFrom===0 && dayTo===0);
       const rainStr = totalRain !== null ? totalRain+' mm' : '—';
-      const etrStr  = obsEtr2  !== null ? obsEtr2.toFixed(0)+'%' : '—';
-      const rainLabel = (mode==='etr') ? 'ETR2%' : (dayFrom===0&&dayTo===0) ? '24h觀測' : 'QPF';
-      const dispStr   = (mode==='etr') ? etrStr : rainStr;
-      const obsEtrStr = obsEtr2 !== null ? obsEtr2.toFixed(0)+'%' : '—';
-      poly.bindTooltip(
-        `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>${rainLabel}：${dispStr} ｜ ETR2%：${obsEtrStr}`,
-        {sticky:true,opacity:.92}
-      );
+      const etrStr  = etrPct    !== null ? etrPct.toFixed(0)+'%' : '—';
+
+      let tooltipHtml;
+      if(mode==='etr'){
+        tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>ETR2%：${etrStr}`;
+      } else if(mode==='risk'){
+        tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>風險指標：${totalRain!=null?totalRain.toFixed(1):'—'}`;
+      } else {
+        // 累積雨量模式：依時段標示來源，並同時顯示該時段對應ETR2%
+        const rainLabel = isToday ? '過去24h觀測' : 'QPF預測';
+        tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>${rainLabel}：${rainStr} ｜ ETR2%：${etrStr}`;
+      }
+      poly.bindTooltip(tooltipHtml, {sticky:true, opacity:.92});
       poly.on('click',()=>{selected=t;renderLayer();updateInfo(t);});
     }
     poly.addTo(townLayer);
@@ -678,11 +718,6 @@ function renderLegend(){
     if(s.max >= 1e9) return `≥ ${prevMax}`;
     return idx===0 ? `< ${s.max}` : `${prevMax}–${s.max}`;
   }
-
-  document.getElementById('leg-title').textContent = titleText;
-  document.getElementById('leg-items').innerHTML = sc.map((s,i)=>
-    `<div class="li"><div class="lsw" style="background:${s.color}"></div>${rangeLabel(sc,i)}</div>`
-  ).join('');
 
   // 地圖右下角 colorbar（黑色文字，純數字範圍）
   const cb = document.getElementById('colorbar');
@@ -909,12 +944,12 @@ function init(){
   tryLoadLive();
   setInterval(()=>{ if(!isPaused) tryLoadLive(); }, 30*60*1000);
 }
-// 手動立即更新
+// 手動重新讀取 data.json（不會觸發後端重新抓取，僅重新載入 GitHub 上最新的 data.json）
 async function manualRefresh(){
   const btn = document.getElementById('btn-refresh');
-  if(btn){ btn.textContent='⟳ 更新中...'; btn.disabled=true; }
+  if(btn){ btn.textContent='⟳ 讀取中...'; btn.disabled=true; }
   await tryLoadLive();
-  if(btn){ btn.textContent='⟳ 立即更新'; btn.disabled=false; }
+  if(btn){ btn.textContent='⟳ 重新讀取'; btn.disabled=false; }
 }
 
 // 等 DOM 完全載入後執行
