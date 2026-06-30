@@ -323,30 +323,35 @@ def fetch_openmeteo_model(townships, model='best_match'):
         print(f"    失敗：{e}"); return {}
 
     result={}
+    result_max_hourly={}  # 每個6h段內的「最大單一小時雨量」，供強度分級用
     data_list = raw if isinstance(raw,list) else [raw]
     for i, loc in enumerate(data_list):
         key = f"{lats[i]:.4f}_{lngs[i]:.4f}"
         hourly = loc.get('hourly',{})
         precip = hourly.get('precipitation',[])
-        # 全部15天轉成6h時段（60個）
         segs_6h = []
+        max_hourly_6h = []
         for j in range(0, len(precip), 6):
             chunk = [v for v in precip[j:j+6] if v is not None]
             segs_6h.append(round(sum(chunk), 1))
-        result[key] = segs_6h[:60]  # 最多60個（15天）
+            max_hourly_6h.append(round(max(chunk), 1) if chunk else 0.0)
+        result[key] = segs_6h[:60]
+        result_max_hourly[key] = max_hourly_6h[:60]
     n = len(next(iter(result.values()),[]))
     print(f"    {len(result)} 個點，各 {n} 個6h時段")
-    return result
+    return result, result_max_hourly
 
 def fetch_openmeteo(townships):
-    """抓取所有 Open-Meteo 模式，回傳 {model: {key: [segs]}}"""
+    """抓取所有 Open-Meteo 模式，回傳 (totals_by_model, max_hourly_by_model)"""
     print(f"抓取 Open-Meteo（{len(townships)} 個鄉鎮，全部15天）...")
     models = ['best_match', 'ecmwf_ifs025', 'gfs_seamless', 'icon_seamless']
     all_results = {}
+    all_max_hourly = {}
     for model in models:
-        result = fetch_openmeteo_model(townships, model)
+        result, max_hourly = fetch_openmeteo_model(townships, model)
         all_results[model] = result
-    return all_results
+        all_max_hourly[model] = max_hourly
+    return all_results, all_max_hourly
 
 
 # ── 颱風期 QPF 格點 ──────────────────────────────
@@ -473,7 +478,7 @@ def main():
     is_typhoon   = len(typhoon_segs) >= 4
 
     # Open-Meteo（四個模式）
-    om_all = fetch_openmeteo(static_list)
+    om_all, om_max_hourly_all = fetch_openmeteo(static_list)
     om = om_all.get('best_match', {})  # 預設用 best_match
 
     # 基準時間
@@ -510,11 +515,22 @@ def main():
                         for i in range(60)]
             return segs[:60]
 
+        def get_max_hourly_model(model_key):
+            """取特定模式的60個6h段內最大單一小時雨量（供強度分級用）"""
+            arr = om_max_hourly_all.get(model_key, {}).get(om_key, [])
+            return arr[:60] if arr else [0.0]*60
+
         # 各模式的完整15天QPF（依優先序：CWA > ECMWF > GFS/ICON）
         qpf_best  = get_qpf_model('best_match')
         qpf_ecmwf = get_qpf_model('ecmwf_ifs025')
         qpf_gfs   = get_qpf_model('gfs_seamless')
         qpf_icon  = get_qpf_model('icon_seamless')
+
+        # 各模式對應的「最大時雨量」（強度分級用，不做累積換算）
+        maxh_best  = get_max_hourly_model('best_match')
+        maxh_ecmwf = get_max_hourly_model('ecmwf_ifs025')
+        maxh_gfs   = get_max_hourly_model('gfs_seamless')
+        maxh_icon  = get_max_hourly_model('icon_seamless')
 
         # 颱風期間：CWA 格點 QPF 優先覆蓋前8段（48h），其餘時段仍用 Open-Meteo
         if is_typhoon and typhoon_segs:
@@ -570,6 +586,10 @@ def main():
             'qpf_ecmwf': qpf_ecmwf,
             'qpf_gfs':   qpf_gfs,
             'qpf_icon':  qpf_icon,
+            'maxh_best':  maxh_best,
+            'maxh_ecmwf': maxh_ecmwf,
+            'maxh_gfs':   maxh_gfs,
+            'maxh_icon':  maxh_icon,
             'obs_6h':[0.0]*8,
             'stations':  info.get('stations', []),
             'daily_rain': obs.get('daily_rain', [0.0]*8),  # 過去8天逐日雨量，供前端滾動計算未來ETR2%
@@ -605,6 +625,8 @@ def main():
             'obs_6h':   [0.0]*8,
             'qpf_best':  [0.0]*60, 'qpf_ecmwf': [0.0]*60,
             'qpf_gfs':   [0.0]*60, 'qpf_icon':  [0.0]*60,
+            'maxh_best': [0.0]*60, 'maxh_ecmwf': [0.0]*60,
+            'maxh_gfs':  [0.0]*60, 'maxh_icon':  [0.0]*60,
             'stations':  [],
             'daily_rain': obs.get('daily_rain', [0.0]*8),
         })

@@ -123,6 +123,28 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <span id="slE-v" style="font-size:10px;color:#6bc8e8;width:60px"></span>
     </div>
     <span id="rng-disp"></span>
+    <button class="b" id="bCustomScale" onclick="toggleCustomScaleEditor()"
+      style="margin-left:8px;border-color:#5a3a8a;color:#b08ae8">自訂色階級距</button>
+  </div>
+  <div id="custom-scale-editor" style="display:none;padding:6px 14px;background:#0a1828;border-bottom:1px solid #1a3348">
+    <div style="font-size:10px;color:#6bc8e8;margin-bottom:5px">
+      設定5個顏色的分界值（mm 或 %，視圖層而定），輸入後按套用
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span style="font-size:10px;color:#5a8aaa">白/藍 &lt;</span>
+      <input type="number" id="cs0" value="20" style="width:55px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
+      <span style="font-size:10px;color:#5a8aaa">綠 &lt;</span>
+      <input type="number" id="cs1" value="40" style="width:55px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
+      <span style="font-size:10px;color:#5a8aaa">黃 &lt;</span>
+      <input type="number" id="cs2" value="70" style="width:55px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
+      <span style="font-size:10px;color:#5a8aaa">紅 &lt;</span>
+      <input type="number" id="cs3" value="130" style="width:55px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
+      <span style="font-size:10px;color:#5a8aaa">紫 &lt;</span>
+      <input type="number" id="cs4" value="250" style="width:55px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
+      <span style="font-size:10px;color:#5a8aaa">≥ 該值=淡紫</span>
+      <button class="b" onclick="applyCustomScale()" style="border-color:#3a8a4a;color:#7be89a">套用</button>
+      <button class="b" onclick="resetCustomScale()" style="border-color:#8a4a3a;color:#e8907b">重設預設值</button>
+    </div>
   </div>
   <!-- 預報模式選擇列（未來時段才顯示） -->
   <div class="ctrl-row" id="model-row-wrap" style="display:none">
@@ -164,12 +186,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div id="no-data-text">此模式目前無資料</div>
     </div>
   </div>
-  <div id="sb" style="transition:width 0.25s ease;position:relative;display:flex;flex-direction:column;overflow:hidden">
   <button id="sb-toggle" onclick="toggleSidebar()" title="收合/展開側欄"
-    style="position:absolute;left:-22px;top:50%;transform:translateY(-50%);
-    z-index:500;background:#091520;border:1px solid #1a3348;border-radius:4px 0 0 4px;
-    color:#6bc8e8;cursor:pointer;padding:6px 3px;font-size:12px;line-height:1;
-    writing-mode:vertical-rl;letter-spacing:2px;">◀</button>
+    style="align-self:center;z-index:500;background:#091520;border:1px solid #1a3348;
+    border-radius:4px 0 0 4px;color:#6bc8e8;cursor:pointer;padding:10px 3px;
+    font-size:12px;line-height:1;writing-mode:vertical-rl;letter-spacing:2px;
+    flex-shrink:0;transition:transform 0.2s ease">◀</button>
+  <div id="sb" style="transition:width 0.25s ease;position:relative;display:flex;flex-direction:column;overflow:hidden">
 
   <!-- 固定標題：縣市鄉鎮 -->
   <h3 id="iTitle" style="font-size:15px;font-weight:700;color:#6bc8e8;padding:12px 14px 8px;
@@ -272,6 +294,35 @@ let townLayer = null, countyLayer = null;
 
 // 右側欄收合/展開
 let sidebarOpen = true;
+// 自訂色階級距編輯器（僅自訂範圍模式可用）
+const DEFAULT_RAIN_BREAKS = [20,40,70,130,250];
+function toggleCustomScaleEditor(){
+  const el = document.getElementById('custom-scale-editor');
+  if(!el) return;
+  el.style.display = (el.style.display==='none'||!el.style.display) ? 'block' : 'none';
+}
+function applyCustomScale(){
+  const vals = [0,1,2,3,4].map(i=>{
+    const v = parseFloat(document.getElementById('cs'+i).value);
+    return isNaN(v) ? DEFAULT_RAIN_BREAKS[i] : v;
+  });
+  // 確保遞增
+  for(let i=1;i<5;i++){ if(vals[i]<=vals[i-1]) vals[i]=vals[i-1]+1; }
+  RAIN_SCALE[0].max = vals[0];
+  RAIN_SCALE[1].max = vals[1];
+  RAIN_SCALE[2].max = vals[2];
+  RAIN_SCALE[3].max = vals[3];
+  RAIN_SCALE[4].max = vals[4];
+  withTransition(()=>{ renderLayer(); renderLegend(); if(selected) updateInfo(selected); });
+}
+function resetCustomScale(){
+  DEFAULT_RAIN_BREAKS.forEach((v,i)=>{
+    const input = document.getElementById('cs'+i);
+    if(input) input.value = v;
+  });
+  applyCustomScale();
+}
+
 function toggleSidebar(){
   sidebarOpen = !sidebarOpen;
   const sb  = document.getElementById('sb');
@@ -279,11 +330,11 @@ function toggleSidebar(){
   if(sidebarOpen){
     sb.style.width  = '300px';
     sb.style.overflow = 'hidden';
-    btn.textContent = '◀';
+    if(btn) btn.style.transform = 'rotate(0deg)';
   } else {
     sb.style.width  = '0px';
     sb.style.overflow = 'hidden';
-    btn.textContent = '▶';
+    if(btn) btn.style.transform = 'rotate(180deg)';
   }
   setTimeout(()=> map.invalidateSize(), 280);
 }
@@ -372,6 +423,16 @@ const RAIN_SCALE=[
   {max:250, color:'#9900CC',label:'130–250 mm'},
   {max:1e9, color:'#DDA0DD',label:'250+ mm'},
 ];
+// 未來6h段強度分級（依「該6h段內最大時雨量」判斷，非累積總量換算）
+// 標準：時雨量<40白；≥40黃(大雨)；≥100橘(豪雨)；≥200紅(大豪雨)；≥500紫(超大豪雨)
+const INTENSITY_SCALE=[
+  {max:40,  color:'#FFFFFF', label:'< 40 mm/h'},
+  {max:100, color:'#DDDD00', label:'40–100 mm/h（大雨）'},
+  {max:200, color:'#FF8800', label:'100–200 mm/h（豪雨）'},
+  {max:500, color:'#DD2222', label:'200–500 mm/h（大豪雨）'},
+  {max:1e9, color:'#9900CC', label:'≥ 500 mm/h（超大豪雨）'},
+];
+function intensityColor(v){for(const s of INTENSITY_SCALE)if(v<s.max)return s.color;return'#9900CC'}
 const ETR_SCALE=[
   {max:50,  color:'#FFFFFF',label:'< 50%'},
   {max:70,  color:'#00CC44',label:'50–70%'},
@@ -524,6 +585,16 @@ function getAccum(t){
     etrPct = Math.round(etr2/t.alert_val*1000)/10;
   }
   if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
+
+  // 未來6h段模式：額外提供強度分級用的「該範圍內最大時雨量」
+  if(winKey.startsWith('fut6_')){
+    const maxhField = 'maxh_' + qpfField.replace('qpf_','');
+    const maxhArr = t[maxhField] || [];
+    let maxIntensity = 0;
+    for(let s=sf; s<=st; s++) maxIntensity = Math.max(maxIntensity, maxhArr[s]||0);
+    return {totalRain: total, etrPct, isIntensity:true, maxIntensity};
+  }
+
   return {totalRain: total, etrPct};
 }
 
@@ -562,6 +633,10 @@ function renderLayer(){
         // ETR2%模式：用 etrColor 對應現況 etr2_pct
         fillColor = totalRain===null ? '#ccddee' : etrColor(totalRain);
         fillOp    = totalRain===null ? 0.12 : (isSel?0.93:0.78);
+      } else if(acc.isIntensity){
+        // 未來6h段：用降雨強度分級（依最大時雨量），非累積總量
+        fillColor = intensityColor(acc.maxIntensity);
+        fillOp    = isSel?0.93:0.78;
       } else {
         fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#ccddee':etrColor(etrPct));
         fillOp    = isSel?0.93:0.78;
@@ -592,7 +667,7 @@ function renderLayer(){
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>風險指標：${totalRain!=null?totalRain.toFixed(1):'—'}`;
       } else if(isFuture6h){
         // 未來6h段：顯示目前ETR2、預計增加量、N小時後ETR2%
-        const nHours = segTo+1; // segTo從0起算
+        const nHours = (segTo+1) * 6; // segTo是6h段索引(0-based)，換算成實際小時數
         const curEtrPct = getObsEtr(t);
         const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
         const qpfArr = getQpfArr(t, qpfField);
@@ -608,7 +683,10 @@ function renderLayer(){
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>${rainLabel}：${rainStr} ｜ ETR2%：${etrStr}`;
       }
       poly.bindTooltip(tooltipHtml, {sticky:true, opacity:.92});
-      poly.on('click', ()=>{ selected=t; renderLayer(); updateInfo(t); });
+      poly.on('click', (e)=>{
+        L.DomEvent.stopPropagation(e);
+        selected=t; renderLayer(); updateInfo(t);
+      });
     }
     poly.addTo(townLayer);
   });
@@ -776,20 +854,21 @@ function drawSegs(t){
 }
 
 function renderLegend(){
-  const sc = mode==='rain'?RAIN_SCALE : mode==='etr'?ETR_SCALE : RISK_SCALE;
-  // 問題6：圖例標題只顯示基本名稱
-  const titles = { rain: '累積雨量(mm)', etr: 'ETR2%', risk: '風險指標' };
+  const isFuture6h = mode==='rain' && winKey.startsWith('fut6_');
+  const sc = isFuture6h ? INTENSITY_SCALE
+           : mode==='rain' ? RAIN_SCALE
+           : mode==='etr'  ? ETR_SCALE
+           : RISK_SCALE;
+  const titles = { rain: isFuture6h ? '降雨強度(時雨量mm/h)' : '累積雨量(mm)', etr: 'ETR2%', risk: '風險指標' };
   const titleText = titles[mode] || '';
 
-  // 問題6：色塊標籤只顯示數字範圍，不顯示文字說明（無風險/注意等）
   function rangeLabel(scale, idx){
     const s = scale[idx];
-    const prevMax = idx>0 ? scale[idx-1].max : (mode==='etr'||mode==='risk' ? 0 : 0);
+    const prevMax = idx>0 ? scale[idx-1].max : 0;
     if(s.max >= 1e9) return `≥ ${prevMax}`;
     return idx===0 ? `< ${s.max}` : `${prevMax}–${s.max}`;
   }
 
-  // 地圖右下角 colorbar（黑色文字，純數字範圍）
   const cb = document.getElementById('colorbar');
   const cbTitle = document.getElementById('cb-title');
   const cbItems = document.getElementById('cb-items');
@@ -1007,7 +1086,18 @@ function buildFuture6hBtns(){
 function buildDayBtns(){
   const c=document.getElementById('day-btns'); if(!c) return;
   c.innerHTML='';
-  ALL_DYNAMIC_BTN_IDS = ALL_DYNAMIC_BTN_IDS.filter(id=>!id.startsWith('bday'));
+  ALL_DYNAMIC_BTN_IDS = ALL_DYNAMIC_BTN_IDS.filter(id=>!id.startsWith('bday') && id!=='bToday');
+
+  // 第一個按鈕：今天（觀測至今+預測補滿24h）
+  const btnToday = document.createElement('button');
+  btnToday.className = 'b';
+  btnToday.id = 'bToday';
+  btnToday.textContent = `今天(${fmtDay(BASE_TIME)})`;
+  btnToday.onclick = () => setWin('today');
+  c.appendChild(btnToday);
+  ALL_DYNAMIC_BTN_IDS.push('bToday');
+
+  // 第2-15天：純未來QPF預測
   for(let i=2;i<=15;i++){
     const dt=new Date(BASE_TIME.getTime()+(i-1)*86400000);
     const btn=document.createElement('button');
