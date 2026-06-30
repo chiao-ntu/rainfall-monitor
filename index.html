@@ -18,7 +18,8 @@ body{font-family:'Microsoft JhengHei',sans-serif;background:#0c1822;color:#dde8f
 .tag.live{background:#0a2a0a;border-color:#2a7a2a;color:#4ae44a}
 .tag.paused{background:#2a1a0a;border-color:#7a4a0a;color:#e4a44a}
 .tag.time{background:#1a1a2a;border-color:#3a3a6a;color:#9090d0}
-#ctrl{background:#081420;border-bottom:1px solid #1a3348;padding:5px 14px;display:flex;flex-direction:column;gap:4px;flex-shrink:0}
+#ctrl{background:#081420;border-bottom:1px solid #1a3348;padding:5px 14px;display:flex;flex-direction:column;gap:4px;flex-shrink:0;max-height:200px;overflow:hidden;transition:max-height 0.25s ease,padding 0.25s ease,opacity 0.2s ease}
+#ctrl.collapsed{max-height:0;padding-top:0;padding-bottom:0;opacity:0}
 .ctrl-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .cl{font-size:10px;color:#3a6080;white-space:nowrap}
 .bg{display:flex;gap:2px;flex-wrap:wrap}
@@ -66,7 +67,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 .leaflet-control-scale-line{color:#111!important;border-color:#333!important;background:transparent!important;font-weight:600;font-size:10px!important}
 /* 切換動畫遮罩 */
 #map-overlay{position:absolute;top:0;left:0;width:100%;height:100%;background:#000;
-  opacity:0;pointer-events:none;z-index:500;transition:opacity 0.18s ease;}
+  opacity:0;pointer-events:none;z-index:450;transition:opacity 0.18s ease;}
 #map-overlay.dimming{opacity:0.45;}
 /* 無資料提示 */
 #no-data-msg{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
@@ -85,13 +86,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 <div id="loading" style="display:block">⏳ 載入地圖資料中...</div>
 <div id="hdr">
   <div><h1>台灣降雨預測監測系統</h1><div class="sub">臺大天災研究中心</div></div>
-  
-  <span class="tag sim" id="data-tag">⚑ 示範資料</span>
   <span class="tag time" id="base-tag"></span>
-  
-  <button class="b pbtn" id="btn-pause" onclick="togglePause()">⏸ 暫停更新</button>
   <button class="b" id="ctrl-toggle" onclick="toggleCtrl()" title="收合/展開控制列"
-    style="border-color:#2a4a6a;color:#7bb8d8;margin-left:auto">&#9650;</button>
+    style="border-color:#2a4a6a;color:#7bb8d8;margin-left:auto;transition:transform 0.25s ease">&#9650;</button>
 </div>
 <div id="ctrl">
   <div class="ctrl-row">
@@ -148,22 +145,25 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 </div>
 <div id="main">
   <div id="map" style="position:relative">
-    <div id="map-info-panel" style="position:absolute;top:12px;right:12px;z-index:400;display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
-      <button id="map-panel-toggle" onclick="toggleMapPanel()" title="收合/展開圖例" style="background:#fff;border:1px solid #99aabb;border-radius:4px;width:22px;height:22px;font-size:11px;cursor:pointer;color:#222;display:flex;align-items:center;justify-content:center;pointer-events:auto;box-shadow:0 1px 3px rgba(0,0,0,.25)">&#9650;</button>
-      <div id="map-panel-body" style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
-        <div id="compass" style="background:#fff;border:1px solid #99aabb;border-radius:50%;width:38px;height:38px;display:flex;align-items:center;justify-content:center;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,.25);position:relative">
-          <svg width="20" height="20" viewBox="0 0 24 24">
-            <polygon points="12,2 16,12 12,9 8,12" fill="#cc2222"/>
-            <polygon points="12,22 8,12 12,15 16,12" fill="#444"/>
-          </svg>
-          <span style="position:absolute;top:0px;left:50%;transform:translateX(-50%);font-size:8px;font-weight:700;color:#111">N</span>
-        </div>
-        <div id="colorbar" style="background:#fff;border:1px solid #99aabb;border-radius:5px;padding:7px 9px;font-size:11px;pointer-events:none;display:inline-block;width:fit-content">
-          <div id="cb-title" style="color:#111;font-weight:700;margin-bottom:4px;font-size:11px;white-space:nowrap"></div>
-          <div id="cb-items"></div>
-        </div>
-        <div id="scalebar-wrap" style="pointer-events:none;background:#fff;border:1px solid #99aabb;border-radius:4px;padding:2px 6px;width:fit-content"></div>
+    <!-- 指北針：右上角，獨立 -->
+    <div id="compass-wrap" style="position:absolute;top:12px;right:12px;z-index:600;display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
+      <button id="map-panel-toggle" onclick="toggleMapPanel()" title="收合/展開圖例與比例尺"
+        style="background:#fff;border:1px solid #99aabb;border-radius:4px;width:22px;height:22px;font-size:11px;cursor:pointer;color:#222;display:flex;align-items:center;justify-content:center;pointer-events:auto;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform 0.2s ease">&#9650;</button>
+      <div id="compass" style="background:#fff;border:1px solid #99aabb;border-radius:50%;width:38px;height:38px;display:flex;align-items:center;justify-content:center;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,.25);position:relative;transition:opacity 0.2s ease,transform 0.2s ease">
+        <svg width="20" height="20" viewBox="0 0 24 24">
+          <polygon points="12,2 16,12 12,9 8,12" fill="#cc2222"/>
+          <polygon points="12,22 8,12 12,15 16,12" fill="#444"/>
+        </svg>
+        <span style="position:absolute;top:0px;left:50%;transform:translateX(-50%);font-size:8px;font-weight:700;color:#111">N</span>
       </div>
+    </div>
+    <!-- 圖例＋比例尺：右下角 -->
+    <div id="map-panel-body" style="position:absolute;bottom:30px;right:12px;z-index:600;display:flex;flex-direction:column;align-items:flex-end;gap:6px;transition:opacity 0.2s ease,transform 0.2s ease">
+      <div id="colorbar" style="background:#fff;border:1px solid #99aabb;border-radius:5px;padding:7px 9px;font-size:11px;pointer-events:none;display:inline-block;width:fit-content">
+        <div id="cb-title" style="color:#111;font-weight:700;margin-bottom:4px;font-size:11px;white-space:nowrap"></div>
+        <div id="cb-items"></div>
+      </div>
+      <div id="scalebar-wrap" style="pointer-events:none;background:#fff;border:1px solid #99aabb;border-radius:4px;padding:2px 6px;width:fit-content"></div>
     </div>
     <div id="map-overlay"></div>
     <div id="no-data-msg">
@@ -255,7 +255,7 @@ const TOWNSHIPS = [{"county":"屏東縣","township":"來義鄉","alert_val":450.
 // ════════════════════════════════════════════════
 // TOWN_GEO and COUNTY_GEO are embedded as const above
 let BASE_TIME = new Date(2025,5,26,5,0,0);
-let isPaused = false, refreshTimer = null;
+let refreshTimer = null;
 let mode = 'rain', dayFrom = 0, dayTo = 1, winKey = 'n48h';
 let forecastModel = 'best';   // 'best' | 'ecmwf' | 'gfs' | 'icon'
 const MODEL_FIELD = {
@@ -291,25 +291,39 @@ function toggleSidebar(){
   setTimeout(()=> map.invalidateSize(), 280);
 }
 
-// 地圖資訊面板（指北針/圖例/比例尺）收合
+// 地圖資訊面板（指北針/圖例/比例尺）一次收合，含動畫
 let mapPanelOpen = true;
 function toggleMapPanel(){
   mapPanelOpen = !mapPanelOpen;
-  const body = document.getElementById('map-panel-body');
-  const btn  = document.getElementById('map-panel-toggle');
-  if(body) body.style.display = mapPanelOpen ? 'flex' : 'none';
-  if(btn)  btn.innerHTML = mapPanelOpen ? '&#9650;' : '&#9660;';
+  const compass = document.getElementById('compass');
+  const body    = document.getElementById('map-panel-body');
+  const btn     = document.getElementById('map-panel-toggle');
+  const visible = mapPanelOpen;
+  if(compass){
+    compass.style.opacity   = visible ? '1' : '0';
+    compass.style.transform = visible ? 'scale(1)' : 'scale(0.6)';
+    compass.style.pointerEvents = visible ? 'none' : 'none';
+    setTimeout(()=>{ if(compass) compass.style.visibility = visible ? 'visible' : 'hidden'; }, visible?0:200);
+    if(visible) compass.style.visibility = 'visible';
+  }
+  if(body){
+    body.style.opacity   = visible ? '1' : '0';
+    body.style.transform = visible ? 'translateY(0)' : 'translateY(-8px)';
+    setTimeout(()=>{ if(body) body.style.visibility = visible ? 'visible' : 'hidden'; }, visible?0:200);
+    if(visible) body.style.visibility = 'visible';
+  }
+  if(btn) btn.style.transform = visible ? 'rotate(0deg)' : 'rotate(180deg)';
 }
 
-// 上方控制列收合
+// 上方控制列收合（動畫版）
 let ctrlOpen = true;
 function toggleCtrl(){
   ctrlOpen = !ctrlOpen;
   const ctrl = document.getElementById('ctrl');
   const btn  = document.getElementById('ctrl-toggle');
-  if(ctrl) ctrl.style.display = ctrlOpen ? 'flex' : 'none';
-  if(btn)  btn.innerHTML = ctrlOpen ? '&#9650;' : '&#9660;';
-  setTimeout(()=> map.invalidateSize(), 100);
+  if(ctrl) ctrl.classList.toggle('collapsed', !ctrlOpen);
+  if(btn)  btn.style.transform = ctrlOpen ? 'rotate(0deg)' : 'rotate(180deg)';
+  setTimeout(()=> map.invalidateSize(), 260);
 }
 
 const TMAP = {};
@@ -748,53 +762,36 @@ function renderLegend(){
 }
 
 // ════════════════════════════════════════════════
-//  暫停
-// ════════════════════════════════════════════════
-function togglePause(){
-  isPaused=!isPaused;
-  const btn=document.getElementById('btn-pause');
-  btn.classList.toggle('on',isPaused);
-  btn.textContent=isPaused?'▶ 繼續更新':'⏸ 暫停更新';
-  document.getElementById('data-tag').classList.toggle('paused',isPaused);
-  if(!isPaused) tryLoadLive();
-}
-
-// ════════════════════════════════════════════════
 //  載入即時資料
 // ════════════════════════════════════════════════
 async function tryLoadLive(){
-  if(isPaused) return;
   try{
     const r=await fetch('data.json?t='+Date.now());
     if(!r.ok) throw new Error(`data.json HTTP ${r.status}`);
     const d=await r.json();
     console.log('data.json 載入：', d.township_count, '個鄉鎮，來源：', d.source);
 
-    // 更新各鄉鎮資料
     if(d.townships){
       d.townships.forEach(live=>{
         const found = TOWNSHIPS.find(x=>x.county===live.county&&x.township===live.township);
         if(found){
           Object.assign(found, live);
         } else {
-          TOWNSHIPS.push(live);  // 新增不在示範資料中的鄉鎮
+          TOWNSHIPS.push(live);
           TMAP[live.county+live.township] = live;
         }
       });
     }
 
     BASE_TIME = new Date(d.base_time);
-    document.getElementById('data-tag').className='tag live';
-    document.getElementById('data-tag').textContent='● 即時資料';
     const src = d.source || '';
-    document.getElementById('data-note').textContent=
-      `${src} · 產製：${d.generated_at ? d.generated_at.slice(0,16).replace('T',' ') : ''} | 雨量=過去24h觀測`;
+    const note = document.getElementById('data-note');
+    if(note) note.textContent = `${src} · 產製：${d.generated_at ? d.generated_at.slice(0,16).replace('T',' ') : ''} | 雨量=過去24h觀測`;
   }catch(e){
     console.warn('data.json 載入失敗（使用示範資料）：', e.message);
-    document.getElementById('data-tag').className='tag sim';
-    document.getElementById('data-tag').textContent='⚑ 示範資料';
   }
-  document.getElementById('base-tag').textContent=`更新時間：${fmtDT(BASE_TIME)}`;
+  const baseTag = document.getElementById('base-tag');
+  if(baseTag) baseTag.textContent = `更新時間：${fmtDT(BASE_TIME)}`;
   buildDayBtns();
   renderLayer();
   renderLegend();
@@ -955,7 +952,7 @@ function init(){
   buildDayBtns();
   setWin('today');  // 預設顯示今天觀測
   tryLoadLive();
-  setInterval(()=>{ if(!isPaused) tryLoadLive(); }, 30*60*1000);
+  setInterval(()=>{ tryLoadLive(); }, 30*60*1000);
 }
 
 // 等 DOM 完全載入後執行
