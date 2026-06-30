@@ -13,8 +13,7 @@ CWA_API_KEY  = os.environ.get("CWA_API_KEY", "")
 STATIC_FILE  = "etr2_static.json"
 HISTORY_FILE = "obs_history.json"
 OUTPUT_FILE  = "data.json"
-ALPHA_DECAY  = 0.88   # 每日時間衰退係數
-OBS_TO_EFF   = 0.7    # 觀測雨量 → 有效雨量轉換係數
+ETR2_WEIGHTS = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1]  # R0~R6 固定權重
 BASE_URL     = "https://opendata.cwa.gov.tw/api/v1/rest/datastore"
 OBS_URL      = f"{BASE_URL}/O-A0002-001"
 OPENMETEO    = "https://api.open-meteo.com/v1/forecast"
@@ -118,11 +117,14 @@ def update_history(stations, now_tpe):
     return history
 
 def calc_etr2(sid, history, now_tpe):
-    """現況 ETR2 = OBS_TO_EFF × Σ(i=0~6) R_i（不含時間衰退，僅用於現況觀測）"""
+    """
+    ETR2 = R0 + 0.7×R1 + 0.5×R2 + 0.4×R3 + 0.3×R4 + 0.2×R5 + 0.1×R6
+    R0 = 當天(0-24h)累積雨量，R1 = 前一天(25-48h)，...R6 = 前6天
+    """
     if sid not in history: return None
     daily = history[sid]
-    etr2 = OBS_TO_EFF * sum(
-        daily.get((now_tpe-timedelta(days=i)).strftime('%Y-%m-%d'), 0.0)
+    etr2 = sum(
+        ETR2_WEIGHTS[i] * daily.get((now_tpe-timedelta(days=i)).strftime('%Y-%m-%d'), 0.0)
         for i in range(7)
     )
     return round(etr2, 1)
@@ -578,10 +580,17 @@ def main():
     processed = {t['county']+t['township'] for t in out_towns}
     for key, obs in town_obs.items():
         if key in processed: continue  # 靜態表已處理過
-        # 從 GeoJSON 中心取座標（可能沒有，先跳過）
+        # 座標：取該鄉鎮所有觀測站座標的平均值作為代表點
+        st_coords = [(stations[s]['lat'], stations[s]['lng'])
+                     for s in obs.get('stations', []) if s in stations]
+        if st_coords:
+            avg_lat = round(sum(c[0] for c in st_coords)/len(st_coords), 4)
+            avg_lng = round(sum(c[1] for c in st_coords)/len(st_coords), 4)
+        else:
+            avg_lat, avg_lng = None, None
         out_towns.append({
             'county':   obs['county'], 'township': obs['township'],
-            'lat': None, 'lng': None,   # 座標待補
+            'lat': avg_lat, 'lng': avg_lng,
             'alert_val': None, 'alert_6h': None,
             'rain_24h':  obs.get('rain_24h'),
             'rain_6h':   obs.get('rain_6h'),
@@ -596,6 +605,8 @@ def main():
             'obs_6h':   [0.0]*8,
             'qpf_best':  [0.0]*60, 'qpf_ecmwf': [0.0]*60,
             'qpf_gfs':   [0.0]*60, 'qpf_icon':  [0.0]*60,
+            'stations':  [],
+            'daily_rain': obs.get('daily_rain', [0.0]*8),
         })
 
     output={
