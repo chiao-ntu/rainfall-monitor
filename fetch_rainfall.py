@@ -6,7 +6,7 @@
   F-D0047-XXX: WeatherElement「3小時降雨機率」/ 「12小時降雨機率」
                各縣市分開端點（奇數=3天，偶數=1週），Location = 鄉鎮
 """
-import requests, json, math, os, sys
+import requests, json, math, os, sys, time
 from datetime import datetime, timezone, timedelta
 
 CWA_API_KEY  = os.environ.get("CWA_API_KEY", "")
@@ -316,11 +316,23 @@ def fetch_openmeteo_model(townships, model='best_match'):
     if model != 'best_match':
         params['models'] = model
 
-    try:
-        r = requests.get(OPENMETEO, params=params, timeout=120)
-        r.raise_for_status(); raw=r.json()
-    except Exception as e:
-        print(f"    失敗：{e}"); return {}
+    for attempt in range(3):
+        try:
+            r = requests.get(OPENMETEO, params=params, timeout=120)
+            if r.status_code == 429:
+                wait = 5 * (attempt+1)
+                print(f"    429限流，等待{wait}秒後重試...")
+                time.sleep(wait)
+                continue
+            r.raise_for_status(); raw=r.json()
+            break
+        except Exception as e:
+            print(f"    失敗（嘗試{attempt+1}/3）：{e}")
+            if attempt == 2:
+                return {}, {}
+            time.sleep(3)
+    else:
+        return {}, {}
 
     result={}
     result_max_hourly={}  # 每個6h段內的「最大單一小時雨量」，供強度分級用
@@ -347,7 +359,9 @@ def fetch_openmeteo(townships):
     models = ['best_match', 'ecmwf_ifs025', 'gfs_seamless', 'icon_seamless']
     all_results = {}
     all_max_hourly = {}
-    for model in models:
+    for i, model in enumerate(models):
+        if i > 0:
+            time.sleep(2)  # 避免連續請求觸發限流
         result, max_hourly = fetch_openmeteo_model(townships, model)
         all_results[model] = result
         all_max_hourly[model] = max_hourly
@@ -615,8 +629,11 @@ def main():
         non_static_keys.append(key)
 
     print(f"  非靜態表鄉鎮（有觀測但無警戒值）：{len(non_static_keys)} 個，補抓 QPF...")
-    non_static_om, non_static_maxh = (fetch_openmeteo(non_static_coords)
-                                        if non_static_coords else ({}, {}))
+    if non_static_coords:
+        time.sleep(3)  # 與前一批 Open-Meteo 呼叫間隔，避免連續觸發限流
+        non_static_om, non_static_maxh = fetch_openmeteo(non_static_coords)
+    else:
+        non_static_om, non_static_maxh = {}, {}
 
     for key in non_static_keys:
         obs = town_obs[key]

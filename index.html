@@ -247,7 +247,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>逐日雨量（15天）</span><span class="sec-arrow" id="arrow-chart">▸</span>
       </div>
       <div class="sec-body" id="body-chart" style="display:none">
-        <canvas id="cv" style="width:100%;height:90px;display:block;background:#060f18;border-radius:3px"></canvas>
+        <canvas id="cv" style="width:100%;height:90px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv')"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">點擊圖表可放大／縮小</div>
       </div>
     </div>
 
@@ -257,6 +259,23 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>6小時分段（前48h）</span><span class="sec-arrow" id="arrow-seg">▸</span>
       </div>
       <div class="sec-body" id="seg-rows" style="display:none"></div>
+    </div>
+
+    <!-- 區塊：行政區組體雨量圖（緊接在6h分段之後，預設收合） -->
+    <div class="sec" id="sec-hyeto" style="display:none">
+      <div class="sec-h" onclick="toggleSec('hyeto')">
+        <span>行政區組體雨量圖（過去2天+未來2天）</span><span class="sec-arrow" id="arrow-hyeto">▸</span>
+      </div>
+      <div class="sec-body" id="body-hyeto" style="display:none">
+        <canvas id="cv-district-hyeto" width="260" height="100" style="width:100%;height:100px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-district-hyeto')"></canvas>
+        <div style="display:flex;gap:8px;margin-top:4px;font-size:9px;color:#5a8aaa;flex-wrap:wrap">
+          <span><span style="display:inline-block;width:8px;height:8px;background:#4a7ab0;margin-right:3px"></span>觀測(日)</span>
+          <span><span style="display:inline-block;width:8px;height:8px;background:#6ad8f0;margin-right:3px"></span>QPF預測(6h)</span>
+          <span><span style="display:inline-block;width:14px;height:2px;background:#ff9933;margin-right:3px;vertical-align:middle"></span>ETR2%</span>
+        </div>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">行政區整體最大值代表；點擊圖表可放大／縮小</div>
+      </div>
     </div>
 
     <!-- 區塊：測站清單（預設收合） -->
@@ -728,7 +747,7 @@ function renderLayer(){
 // ════════════════════════════════════════════════
 function wv(cls,txt){return`<span class="v ${cls}">${txt}</span>`;}
 // 分區展開/收合狀態
-const secOpen = {obs:true, qpf:true, risk:true, chart:false, seg:false, stations:false};
+const secOpen = {obs:true, qpf:true, risk:true, chart:false, seg:false, hyeto:false, stations:false};
 function toggleSec(name){
   secOpen[name] = !secOpen[name];
   const body  = document.getElementById('body-'+name) || document.getElementById(name+'-rows');
@@ -789,11 +808,13 @@ function updateInfo(t){
     <div class="ir"><span class="l">風險等級</span>${curLevel ? wv(scoreStyle(curScore||0), curLevel) : wv('','無資料')}</div>
   `;
 
-  // ── 區塊：逐日趨勢 + 6h分段 + 測站清單 ──
+  // ── 區塊：逐日趨勢 + 6h分段 + 行政區組體圖 + 測站清單 ──
   document.getElementById('sec-chart').style.display = 'block';
   document.getElementById('sec-seg').style.display   = 'block';
+  document.getElementById('sec-hyeto').style.display = 'block';
   drawChart(t);
   drawSegs(t);
+  drawDistrictHyetograph(t);
 
   if(t.stations && t.stations.length){
     document.getElementById('sec-stations').style.display = 'block';
@@ -882,8 +903,11 @@ function showHyetograph(t, station, evt){
   const popup = document.getElementById('hyeto-popup');
   popup.style.display = 'block';
   document.getElementById('hyeto-title').textContent = `${station.name}（${t.county}${t.township}）`;
-  document.getElementById('hyeto-sub').textContent =
-    `過去2天觀測（日累積）+ 未來2天預測（每6h）`;
+  document.getElementById('hyeto-sub').innerHTML =
+    `行政區整體資料（過去2天觀測+未來2天預測）<br>` +
+    `<a href="https://dfm.ardswc.gov.tw/RainStation/" target="_blank" rel="noopener"
+       style="color:#6ad8f0;text-decoration:underline;pointer-events:auto">
+       於水保署即時雨量平台查詢「${station.name}」站 →</a>`;
   drawHyetograph(t);
   positionHyetograph(evt);
 }
@@ -904,8 +928,31 @@ function hideHyetograph(){
   hyetoCurrentKey = null;
 }
 
-function drawHyetograph(t){
-  const cv = document.getElementById('hyeto-canvas');
+// 圖表點擊放大/縮小（逐日雨量圖、行政區組體圖）
+const CHART_ZOOM_STATE = {};
+function toggleChartZoom(canvasId){
+  const cv = document.getElementById(canvasId);
+  if(!cv) return;
+  const isZoomed = !!CHART_ZOOM_STATE[canvasId];
+  CHART_ZOOM_STATE[canvasId] = !isZoomed;
+  if(!isZoomed){
+    cv.dataset.origWidth  = cv.style.width  || '100%';
+    cv.dataset.origHeight = cv.style.height || '90px';
+    cv.style.height = '260px';
+    cv.style.cursor = 'zoom-out';
+  } else {
+    cv.style.width  = cv.dataset.origWidth  || '100%';
+    cv.style.height = cv.dataset.origHeight || '90px';
+    cv.style.cursor = 'zoom-in';
+  }
+  // 重新繪製（高度改變需要重新計算）
+  if(canvasId==='cv' && selected) drawChart(selected);
+  if(canvasId==='cv-district-hyeto' && selected) drawDistrictHyetograph(selected);
+}
+
+function drawHyetograph(t, canvasId){
+  canvasId = canvasId || 'hyeto-canvas';
+  const cv = document.getElementById(canvasId);
   const W = cv.width, H = cv.height;
   const ctx = cv.getContext('2d');
   ctx.clearRect(0,0,W,H);
@@ -1006,6 +1053,11 @@ function drawHyetograph(t){
     const x = padL + i*gap + gap/2;
     ctx.fillText(b.label, x, H-8);
   });
+}
+
+// 行政區整體組體圖（畫到側欄固定區塊，非懸停彈窗）
+function drawDistrictHyetograph(t){
+  drawHyetograph(t, 'cv-district-hyeto');
 }
 
 function drawSegs(t){
@@ -1144,16 +1196,25 @@ function setMode(m){
 //   'day{N}'    N=2~15，逐日未來第N天（從第2天起，第1天已被「今天」取代）
 //   'custom'    自訂範圍
 function setWin(key){
-  winKey=key; clearBtns();
-  document.getElementById('cust-ctrl').classList.remove('show');
-
   if(key==='custom'){
+    const custCtrl = document.getElementById('cust-ctrl');
+    const isOpen = custCtrl.classList.contains('show');
+    if(isOpen && winKey==='custom'){
+      // 再按一次自訂範圍：收起面板，但不改變目前選取的時段
+      custCtrl.classList.remove('show');
+      document.getElementById('bCust').classList.remove('on');
+      return;
+    }
+    winKey=key; clearBtns();
     document.getElementById('bCust').classList.add('on');
-    document.getElementById('cust-ctrl').classList.add('show');
+    custCtrl.classList.add('show');
     onSlider();
     updateModelRowVisibility(true);
     return;
   }
+
+  winKey=key; clearBtns();
+  document.getElementById('cust-ctrl').classList.remove('show');
 
   if(key==='today'){
     segFrom = -100; segTo = 3;  // segFrom設極小值代表「含今天起點」，實際運算見getAccum
