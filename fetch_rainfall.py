@@ -663,6 +663,19 @@ def main():
     # 確保即使該行政區完全沒有CWA觀測站，也能用座標補上QPF預測資料
     processed = {t['county']+t['township'] for t in out_towns}
     all_towns = load_all_townships()
+
+    # 除錯：確認問題鄉鎮在 all_townships.json 裡是否存在，以及 key 是否被誤判為已處理
+    debug_check = [('高雄市','鳥松區'),('高雄市','前金區'),('高雄市','鹽埕區'),
+                   ('彰化縣','芬園鄉'),('臺南市','東區'),
+                   ('臺中市','中區'),('臺中市','東區'),('臺中市','南區'),('臺中市','西區')]
+    print(f"  [除錯] all_townships.json 載入筆數: {len(all_towns)}")
+    print(f"  [除錯] processed 集合大小（靜態表已處理）: {len(processed)}")
+    for c, t in debug_check:
+        key = c + t
+        in_all = any(at['county']==c and at['township']==t for at in all_towns)
+        in_processed = key in processed
+        print(f"  [除錯] {key}: all_townships中={'有' if in_all else '無'}, 已被processed標記={'是' if in_processed else '否'}")
+
     non_static_list = []  # 待補的行政區清單（含座標）
 
     for at in all_towns:
