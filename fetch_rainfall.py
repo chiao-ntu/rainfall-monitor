@@ -154,36 +154,43 @@ def get_daily_rain_array(sid, history, now_tpe, days=8):
 
 def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
     """
-    把 Excel 靜態表的測站清單（只有站名+警戒值）
-    跟即時觀測站資料（用站號為key）做站名比對，
-    補上每個測站「個別」的 ETR2 值與 ETR2%（不是行政區最大值）
+    把 Excel 靜態表的測站清單跟即時觀測站資料做站名比對
+    使用「正規化比對」：去除 s/w/S/W 結尾後再比較，提高匹配率
     """
-    station_etr2 = obs.get('station_etr2', {})  # {站號: etr2值}
-    station_daily = obs.get('station_daily', {})  # {站號: [逐日雨量]}
-    obs_station_ids = obs.get('stations', [])     # 該行政區所有觀測站號清單
+    station_etr2  = obs.get('station_etr2', {})
+    station_daily = obs.get('station_daily', {})
+    obs_station_ids = obs.get('stations', [])
 
-    # 建立「站名 → 站號」對照（從 all_stations 反查）
-    name_to_sid = {}
+    def normalize(name):
+        """去除水保署/水利署標記（s/w/S/W）和空白，用於模糊比對"""
+        return name.strip().rstrip('sSWw').strip()
+
+    # 建立「正規化站名 → 站號」對照（優先精確，其次正規化）
+    exact_map = {}    # 精確站名 → 站號
+    normal_map = {}   # 正規化站名 → 站號
     for sid in obs_station_ids:
         if sid in all_stations:
-            name = all_stations[sid]['name']
-            name_to_sid[name] = sid
+            name = all_stations[sid].get('name', '').strip()
+            exact_map[name] = sid
+            normal_map[normalize(name)] = sid
 
     enriched = []
     for st in excel_stations:
-        name = st.get('name', '')
-        sid = name_to_sid.get(name)
+        name = st.get('name', '').strip()
+        # 先精確比對，再正規化比對
+        sid = exact_map.get(name) or normal_map.get(normalize(name))
         etr2_val = station_etr2.get(sid) if sid else None
-        etr2_pct = round(etr2_val/alert_val, 4) if (etr2_val is not None and alert_val and alert_val>0) else None
-        daily = station_daily.get(sid, [0.0]*8) if sid else [0.0]*8
+        etr2_pct = round(etr2_val/alert_val, 4) if (etr2_val is not None and alert_val and alert_val > 0) else None
+        daily    = station_daily.get(sid, [0.0]*8) if sid else [0.0]*8
         enriched.append({
-            'name': name,
+            'name':      name,
             'alert_val': st.get('alert_val'),
-            'village': st.get('village', ''),
-            'etr2': round(etr2_val,1) if etr2_val is not None else None,
-            'etr2_pct': etr2_pct,
+            'village':   st.get('village', ''),
+            'etr2':      round(etr2_val, 1) if etr2_val is not None else None,
+            'etr2_pct':  etr2_pct,
             'daily_rain': daily,
         })
+    return enriched
     return enriched
 
 def agg_obs(stations, alert_table, history, now_tpe):
@@ -663,6 +670,19 @@ def main():
     # 確保即使該行政區完全沒有CWA觀測站，也能用座標補上QPF預測資料
     processed = {t['county']+t['township'] for t in out_towns}
     all_towns = load_all_townships()
+
+    # 除錯：確認問題鄉鎮在 all_townships.json 裡是否存在，以及 key 是否被誤判為已處理
+    debug_check = [('高雄市','鳥松區'),('高雄市','前金區'),('高雄市','鹽埕區'),
+                   ('彰化縣','芬園鄉'),('臺南市','東區'),
+                   ('臺中市','中區'),('臺中市','東區'),('臺中市','南區'),('臺中市','西區')]
+    print(f"  [除錯] all_townships.json 載入筆數: {len(all_towns)}")
+    print(f"  [除錯] processed 集合大小（靜態表已處理）: {len(processed)}")
+    for c, t in debug_check:
+        key = c + t
+        in_all = any(at['county']==c and at['township']==t for at in all_towns)
+        in_processed = key in processed
+        print(f"  [除錯] {key}: all_townships中={'有' if in_all else '無'}, 已被processed標記={'是' if in_processed else '否'}")
+
     non_static_list = []  # 待補的行政區清單（含座標）
 
     for at in all_towns:
