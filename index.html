@@ -972,13 +972,17 @@ function calcNationwideExtremes(){
     }
   });
   NATIONWIDE_EXTREMES = {
-    rainMax: Math.round(maxRain)+20,
-    rainMin: Math.max(0, Math.round(minRain)-20),
-    etrMax:  Math.round(maxEtr)+20,
-    etrMin:  Math.max(0, Math.round(minEtr)-20),
+    rainMax: ceilTo10(Math.round(maxRain)+20),
+    rainMin: floorTo10(Math.round(minRain)-20),
+    etrMax:  ceilTo10(Math.round(maxEtr)+20),
+    etrMin:  floorTo10(Math.round(minEtr)-20),
   };
   return NATIONWIDE_EXTREMES;
 }
+// 個位數無條件進位至十位數（例如 87→90, 113→120, 100→100）
+function ceilTo10(v){ return Math.ceil(v/10)*10; }
+function floorTo10(v){ return Math.max(0, Math.floor(v/10)*10); }
+
 function getNationwideExtremes(){
   if(!NATIONWIDE_EXTREMES) calcNationwideExtremes();
   return NATIONWIDE_EXTREMES;
@@ -993,8 +997,8 @@ function calcDailyChartExtremes(){
     d.forEach(v=>{ if(v!=null){ maxV=Math.max(maxV,v); minV=Math.min(minV,v); }});
   });
   DAILY_CHART_EXTREMES = {
-    rainMax: Math.round(maxV) + 20,
-    rainMin: Math.max(0, Math.round(minV) - 20),
+    rainMax: ceilTo10(Math.round(maxV) + 20),
+    rainMin: floorTo10(Math.round(minV) - 20),
   };
   return DAILY_CHART_EXTREMES;
 }
@@ -1094,7 +1098,7 @@ function drawChartHQ(t, canvasId){
   const ext = getDailyChartExtremes();  // 全台15天逐日QPF極值
   const mx = ext.rainMax;
   const districtColor = getDistrictColor(t.county);
-  const FS = 35, FS_TITLE = 45;  // 標籤35px，標題45px
+  const FS = 30, FS_TITLE = 40;  // 標籤30px，標題40px
 
   const pL=90, pR=50, pT=60, pB=80, cw=W-pL-pR, ch=H-pT-pB, xS=cw/(d.length-1);
 
@@ -1184,8 +1188,8 @@ function drawHyetograph(t, canvasId, scale){
   ctx.fillRect(0,0,W,H);
 
   // 字體大小依畫布尺寸自動縮放
-  const fs = scale >= 3 ? 35 : Math.max(8, Math.round(8*scale));
-  const fsTitle = scale >= 3 ? 45 : Math.max(9, Math.round(10*scale));
+  const fs = scale >= 3 ? 30 : Math.max(8, Math.round(8*scale));
+  const fsTitle = scale >= 3 ? 40 : Math.max(9, Math.round(10*scale));
 
   // ── 橫軸資料：過去2天(日觀測) + 未來2天(逐6h QPF) ──
   const dailyObs = t.daily_rain || [];
