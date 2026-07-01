@@ -18,7 +18,7 @@ body{font-family:'Microsoft JhengHei',sans-serif;background:#0c1822;color:#dde8f
 .tag.live{background:#0a2a0a;border-color:#2a7a2a;color:#4ae44a}
 .tag.paused{background:#2a1a0a;border-color:#7a4a0a;color:#e4a44a}
 .tag.time{background:#1a1a2a;border-color:#3a3a6a;color:#9090d0}
-#ctrl{background:#081420;border-bottom:1px solid #1a3348;padding:5px 14px;display:flex;flex-direction:column;gap:4px;flex-shrink:0;max-height:200px;overflow:hidden;transition:max-height 0.25s ease,padding 0.25s ease,opacity 0.2s ease}
+#ctrl{background:#081420;border-bottom:1px solid #1a3348;padding:5px 14px;display:flex;flex-direction:column;gap:4px;flex-shrink:0;overflow:hidden;transition:max-height 0.4s ease,padding 0.25s ease,opacity 0.2s ease;max-height:600px}
 #ctrl.collapsed{max-height:0;padding-top:0;padding-bottom:0;opacity:0}
 .ctrl-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .cl{font-size:10px;color:#3a6080;white-space:nowrap}
@@ -98,17 +98,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bEtr"   onclick="setMode('etr')">ETR2%</button>
       <button class="b"    id="bRisk"  onclick="setMode('risk')">風險指標</button>
     </div>
-    <span class="cl" style="margin-left:6px">過去7天</span>
-    <div class="bg" id="past-btns"></div>
+  </div>
+  <div class="ctrl-row">
+    <span class="cl">過去7天</span>
+    <div class="bg" id="past-btns" style="flex:1;min-width:0"></div>
   </div>
   <div class="ctrl-row">
     <span class="cl">未來6h段</span>
-    <div class="bg" id="future6h-btns"></div>
+    <div class="bg" id="future6h-btns" style="flex:1;min-width:0"></div>
   </div>
   <div class="ctrl-row">
     <span class="cl">逐日</span>
-    <div class="bg" id="day-btns"></div>
-    <span class="cl" style="margin-left:6px">自訂</span>
+    <div class="bg" id="day-btns" style="flex:1;min-width:0"></div>
+  </div>
+  <div class="ctrl-row">
     <button class="b" id="bCust" onclick="setWin('custom')">自訂範圍</button>
     <button class="b" id="bCustomScale" onclick="toggleCustomScaleEditor()"
       style="border-color:#5a3a8a;color:#b08ae8">自訂色階級距</button>
@@ -701,7 +704,14 @@ function renderLayer(){
         fillOp    = isSel?0.93:0.78;
       }
     }
-    const opts={color:isSel?'#ffff44':'rgba(60,80,100,0.4)', weight:isSel?1.5:0.4, fillColor, fillOpacity:fillOp};
+    // 非選取的鄉鎮邊框顏色設為與填色相同，視覺上消除縫隙
+    // 選取狀態才顯示黃色高亮邊框
+    const opts={
+      color: isSel ? '#ffff44' : fillColor,
+      weight: isSel ? 1.5 : 0.3,
+      fillColor, fillOpacity: fillOp,
+      smoothFactor: 0  // 停用Leaflet的路徑平滑，避免縮放時端點偏移
+    };
     let poly;
     const g = feat.geometry;
     if(g.type==='Polygon'){
@@ -965,16 +975,39 @@ function calcNationwideExtremes(){
     }
   });
   NATIONWIDE_EXTREMES = {
-    rainMax: Math.round(maxRain)+20,
-    rainMin: Math.max(0, Math.round(minRain)-20),
-    etrMax:  Math.round(maxEtr)+20,
-    etrMin:  Math.max(0, Math.round(minEtr)-20),
+    rainMax: ceilTo10(Math.round(maxRain)+20),
+    rainMin: floorTo10(Math.round(minRain)-20),
+    etrMax:  ceilTo10(Math.round(maxEtr)+20),
+    etrMin:  floorTo10(Math.round(minEtr)-20),
   };
   return NATIONWIDE_EXTREMES;
 }
+// 個位數無條件進位至十位數（例如 87→90, 113→120, 100→100）
+function ceilTo10(v){ return Math.ceil(v/10)*10; }
+function floorTo10(v){ return Math.max(0, Math.floor(v/10)*10); }
+
 function getNationwideExtremes(){
   if(!NATIONWIDE_EXTREMES) calcNationwideExtremes();
   return NATIONWIDE_EXTREMES;
+}
+
+// 全台15天逐日QPF的極值（供逐日雨量圖縱軸使用，跟組體圖的8格不同範圍）
+let DAILY_CHART_EXTREMES = null;
+function calcDailyChartExtremes(){
+  let maxV = 0, minV = 0;
+  TOWNSHIPS.forEach(t=>{
+    const d = t.daily_qpf || [];
+    d.forEach(v=>{ if(v!=null){ maxV=Math.max(maxV,v); minV=Math.min(minV,v); }});
+  });
+  DAILY_CHART_EXTREMES = {
+    rainMax: ceilTo10(Math.round(maxV) + 20),
+    rainMin: floorTo10(Math.round(minV) - 20),
+  };
+  return DAILY_CHART_EXTREMES;
+}
+function getDailyChartExtremes(){
+  if(!DAILY_CHART_EXTREMES) calcDailyChartExtremes();
+  return DAILY_CHART_EXTREMES;
 }
 
 // ════════════════════════════════════════════════
@@ -1065,10 +1098,10 @@ function drawChartHQ(t, canvasId){
 
   const d = t.daily_qpf || [];
   if(!d.length) return;
-  const ext = getNationwideExtremes();
+  const ext = getDailyChartExtremes();  // 全台15天逐日QPF極值
   const mx = ext.rainMax;
   const districtColor = getDistrictColor(t.county);
-  const FS = 25, FS_TITLE = 35;  // 統一字體大小（再放大5號：標籤25px，標題35px）
+  const FS = 30, FS_TITLE = 40;  // 標籤30px，標題40px
 
   const pL=90, pR=50, pT=60, pB=80, cw=W-pL-pR, ch=H-pT-pB, xS=cw/(d.length-1);
 
@@ -1158,8 +1191,8 @@ function drawHyetograph(t, canvasId, scale){
   ctx.fillRect(0,0,W,H);
 
   // 字體大小依畫布尺寸自動縮放
-  const fs = scale >= 3 ? 25 : Math.max(8, Math.round(8*scale));  // 放大模式統一用25px，與drawChartHQ一致
-  const fsTitle = scale >= 3 ? 35 : Math.max(9, Math.round(10*scale));
+  const fs = scale >= 3 ? 30 : Math.max(8, Math.round(8*scale));
+  const fsTitle = scale >= 3 ? 40 : Math.max(9, Math.round(10*scale));
 
   // ── 橫軸資料：過去2天(日觀測) + 未來2天(逐6h QPF) ──
   const dailyObs = t.daily_rain || [];
@@ -1345,7 +1378,7 @@ function renderLegend(){
   const titleText = titles[mode] || '';
 
   // 強度分級用描述性文字，不顯示數字範圍
-  const INTENSITY_DESC = ['未達標', '大雨', '豪雨', '大豪雨', '超大豪雨'];
+  const INTENSITY_DESC = ['未達警戒', '大雨', '豪雨', '大豪雨', '超大豪雨'];
 
   function rangeLabel(scale, idx){
     if(isFuture6h) return INTENSITY_DESC[idx] || '';
@@ -1401,6 +1434,8 @@ async function tryLoadLive(){
     }
 
     BASE_TIME = new Date(d.base_time);
+    NATIONWIDE_EXTREMES = null;   // 重置極值快取，讓下次繪圖重新計算
+    DAILY_CHART_EXTREMES = null;
     const src = d.source || '';
     const note = document.getElementById('data-note');
     if(note) note.textContent = `${src} · 產製：${d.generated_at ? d.generated_at.slice(0,16).replace('T',' ') : ''} | 雨量=過去24h觀測`;

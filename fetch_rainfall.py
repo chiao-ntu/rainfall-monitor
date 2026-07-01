@@ -154,36 +154,90 @@ def get_daily_rain_array(sid, history, now_tpe, days=8):
 
 def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
     """
-    把 Excel 靜態表的測站清單（只有站名+警戒值）
-    跟即時觀測站資料（用站號為key）做站名比對，
-    補上每個測站「個別」的 ETR2 值與 ETR2%（不是行政區最大值）
+    把 Excel 靜態表的測站清單跟即時觀測站資料做站名比對
+    比對策略（依序嘗試）：
+      1. 精確比對
+      2. 正規化比對：去除 s/w/S/W/(1)/(2) 等後綴
+      3. 部分包含比對：其中一邊包含另一邊的核心名稱
     """
-    station_etr2 = obs.get('station_etr2', {})  # {站號: etr2值}
-    station_daily = obs.get('station_daily', {})  # {站號: [逐日雨量]}
-    obs_station_ids = obs.get('stations', [])     # 該行政區所有觀測站號清單
+    import re as _re
+    station_etr2  = obs.get('station_etr2', {})
+    station_daily = obs.get('station_daily', {})
+    obs_station_ids = obs.get('stations', [])
 
-    # 建立「站名 → 站號」對照（從 all_stations 反查）
-    name_to_sid = {}
+    # 若 obs 是空字典（該鄉鎮完全無觀測站資料），直接回傳原站清單（無ETR2%）
+    if not obs_station_ids:
+        return [{'name': st.get('name',''), 'alert_val': st.get('alert_val'),
+                 'village': st.get('village',''), 'etr2': None, 'etr2_pct': None,
+                 'daily_rain': [0.0]*8} for st in excel_stations]
+
+    def normalize(name):
+        """去除常見後綴：機構代碼(s/w/S/W)、序號((1)/(2)/1/2)、空白"""
+        n = name.strip()
+        # 去除括號數字後綴，如 (1)(2)(3)
+        n = _re.sub(r'\s*\([0-9]+\)\s*$', '', n)
+        # 去除純數字後綴，如 1, 2
+        n = _re.sub(r'\s*[0-9]+\s*$', '', n)
+        # 去除機構代碼後綴 s/w/S/W
+        n = n.rstrip('sSWw').strip()
+        return n
+
+    # 建立三層比對結構
+    exact_map  = {}   # 精確站名 → 站號
+    normal_map = {}   # 正規化站名 → 站號
     for sid in obs_station_ids:
         if sid in all_stations:
-            name = all_stations[sid]['name']
-            name_to_sid[name] = sid
+            raw = all_stations[sid].get('name', '').strip()
+            exact_map[raw] = sid
+            nrm = normalize(raw)
+            if nrm and nrm not in normal_map:
+                normal_map[nrm] = sid
+        # 若 sid 不在 all_stations，代表資料結構有問題（通常不應發生）
 
+    unmatched = []
     enriched = []
     for st in excel_stations:
-        name = st.get('name', '')
-        sid = name_to_sid.get(name)
+        name = st.get('name', '').strip()
+        sid = None
+
+        # 策略1：精確
+        sid = exact_map.get(name)
+
+        # 策略2：正規化
+        if not sid:
+            sid = normal_map.get(normalize(name))
+
+        # 策略3：部分包含（Excel站名正規化後是CWA站名的子字串，或反之）
+        if not sid:
+            nrm_excel = normalize(name)
+            for cwa_name, cwa_sid in exact_map.items():
+                nrm_cwa = normalize(cwa_name)
+                if nrm_excel and nrm_cwa and (nrm_excel in nrm_cwa or nrm_cwa in nrm_excel):
+                    sid = cwa_sid
+                    break
+
+        if not sid:
+            unmatched.append(name)
+
         etr2_val = station_etr2.get(sid) if sid else None
-        etr2_pct = round(etr2_val/alert_val, 4) if (etr2_val is not None and alert_val and alert_val>0) else None
-        daily = station_daily.get(sid, [0.0]*8) if sid else [0.0]*8
+        etr2_pct = round(etr2_val/alert_val, 4) if (etr2_val is not None and alert_val and alert_val > 0) else None
+        daily    = station_daily.get(sid, [0.0]*8) if sid else [0.0]*8
         enriched.append({
-            'name': name,
+            'name':      name,
             'alert_val': st.get('alert_val'),
-            'village': st.get('village', ''),
-            'etr2': round(etr2_val,1) if etr2_val is not None else None,
-            'etr2_pct': etr2_pct,
+            'village':   st.get('village', ''),
+            'etr2':      round(etr2_val, 1) if etr2_val is not None else None,
+            'etr2_pct':  etr2_pct,
             'daily_rain': daily,
         })
+
+    if obs_station_ids and not exact_map:
+        print(f"    [警告] obs有{len(obs_station_ids)}個站號但all_stations查無對應，站名比對完全失效")
+        print(f"    obs_station_ids前3個: {obs_station_ids[:3]}")
+        print(f"    all_stations共{len(all_stations)}個，前3個key: {list(all_stations.keys())[:3]}")
+
+    if unmatched:
+        print(f"    [未匹配測站 {len(unmatched)}個]: {', '.join(unmatched[:8])}{'...' if len(unmatched)>8 else ''}")
     return enriched
 
 def agg_obs(stations, alert_table, history, now_tpe):
