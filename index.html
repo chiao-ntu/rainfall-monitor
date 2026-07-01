@@ -18,7 +18,7 @@ body{font-family:'Microsoft JhengHei',sans-serif;background:#0c1822;color:#dde8f
 .tag.live{background:#0a2a0a;border-color:#2a7a2a;color:#4ae44a}
 .tag.paused{background:#2a1a0a;border-color:#7a4a0a;color:#e4a44a}
 .tag.time{background:#1a1a2a;border-color:#3a3a6a;color:#9090d0}
-#ctrl{background:#081420;border-bottom:1px solid #1a3348;padding:5px 14px;display:flex;flex-direction:column;gap:4px;flex-shrink:0;max-height:200px;overflow:hidden;transition:max-height 0.25s ease,padding 0.25s ease,opacity 0.2s ease}
+#ctrl{background:#081420;border-bottom:1px solid #1a3348;padding:5px 14px;display:flex;flex-direction:column;gap:4px;flex-shrink:0;overflow:hidden;transition:max-height 0.4s ease,padding 0.25s ease,opacity 0.2s ease;max-height:600px}
 #ctrl.collapsed{max-height:0;padding-top:0;padding-bottom:0;opacity:0}
 .ctrl-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .cl{font-size:10px;color:#3a6080;white-space:nowrap}
@@ -98,17 +98,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bEtr"   onclick="setMode('etr')">ETR2%</button>
       <button class="b"    id="bRisk"  onclick="setMode('risk')">風險指標</button>
     </div>
-    <span class="cl" style="margin-left:6px">過去7天</span>
-    <div class="bg" id="past-btns"></div>
+  </div>
+  <div class="ctrl-row">
+    <span class="cl">過去7天</span>
+    <div class="bg" id="past-btns" style="flex:1;min-width:0"></div>
   </div>
   <div class="ctrl-row">
     <span class="cl">未來6h段</span>
-    <div class="bg" id="future6h-btns"></div>
+    <div class="bg" id="future6h-btns" style="flex:1;min-width:0"></div>
   </div>
   <div class="ctrl-row">
     <span class="cl">逐日</span>
-    <div class="bg" id="day-btns"></div>
-    <span class="cl" style="margin-left:6px">自訂</span>
+    <div class="bg" id="day-btns" style="flex:1;min-width:0"></div>
+  </div>
+  <div class="ctrl-row">
     <button class="b" id="bCust" onclick="setWin('custom')">自訂範圍</button>
     <button class="b" id="bCustomScale" onclick="toggleCustomScaleEditor()"
       style="border-color:#5a3a8a;color:#b08ae8">自訂色階級距</button>

@@ -165,6 +165,12 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
     station_daily = obs.get('station_daily', {})
     obs_station_ids = obs.get('stations', [])
 
+    # 若 obs 是空字典（該鄉鎮完全無觀測站資料），直接回傳原站清單（無ETR2%）
+    if not obs_station_ids:
+        return [{'name': st.get('name',''), 'alert_val': st.get('alert_val'),
+                 'village': st.get('village',''), 'etr2': None, 'etr2_pct': None,
+                 'daily_rain': [0.0]*8} for st in excel_stations]
+
     def normalize(name):
         """去除常見後綴：機構代碼(s/w/S/W)、序號((1)/(2)/1/2)、空白"""
         n = name.strip()
@@ -186,6 +192,7 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
             nrm = normalize(raw)
             if nrm and nrm not in normal_map:
                 normal_map[nrm] = sid
+        # 若 sid 不在 all_stations，代表資料結構有問題（通常不應發生）
 
     unmatched = []
     enriched = []
@@ -223,6 +230,11 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
             'etr2_pct':  etr2_pct,
             'daily_rain': daily,
         })
+
+    if obs_station_ids and not exact_map:
+        print(f"    [警告] obs有{len(obs_station_ids)}個站號但all_stations查無對應，站名比對完全失效")
+        print(f"    obs_station_ids前3個: {obs_station_ids[:3]}")
+        print(f"    all_stations共{len(all_stations)}個，前3個key: {list(all_stations.keys())[:3]}")
 
     if unmatched:
         print(f"    [未匹配測站 {len(unmatched)}個]: {', '.join(unmatched[:8])}{'...' if len(unmatched)>8 else ''}")
