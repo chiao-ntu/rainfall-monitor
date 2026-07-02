@@ -4,8 +4,8 @@
     "township": "龍崎區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 23.065,
-    "lng": 120.397,
+    "lat": 22.9597,
+    "lng": 120.3788,
     "stations": [
       {
         "name": "崎頂",
@@ -20,8 +20,8 @@
     "township": "楠西區",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 23.197,
-    "lng": 120.527,
+    "lat": 23.172,
+    "lng": 120.5082,
     "stations": [
       {
         "name": "玉井",
@@ -29,30 +29,20 @@
         "village": "臺南市楠西區灣丘里"
       },
       {
-        "name": "玉井",
-        "alert_val": 400.0,
-        "village": "臺南市楠西區龜丹里"
-      },
-      {
         "name": "曾文",
         "alert_val": 400.0,
         "village": "臺南市楠西區照興里"
-      },
-      {
-        "name": "曾文",
-        "alert_val": 400.0,
-        "village": "臺南市楠西區密枝里"
       }
     ],
-    "station_count": 4
+    "station_count": 2
   },
   {
     "county": "臺南市",
     "township": "南化區",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 23.14,
-    "lng": 120.479,
+    "lat": 23.1134,
+    "lng": 120.5318,
     "stations": [
       {
         "name": "關山w",
@@ -72,8 +62,8 @@
     "township": "東山區",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 23.365,
-    "lng": 120.487,
+    "lat": 23.2874,
+    "lng": 120.432,
     "stations": [
       {
         "name": "北寮w",
@@ -108,8 +98,8 @@
     "township": "白河區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 23.355,
-    "lng": 120.406,
+    "lat": 23.3494,
+    "lng": 120.4602,
     "stations": [
       {
         "name": "大棟山w",
@@ -122,30 +112,20 @@
         "village": "臺南市白河區關嶺里"
       },
       {
-        "name": "關子嶺",
-        "alert_val": 500.0,
-        "village": "臺南市白河區仙草里"
-      },
-      {
         "name": "六溪w",
         "alert_val": 500.0,
         "village": "臺南市白河區六溪里"
-      },
-      {
-        "name": "六溪w",
-        "alert_val": 500.0,
-        "village": "臺南市白河區大林里"
       }
     ],
-    "station_count": 5
+    "station_count": 3
   },
   {
     "county": "臺南市",
     "township": "玉井區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 23.127,
-    "lng": 120.459,
+    "lat": 23.1144,
+    "lng": 120.4617,
     "stations": [
       {
         "name": "環湖",
@@ -160,8 +140,8 @@
     "township": "六甲區",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 23.219,
-    "lng": 120.424,
+    "lat": 23.2282,
+    "lng": 120.38,
     "stations": [
       {
         "name": "王爺宮",
@@ -176,8 +156,8 @@
     "township": "關山鎮",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 23.051,
-    "lng": 121.165,
+    "lat": 23.0379,
+    "lng": 121.1731,
     "stations": [
       {
         "name": "關山",
@@ -188,22 +168,17 @@
         "name": "月眉國小s",
         "alert_val": 500.0,
         "village": "臺東縣關山鎮電光里"
-      },
-      {
-        "name": "月眉國小s",
-        "alert_val": 500.0,
-        "village": "臺東縣關山鎮月眉里"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "臺東縣",
     "township": "臺東市",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 22.757,
-    "lng": 121.144,
+    "lat": 22.7686,
+    "lng": 121.1145,
     "stations": [
       {
         "name": "射馬干s",
@@ -211,35 +186,25 @@
         "village": "臺東縣臺東市新園里"
       },
       {
-        "name": "射馬干s",
-        "alert_val": 600.0,
-        "village": "臺東縣臺東市建和里"
-      },
-      {
         "name": "檳榔四格山",
         "alert_val": 600.0,
         "village": "臺東縣臺東市岩灣里"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "臺東縣",
     "township": "達仁鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 22.411,
-    "lng": 120.88,
+    "lat": 22.3853,
+    "lng": 120.841,
     "stations": [
       {
         "name": "南田",
         "alert_val": 500.0,
         "village": "臺東縣達仁鄉南田村"
-      },
-      {
-        "name": "南田",
-        "alert_val": 500.0,
-        "village": "臺東縣達仁鄉安朔村"
       },
       {
         "name": "拉里吧s",
@@ -252,15 +217,15 @@
         "village": "臺東縣達仁鄉土板村"
       }
     ],
-    "station_count": 4
+    "station_count": 3
   },
   {
     "county": "臺東縣",
     "township": "鹿野鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 22.918,
-    "lng": 121.152,
+    "lat": 22.9496,
+    "lng": 121.1559,
     "stations": [
       {
         "name": "鹿野",
@@ -271,22 +236,17 @@
         "name": "瑞和s",
         "alert_val": 500.0,
         "village": "臺東縣鹿野鄉瑞豐村"
-      },
-      {
-        "name": "瑞和s",
-        "alert_val": 500.0,
-        "village": "臺東縣鹿野鄉瑞和村"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "臺東縣",
     "township": "海端鄉",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 23.137,
-    "lng": 121.024,
+    "lat": 23.1078,
+    "lng": 121.0299,
     "stations": [
       {
         "name": "下馬",
@@ -299,11 +259,6 @@
         "village": "臺東縣海端鄉廣原村"
       },
       {
-        "name": "池上",
-        "alert_val": 450.0,
-        "village": "臺東縣海端鄉海端村"
-      },
-      {
         "name": "關山",
         "alert_val": 450.0,
         "village": "臺東縣海端鄉崁頂村"
@@ -314,15 +269,15 @@
         "village": "臺東縣海端鄉加拿村"
       }
     ],
-    "station_count": 5
+    "station_count": 4
   },
   {
     "county": "臺東縣",
     "township": "長濱鄉",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 23.37,
-    "lng": 121.476,
+    "lat": 23.3202,
+    "lng": 121.4232,
     "stations": [
       {
         "name": "膽曼s",
@@ -333,32 +288,22 @@
         "name": "長濱漁港",
         "alert_val": 400.0,
         "village": "臺東縣長濱鄉忠勇村"
-      },
-      {
-        "name": "長濱漁港",
-        "alert_val": 400.0,
-        "village": "臺東縣長濱鄉三間村"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "臺東縣",
     "township": "金峰鄉",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 22.499,
-    "lng": 120.938,
+    "lat": 22.6005,
+    "lng": 120.8965,
     "stations": [
       {
         "name": "賓茂國小w",
         "alert_val": 450.0,
         "village": "臺東縣金峰鄉歷坵村"
-      },
-      {
-        "name": "賓茂國小w",
-        "alert_val": 450.0,
-        "village": "臺東縣金峰鄉賓茂村"
       },
       {
         "name": "金峰鄉公所s",
@@ -369,22 +314,17 @@
         "name": "太麻里",
         "alert_val": 450.0,
         "village": "臺東縣金峰鄉新興村"
-      },
-      {
-        "name": "太麻里",
-        "alert_val": 450.0,
-        "village": "臺東縣金峰鄉正興村"
       }
     ],
-    "station_count": 5
+    "station_count": 3
   },
   {
     "county": "臺東縣",
     "township": "東河鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 23.118,
-    "lng": 121.287,
+    "lat": 22.9772,
+    "lng": 121.2523,
     "stations": [
       {
         "name": "興隆",
@@ -419,8 +359,8 @@
     "township": "延平鄉",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 23.038,
-    "lng": 121.063,
+    "lat": 22.904,
+    "lng": 121.0074,
     "stations": [
       {
         "name": "鹿野",
@@ -441,22 +381,17 @@
         "name": "武陵w",
         "alert_val": 450.0,
         "village": "臺東縣延平鄉武陵村"
-      },
-      {
-        "name": "鹿野",
-        "alert_val": 450.0,
-        "village": "臺東縣延平鄉永康村"
       }
     ],
-    "station_count": 5
+    "station_count": 4
   },
   {
     "county": "臺東縣",
     "township": "卑南鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 22.722,
-    "lng": 121.088,
+    "lat": 22.7538,
+    "lng": 120.9978,
     "stations": [
       {
         "name": "東改班鳩分",
@@ -474,11 +409,6 @@
         "village": "臺東縣卑南鄉嘉豐村"
       },
       {
-        "name": "利吉國小w",
-        "alert_val": 500.0,
-        "village": "臺東縣卑南鄉嘉豐村"
-      },
-      {
         "name": "知本",
         "alert_val": 450.0,
         "village": "臺東縣卑南鄉溫泉村"
@@ -490,18 +420,8 @@
       },
       {
         "name": "利嘉",
-        "alert_val": 450.0,
-        "village": "臺東縣卑南鄉泰安村"
-      },
-      {
-        "name": "利嘉",
         "alert_val": 500.0,
         "village": "臺東縣卑南鄉泰安村"
-      },
-      {
-        "name": "東改班鳩分",
-        "alert_val": 500.0,
-        "village": "臺東縣卑南鄉美農村"
       },
       {
         "name": "南鵝w",
@@ -512,58 +432,33 @@
         "name": "初鹿國中s",
         "alert_val": 500.0,
         "village": "臺東縣卑南鄉明峰村"
-      },
-      {
-        "name": "利吉國小w",
-        "alert_val": 500.0,
-        "village": "臺東縣卑南鄉明峰村"
-      },
-      {
-        "name": "利嘉",
-        "alert_val": 500.0,
-        "village": "臺東縣卑南鄉利嘉村"
-      },
-      {
-        "name": "利吉國小w",
-        "alert_val": 500.0,
-        "village": "臺東縣卑南鄉利吉村"
-      },
-      {
-        "name": "初鹿國中s",
-        "alert_val": 500.0,
-        "village": "臺東縣卑南鄉初鹿村"
       }
     ],
-    "station_count": 15
+    "station_count": 8
   },
   {
     "county": "臺東縣",
     "township": "池上鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 23.117,
-    "lng": 121.23,
+    "lat": 23.0976,
+    "lng": 121.2102,
     "stations": [
       {
         "name": "池上",
         "alert_val": 500.0,
         "village": "臺東縣池上鄉錦園村"
-      },
-      {
-        "name": "池上",
-        "alert_val": 500.0,
-        "village": "臺東縣池上鄉富興村"
       }
     ],
-    "station_count": 2
+    "station_count": 1
   },
   {
     "county": "臺東縣",
     "township": "成功鎮",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 23.098,
-    "lng": 121.374,
+    "lat": 23.1167,
+    "lng": 121.3524,
     "stations": [
       {
         "name": "石寧山",
@@ -584,22 +479,17 @@
         "name": "成功",
         "alert_val": 450.0,
         "village": "臺東縣成功鎮忠仁里"
-      },
-      {
-        "name": "成功",
-        "alert_val": 450.0,
-        "village": "臺東縣成功鎮和平里"
       }
     ],
-    "station_count": 5
+    "station_count": 4
   },
   {
     "county": "臺東縣",
     "township": "太麻里鄉",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 22.61,
-    "lng": 121.044,
+    "lat": 22.5968,
+    "lng": 120.9739,
     "stations": [
       {
         "name": "華源s",
@@ -612,19 +502,9 @@
         "village": "臺東縣太麻里鄉香蘭村"
       },
       {
-        "name": "金崙山",
-        "alert_val": 400.0,
-        "village": "臺東縣太麻里鄉金崙村"
-      },
-      {
         "name": "大溪山",
         "alert_val": 400.0,
         "village": "臺東縣太麻里鄉多良村"
-      },
-      {
-        "name": "華源s",
-        "alert_val": 400.0,
-        "village": "臺東縣太麻里鄉北里村"
       },
       {
         "name": "太麻里",
@@ -632,25 +512,20 @@
         "village": "臺東縣太麻里鄉大王村"
       }
     ],
-    "station_count": 6
+    "station_count": 4
   },
   {
     "county": "臺東縣",
     "township": "大武鄉",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 22.369,
-    "lng": 120.883,
+    "lat": 22.3827,
+    "lng": 120.8901,
     "stations": [
       {
         "name": "山豬窟",
         "alert_val": 450.0,
         "village": "臺東縣大武鄉南興村"
-      },
-      {
-        "name": "山豬窟",
-        "alert_val": 450.0,
-        "village": "臺東縣大武鄉尚武村"
       },
       {
         "name": "大武",
@@ -663,16 +538,6 @@
         "village": "臺東縣大武鄉大鳥村"
       },
       {
-        "name": "大武",
-        "alert_val": 450.0,
-        "village": "臺東縣大武鄉大鳥村"
-      },
-      {
-        "name": "大武",
-        "alert_val": 450.0,
-        "village": "臺東縣大武鄉大武村"
-      },
-      {
         "name": "愛國埔分校s",
         "alert_val": 450.0,
         "village": "臺東縣大武鄉大竹村"
@@ -683,15 +548,15 @@
         "village": "臺東縣大武鄉大竹村"
       }
     ],
-    "station_count": 8
+    "station_count": 5
   },
   {
     "county": "臺北市",
     "township": "南港區",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 25.055,
-    "lng": 121.607,
+    "lat": 25.0352,
+    "lng": 121.6198,
     "stations": [
       {
         "name": "舊莊里tp",
@@ -716,8 +581,8 @@
     "township": "信義區",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 25.033,
-    "lng": 121.565,
+    "lat": 25.0297,
+    "lng": 121.5735,
     "stations": [
       {
         "name": "挹翠山莊tp",
@@ -728,22 +593,17 @@
         "name": "四獸山tp",
         "alert_val": 600.0,
         "village": "臺北市信義區松隆里"
-      },
-      {
-        "name": "挹翠山莊tp",
-        "alert_val": 600.0,
-        "village": "臺北市信義區六合里"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "臺北市",
     "township": "北投區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 25.132,
-    "lng": 121.497,
+    "lat": 25.1571,
+    "lng": 121.5262,
     "stations": [
       {
         "name": "稻香里tp",
@@ -756,19 +616,9 @@
         "village": "臺北市北投區湖田里"
       },
       {
-        "name": "稻香里tp",
-        "alert_val": 500.0,
-        "village": "臺北市北投區桃源里"
-      },
-      {
         "name": "北投國小tp",
         "alert_val": 500.0,
         "village": "臺北市北投區泉源里"
-      },
-      {
-        "name": "北投國小tp",
-        "alert_val": 500.0,
-        "village": "臺北市北投區林泉里"
       },
       {
         "name": "貴子坑tp",
@@ -779,48 +629,33 @@
         "name": "天母",
         "alert_val": 500.0,
         "village": "臺北市北投區永和里"
-      },
-      {
-        "name": "貴子坑tp",
-        "alert_val": 500.0,
-        "village": "臺北市北投區大屯里"
       }
     ],
-    "station_count": 8
+    "station_count": 5
   },
   {
     "county": "臺北市",
     "township": "文山區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.994,
-    "lng": 121.57,
+    "lat": 24.9906,
+    "lng": 121.5728,
     "stations": [
       {
         "name": "北政國中tp",
         "alert_val": 500.0,
         "village": "臺北市文山區政大里"
-      },
-      {
-        "name": "北政國中tp",
-        "alert_val": 500.0,
-        "village": "臺北市文山區指南里"
-      },
-      {
-        "name": "北政國中tp",
-        "alert_val": 500.0,
-        "village": "臺北市文山區老泉里"
       }
     ],
-    "station_count": 3
+    "station_count": 1
   },
   {
     "county": "臺北市",
     "township": "內湖區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 25.083,
-    "lng": 121.587,
+    "lat": 25.0832,
+    "lng": 121.5913,
     "stations": [
       {
         "name": "大湖里tp",
@@ -831,37 +666,17 @@
         "name": "內湖",
         "alert_val": 500.0,
         "village": "臺北市內湖區港華里"
-      },
-      {
-        "name": "大湖里tp",
-        "alert_val": 500.0,
-        "village": "臺北市內湖區金瑞里"
-      },
-      {
-        "name": "內湖",
-        "alert_val": 500.0,
-        "village": "臺北市內湖區西康里"
-      },
-      {
-        "name": "內湖",
-        "alert_val": 500.0,
-        "village": "臺北市內湖區西安里"
-      },
-      {
-        "name": "大湖里tp",
-        "alert_val": 500.0,
-        "village": "臺北市內湖區大湖里"
       }
     ],
-    "station_count": 6
+    "station_count": 2
   },
   {
     "county": "臺北市",
     "township": "中山區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 25.07,
-    "lng": 121.535,
+    "lat": 25.0746,
+    "lng": 121.5443,
     "stations": [
       {
         "name": "劍南路tp",
@@ -876,8 +691,8 @@
     "township": "士林區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 25.093,
-    "lng": 121.523,
+    "lat": 25.1297,
+    "lng": 121.5488,
     "stations": [
       {
         "name": "至善國中tp",
@@ -912,8 +727,8 @@
     "township": "霧峰區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.052,
-    "lng": 120.712,
+    "lat": 24.0499,
+    "lng": 120.7135,
     "stations": [
       {
         "name": "峰谷國小s",
@@ -924,32 +739,17 @@
         "name": "桐林",
         "alert_val": 500.0,
         "village": "臺中市霧峰區萊園里"
-      },
-      {
-        "name": "桐林",
-        "alert_val": 500.0,
-        "village": "臺中市霧峰區桐林里"
-      },
-      {
-        "name": "峰谷國小s",
-        "alert_val": 500.0,
-        "village": "臺中市霧峰區峰谷里"
-      },
-      {
-        "name": "桐林",
-        "alert_val": 500.0,
-        "village": "臺中市霧峰區吉峰里"
       }
     ],
-    "station_count": 5
+    "station_count": 2
   },
   {
     "county": "臺中市",
     "township": "潭子區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 24.206,
-    "lng": 120.711,
+    "lat": 24.2124,
+    "lng": 120.7061,
     "stations": [
       {
         "name": "大坑",
@@ -964,8 +764,8 @@
     "township": "新社區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.215,
-    "lng": 120.826,
+    "lat": 24.1827,
+    "lng": 120.8272,
     "stations": [
       {
         "name": "白毛台",
@@ -981,22 +781,17 @@
         "name": "龍安",
         "alert_val": 500.0,
         "village": "臺中市新社區協成里"
-      },
-      {
-        "name": "龍安",
-        "alert_val": 500.0,
-        "village": "臺中市新社區中和里"
       }
     ],
-    "station_count": 4
+    "station_count": 3
   },
   {
     "county": "臺中市",
     "township": "清水區",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 24.365,
-    "lng": 120.566,
+    "lat": 24.2847,
+    "lng": 120.5784,
     "stations": [
       {
         "name": "清水",
@@ -1011,8 +806,8 @@
     "township": "東勢區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.254,
-    "lng": 120.861,
+    "lat": 24.2525,
+    "lng": 120.842,
     "stations": [
       {
         "name": "龍安",
@@ -1043,32 +838,17 @@
         "name": "卓蘭",
         "alert_val": 500.0,
         "village": "臺中市東勢區茂興里"
-      },
-      {
-        "name": "伯公龍",
-        "alert_val": 500.0,
-        "village": "臺中市東勢區東新里"
-      },
-      {
-        "name": "卓蘭",
-        "alert_val": 500.0,
-        "village": "臺中市東勢區明正里"
-      },
-      {
-        "name": "新伯公",
-        "alert_val": 500.0,
-        "village": "臺中市東勢區上城里"
       }
     ],
-    "station_count": 9
+    "station_count": 6
   },
   {
     "county": "臺中市",
     "township": "和平區",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 24.361,
-    "lng": 121.083,
+    "lat": 24.2727,
+    "lng": 121.1362,
     "stations": [
       {
         "name": "摩天嶺",
@@ -1117,24 +897,19 @@
       },
       {
         "name": "白冷",
-        "alert_val": 350.0,
-        "village": "臺中市和平區天輪里"
-      },
-      {
-        "name": "白冷",
         "alert_val": 400.0,
         "village": "臺中市和平區天輪里"
       }
     ],
-    "station_count": 11
+    "station_count": 10
   },
   {
     "county": "臺中市",
     "township": "外埔區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 24.354,
-    "lng": 120.636,
+    "lat": 24.3356,
+    "lng": 120.6723,
     "stations": [
       {
         "name": "國三S168K",
@@ -1149,8 +924,8 @@
     "township": "北屯區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.172,
-    "lng": 120.703,
+    "lat": 24.1848,
+    "lng": 120.7276,
     "stations": [
       {
         "name": "大坑",
@@ -1165,8 +940,8 @@
     "township": "太平區",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 24.126,
-    "lng": 120.726,
+    "lat": 24.1146,
+    "lng": 120.7744,
     "stations": [
       {
         "name": "龍安",
@@ -1179,19 +954,9 @@
         "village": "臺中市太平區興隆里"
       },
       {
-        "name": "中竹林",
-        "alert_val": 450.0,
-        "village": "臺中市太平區黃竹里"
-      },
-      {
         "name": "清水林",
         "alert_val": 450.0,
         "village": "臺中市太平區東汴里"
-      },
-      {
-        "name": "中竹林",
-        "alert_val": 450.0,
-        "village": "臺中市太平區光隆里"
       },
       {
         "name": "坪廓分校s",
@@ -1199,15 +964,15 @@
         "village": "臺中市太平區大興里"
       }
     ],
-    "station_count": 6
+    "station_count": 4
   },
   {
     "county": "彰化縣",
     "township": "社頭鄉",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 23.899,
-    "lng": 120.573,
+    "lat": 23.9058,
+    "lng": 120.6096,
     "stations": [
       {
         "name": "社頭",
@@ -1222,60 +987,40 @@
     "township": "田中鎮",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 23.854,
-    "lng": 120.578,
+    "lat": 23.8585,
+    "lng": 120.5949,
     "stations": [
       {
         "name": "田中",
         "alert_val": 550.0,
         "village": "彰化縣田中鎮香山里"
-      },
-      {
-        "name": "田中",
-        "alert_val": 550.0,
-        "village": "彰化縣田中鎮平和里"
       }
     ],
-    "station_count": 2
+    "station_count": 1
   },
   {
     "county": "彰化縣",
     "township": "二水鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 23.821,
-    "lng": 120.617,
+    "lat": 23.8218,
+    "lng": 120.6297,
     "stations": [
       {
         "name": "松茗",
         "alert_val": 550.0,
         "village": "彰化縣二水鄉源泉村"
-      },
-      {
-        "name": "松茗",
-        "alert_val": 550.0,
-        "village": "彰化縣二水鄉惠民村"
-      },
-      {
-        "name": "松茗",
-        "alert_val": 550.0,
-        "village": "彰化縣二水鄉倡和村"
-      },
-      {
-        "name": "松茗",
-        "alert_val": 550.0,
-        "village": "彰化縣二水鄉大園村"
       }
     ],
-    "station_count": 4
+    "station_count": 1
   },
   {
     "county": "嘉義縣",
     "township": "番路鄉",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 23.439,
-    "lng": 120.574,
+    "lat": 23.4376,
+    "lng": 120.593,
     "stations": [
       {
         "name": "頭凍",
@@ -1288,11 +1033,6 @@
         "village": "嘉義縣番路鄉公興村"
       },
       {
-        "name": "小公田(2)w",
-        "alert_val": 450.0,
-        "village": "嘉義縣番路鄉公田村"
-      },
-      {
         "name": "大湖山w",
         "alert_val": 450.0,
         "village": "嘉義縣番路鄉大湖村"
@@ -1303,15 +1043,15 @@
         "village": "嘉義縣番路鄉下坑村"
       }
     ],
-    "station_count": 5
+    "station_count": 4
   },
   {
     "county": "嘉義縣",
     "township": "梅山鄉",
     "alert_val": 350.0,
     "alert_6h": 193.0,
-    "lat": 23.578,
-    "lng": 120.56,
+    "lat": 23.555,
+    "lng": 120.625,
     "stations": [
       {
         "name": "碧湖",
@@ -1332,27 +1072,17 @@
         "name": "梅山",
         "alert_val": 350.0,
         "village": "嘉義縣梅山鄉安靖村"
-      },
-      {
-        "name": "梅山",
-        "alert_val": 350.0,
-        "village": "嘉義縣梅山鄉圳南村"
-      },
-      {
-        "name": "太和村s",
-        "alert_val": 350.0,
-        "village": "嘉義縣梅山鄉太和村"
       }
     ],
-    "station_count": 6
+    "station_count": 4
   },
   {
     "county": "嘉義縣",
     "township": "阿里山鄉",
     "alert_val": 300.0,
     "alert_6h": 165.0,
-    "lat": 23.508,
-    "lng": 120.805,
+    "lat": 23.4478,
+    "lng": 120.7764,
     "stations": [
       {
         "name": "豐山s",
@@ -1407,8 +1137,8 @@
     "township": "竹崎鄉",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 23.527,
-    "lng": 120.598,
+    "lat": 23.5036,
+    "lng": 120.5903,
     "stations": [
       {
         "name": "獨立山",
@@ -1419,16 +1149,6 @@
         "name": "番路",
         "alert_val": 400.0,
         "village": "嘉義縣竹崎鄉塘興村"
-      },
-      {
-        "name": "獨立山",
-        "alert_val": 400.0,
-        "village": "嘉義縣竹崎鄉復金村"
-      },
-      {
-        "name": "番路",
-        "alert_val": 400.0,
-        "village": "嘉義縣竹崎鄉桃源村"
       },
       {
         "name": "奮起湖",
@@ -1444,32 +1164,22 @@
         "name": "文峰遊客中s",
         "alert_val": 400.0,
         "village": "嘉義縣竹崎鄉文峰村"
-      },
-      {
-        "name": "奮起湖",
-        "alert_val": 400.0,
-        "village": "嘉義縣竹崎鄉中和村"
       }
     ],
-    "station_count": 8
+    "station_count": 5
   },
   {
     "county": "嘉義縣",
     "township": "中埔鄉",
     "alert_val": 350.0,
     "alert_6h": 193.0,
-    "lat": 23.435,
-    "lng": 120.521,
+    "lat": 23.4012,
+    "lng": 120.5159,
     "stations": [
       {
         "name": "沄水國小s",
         "alert_val": 350.0,
         "village": "嘉義縣中埔鄉瑞豐村"
-      },
-      {
-        "name": "沄水國小s",
-        "alert_val": 300.0,
-        "village": "嘉義縣中埔鄉東興村"
       },
       {
         "name": "頭凍",
@@ -1482,15 +1192,15 @@
         "village": "嘉義縣中埔鄉中崙村"
       }
     ],
-    "station_count": 4
+    "station_count": 3
   },
   {
     "county": "嘉義縣",
     "township": "大埔鄉",
     "alert_val": 350.0,
     "alert_6h": 193.0,
-    "lat": 23.27,
-    "lng": 120.612,
+    "lat": 23.2894,
+    "lng": 120.5971,
     "stations": [
       {
         "name": "表湖",
@@ -1501,27 +1211,17 @@
         "name": "馬頭山",
         "alert_val": 350.0,
         "village": "嘉義縣大埔鄉和平村"
-      },
-      {
-        "name": "馬頭山",
-        "alert_val": 350.0,
-        "village": "嘉義縣大埔鄉永樂村"
-      },
-      {
-        "name": "馬頭山",
-        "alert_val": 350.0,
-        "village": "嘉義縣大埔鄉大埔村"
       }
     ],
-    "station_count": 4
+    "station_count": 2
   },
   {
     "county": "新竹縣",
     "township": "關西鎮",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.8,
-    "lng": 121.173,
+    "lat": 24.7914,
+    "lng": 121.1863,
     "stations": [
       {
         "name": "錦山國小s",
@@ -1539,30 +1239,20 @@
         "village": "新竹縣關西鎮南山里"
       },
       {
-        "name": "錦山國小s",
-        "alert_val": 500.0,
-        "village": "新竹縣關西鎮金山里"
-      },
-      {
         "name": "打鐵坑",
         "alert_val": 500.0,
         "village": "新竹縣關西鎮東平里"
-      },
-      {
-        "name": "錦山國小s",
-        "alert_val": 500.0,
-        "village": "新竹縣關西鎮東山里"
       }
     ],
-    "station_count": 6
+    "station_count": 4
   },
   {
     "county": "新竹縣",
     "township": "橫山鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.733,
-    "lng": 121.151,
+    "lat": 24.7132,
+    "lng": 121.1482,
     "stations": [
       {
         "name": "內灣國小s",
@@ -1578,27 +1268,17 @@
         "name": "花園派出所s",
         "alert_val": 500.0,
         "village": "新竹縣橫山鄉南昌村"
-      },
-      {
-        "name": "內灣國小s",
-        "alert_val": 500.0,
-        "village": "新竹縣橫山鄉內灣村"
-      },
-      {
-        "name": "橫山",
-        "alert_val": 500.0,
-        "village": "新竹縣橫山鄉大肚村"
       }
     ],
-    "station_count": 5
+    "station_count": 3
   },
   {
     "county": "新竹縣",
     "township": "新埔鎮",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.838,
-    "lng": 121.068,
+    "lat": 24.8424,
+    "lng": 121.0983,
     "stations": [
       {
         "name": "新竹",
@@ -1613,8 +1293,8 @@
     "township": "峨眉鄉",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 24.669,
-    "lng": 121.025,
+    "lat": 24.6792,
+    "lng": 121.0079,
     "stations": [
       {
         "name": "峨眉",
@@ -1629,29 +1309,24 @@
     "township": "芎林鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 24.784,
-    "lng": 121.107,
+    "lat": 24.7701,
+    "lng": 121.1018,
     "stations": [
       {
         "name": "飛鳳山",
         "alert_val": 550.0,
         "village": "新竹縣芎林鄉華龍村"
-      },
-      {
-        "name": "飛鳳山",
-        "alert_val": 550.0,
-        "village": "新竹縣芎林鄉永興村"
       }
     ],
-    "station_count": 2
+    "station_count": 1
   },
   {
     "county": "新竹縣",
     "township": "竹東鎮",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.733,
-    "lng": 121.085,
+    "lat": 24.7204,
+    "lng": 121.0748,
     "stations": [
       {
         "name": "橫山",
@@ -1671,8 +1346,8 @@
     "township": "尖石鄉",
     "alert_val": 350.0,
     "alert_6h": 193.0,
-    "lat": 24.683,
-    "lng": 121.227,
+    "lat": 24.5931,
+    "lng": 121.2771,
     "stations": [
       {
         "name": "錦屏國小s",
@@ -1701,11 +1376,6 @@
       },
       {
         "name": "秀巒國小s",
-        "alert_val": 300.0,
-        "village": "新竹縣尖石鄉秀巒村"
-      },
-      {
-        "name": "秀巒國小s",
         "alert_val": 350.0,
         "village": "新竹縣尖石鄉秀巒村"
       },
@@ -1715,36 +1385,31 @@
         "village": "新竹縣尖石鄉玉峰村"
       }
     ],
-    "station_count": 8
+    "station_count": 7
   },
   {
     "county": "新竹縣",
     "township": "北埔鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 24.698,
-    "lng": 121.056,
+    "lat": 24.6783,
+    "lng": 121.0651,
     "stations": [
       {
         "name": "外坪五指",
         "alert_val": 550.0,
         "village": "新竹縣北埔鄉南坑村"
-      },
-      {
-        "name": "外坪五指",
-        "alert_val": 550.0,
-        "village": "新竹縣北埔鄉外坪村"
       }
     ],
-    "station_count": 2
+    "station_count": 1
   },
   {
     "county": "新竹縣",
     "township": "五峰鄉",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 24.548,
-    "lng": 121.104,
+    "lat": 24.5778,
+    "lng": 121.1391,
     "stations": [
       {
         "name": "白蘭",
@@ -1760,22 +1425,17 @@
         "name": "五峰國小s",
         "alert_val": 400.0,
         "village": "新竹縣五峰鄉竹林村"
-      },
-      {
-        "name": "五峰國小s",
-        "alert_val": 400.0,
-        "village": "新竹縣五峰鄉大隘村"
       }
     ],
-    "station_count": 4
+    "station_count": 3
   },
   {
     "county": "新北市",
     "township": "鶯歌區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.955,
-    "lng": 121.346,
+    "lat": 24.9623,
+    "lng": 121.3429,
     "stations": [
       {
         "name": "鶯歌w",
@@ -1790,8 +1450,8 @@
     "township": "雙溪區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 25.027,
-    "lng": 121.872,
+    "lat": 24.9994,
+    "lng": 121.8354,
     "stations": [
       {
         "name": "泰平",
@@ -1809,30 +1469,20 @@
         "village": "新北市雙溪區牡丹里"
       },
       {
-        "name": "雙溪",
-        "alert_val": 550.0,
-        "village": "新北市雙溪區平林里"
-      },
-      {
-        "name": "柑林國小s",
-        "alert_val": 550.0,
-        "village": "新北市雙溪區外柑里"
-      },
-      {
         "name": "大粗坑s",
         "alert_val": 550.0,
         "village": "新北市雙溪區三貂里"
       }
     ],
-    "station_count": 6
+    "station_count": 4
   },
   {
     "county": "新北市",
     "township": "樹林區",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 24.989,
-    "lng": 121.414,
+    "lat": 24.9831,
+    "lng": 121.3984,
     "stations": [
       {
         "name": "山佳",
@@ -1840,30 +1490,20 @@
         "village": "新北市樹林區東山里"
       },
       {
-        "name": "山佳",
-        "alert_val": 600.0,
-        "village": "新北市樹林區坡內里"
-      },
-      {
         "name": "龍壽社區",
         "alert_val": 600.0,
         "village": "新北市樹林區光興里"
-      },
-      {
-        "name": "龍壽社區",
-        "alert_val": 600.0,
-        "village": "新北市樹林區三福里"
       }
     ],
-    "station_count": 4
+    "station_count": 2
   },
   {
     "county": "新北市",
     "township": "萬里區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 25.187,
-    "lng": 121.685,
+    "lat": 25.1847,
+    "lng": 121.6621,
     "stations": [
       {
         "name": "萬里國小s",
@@ -1874,47 +1514,22 @@
         "name": "大坪",
         "alert_val": 550.0,
         "village": "新北市萬里區溪底里"
-      },
-      {
-        "name": "萬里國小s",
-        "alert_val": 550.0,
-        "village": "新北市萬里區野柳里"
-      },
-      {
-        "name": "萬里國小s",
-        "alert_val": 550.0,
-        "village": "新北市萬里區中幅里"
-      },
-      {
-        "name": "萬里國小s",
-        "alert_val": 550.0,
-        "village": "新北市萬里區大鵬里"
       }
     ],
-    "station_count": 5
+    "station_count": 2
   },
   {
     "county": "新北市",
     "township": "瑞芳區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 25.104,
-    "lng": 121.803,
+    "lat": 25.1059,
+    "lng": 121.8338,
     "stations": [
       {
         "name": "水湳洞",
         "alert_val": 500.0,
         "village": "新北市瑞芳區濂新里"
-      },
-      {
-        "name": "水湳洞",
-        "alert_val": 500.0,
-        "village": "新北市瑞芳區銅山里"
-      },
-      {
-        "name": "水湳洞",
-        "alert_val": 500.0,
-        "village": "新北市瑞芳區福住里"
       },
       {
         "name": "三貂嶺w",
@@ -1927,44 +1542,9 @@
         "village": "新北市瑞芳區瑞濱里"
       },
       {
-        "name": "瑞芳",
-        "alert_val": 500.0,
-        "village": "新北市瑞芳區新峰里"
-      },
-      {
-        "name": "水湳洞",
-        "alert_val": 500.0,
-        "village": "新北市瑞芳區新山里"
-      },
-      {
         "name": "大粗坑s",
         "alert_val": 500.0,
         "village": "新北市瑞芳區猴硐里"
-      },
-      {
-        "name": "瑞芳",
-        "alert_val": 500.0,
-        "village": "新北市瑞芳區傑魚里"
-      },
-      {
-        "name": "水湳洞",
-        "alert_val": 500.0,
-        "village": "新北市瑞芳區南雅里"
-      },
-      {
-        "name": "瑞芳",
-        "alert_val": 500.0,
-        "village": "新北市瑞芳區東和里"
-      },
-      {
-        "name": "大粗坑s",
-        "alert_val": 500.0,
-        "village": "新北市瑞芳區光復里"
-      },
-      {
-        "name": "大粗坑s",
-        "alert_val": 500.0,
-        "village": "新北市瑞芳區弓橋里"
       },
       {
         "name": "五分山",
@@ -1972,36 +1552,31 @@
         "village": "新北市瑞芳區上天里"
       }
     ],
-    "station_count": 14
+    "station_count": 5
   },
   {
     "county": "新北市",
     "township": "新莊區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 25.033,
-    "lng": 121.441,
+    "lat": 25.0366,
+    "lng": 121.4265,
     "stations": [
       {
         "name": "龜山",
         "alert_val": 550.0,
         "village": "新北市新莊區雙鳳里"
-      },
-      {
-        "name": "龜山",
-        "alert_val": 550.0,
-        "village": "新北市新莊區丹鳳里"
       }
     ],
-    "station_count": 2
+    "station_count": 1
   },
   {
     "county": "新北市",
     "township": "新店區",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 24.969,
-    "lng": 121.536,
+    "lat": 24.9313,
+    "lng": 121.5371,
     "stations": [
       {
         "name": "五城加油站s",
@@ -2019,101 +1594,36 @@
         "village": "新北市新店區龜山里"
       },
       {
-        "name": "五城加油站s",
-        "alert_val": 450.0,
-        "village": "新北市新店區德安里"
-      },
-      {
-        "name": "屈尺",
-        "alert_val": 450.0,
-        "village": "新北市新店區廣興里"
-      },
-      {
         "name": "精忠s",
         "alert_val": 450.0,
         "village": "新北市新店區塗潭里"
-      },
-      {
-        "name": "四十份",
-        "alert_val": 450.0,
-        "village": "新北市新店區粗坑里"
-      },
-      {
-        "name": "精忠s",
-        "alert_val": 450.0,
-        "village": "新北市新店區員潭里"
-      },
-      {
-        "name": "精忠s",
-        "alert_val": 450.0,
-        "village": "新北市新店區美潭里"
-      },
-      {
-        "name": "精忠s",
-        "alert_val": 450.0,
-        "village": "新北市新店區青潭里"
-      },
-      {
-        "name": "屈尺",
-        "alert_val": 450.0,
-        "village": "新北市新店區屈尺里"
-      },
-      {
-        "name": "五城加油站s",
-        "alert_val": 450.0,
-        "village": "新北市新店區日興里"
-      },
-      {
-        "name": "精忠s",
-        "alert_val": 450.0,
-        "village": "新北市新店區中興里"
       }
     ],
-    "station_count": 13
+    "station_count": 4
   },
   {
     "county": "新北市",
     "township": "深坑區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.99,
-    "lng": 121.612,
+    "lat": 25.0009,
+    "lng": 121.6216,
     "stations": [
       {
         "name": "深坑",
         "alert_val": 500.0,
         "village": "新北市深坑區賴仲里"
-      },
-      {
-        "name": "深坑",
-        "alert_val": 500.0,
-        "village": "新北市深坑區深坑里"
-      },
-      {
-        "name": "深坑",
-        "alert_val": 500.0,
-        "village": "新北市深坑區埔新里"
-      },
-      {
-        "name": "深坑",
-        "alert_val": 500.0,
-        "village": "新北市深坑區昇高里"
-      },
-      {
-        "name": "深坑",
-        "alert_val": 500.0,
-        "village": "新北市深坑區土庫里"
       }
     ],
-    "station_count": 5
+    "station_count": 1
   },
   {
     "county": "新北市",
     "township": "淡水區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 25.171,
-    "lng": 121.441,
+    "lat": 25.1944,
+    "lng": 121.4758,
     "stations": [
       {
         "name": "貴子坑tp",
@@ -2124,32 +1634,22 @@
         "name": "大屯山",
         "alert_val": 550.0,
         "village": "新北市淡水區水源里"
-      },
-      {
-        "name": "貴子坑tp",
-        "alert_val": 550.0,
-        "village": "新北市淡水區八勢里"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "新北市",
     "township": "貢寮區",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 25.02,
-    "lng": 121.927,
+    "lat": 25.0369,
+    "lng": 121.9221,
     "stations": [
       {
         "name": "福隆",
         "alert_val": 600.0,
         "village": "新北市貢寮區雙玉里"
-      },
-      {
-        "name": "福隆",
-        "alert_val": 600.0,
-        "village": "新北市貢寮區福隆里"
       },
       {
         "name": "三貂角",
@@ -2162,15 +1662,15 @@
         "village": "新北市貢寮區和美里"
       }
     ],
-    "station_count": 4
+    "station_count": 3
   },
   {
     "county": "新北市",
     "township": "烏來區",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 24.863,
-    "lng": 121.549,
+    "lat": 24.7914,
+    "lng": 121.5585,
     "stations": [
       {
         "name": "福山",
@@ -2195,8 +1695,8 @@
     "township": "泰山區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 25.061,
-    "lng": 121.427,
+    "lat": 25.0582,
+    "lng": 121.4071,
     "stations": [
       {
         "name": "新莊",
@@ -2204,66 +1704,36 @@
         "village": "新北市泰山區貴子里"
       },
       {
-        "name": "新莊",
-        "alert_val": 500.0,
-        "village": "新北市泰山區明志里"
-      },
-      {
         "name": "國一39K",
         "alert_val": 500.0,
         "village": "新北市泰山區大科里"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "新北市",
     "township": "金山區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 25.224,
-    "lng": 121.639,
+    "lat": 25.2145,
+    "lng": 121.6083,
     "stations": [
       {
         "name": "三和",
         "alert_val": 500.0,
         "village": "新北市金山區重和里"
-      },
-      {
-        "name": "三和",
-        "alert_val": 500.0,
-        "village": "新北市金山區西湖里"
-      },
-      {
-        "name": "三和",
-        "alert_val": 500.0,
-        "village": "新北市金山區永興里"
-      },
-      {
-        "name": "三和",
-        "alert_val": 500.0,
-        "village": "新北市金山區六股里"
-      },
-      {
-        "name": "三和",
-        "alert_val": 500.0,
-        "village": "新北市金山區五湖里"
-      },
-      {
-        "name": "三和",
-        "alert_val": 500.0,
-        "village": "新北市金山區三界里"
       }
     ],
-    "station_count": 6
+    "station_count": 1
   },
   {
     "county": "新北市",
     "township": "坪林區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 24.928,
-    "lng": 121.711,
+    "lat": 24.9095,
+    "lng": 121.7302,
     "stations": [
       {
         "name": "坪林",
@@ -2271,35 +1741,20 @@
         "village": "新北市坪林區粗窟里"
       },
       {
-        "name": "坪林",
-        "alert_val": 500.0,
-        "village": "新北市坪林區坪林里"
-      },
-      {
         "name": "四堵",
         "alert_val": 550.0,
         "village": "新北市坪林區石嶆里"
-      },
-      {
-        "name": "坪林",
-        "alert_val": 500.0,
-        "village": "新北市坪林區水德里"
-      },
-      {
-        "name": "坪林",
-        "alert_val": 500.0,
-        "village": "新北市坪林區大林里"
       }
     ],
-    "station_count": 5
+    "station_count": 2
   },
   {
     "county": "新北市",
     "township": "汐止區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 25.066,
-    "lng": 121.66,
+    "lat": 25.0726,
+    "lng": 121.6568,
     "stations": [
       {
         "name": "五指山",
@@ -2312,23 +1767,8 @@
         "village": "新北市汐止區茄苳里"
       },
       {
-        "name": "汐止",
-        "alert_val": 500.0,
-        "village": "新北市汐止區保新里"
-      },
-      {
-        "name": "五指山",
-        "alert_val": 500.0,
-        "village": "新北市汐止區長青里"
-      },
-      {
         "name": "東山s",
         "alert_val": 400.0,
-        "village": "新北市汐止區東山里"
-      },
-      {
-        "name": "汐止",
-        "alert_val": 500.0,
         "village": "新北市汐止區東山里"
       },
       {
@@ -2337,15 +1777,15 @@
         "village": "新北市汐止區白雲里"
       }
     ],
-    "station_count": 7
+    "station_count": 4
   },
   {
     "county": "新北市",
     "township": "石碇區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.986,
-    "lng": 121.651,
+    "lat": 24.9552,
+    "lng": 121.6488,
     "stations": [
       {
         "name": "石碇",
@@ -2353,35 +1793,20 @@
         "village": "新北市石碇區潭邊里"
       },
       {
-        "name": "石碇",
-        "alert_val": 500.0,
-        "village": "新北市石碇區烏塗里"
-      },
-      {
         "name": "茶改北部分",
         "alert_val": 500.0,
         "village": "新北市石碇區烏塗里"
-      },
-      {
-        "name": "茶改北部分",
-        "alert_val": 500.0,
-        "village": "新北市石碇區格頭里"
-      },
-      {
-        "name": "石碇",
-        "alert_val": 500.0,
-        "village": "新北市石碇區永定里"
       }
     ],
-    "station_count": 5
+    "station_count": 2
   },
   {
     "county": "新北市",
     "township": "石門區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 25.283,
-    "lng": 121.569,
+    "lat": 25.266,
+    "lng": 121.5569,
     "stations": [
       {
         "name": "三和",
@@ -2396,8 +1821,8 @@
     "township": "平溪區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 25.02,
-    "lng": 121.737,
+    "lat": 25.0235,
+    "lng": 121.758,
     "stations": [
       {
         "name": "火燒寮",
@@ -2405,40 +1830,20 @@
         "village": "新北市平溪區薯榔里"
       },
       {
-        "name": "火燒寮",
-        "alert_val": 550.0,
-        "village": "新北市平溪區嶺腳里"
-      },
-      {
         "name": "平溪旅遊w",
         "alert_val": 550.0,
         "village": "新北市平溪區新寮里"
-      },
-      {
-        "name": "火燒寮",
-        "alert_val": 550.0,
-        "village": "新北市平溪區菁桐里"
-      },
-      {
-        "name": "平溪旅遊w",
-        "alert_val": 550.0,
-        "village": "新北市平溪區南山里"
-      },
-      {
-        "name": "平溪旅遊w",
-        "alert_val": 550.0,
-        "village": "新北市平溪區十分里"
       }
     ],
-    "station_count": 6
+    "station_count": 2
   },
   {
     "county": "新北市",
     "township": "五股區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 25.084,
-    "lng": 121.44,
+    "lat": 25.092,
+    "lng": 121.4306,
     "stations": [
       {
         "name": "硬漢嶺",
@@ -2451,25 +1856,20 @@
         "village": "新北市五股區福德里"
       },
       {
-        "name": "五股",
-        "alert_val": 500.0,
-        "village": "新北市五股區民義里"
-      },
-      {
         "name": "長坑國小s",
         "alert_val": 500.0,
         "village": "新北市五股區五龍里"
       }
     ],
-    "station_count": 4
+    "station_count": 3
   },
   {
     "county": "新北市",
     "township": "中和區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 24.995,
-    "lng": 121.49,
+    "lat": 24.9923,
+    "lng": 121.4945,
     "stations": [
       {
         "name": "中和",
@@ -2484,8 +1884,8 @@
     "township": "土城區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 24.975,
-    "lng": 121.445,
+    "lat": 24.9697,
+    "lng": 121.4508,
     "stations": [
       {
         "name": "國三S042K",
@@ -2496,22 +1896,17 @@
         "name": "國三S037K",
         "alert_val": 550.0,
         "village": "新北市土城區廷寮里"
-      },
-      {
-        "name": "國三S042K",
-        "alert_val": 550.0,
-        "village": "新北市土城區永寧里"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "新北市",
     "township": "三峽區",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 24.928,
-    "lng": 121.374,
+    "lat": 24.877,
+    "lng": 121.4087,
     "stations": [
       {
         "name": "三峽",
@@ -2522,11 +1917,6 @@
         "name": "大豹w",
         "alert_val": 450.0,
         "village": "新北市三峽區插角里"
-      },
-      {
-        "name": "大豹w",
-        "alert_val": 450.0,
-        "village": "新北市三峽區金圳里"
       },
       {
         "name": "五寮國小s",
@@ -2542,32 +1932,17 @@
         "name": "有木國小s",
         "alert_val": 450.0,
         "village": "新北市三峽區有木里"
-      },
-      {
-        "name": "建安國小s",
-        "alert_val": 450.0,
-        "village": "新北市三峽區安坑里"
-      },
-      {
-        "name": "三峽",
-        "alert_val": 450.0,
-        "village": "新北市三峽區弘道里"
-      },
-      {
-        "name": "五寮國小s",
-        "alert_val": 450.0,
-        "village": "新北市三峽區五寮里"
       }
     ],
-    "station_count": 9
+    "station_count": 5
   },
   {
     "county": "新北市",
     "township": "三芝區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 25.25,
-    "lng": 121.501,
+    "lat": 25.229,
+    "lng": 121.5152,
     "stations": [
       {
         "name": "田寮",
@@ -2578,27 +1953,17 @@
         "name": "鞍部",
         "alert_val": 550.0,
         "village": "新北市三芝區圓山里"
-      },
-      {
-        "name": "鞍部",
-        "alert_val": 550.0,
-        "village": "新北市三芝區店子里"
-      },
-      {
-        "name": "田寮",
-        "alert_val": 550.0,
-        "village": "新北市三芝區八賢里"
       }
     ],
-    "station_count": 4
+    "station_count": 2
   },
   {
     "county": "新北市",
     "township": "八里區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 25.149,
-    "lng": 121.388,
+    "lat": 25.1153,
+    "lng": 121.4058,
     "stations": [
       {
         "name": "長坑國小s",
@@ -2623,8 +1988,8 @@
     "township": "古坑鄉",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 23.636,
-    "lng": 120.584,
+    "lat": 23.6265,
+    "lng": 120.6183,
     "stations": [
       {
         "name": "桶頭",
@@ -2640,84 +2005,49 @@
         "name": "草嶺石壁",
         "alert_val": 400.0,
         "village": "雲林縣古坑鄉草嶺村"
-      },
-      {
-        "name": "華山s",
-        "alert_val": 350.0,
-        "village": "雲林縣古坑鄉桂林村"
-      },
-      {
-        "name": "華山s",
-        "alert_val": 400.0,
-        "village": "雲林縣古坑鄉桂林村"
-      }
-    ],
-    "station_count": 5
-  },
-  {
-    "county": "基隆市",
-    "township": "暖暖區",
-    "alert_val": 550.0,
-    "alert_6h": 302.0,
-    "lat": 25.102,
-    "lng": 121.736,
-    "stations": [
-      {
-        "name": "暖暖",
-        "alert_val": 550.0,
-        "village": "基隆市暖暖區過港里"
-      },
-      {
-        "name": "暖暖",
-        "alert_val": 550.0,
-        "village": "基隆市暖暖區碇內里"
-      },
-      {
-        "name": "暖暖",
-        "alert_val": 550.0,
-        "village": "基隆市暖暖區暖東里"
       }
     ],
     "station_count": 3
   },
   {
     "county": "基隆市",
+    "township": "暖暖區",
+    "alert_val": 550.0,
+    "alert_6h": 302.0,
+    "lat": 25.0843,
+    "lng": 121.7435,
+    "stations": [
+      {
+        "name": "暖暖",
+        "alert_val": 550.0,
+        "village": "基隆市暖暖區過港里"
+      }
+    ],
+    "station_count": 1
+  },
+  {
+    "county": "基隆市",
     "township": "信義區",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 25.108,
-    "lng": 121.757,
+    "lat": 25.124,
+    "lng": 121.7742,
     "stations": [
       {
         "name": "基隆",
         "alert_val": 600.0,
         "village": "基隆市信義區禮儀里"
-      },
-      {
-        "name": "基隆",
-        "alert_val": 600.0,
-        "village": "基隆市信義區禮東里"
-      },
-      {
-        "name": "基隆",
-        "alert_val": 600.0,
-        "village": "基隆市信義區東明里"
-      },
-      {
-        "name": "基隆",
-        "alert_val": 600.0,
-        "village": "基隆市信義區東安里"
       }
     ],
-    "station_count": 4
+    "station_count": 1
   },
   {
     "county": "基隆市",
     "township": "安樂區",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 25.117,
-    "lng": 121.723,
+    "lat": 25.147,
+    "lng": 121.7073,
     "stations": [
       {
         "name": "國三N002K",
@@ -2737,8 +2067,8 @@
     "township": "仁愛區",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 25.128,
-    "lng": 121.741,
+    "lat": 25.12,
+    "lng": 121.7446,
     "stations": [
       {
         "name": "基隆",
@@ -2753,55 +2083,40 @@
     "township": "中正區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 25.128,
-    "lng": 121.74,
+    "lat": 25.1463,
+    "lng": 121.7779,
     "stations": [
       {
         "name": "八斗子",
         "alert_val": 550.0,
         "village": "基隆市中正區海濱里"
-      },
-      {
-        "name": "八斗子",
-        "alert_val": 550.0,
-        "village": "基隆市中正區砂子里"
-      },
-      {
-        "name": "八斗子",
-        "alert_val": 550.0,
-        "village": "基隆市中正區建國里"
       }
     ],
-    "station_count": 3
+    "station_count": 1
   },
   {
     "county": "基隆市",
     "township": "中山區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 25.133,
-    "lng": 121.742,
+    "lat": 25.1499,
+    "lng": 121.7328,
     "stations": [
       {
         "name": "國三N002K",
         "alert_val": 550.0,
         "village": "基隆市中山區協和里"
-      },
-      {
-        "name": "國三N002K",
-        "alert_val": 550.0,
-        "village": "基隆市中山區中和里"
       }
     ],
-    "station_count": 2
+    "station_count": 1
   },
   {
     "county": "基隆市",
     "township": "七堵區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 25.098,
-    "lng": 121.72,
+    "lat": 25.1089,
+    "lng": 121.6868,
     "stations": [
       {
         "name": "國三S004K",
@@ -2809,24 +2124,9 @@
         "village": "基隆市七堵區瑪南里"
       },
       {
-        "name": "國三S004K",
-        "alert_val": 550.0,
-        "village": "基隆市七堵區瑪西里"
-      },
-      {
         "name": "七堵",
         "alert_val": 550.0,
         "village": "基隆市七堵區泰安里"
-      },
-      {
-        "name": "七堵",
-        "alert_val": 550.0,
-        "village": "基隆市七堵區長興里"
-      },
-      {
-        "name": "七堵",
-        "alert_val": 550.0,
-        "village": "基隆市七堵區長安里"
       },
       {
         "name": "復興國小",
@@ -2834,15 +2134,15 @@
         "village": "基隆市七堵區友二里"
       }
     ],
-    "station_count": 6
+    "station_count": 3
   },
   {
     "county": "高雄市",
     "township": "旗山區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 22.887,
-    "lng": 120.47,
+    "lat": 22.8775,
+    "lng": 120.4787,
     "stations": [
       {
         "name": "旗山",
@@ -2857,8 +2157,8 @@
     "township": "鼓山區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 22.656,
-    "lng": 120.284,
+    "lat": 22.646,
+    "lng": 120.2795,
     "stations": [
       {
         "name": "鼓山",
@@ -2873,8 +2173,8 @@
     "township": "桃源區",
     "alert_val": 250.0,
     "alert_6h": 138.0,
-    "lat": 23.162,
-    "lng": 120.812,
+    "lat": 23.2401,
+    "lng": 120.8596,
     "stations": [
       {
         "name": "桃源區公所s",
@@ -2895,42 +2195,22 @@
         "name": "建山國小s",
         "alert_val": 250.0,
         "village": "高雄市桃源區高中里"
-      },
-      {
-        "name": "桃源區公所s",
-        "alert_val": 250.0,
-        "village": "高雄市桃源區桃源里"
-      },
-      {
-        "name": "建山國小s",
-        "alert_val": 250.0,
-        "village": "高雄市桃源區建山里"
-      },
-      {
-        "name": "梅山",
-        "alert_val": 250.0,
-        "village": "高雄市桃源區拉芙蘭里"
       }
     ],
-    "station_count": 7
+    "station_count": 4
   },
   {
     "county": "高雄市",
     "township": "茂林區",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 22.894,
-    "lng": 120.693,
+    "lat": 22.9078,
+    "lng": 120.7662,
     "stations": [
       {
         "name": "萬山",
         "alert_val": 400.0,
         "village": "高雄市茂林區萬山里"
-      },
-      {
-        "name": "茂林國小s",
-        "alert_val": 350.0,
-        "village": "高雄市茂林區茂林里"
       },
       {
         "name": "茂林國小s",
@@ -2943,15 +2223,15 @@
         "village": "高雄市茂林區多納里"
       }
     ],
-    "station_count": 4
+    "station_count": 3
   },
   {
     "county": "高雄市",
     "township": "美濃區",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 22.893,
-    "lng": 120.54,
+    "lat": 22.9066,
+    "lng": 120.5644,
     "stations": [
       {
         "name": "美濃",
@@ -2959,30 +2239,20 @@
         "village": "高雄市美濃區廣林里"
       },
       {
-        "name": "美濃",
-        "alert_val": 500.0,
-        "village": "高雄市美濃區福安里"
-      },
-      {
         "name": "吉東w",
         "alert_val": 500.0,
         "village": "高雄市美濃區獅山里"
-      },
-      {
-        "name": "美濃",
-        "alert_val": 500.0,
-        "village": "高雄市美濃區中圳里"
       }
     ],
-    "station_count": 4
+    "station_count": 2
   },
   {
     "county": "高雄市",
     "township": "阿蓮區",
     "alert_val": 650.0,
     "alert_6h": 358.0,
-    "lat": 22.886,
-    "lng": 120.337,
+    "lat": 22.8698,
+    "lng": 120.3198,
     "stations": [
       {
         "name": "阿公店",
@@ -2997,8 +2267,8 @@
     "township": "岡山區",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 22.796,
-    "lng": 120.296,
+    "lat": 22.8032,
+    "lng": 120.3002,
     "stations": [
       {
         "name": "國一S346K",
@@ -3013,14 +2283,9 @@
     "township": "那瑪夏區",
     "alert_val": 300.0,
     "alert_6h": 165.0,
-    "lat": 23.268,
-    "lng": 120.697,
+    "lat": 23.2825,
+    "lng": 120.7276,
     "stations": [
-      {
-        "name": "那瑪夏國中s",
-        "alert_val": 250.0,
-        "village": "高雄市那瑪夏區瑪雅里"
-      },
       {
         "name": "那瑪夏國中s",
         "alert_val": 300.0,
@@ -3030,43 +2295,33 @@
         "name": "達卡努瓦",
         "alert_val": 300.0,
         "village": "高雄市那瑪夏區達卡努瓦里"
-      },
-      {
-        "name": "那瑪夏國中s",
-        "alert_val": 250.0,
-        "village": "高雄市那瑪夏區南沙魯里"
-      }
-    ],
-    "station_count": 4
-  },
-  {
-    "county": "高雄市",
-    "township": "杉林區",
-    "alert_val": 450.0,
-    "alert_6h": 248.0,
-    "lat": 23.068,
-    "lng": 120.542,
-    "stations": [
-      {
-        "name": "集來s",
-        "alert_val": 450.0,
-        "village": "高雄市杉林區集來里"
-      },
-      {
-        "name": "集來s",
-        "alert_val": 450.0,
-        "village": "高雄市杉林區木梓里"
       }
     ],
     "station_count": 2
   },
   {
     "county": "高雄市",
+    "township": "杉林區",
+    "alert_val": 450.0,
+    "alert_6h": 248.0,
+    "lat": 22.9929,
+    "lng": 120.5571,
+    "stations": [
+      {
+        "name": "集來s",
+        "alert_val": 450.0,
+        "village": "高雄市杉林區集來里"
+      }
+    ],
+    "station_count": 1
+  },
+  {
+    "county": "高雄市",
     "township": "甲仙區",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 23.087,
-    "lng": 120.585,
+    "lat": 23.1187,
+    "lng": 120.6204,
     "stations": [
       {
         "name": "小林",
@@ -3077,37 +2332,17 @@
         "name": "甲仙",
         "alert_val": 400.0,
         "village": "高雄市甲仙區東安里"
-      },
-      {
-        "name": "甲仙",
-        "alert_val": 400.0,
-        "village": "高雄市甲仙區和安里"
-      },
-      {
-        "name": "甲仙",
-        "alert_val": 400.0,
-        "village": "高雄市甲仙區西安里"
-      },
-      {
-        "name": "小林",
-        "alert_val": 400.0,
-        "village": "高雄市甲仙區小林里"
-      },
-      {
-        "name": "甲仙",
-        "alert_val": 400.0,
-        "village": "高雄市甲仙區大田里"
       }
     ],
-    "station_count": 6
+    "station_count": 2
   },
   {
     "county": "高雄市",
     "township": "田寮區",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 22.878,
-    "lng": 120.363,
+    "lat": 22.8705,
+    "lng": 120.3895,
     "stations": [
       {
         "name": "尖山",
@@ -3122,8 +2357,8 @@
     "township": "六龜區",
     "alert_val": 250.0,
     "alert_6h": 138.0,
-    "lat": 23.013,
-    "lng": 120.637,
+    "lat": 23.0142,
+    "lng": 120.6555,
     "stations": [
       {
         "name": "建山國小s",
@@ -3136,29 +2371,9 @@
         "village": "高雄市六龜區興龍里"
       },
       {
-        "name": "新發國小",
-        "alert_val": 250.0,
-        "village": "高雄市六龜區新發里"
-      },
-      {
-        "name": "建山國小s",
-        "alert_val": 250.0,
-        "village": "高雄市六龜區荖濃里"
-      },
-      {
         "name": "六龜",
         "alert_val": 250.0,
         "village": "高雄市六龜區文武里"
-      },
-      {
-        "name": "新發國小",
-        "alert_val": 250.0,
-        "village": "高雄市六龜區六龜里"
-      },
-      {
-        "name": "六龜",
-        "alert_val": 250.0,
-        "village": "高雄市六龜區中興里"
       },
       {
         "name": "大津",
@@ -3166,41 +2381,31 @@
         "village": "高雄市六龜區大津里"
       }
     ],
-    "station_count": 8
+    "station_count": 4
   },
   {
     "county": "高雄市",
     "township": "內門區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 22.98,
-    "lng": 120.456,
+    "lat": 22.9459,
+    "lng": 120.4678,
     "stations": [
       {
         "name": "溝坪w",
         "alert_val": 550.0,
         "village": "高雄市內門區金竹里"
-      },
-      {
-        "name": "溝坪w",
-        "alert_val": 550.0,
-        "village": "高雄市內門區永富里"
-      },
-      {
-        "name": "溝坪w",
-        "alert_val": 550.0,
-        "village": "高雄市內門區永吉里"
       }
     ],
-    "station_count": 3
+    "station_count": 1
   },
   {
     "county": "桃園市",
     "township": "龜山區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 25.038,
-    "lng": 121.353,
+    "lat": 25.0274,
+    "lng": 121.3674,
     "stations": [
       {
         "name": "龍壽社區",
@@ -3208,35 +2413,20 @@
         "village": "桃園市龜山區龍壽里"
       },
       {
-        "name": "龍壽社區",
-        "alert_val": 550.0,
-        "village": "桃園市龜山區龍華里"
-      },
-      {
-        "name": "龍壽社區",
-        "alert_val": 550.0,
-        "village": "桃園市龜山區迴龍里"
-      },
-      {
         "name": "山佳",
         "alert_val": 550.0,
         "village": "桃園市龜山區兔坑里"
-      },
-      {
-        "name": "龍壽社區",
-        "alert_val": 550.0,
-        "village": "桃園市龜山區文藝里"
       }
     ],
-    "station_count": 5
+    "station_count": 2
   },
   {
     "county": "桃園市",
     "township": "復興區",
     "alert_val": 350.0,
     "alert_6h": 193.0,
-    "lat": 24.797,
-    "lng": 121.364,
+    "lat": 24.7412,
+    "lng": 121.3677,
     "stations": [
       {
         "name": "霞雲sr",
@@ -3249,29 +2439,9 @@
         "village": "桃園市復興區羅浮里"
       },
       {
-        "name": "霞雲sr",
-        "alert_val": 350.0,
-        "village": "桃園市復興區霞雲里"
-      },
-      {
         "name": "復興",
         "alert_val": 350.0,
         "village": "桃園市復興區澤仁里"
-      },
-      {
-        "name": "霞雲sr",
-        "alert_val": 350.0,
-        "village": "桃園市復興區澤仁里"
-      },
-      {
-        "name": "霞雲sr",
-        "alert_val": 350.0,
-        "village": "桃園市復興區義盛里"
-      },
-      {
-        "name": "高坡國小s",
-        "alert_val": 350.0,
-        "village": "桃園市復興區義盛里"
       },
       {
         "name": "嘎拉賀sr",
@@ -3297,27 +2467,17 @@
         "name": "大艽芎古道s",
         "alert_val": 350.0,
         "village": "桃園市復興區長興里"
-      },
-      {
-        "name": "巴陵sr",
-        "alert_val": 350.0,
-        "village": "桃園市復興區三光里"
-      },
-      {
-        "name": "復興",
-        "alert_val": 350.0,
-        "village": "桃園市復興區三民里"
       }
     ],
-    "station_count": 14
+    "station_count": 8
   },
   {
     "county": "桃園市",
     "township": "桃園區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 24.993,
-    "lng": 121.301,
+    "lat": 24.9955,
+    "lng": 121.3013,
     "stations": [
       {
         "name": "桃園",
@@ -3332,8 +2492,8 @@
     "township": "大溪區",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 24.878,
-    "lng": 121.289,
+    "lat": 24.8699,
+    "lng": 121.3059,
     "stations": [
       {
         "name": "大艽芎古道s",
@@ -3341,35 +2501,20 @@
         "village": "桃園市大溪區福安里"
       },
       {
-        "name": "大艽芎古道s",
-        "alert_val": 550.0,
-        "village": "桃園市大溪區義和里"
-      },
-      {
         "name": "五寮國小s",
         "alert_val": 550.0,
         "village": "桃園市大溪區新峰里"
-      },
-      {
-        "name": "大艽芎古道s",
-        "alert_val": 550.0,
-        "village": "桃園市大溪區復興里"
-      },
-      {
-        "name": "大艽芎古道s",
-        "alert_val": 550.0,
-        "village": "桃園市大溪區美華里"
       }
     ],
-    "station_count": 5
+    "station_count": 2
   },
   {
     "county": "苗栗縣",
     "township": "銅鑼鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.487,
-    "lng": 120.801,
+    "lat": 24.4579,
+    "lng": 120.8031,
     "stations": [
       {
         "name": "銅鑼",
@@ -3385,22 +2530,17 @@
         "name": "南湖",
         "alert_val": 500.0,
         "village": "苗栗縣銅鑼鄉新隆村"
-      },
-      {
-        "name": "南湖",
-        "alert_val": 500.0,
-        "village": "苗栗縣銅鑼鄉盛隆村"
       }
     ],
-    "station_count": 4
+    "station_count": 3
   },
   {
     "county": "苗栗縣",
     "township": "獅潭鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.521,
-    "lng": 120.916,
+    "lat": 24.5201,
+    "lng": 120.9232,
     "stations": [
       {
         "name": "和興",
@@ -3408,25 +2548,20 @@
         "village": "苗栗縣獅潭鄉豐林村"
       },
       {
-        "name": "和興",
-        "alert_val": 500.0,
-        "village": "苗栗縣獅潭鄉新豐村"
-      },
-      {
         "name": "開礦國小s",
         "alert_val": 500.0,
         "village": "苗栗縣獅潭鄉竹木村"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "苗栗縣",
     "township": "通霄鎮",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 24.482,
-    "lng": 120.668,
+    "lat": 24.4888,
+    "lng": 120.7189,
     "stations": [
       {
         "name": "大坪頂w",
@@ -3446,8 +2581,8 @@
     "township": "泰安鄉",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 24.394,
-    "lng": 121.019,
+    "lat": 24.4166,
+    "lng": 121.0655,
     "stations": [
       {
         "name": "馬都安",
@@ -3463,11 +2598,6 @@
         "name": "象鼻",
         "alert_val": 400.0,
         "village": "苗栗縣泰安鄉象鼻村"
-      },
-      {
-        "name": "馬都安",
-        "alert_val": 400.0,
-        "village": "苗栗縣泰安鄉清安村"
       },
       {
         "name": "松安",
@@ -3490,15 +2620,15 @@
         "village": "苗栗縣泰安鄉八卦村"
       }
     ],
-    "station_count": 8
+    "station_count": 7
   },
   {
     "county": "苗栗縣",
     "township": "苑裡鎮",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 24.437,
-    "lng": 120.65,
+    "lat": 24.4132,
+    "lng": 120.6894,
     "stations": [
       {
         "name": "火炎山s",
@@ -3513,8 +2643,8 @@
     "township": "南庄鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.525,
-    "lng": 121.011,
+    "lat": 24.5735,
+    "lng": 121.0097,
     "stations": [
       {
         "name": "南礦",
@@ -3527,35 +2657,20 @@
         "village": "苗栗縣南庄鄉獅山村"
       },
       {
-        "name": "南庄",
-        "alert_val": 500.0,
-        "village": "苗栗縣南庄鄉南富村"
-      },
-      {
         "name": "南庄w",
         "alert_val": 500.0,
         "village": "苗栗縣南庄鄉南江村"
-      },
-      {
-        "name": "南庄",
-        "alert_val": 500.0,
-        "village": "苗栗縣南庄鄉東河村"
-      },
-      {
-        "name": "南庄w",
-        "alert_val": 500.0,
-        "village": "苗栗縣南庄鄉西村"
       }
     ],
-    "station_count": 6
+    "station_count": 3
   },
   {
     "county": "苗栗縣",
     "township": "卓蘭鎮",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 24.316,
-    "lng": 120.869,
+    "lat": 24.3378,
+    "lng": 120.8443,
     "stations": [
       {
         "name": "白布帆s",
@@ -3566,27 +2681,17 @@
         "name": "卓蘭",
         "alert_val": 450.0,
         "village": "苗栗縣卓蘭鎮老庄里"
-      },
-      {
-        "name": "白布帆s",
-        "alert_val": 450.0,
-        "village": "苗栗縣卓蘭鎮內灣里"
-      },
-      {
-        "name": "卓蘭",
-        "alert_val": 450.0,
-        "village": "苗栗縣卓蘭鎮上新里"
       }
     ],
-    "station_count": 4
+    "station_count": 2
   },
   {
     "county": "苗栗縣",
     "township": "竹南鎮",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 24.685,
-    "lng": 120.877,
+    "lat": 24.6982,
+    "lng": 120.8878,
     "stations": [
       {
         "name": "竹南w",
@@ -3601,8 +2706,8 @@
     "township": "公館鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.506,
-    "lng": 120.826,
+    "lat": 24.5029,
+    "lng": 120.8571,
     "stations": [
       {
         "name": "開礦國小s",
@@ -3610,25 +2715,20 @@
         "village": "苗栗縣公館鄉福德村"
       },
       {
-        "name": "開礦國小s",
-        "alert_val": 500.0,
-        "village": "苗栗縣公館鄉開礦村"
-      },
-      {
         "name": "苗栗農改",
         "alert_val": 500.0,
         "village": "苗栗縣公館鄉大坑村"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "苗栗縣",
     "township": "大湖鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.42,
-    "lng": 120.861,
+    "lat": 24.384,
+    "lng": 120.8466,
     "stations": [
       {
         "name": "南勢山",
@@ -3646,40 +2746,20 @@
         "village": "苗栗縣大湖鄉義和村"
       },
       {
-        "name": "南勢山",
-        "alert_val": 500.0,
-        "village": "苗栗縣大湖鄉富興村"
-      },
-      {
         "name": "苗改生物防w",
         "alert_val": 500.0,
         "village": "苗栗縣大湖鄉南湖村"
-      },
-      {
-        "name": "馬拉邦山",
-        "alert_val": 500.0,
-        "village": "苗栗縣大湖鄉武榮村"
-      },
-      {
-        "name": "苗改生物防w",
-        "alert_val": 500.0,
-        "village": "苗栗縣大湖鄉大寮村"
-      },
-      {
-        "name": "南勢山",
-        "alert_val": 500.0,
-        "village": "苗栗縣大湖鄉大南村"
       }
     ],
-    "station_count": 8
+    "station_count": 4
   },
   {
     "county": "苗栗縣",
     "township": "三灣鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 24.611,
-    "lng": 120.9,
+    "lat": 24.635,
+    "lng": 120.9511,
     "stations": [
       {
         "name": "大河",
@@ -3694,29 +2774,24 @@
     "township": "霧臺鄉",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 22.692,
-    "lng": 120.789,
+    "lat": 22.7563,
+    "lng": 120.8028,
     "stations": [
       {
         "name": "阿禮",
         "alert_val": 400.0,
         "village": "屏東縣霧臺鄉霧臺村"
-      },
-      {
-        "name": "阿禮",
-        "alert_val": 400.0,
-        "village": "屏東縣霧臺鄉阿禮村"
       }
     ],
-    "station_count": 2
+    "station_count": 1
   },
   {
     "county": "屏東縣",
     "township": "瑪家鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 22.722,
-    "lng": 120.676,
+    "lat": 22.6676,
+    "lng": 120.6722,
     "stations": [
       {
         "name": "瑪家",
@@ -3741,8 +2816,8 @@
     "township": "滿州鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 22.056,
-    "lng": 120.756,
+    "lat": 22.0596,
+    "lng": 120.8384,
     "stations": [
       {
         "name": "滿州",
@@ -3762,8 +2837,8 @@
     "township": "萬巒鄉",
     "alert_val": 650.0,
     "alert_6h": 358.0,
-    "lat": 22.62,
-    "lng": 120.534,
+    "lat": 22.5792,
+    "lng": 120.6113,
     "stations": [
       {
         "name": "萬隆國小",
@@ -3778,8 +2853,8 @@
     "township": "獅子鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 22.525,
-    "lng": 120.68,
+    "lat": 22.2558,
+    "lng": 120.7322,
     "stations": [
       {
         "name": "枋山",
@@ -3802,30 +2877,20 @@
         "village": "屏東縣獅子鄉竹坑村"
       },
       {
-        "name": "內獅國小s",
-        "alert_val": 500.0,
-        "village": "屏東縣獅子鄉內獅村"
-      },
-      {
-        "name": "壽卡",
-        "alert_val": 500.0,
-        "village": "屏東縣獅子鄉內文村"
-      },
-      {
         "name": "丹路國小s",
         "alert_val": 500.0,
         "village": "屏東縣獅子鄉丹路村"
       }
     ],
-    "station_count": 7
+    "station_count": 5
   },
   {
     "county": "屏東縣",
     "township": "高樹鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 22.801,
-    "lng": 120.614,
+    "lat": 22.7993,
+    "lng": 120.6093,
     "stations": [
       {
         "name": "新豐(1)w",
@@ -3840,8 +2905,8 @@
     "township": "泰武鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 22.659,
-    "lng": 120.666,
+    "lat": 22.5945,
+    "lng": 120.6616,
     "stations": [
       {
         "name": "赤山",
@@ -3854,25 +2919,20 @@
         "village": "屏東縣泰武鄉佳興村"
       },
       {
-        "name": "赤山",
-        "alert_val": 550.0,
-        "village": "屏東縣泰武鄉佳平村"
-      },
-      {
         "name": "萬隆國小",
         "alert_val": 550.0,
         "village": "屏東縣泰武鄉平和村"
       }
     ],
-    "station_count": 4
+    "station_count": 3
   },
   {
     "county": "屏東縣",
     "township": "春日鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 22.607,
-    "lng": 120.638,
+    "lat": 22.3995,
+    "lng": 120.6776,
     "stations": [
       {
         "name": "力里",
@@ -3883,22 +2943,17 @@
         "name": "春日w",
         "alert_val": 550.0,
         "village": "屏東縣春日鄉古華村"
-      },
-      {
-        "name": "力里",
-        "alert_val": 550.0,
-        "village": "屏東縣春日鄉力里村"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "屏東縣",
     "township": "枋山鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 22.296,
-    "lng": 120.637,
+    "lat": 22.2465,
+    "lng": 120.6693,
     "stations": [
       {
         "name": "楓港",
@@ -3913,8 +2968,8 @@
     "township": "來義鄉",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 22.698,
-    "lng": 120.643,
+    "lat": 22.4919,
+    "lng": 120.6603,
     "stations": [
       {
         "name": "來義s",
@@ -3935,42 +2990,17 @@
         "name": "白鷺",
         "alert_val": 450.0,
         "village": "屏東縣來義鄉南和村"
-      },
-      {
-        "name": "來義s",
-        "alert_val": 450.0,
-        "village": "屏東縣來義鄉來義村"
-      },
-      {
-        "name": "萬隆國小",
-        "alert_val": 450.0,
-        "village": "屏東縣來義鄉古樓村"
-      },
-      {
-        "name": "萬隆國小",
-        "alert_val": 450.0,
-        "village": "屏東縣來義鄉文樂村"
-      },
-      {
-        "name": "來義s",
-        "alert_val": 450.0,
-        "village": "屏東縣來義鄉丹林村"
-      },
-      {
-        "name": "萬隆國小",
-        "alert_val": 450.0,
-        "village": "屏東縣來義鄉丹林村"
       }
     ],
-    "station_count": 9
+    "station_count": 4
   },
   {
     "county": "屏東縣",
     "township": "牡丹鄉",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 22.312,
-    "lng": 120.777,
+    "lat": 22.1495,
+    "lng": 120.82,
     "stations": [
       {
         "name": "牡丹",
@@ -3983,11 +3013,6 @@
         "village": "屏東縣牡丹鄉牡丹村"
       },
       {
-        "name": "牡丹",
-        "alert_val": 600.0,
-        "village": "屏東縣牡丹鄉石門村"
-      },
-      {
         "name": "石門山",
         "alert_val": 600.0,
         "village": "屏東縣牡丹鄉石門村"
@@ -3998,15 +3023,15 @@
         "village": "屏東縣牡丹鄉四林村"
       }
     ],
-    "station_count": 5
+    "station_count": 4
   },
   {
     "county": "屏東縣",
     "township": "三地門鄉",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 22.727,
-    "lng": 120.636,
+    "lat": 22.7923,
+    "lng": 120.6816,
     "stations": [
       {
         "name": "瑪家",
@@ -4019,30 +3044,20 @@
         "village": "屏東縣三地門鄉青葉村"
       },
       {
-        "name": "高樹",
-        "alert_val": 400.0,
-        "village": "屏東縣三地門鄉青山村"
-      },
-      {
-        "name": "高樹",
-        "alert_val": 400.0,
-        "village": "屏東縣三地門鄉安坡村"
-      },
-      {
         "name": "口社w",
         "alert_val": 400.0,
         "village": "屏東縣三地門鄉口社村"
       }
     ],
-    "station_count": 5
+    "station_count": 3
   },
   {
     "county": "南投縣",
     "township": "集集鎮",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 23.835,
-    "lng": 120.779,
+    "lat": 23.8435,
+    "lng": 120.7887,
     "stations": [
       {
         "name": "集集",
@@ -4057,8 +3072,8 @@
     "township": "鹿谷鄉",
     "alert_val": 350.0,
     "alert_6h": 193.0,
-    "lat": 23.714,
-    "lng": 120.78,
+    "lat": 23.7451,
+    "lng": 120.7757,
     "stations": [
       {
         "name": "信義",
@@ -4081,11 +3096,6 @@
         "village": "南投縣鹿谷鄉初鄉村"
       },
       {
-        "name": "和雅茶園s",
-        "alert_val": 350.0,
-        "village": "南投縣鹿谷鄉竹林村"
-      },
-      {
         "name": "鳳鵬",
         "alert_val": 350.0,
         "village": "南投縣鹿谷鄉永隆村"
@@ -4094,32 +3104,22 @@
         "name": "溪頭",
         "alert_val": 350.0,
         "village": "南投縣鹿谷鄉內湖村"
-      },
-      {
-        "name": "和雅茶園s",
-        "alert_val": 350.0,
-        "village": "南投縣鹿谷鄉內湖村"
       }
     ],
-    "station_count": 8
+    "station_count": 6
   },
   {
     "county": "南投縣",
     "township": "魚池鄉",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 23.881,
-    "lng": 120.931,
+    "lat": 23.8778,
+    "lng": 120.9211,
     "stations": [
       {
         "name": "魚池",
         "alert_val": 400.0,
         "village": "南投縣魚池鄉新城村"
-      },
-      {
-        "name": "魚池",
-        "alert_val": 400.0,
-        "village": "南投縣魚池鄉東光村"
       },
       {
         "name": "德化國小s",
@@ -4135,22 +3135,17 @@
         "name": "大觀發電廠s",
         "alert_val": 400.0,
         "village": "南投縣魚池鄉五城村"
-      },
-      {
-        "name": "魚池",
-        "alert_val": 400.0,
-        "village": "南投縣魚池鄉大林村"
       }
     ],
-    "station_count": 6
+    "station_count": 4
   },
   {
     "county": "南投縣",
     "township": "國姓鄉",
     "alert_val": 350.0,
     "alert_6h": 193.0,
-    "lat": 24.052,
-    "lng": 120.864,
+    "lat": 24.0229,
+    "lng": 120.8717,
     "stations": [
       {
         "name": "福龜國小s",
@@ -4159,11 +3154,6 @@
       },
       {
         "name": "清水林",
-        "alert_val": 350.0,
-        "village": "南投縣國姓鄉乾溝村"
-      },
-      {
-        "name": "福龜國小s",
         "alert_val": 350.0,
         "village": "南投縣國姓鄉乾溝村"
       },
@@ -4188,16 +3178,6 @@
         "village": "南投縣國姓鄉長豐村"
       },
       {
-        "name": "三隻寮",
-        "alert_val": 350.0,
-        "village": "南投縣國姓鄉長福村"
-      },
-      {
-        "name": "三隻寮",
-        "alert_val": 350.0,
-        "village": "南投縣國姓鄉長流村"
-      },
-      {
         "name": "北港國小s",
         "alert_val": 350.0,
         "village": "南投縣國姓鄉北港村"
@@ -4206,22 +3186,17 @@
         "name": "國姓",
         "alert_val": 350.0,
         "village": "南投縣國姓鄉大旗村"
-      },
-      {
-        "name": "國六W023K",
-        "alert_val": 350.0,
-        "village": "南投縣國姓鄉大石村"
       }
     ],
-    "station_count": 12
+    "station_count": 8
   },
   {
     "county": "南投縣",
     "township": "草屯鎮",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 23.977,
-    "lng": 120.688,
+    "lat": 23.9783,
+    "lng": 120.7387,
     "stations": [
       {
         "name": "平林國小s",
@@ -4232,22 +3207,17 @@
         "name": "福龜國小s",
         "alert_val": 500.0,
         "village": "南投縣草屯鎮雙冬里"
-      },
-      {
-        "name": "平林國小s",
-        "alert_val": 500.0,
-        "village": "南投縣草屯鎮平林里"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "南投縣",
     "township": "埔里鎮",
     "alert_val": 350.0,
     "alert_6h": 193.0,
-    "lat": 23.963,
-    "lng": 120.959,
+    "lat": 23.9672,
+    "lng": 120.9667,
     "stations": [
       {
         "name": "北坑",
@@ -4275,40 +3245,20 @@
         "village": "南投縣埔里鎮桃米里"
       },
       {
-        "name": "外大坪",
-        "alert_val": 350.0,
-        "village": "南投縣埔里鎮南村里"
-      },
-      {
-        "name": "鯉潭",
-        "alert_val": 350.0,
-        "village": "南投縣埔里鎮枇杷里"
-      },
-      {
         "name": "外大坪w",
         "alert_val": 350.0,
         "village": "南投縣埔里鎮成功里"
-      },
-      {
-        "name": "鯉潭",
-        "alert_val": 350.0,
-        "village": "南投縣埔里鎮牛眠里"
-      },
-      {
-        "name": "北坑",
-        "alert_val": 350.0,
-        "village": "南投縣埔里鎮水頭里"
       }
     ],
-    "station_count": 10
+    "station_count": 6
   },
   {
     "county": "南投縣",
     "township": "信義鄉",
     "alert_val": 350.0,
     "alert_6h": 193.0,
-    "lat": 23.68,
-    "lng": 120.854,
+    "lat": 23.6577,
+    "lng": 121.0229,
     "stations": [
       {
         "name": "羅娜國小s",
@@ -4324,16 +3274,6 @@
         "name": "豐丘s",
         "alert_val": 300.0,
         "village": "南投縣信義鄉豐丘村"
-      },
-      {
-        "name": "青雲",
-        "alert_val": 350.0,
-        "village": "南投縣信義鄉潭南村"
-      },
-      {
-        "name": "羅娜國小s",
-        "alert_val": 300.0,
-        "village": "南投縣信義鄉望美村"
       },
       {
         "name": "新興橋",
@@ -4356,50 +3296,20 @@
         "village": "南投縣信義鄉明德村"
       },
       {
-        "name": "羅娜國小s",
-        "alert_val": 300.0,
-        "village": "南投縣信義鄉自強村"
-      },
-      {
-        "name": "信義",
-        "alert_val": 300.0,
-        "village": "南投縣信義鄉自強村"
-      },
-      {
-        "name": "青雲",
-        "alert_val": 350.0,
-        "village": "南投縣信義鄉地利村"
-      },
-      {
-        "name": "新興橋",
-        "alert_val": 300.0,
-        "village": "南投縣信義鄉同富村"
-      },
-      {
-        "name": "東埔吊橋s",
-        "alert_val": 300.0,
-        "village": "南投縣信義鄉同富村"
-      },
-      {
         "name": "和社",
         "alert_val": 300.0,
         "village": "南投縣信義鄉同富村"
-      },
-      {
-        "name": "青雲",
-        "alert_val": 350.0,
-        "village": "南投縣信義鄉人和村"
       }
     ],
-    "station_count": 16
+    "station_count": 8
   },
   {
     "county": "南投縣",
     "township": "竹山鎮",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 23.748,
-    "lng": 120.669,
+    "lat": 23.6917,
+    "lng": 120.7178,
     "stations": [
       {
         "name": "杉林溪",
@@ -4420,43 +3330,33 @@
         "name": "中心崙",
         "alert_val": 450.0,
         "village": "南投縣竹山鎮秀林里"
-      },
-      {
-        "name": "車籠埔s",
-        "alert_val": 450.0,
-        "village": "南投縣竹山鎮中央里"
       }
     ],
-    "station_count": 5
+    "station_count": 4
   },
   {
     "county": "南投縣",
     "township": "名間鄉",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 23.838,
-    "lng": 120.696,
+    "lat": 23.8497,
+    "lng": 120.6549,
     "stations": [
       {
         "name": "名間",
         "alert_val": 500.0,
         "village": "南投縣名間鄉萬丹村"
-      },
-      {
-        "name": "名間",
-        "alert_val": 450.0,
-        "village": "南投縣名間鄉仁和村"
       }
     ],
-    "station_count": 2
+    "station_count": 1
   },
   {
     "county": "南投縣",
     "township": "水里鄉",
     "alert_val": 350.0,
     "alert_6h": 193.0,
-    "lat": 23.811,
-    "lng": 120.85,
+    "lat": 23.8137,
+    "lng": 120.8684,
     "stations": [
       {
         "name": "永興國小s",
@@ -4474,16 +3374,6 @@
         "village": "南投縣水里鄉新興村"
       },
       {
-        "name": "水里",
-        "alert_val": 350.0,
-        "village": "南投縣水里鄉新城村"
-      },
-      {
-        "name": "永興國小s",
-        "alert_val": 350.0,
-        "village": "南投縣水里鄉新山村"
-      },
-      {
         "name": "郡坑s",
         "alert_val": 350.0,
         "village": "南投縣水里鄉新山村"
@@ -4492,11 +3382,6 @@
         "name": "人和國小s",
         "alert_val": 350.0,
         "village": "南投縣水里鄉頂崁村"
-      },
-      {
-        "name": "郡坑s",
-        "alert_val": 350.0,
-        "village": "南投縣水里鄉郡坑村"
       },
       {
         "name": "大觀發電廠s",
@@ -4514,40 +3399,30 @@
         "village": "南投縣水里鄉民和村"
       },
       {
-        "name": "水里",
-        "alert_val": 350.0,
-        "village": "南投縣水里鄉水里村"
-      },
-      {
         "name": "上安s",
         "alert_val": 350.0,
         "village": "南投縣水里鄉上安村"
       }
     ],
-    "station_count": 13
+    "station_count": 9
   },
   {
     "county": "南投縣",
     "township": "仁愛鄉",
     "alert_val": 300.0,
     "alert_6h": 165.0,
-    "lat": 24.0,
-    "lng": 121.072,
+    "lat": 24.0193,
+    "lng": 121.1257,
     "stations": [
       {
         "name": "伊拿谷",
-        "alert_val": 250.0,
-        "village": "南投縣仁愛鄉親愛村"
+        "alert_val": 300.0,
+        "village": "南投縣仁愛鄉萬豐村"
       },
       {
         "name": "廬山",
         "alert_val": 250.0,
         "village": "南投縣仁愛鄉精英村"
-      },
-      {
-        "name": "伊拿谷",
-        "alert_val": 300.0,
-        "village": "南投縣仁愛鄉萬豐村"
       },
       {
         "name": "清流",
@@ -4565,11 +3440,6 @@
         "village": "南投縣仁愛鄉發祥村"
       },
       {
-        "name": "廬山",
-        "alert_val": 250.0,
-        "village": "南投縣仁愛鄉春陽村"
-      },
-      {
         "name": "楓樹林",
         "alert_val": 250.0,
         "village": "南投縣仁愛鄉南豐村"
@@ -4583,32 +3453,22 @@
         "name": "武界",
         "alert_val": 300.0,
         "village": "南投縣仁愛鄉法治村"
-      },
-      {
-        "name": "清流",
-        "alert_val": 300.0,
-        "village": "南投縣仁愛鄉互助村"
       }
     ],
-    "station_count": 11
+    "station_count": 8
   },
   {
     "county": "南投縣",
     "township": "中寮鄉",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 23.9,
-    "lng": 120.754,
+    "lat": 23.9104,
+    "lng": 120.7841,
     "stations": [
       {
         "name": "中寮",
         "alert_val": 450.0,
         "village": "南投縣中寮鄉廣福村"
-      },
-      {
-        "name": "中寮",
-        "alert_val": 450.0,
-        "village": "南投縣中寮鄉福盛村"
       },
       {
         "name": "雙冬",
@@ -4626,15 +3486,15 @@
         "village": "南投縣中寮鄉和興村"
       }
     ],
-    "station_count": 5
+    "station_count": 4
   },
   {
     "county": "花蓮縣",
     "township": "豐濱鄉",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 23.726,
-    "lng": 121.517,
+    "lat": 23.5922,
+    "lng": 121.4955,
     "stations": [
       {
         "name": "豐濱",
@@ -4652,25 +3512,20 @@
         "village": "花蓮縣豐濱鄉新社村"
       },
       {
-        "name": "高山部落s",
-        "alert_val": 450.0,
-        "village": "花蓮縣豐濱鄉新社村"
-      },
-      {
         "name": "石梯坪s",
         "alert_val": 450.0,
         "village": "花蓮縣豐濱鄉港口村"
       }
     ],
-    "station_count": 5
+    "station_count": 4
   },
   {
     "county": "花蓮縣",
     "township": "鳳林鎮",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 23.742,
-    "lng": 121.449,
+    "lat": 23.7454,
+    "lng": 121.4683,
     "stations": [
       {
         "name": "鳳義坑",
@@ -4678,25 +3533,20 @@
         "village": "花蓮縣鳳林鎮鳳義里"
       },
       {
-        "name": "鳳義坑",
-        "alert_val": 500.0,
-        "village": "花蓮縣鳳林鎮鳳信里"
-      },
-      {
         "name": "山興分校s",
         "alert_val": 500.0,
         "village": "花蓮縣鳳林鎮山興里"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "花蓮縣",
     "township": "壽豐鄉",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 23.856,
-    "lng": 121.513,
+    "lat": 23.8287,
+    "lng": 121.5258,
     "stations": [
       {
         "name": "鹽寮",
@@ -4707,16 +3557,6 @@
         "name": "溪口國小s",
         "alert_val": 400.0,
         "village": "花蓮縣壽豐鄉豐山村"
-      },
-      {
-        "name": "溪口國小s",
-        "alert_val": 400.0,
-        "village": "花蓮縣壽豐鄉樹湖村"
-      },
-      {
-        "name": "溪口國小s",
-        "alert_val": 400.0,
-        "village": "花蓮縣壽豐鄉溪口村"
       },
       {
         "name": "鯉魚潭",
@@ -4739,30 +3579,20 @@
         "village": "花蓮縣壽豐鄉池南村"
       },
       {
-        "name": "鯉魚潭",
-        "alert_val": 400.0,
-        "village": "花蓮縣壽豐鄉池南村"
-      },
-      {
-        "name": "鹽寮",
-        "alert_val": 400.0,
-        "village": "花蓮縣壽豐鄉水璉村"
-      },
-      {
         "name": "大坑",
         "alert_val": 400.0,
         "village": "花蓮縣壽豐鄉月眉村"
       }
     ],
-    "station_count": 11
+    "station_count": 7
   },
   {
     "county": "花蓮縣",
     "township": "萬榮鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 23.67,
-    "lng": 121.399,
+    "lat": 23.6928,
+    "lng": 121.3216,
     "stations": [
       {
         "name": "瑞北國小s",
@@ -4788,22 +3618,17 @@
         "name": "西林",
         "alert_val": 550.0,
         "village": "花蓮縣萬榮鄉見晴村"
-      },
-      {
-        "name": "西林",
-        "alert_val": 550.0,
-        "village": "花蓮縣萬榮鄉西林村"
       }
     ],
-    "station_count": 6
+    "station_count": 5
   },
   {
     "county": "花蓮縣",
     "township": "瑞穗鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 23.497,
-    "lng": 121.37,
+    "lat": 23.5236,
+    "lng": 121.404,
     "stations": [
       {
         "name": "瑞北國小s",
@@ -4816,25 +3641,20 @@
         "village": "花蓮縣瑞穗鄉富興村"
       },
       {
-        "name": "富源",
-        "alert_val": 550.0,
-        "village": "花蓮縣瑞穗鄉富源村"
-      },
-      {
         "name": "奇美國小w",
         "alert_val": 550.0,
         "village": "花蓮縣瑞穗鄉奇美村"
       }
     ],
-    "station_count": 4
+    "station_count": 3
   },
   {
     "county": "花蓮縣",
     "township": "富里鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 23.199,
-    "lng": 121.27,
+    "lat": 23.1983,
+    "lng": 121.298,
     "stations": [
       {
         "name": "明里",
@@ -4847,45 +3667,20 @@
         "village": "花蓮縣富里鄉豐南村"
       },
       {
-        "name": "富南部落s",
-        "alert_val": 550.0,
-        "village": "花蓮縣富里鄉學田村"
-      },
-      {
         "name": "東里國中s",
         "alert_val": 550.0,
         "village": "花蓮縣富里鄉萬寧村"
-      },
-      {
-        "name": "明里",
-        "alert_val": 550.0,
-        "village": "花蓮縣富里鄉新興村"
-      },
-      {
-        "name": "富南部落s",
-        "alert_val": 550.0,
-        "village": "花蓮縣富里鄉富南村"
-      },
-      {
-        "name": "東里國中s",
-        "alert_val": 550.0,
-        "village": "花蓮縣富里鄉吳江村"
-      },
-      {
-        "name": "富南部落s",
-        "alert_val": 550.0,
-        "village": "花蓮縣富里鄉永豐村"
       }
     ],
-    "station_count": 8
+    "station_count": 3
   },
   {
     "county": "花蓮縣",
     "township": "花蓮市",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 23.991,
-    "lng": 121.601,
+    "lat": 23.9956,
+    "lng": 121.6018,
     "stations": [
       {
         "name": "水源",
@@ -4900,18 +3695,13 @@
     "township": "卓溪鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 23.568,
-    "lng": 121.338,
+    "lat": 23.3935,
+    "lng": 121.1875,
     "stations": [
       {
         "name": "卓溪國小s",
         "alert_val": 450.0,
         "village": "花蓮縣卓溪鄉卓溪村"
-      },
-      {
-        "name": "卓麓(4)w",
-        "alert_val": 450.0,
-        "village": "花蓮縣卓溪鄉卓清村"
       },
       {
         "name": "卓麓(4)w",
@@ -4944,15 +3734,15 @@
         "village": "花蓮縣卓溪鄉太平村"
       }
     ],
-    "station_count": 8
+    "station_count": 7
   },
   {
     "county": "花蓮縣",
     "township": "秀林鄉",
     "alert_val": 300.0,
     "alert_6h": 165.0,
-    "lat": 24.1,
-    "lng": 121.449,
+    "lat": 24.1433,
+    "lng": 121.4961,
     "stations": [
       {
         "name": "銅門",
@@ -4985,11 +3775,6 @@
         "village": "花蓮縣秀林鄉崇德村"
       },
       {
-        "name": "富世",
-        "alert_val": 300.0,
-        "village": "花蓮縣秀林鄉崇德村"
-      },
-      {
         "name": "崇德國小s",
         "alert_val": 300.0,
         "village": "花蓮縣秀林鄉崇德村"
@@ -5010,11 +3795,6 @@
         "village": "花蓮縣秀林鄉佳民村"
       },
       {
-        "name": "三棧",
-        "alert_val": 300.0,
-        "village": "花蓮縣秀林鄉秀林村"
-      },
-      {
         "name": "水源",
         "alert_val": 300.0,
         "village": "花蓮縣秀林鄉水源村"
@@ -5025,15 +3805,15 @@
         "village": "花蓮縣秀林鄉文蘭村"
       }
     ],
-    "station_count": 14
+    "station_count": 12
   },
   {
     "county": "花蓮縣",
     "township": "吉安鄉",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 23.966,
-    "lng": 121.568,
+    "lat": 23.9698,
+    "lng": 121.5666,
     "stations": [
       {
         "name": "水源",
@@ -5044,22 +3824,17 @@
         "name": "吉安",
         "alert_val": 400.0,
         "village": "花蓮縣吉安鄉南華村"
-      },
-      {
-        "name": "水源",
-        "alert_val": 400.0,
-        "village": "花蓮縣吉安鄉太昌村"
       }
     ],
-    "station_count": 3
+    "station_count": 2
   },
   {
     "county": "花蓮縣",
     "township": "光復鄉",
     "alert_val": 450.0,
     "alert_6h": 248.0,
-    "lat": 23.671,
-    "lng": 121.434,
+    "lat": 23.6492,
+    "lng": 121.4443,
     "stations": [
       {
         "name": "東富w",
@@ -5090,27 +3865,17 @@
         "name": "光復",
         "alert_val": 450.0,
         "village": "花蓮縣光復鄉大馬村"
-      },
-      {
-        "name": "大農",
-        "alert_val": 450.0,
-        "village": "花蓮縣光復鄉大全村"
-      },
-      {
-        "name": "光復",
-        "alert_val": 450.0,
-        "village": "花蓮縣光復鄉大全村"
       }
     ],
-    "station_count": 8
+    "station_count": 6
   },
   {
     "county": "花蓮縣",
     "township": "玉里鎮",
     "alert_val": 500.0,
     "alert_6h": 275.0,
-    "lat": 23.331,
-    "lng": 121.318,
+    "lat": 23.3722,
+    "lng": 121.356,
     "stations": [
       {
         "name": "高寮",
@@ -5121,11 +3886,6 @@
         "name": "安通山",
         "alert_val": 500.0,
         "village": "花蓮縣玉里鎮樂合里"
-      },
-      {
-        "name": "玉里",
-        "alert_val": 400.0,
-        "village": "花蓮縣玉里鎮源城里"
       },
       {
         "name": "玉里",
@@ -5141,37 +3901,17 @@
         "name": "東里",
         "alert_val": 500.0,
         "village": "花蓮縣玉里鎮長良里"
-      },
-      {
-        "name": "高寮",
-        "alert_val": 500.0,
-        "village": "花蓮縣玉里鎮松浦里"
-      },
-      {
-        "name": "卓溪國小s",
-        "alert_val": 400.0,
-        "village": "花蓮縣玉里鎮東豐里"
-      },
-      {
-        "name": "卓溪國小s",
-        "alert_val": 500.0,
-        "village": "花蓮縣玉里鎮東豐里"
-      },
-      {
-        "name": "高寮",
-        "alert_val": 500.0,
-        "village": "花蓮縣玉里鎮大禹里"
       }
     ],
-    "station_count": 10
+    "station_count": 5
   },
   {
     "county": "宜蘭縣",
     "township": "蘇澳鎮",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 24.598,
-    "lng": 121.841,
+    "lat": 24.5528,
+    "lng": 121.8364,
     "stations": [
       {
         "name": "蘇澳",
@@ -5179,29 +3919,9 @@
         "village": "宜蘭縣蘇澳鎮蘇北里"
       },
       {
-        "name": "蘇澳",
-        "alert_val": 400.0,
-        "village": "宜蘭縣蘇澳鎮聖愛里"
-      },
-      {
-        "name": "蘇澳",
-        "alert_val": 400.0,
-        "village": "宜蘭縣蘇澳鎮聖湖里"
-      },
-      {
         "name": "南澳",
         "alert_val": 400.0,
         "village": "宜蘭縣蘇澳鎮朝陽里"
-      },
-      {
-        "name": "蘇澳",
-        "alert_val": 400.0,
-        "village": "宜蘭縣蘇澳鎮南建里"
-      },
-      {
-        "name": "蘇澳",
-        "alert_val": 400.0,
-        "village": "宜蘭縣蘇澳鎮長安里"
       },
       {
         "name": "粉鳥林",
@@ -5212,22 +3932,17 @@
         "name": "永樂國小s",
         "alert_val": 400.0,
         "village": "宜蘭縣蘇澳鎮永樂里"
-      },
-      {
-        "name": "永樂國小s",
-        "alert_val": 400.0,
-        "village": "宜蘭縣蘇澳鎮永春里"
       }
     ],
-    "station_count": 9
+    "station_count": 4
   },
   {
     "county": "宜蘭縣",
     "township": "礁溪鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 24.82,
-    "lng": 121.776,
+    "lat": 24.8087,
+    "lng": 121.7316,
     "stations": [
       {
         "name": "大礁溪",
@@ -5238,47 +3953,17 @@
         "name": "礁溪",
         "alert_val": 550.0,
         "village": "宜蘭縣礁溪鄉德陽村"
-      },
-      {
-        "name": "大礁溪",
-        "alert_val": 550.0,
-        "village": "宜蘭縣礁溪鄉匏崙村"
-      },
-      {
-        "name": "礁溪",
-        "alert_val": 550.0,
-        "village": "宜蘭縣礁溪鄉林美村"
-      },
-      {
-        "name": "礁溪",
-        "alert_val": 550.0,
-        "village": "宜蘭縣礁溪鄉白雲村"
-      },
-      {
-        "name": "礁溪",
-        "alert_val": 550.0,
-        "village": "宜蘭縣礁溪鄉玉石村"
-      },
-      {
-        "name": "礁溪",
-        "alert_val": 550.0,
-        "village": "宜蘭縣礁溪鄉大忠村"
-      },
-      {
-        "name": "大礁溪",
-        "alert_val": 550.0,
-        "village": "宜蘭縣礁溪鄉二結村"
       }
     ],
-    "station_count": 8
+    "station_count": 2
   },
   {
     "county": "宜蘭縣",
     "township": "頭城鎮",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 24.858,
-    "lng": 121.832,
+    "lat": 24.9133,
+    "lng": 121.8515,
     "stations": [
       {
         "name": "坪林石牌",
@@ -5302,11 +3987,6 @@
       },
       {
         "name": "石城",
-        "alert_val": 450.0,
-        "village": "宜蘭縣頭城鎮石城里"
-      },
-      {
-        "name": "石城",
         "alert_val": 550.0,
         "village": "宜蘭縣頭城鎮石城里"
       },
@@ -5314,32 +3994,17 @@
         "name": "大里國小s",
         "alert_val": 550.0,
         "village": "宜蘭縣頭城鎮石城里"
-      },
-      {
-        "name": "北關",
-        "alert_val": 550.0,
-        "village": "宜蘭縣頭城鎮外澳里"
-      },
-      {
-        "name": "大里國小s",
-        "alert_val": 550.0,
-        "village": "宜蘭縣頭城鎮大里里"
-      },
-      {
-        "name": "大溪國小s",
-        "alert_val": 550.0,
-        "village": "宜蘭縣頭城鎮大里里"
       }
     ],
-    "station_count": 10
+    "station_count": 6
   },
   {
     "county": "宜蘭縣",
     "township": "員山鄉",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 24.744,
-    "lng": 121.675,
+    "lat": 24.7411,
+    "lng": 121.6676,
     "stations": [
       {
         "name": "員山",
@@ -5347,19 +4012,9 @@
         "village": "宜蘭縣員山鄉湖東村"
       },
       {
-        "name": "員山",
-        "alert_val": 600.0,
-        "village": "宜蘭縣員山鄉湖西村"
-      },
-      {
         "name": "大礁溪",
         "alert_val": 600.0,
         "village": "宜蘭縣員山鄉枕山村"
-      },
-      {
-        "name": "員山",
-        "alert_val": 600.0,
-        "village": "宜蘭縣員山鄉內城村"
       },
       {
         "name": "長嶺",
@@ -5367,15 +4022,15 @@
         "village": "宜蘭縣員山鄉中華村"
       }
     ],
-    "station_count": 5
+    "station_count": 3
   },
   {
     "county": "宜蘭縣",
     "township": "南澳鄉",
     "alert_val": 400.0,
     "alert_6h": 220.0,
-    "lat": 24.453,
-    "lng": 121.827,
+    "lat": 24.4545,
+    "lng": 121.6653,
     "stations": [
       {
         "name": "大濁水w",
@@ -5398,11 +4053,6 @@
         "village": "宜蘭縣南澳鄉金洋村"
       },
       {
-        "name": "金岳國小s",
-        "alert_val": 400.0,
-        "village": "宜蘭縣南澳鄉金岳村"
-      },
-      {
         "name": "武塔w",
         "alert_val": 400.0,
         "village": "宜蘭縣南澳鄉武塔村"
@@ -5413,15 +4063,15 @@
         "village": "宜蘭縣南澳鄉東岳村"
       }
     ],
-    "station_count": 7
+    "station_count": 6
   },
   {
     "county": "宜蘭縣",
     "township": "冬山鄉",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 24.655,
-    "lng": 121.781,
+    "lat": 24.6439,
+    "lng": 121.7551,
     "stations": [
       {
         "name": "新寮(1)w",
@@ -5434,35 +4084,20 @@
         "village": "宜蘭縣冬山鄉東城村"
       },
       {
-        "name": "冬山",
-        "alert_val": 600.0,
-        "village": "宜蘭縣冬山鄉安平村"
-      },
-      {
-        "name": "冬山",
-        "alert_val": 600.0,
-        "village": "宜蘭縣冬山鄉太和村"
-      },
-      {
-        "name": "新寮(1)w",
-        "alert_val": 600.0,
-        "village": "宜蘭縣冬山鄉中山村"
-      },
-      {
         "name": "寒溪",
         "alert_val": 600.0,
         "village": "宜蘭縣冬山鄉大進村"
       }
     ],
-    "station_count": 6
+    "station_count": 3
   },
   {
     "county": "宜蘭縣",
     "township": "大同鄉",
     "alert_val": 550.0,
     "alert_6h": 302.0,
-    "lat": 24.538,
-    "lng": 121.55,
+    "lat": 24.5584,
+    "lng": 121.5457,
     "stations": [
       {
         "name": "樂水分校s",
@@ -5495,19 +4130,9 @@
         "village": "宜蘭縣大同鄉茂安村"
       },
       {
-        "name": "樂水分校s",
-        "alert_val": 550.0,
-        "village": "宜蘭縣大同鄉英士村"
-      },
-      {
         "name": "南山",
         "alert_val": 550.0,
         "village": "宜蘭縣大同鄉南山村"
-      },
-      {
-        "name": "玉蘭",
-        "alert_val": 550.0,
-        "village": "宜蘭縣大同鄉松羅村"
       },
       {
         "name": "四季w",
@@ -5520,32 +4145,22 @@
         "village": "宜蘭縣大同鄉太平村"
       }
     ],
-    "station_count": 11
+    "station_count": 9
   },
   {
     "county": "宜蘭縣",
     "township": "三星鄉",
     "alert_val": 600.0,
     "alert_6h": 330.0,
-    "lat": 24.668,
-    "lng": 121.655,
+    "lat": 24.663,
+    "lng": 121.6676,
     "stations": [
       {
         "name": "三星",
         "alert_val": 600.0,
         "village": "宜蘭縣三星鄉集慶村"
-      },
-      {
-        "name": "三星",
-        "alert_val": 600.0,
-        "village": "宜蘭縣三星鄉拱照村"
-      },
-      {
-        "name": "三星",
-        "alert_val": 600.0,
-        "village": "宜蘭縣三星鄉天山村"
       }
     ],
-    "station_count": 3
+    "station_count": 1
   }
 ]
