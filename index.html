@@ -527,16 +527,25 @@ function calcEtr2AtSeg(t, seg, qpfField){
   for(let d=0; d<15; d++){
     dailyQpf.push(qpfArr.slice(d*4,(d+1)*4).reduce((a,b)=>a+(b||0),0));
   }
+  // 「今天」的代表雨量 = 今天觀測量 + 今天QPF預測量（觀測+預測同步，避免脫鉤）
+  // 這樣當計算明天的ETR2時，R1（今天）才是完整的預估雨量
+  const todayTotal = Math.round(((dailyObs[0]||0) + (dailyQpf[0]||0))*10)/10;
+
   // seg 所在的「天」（0=今天, 正值=未來第N天）
   const segDay = Math.floor(seg/4);
   let etr2 = 0;
   for(let i=0; i<=6; i++){
     const day = segDay - i;
     let rainVal;
-    if(day <= 0){
+    if(day === 0){
+      // 今天：用「觀測+QPF」合計
+      rainVal = todayTotal;
+    } else if(day < 0){
+      // 過去：純觀測
       const obsIdx = -day;
       rainVal = (obsIdx < dailyObs.length) ? dailyObs[obsIdx] : 0;
     } else {
+      // 未來：純QPF
       rainVal = (day-1 < dailyQpf.length) ? dailyQpf[day-1] : 0;
     }
     etr2 += ETR2_WEIGHTS[i] * rainVal;
@@ -607,15 +616,9 @@ function getAccum(t){
     const totalRain = Math.round((obsToday + futureSum)*10)/10;
     let etrPct = null;
     if(hasEtr){
-      const etr2 = calcEtr2AtSeg(t, segTo, qpfField);
-      // 今天的ETR2用：今天觀測+預測 取代 R0
-      const dailyObs = t.daily_rain || [];
-      const qpfArrFull = getQpfArr(t, qpfField);
-      const dailyQpf = [];
-      for(let d=0; d<15; d++) dailyQpf.push(qpfArrFull.slice(d*4,(d+1)*4).reduce((a,b)=>a+(b||0),0));
-      let etr2Today = totalRain; // R0 = 今天最終預估總量
-      for(let i=1;i<=6;i++) etr2Today += ETR2_WEIGHTS[i] * (dailyObs[i]||0);
-      etrPct = Math.round(etr2Today/t.alert_val*1000)/10;
+      // 今天的ETR2：直接用 calcEtr2AtSeg，它已經包含今天「觀測+QPF」的合計
+      const etr2 = calcEtr2AtSeg(t, 3, qpfField);  // seg=3 代表今天最後一個6h段，等同於今天結束時的ETR2
+      etrPct = Math.round(etr2/t.alert_val*1000)/10;
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
     return {totalRain, etrPct};
@@ -1103,7 +1106,7 @@ function drawChartHQ(t, canvasId){
   const districtColor = getDistrictColor(t.county);
   const FS = 30, FS_TITLE = 40;  // 標籤30px，標題40px
 
-  const pL=90, pR=50, pT=60, pB=80, cw=W-pL-pR, ch=H-pT-pB, xS=cw/(d.length-1);
+  const pL=120, pR=60, pT=70, pB=90, cw=W-pL-pR, ch=H-pT-pB, xS=cw/(d.length-1);
 
   // 標題
   ctx.fillStyle='#ffffff'; ctx.font=`${FS_TITLE}px sans-serif`; ctx.textAlign='left';
@@ -1117,7 +1120,7 @@ function drawChartHQ(t, canvasId){
     ctx.fillStyle='#ffffff'; ctx.font=`${FS}px sans-serif`; ctx.textAlign='right';
     ctx.fillText(Math.round(mx*r), pL-10, y+5);
   });
-  ctx.save(); ctx.translate(pL*0.35, pT+ch/2); ctx.rotate(-Math.PI/2);
+  ctx.save(); ctx.translate(pL*0.28, pT+ch/2); ctx.rotate(-Math.PI/2);
   ctx.fillStyle='#ffffff'; ctx.font=`${FS}px sans-serif`; ctx.textAlign='center';
   ctx.fillText('累積雨量 (mm)', 0, 0);
   ctx.restore();
@@ -1229,7 +1232,7 @@ function drawHyetograph(t, canvasId, scale){
   const districtColor = getDistrictColor(t.county);
 
   // ── 版面配置（雙縱軸：左=時雨量白色，右=ETR2%分署色）──
-  const padL = 50*scale, padR = 55*scale, padT = 24*scale, padB = 34*scale;
+  const padL = 70*scale, padR = 75*scale, padT = 30*scale, padB = 40*scale;
   const cw = W-padL-padR, ch = H-padT-padB;
   const barW = cw/n * 0.6;
   const gap  = cw/n;
@@ -1255,9 +1258,9 @@ function drawHyetograph(t, canvasId, scale){
     ctx.textAlign = 'right';
     ctx.fillText(Math.round(maxRain*r), padL-6*scale, y+fs*0.35);
   });
-  // 左縱軸標題
+  // 左縱軸標題（放在更左邊，不跟數字重疊）
   ctx.save();
-  ctx.translate(padL*0.32, padT+ch/2);
+  ctx.translate(padL*0.25, padT+ch/2);
   ctx.rotate(-Math.PI/2);
   ctx.fillStyle = '#ffffff';
   ctx.font = `${fs}px sans-serif`;
@@ -1275,7 +1278,7 @@ function drawHyetograph(t, canvasId, scale){
       ctx.fillText(Math.round(maxEtr*r)+'%', W-padR+6*scale, y+fs*0.35);
     });
     ctx.save();
-    ctx.translate(W-padR*0.28, padT+ch/2);
+    ctx.translate(W-padR*0.18, padT+ch/2);
     ctx.rotate(Math.PI/2);
     ctx.fillStyle = districtColor;
     ctx.font = `${fs}px sans-serif`;

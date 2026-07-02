@@ -531,7 +531,14 @@ def calc_risk_score(etr_pct, qpf_mm, pop_pct, n_hours,
     n_hours   : 預報時窗（3/6/12/24）
     回傳 S*（float，越大越嚴峻）
     """
-    if etr_pct is None or pop_pct is None: return None
+    if etr_pct is None: return None
+    # 當 PoP 缺失（超過7天預報範圍），用 QPF 量推估合理的 PoP
+    # QPF=0mm → PoP=10%（基底），QPF=50mm → PoP≈90%，中間線性插值
+    if pop_pct is None:
+        if qpf_mm is None or qpf_mm <= 0:
+            pop_pct = 10.0
+        else:
+            pop_pct = min(95.0, 10.0 + qpf_mm * 1.7)  # 約50mm達90%
 
     # Step 1: L（現況基礎分）
     if etr_pct < 70:
