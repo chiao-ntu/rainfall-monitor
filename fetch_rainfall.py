@@ -241,6 +241,17 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
     return enriched
 
 def agg_obs(stations, alert_table, history, now_tpe):
+    # 建立「有ETR2警戒值登記」的測站名稱集合（用於判斷哪些站可以參與ETR2計算）
+    # 邏輯：只有 etr2_static.json 裡明確登記的測站，才能影響 ETR2% 和地圖塗色
+    etr2_valid_station_names = set()
+    for info in alert_table.values():
+        for st in info.get('stations', []):
+            name = st.get('name', '').strip()
+            if name:
+                etr2_valid_station_names.add(name)
+                # 也加入正規化後的名稱（去除 s/w 後綴）
+                etr2_valid_station_names.add(name.rstrip('sSWw').strip())
+
     town={}
     for sid,st in stations.items():
         key=st['county']+st['township']
@@ -250,24 +261,32 @@ def agg_obs(stations, alert_table, history, now_tpe):
                        'rain_2d':0.0,'rain_3d':0.0,'etr2':None,
                        'daily_rain':[0.0]*8, 'station_etr2':{}}
         td=town[key]; td['stations'].append(sid)
+        # 雨量觀測：所有站都可以貢獻（用於顯示觀測雨量，不影響 ETR2 塗色）
         td['rain_24h']=max(td['rain_24h'],st['rain_24h'])
         td['rain_6h'] =max(td['rain_6h'], st['rain_6h'])
         td['rain_2d'] =max(td['rain_2d'], st['rain_2d'])
         td['rain_3d'] =max(td['rain_3d'], st['rain_3d'])
-        ev=calc_etr2(sid,history,now_tpe)
-        if ev is not None:
-            td['etr2']=max(td['etr2'] or 0.0,ev)
-            td['station_etr2'][sid] = ev  # 個別測站的 ETR2（不取最大，各自獨立）
-        # 取各站每日雨量的最大值，組成鄉鎮代表性的逐日雨量陣列
+
+        # ETR2 計算：只允許靜態表中有警戒值登記的測站參與
+        st_name = st.get('name','').strip()
+        is_etr2_valid = (st_name in etr2_valid_station_names or
+                         st_name.rstrip('sSWw').strip() in etr2_valid_station_names)
+        if is_etr2_valid:
+            ev=calc_etr2(sid,history,now_tpe)
+            if ev is not None:
+                td['etr2']=max(td['etr2'] or 0.0,ev)
+                td['station_etr2'][sid] = ev
+
+        # 逐日雨量：所有站都可以貢獻（供前端顯示用）
         st_daily = get_daily_rain_array(sid, history, now_tpe, days=8)
         td['daily_rain'] = [max(a,b) for a,b in zip(td['daily_rain'], st_daily)]
-        # 個別測站的逐日雨量（供前端逐站滾動計算未來ETR2%用）
         if 'station_daily' not in td: td['station_daily'] = {}
         td['station_daily'][sid] = st_daily
+
     for key,td in town.items():
         ai=alert_table.get(key,{}); av=ai.get('alert_val',0)
         td['etr2_pct']=round(td['etr2']/av,4) if td['etr2'] and av>0 else None
-    print(f"  鄉鎮聚合：{len(town)} 個有觀測的鄉鎮")
+    print(f"  鄉鎮聚合：{len(town)} 個有觀測的鄉鎮（ETR2有效站名：{len(etr2_valid_station_names)}個）")
     return town
 
 # ── PoP 各縣市鄉鎮端點 ───────────────────────────
