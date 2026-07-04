@@ -120,6 +120,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <button class="b" id="bCust" onclick="setWin('custom')">自訂範圍</button>
     <button class="b" id="bCustomScale" onclick="toggleCustomScaleEditor()"
       style="border-color:#5a3a8a;color:#b08ae8">自訂色階級距</button>
+    <button class="b" onclick="downloadMapCSV()"
+      style="border-color:#2a6a3a;color:#7be8a8" title="下載目前地圖資料為CSV">⬇ CSV</button>
   </div>
   <div id="cust-ctrl">
     <div class="sl-wrap">
@@ -171,15 +173,23 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div id="etr-alert-panel" style="position:absolute;top:90px;left:8px;z-index:800;
       background:#080f18ee;border:1px solid #2a4a6a;border-radius:6px;
       max-width:210px;min-width:150px;font-size:11px;color:#dde8f2;pointer-events:auto">
-      <div onclick="toggleEtrPanel()" style="cursor:pointer;display:flex;justify-content:space-between;
-        align-items:center;padding:5px 8px;border-bottom:1px solid #1a3348;
-        background:#0a1828;border-radius:6px 6px 0 0">
-        <span style="font-weight:700;color:#ffcc44;font-size:11px">⚠ ETR2%警戒</span>
-        <span id="etr-panel-arrow" style="color:#6bc8e8;font-size:10px">▾</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;
+        border-bottom:1px solid #1a3348;background:#0a1828;border-radius:6px 6px 0 0">
+        <span onclick="toggleEtrPanel()" style="cursor:pointer;font-weight:700;color:#ffcc44;font-size:11px">⚠ ETR2%警戒</span>
+        <div style="display:flex;align-items:center;gap:3px">
+          <button onclick="copyEtrText()" title="複製文字摘要"
+            style="background:none;border:1px solid #3a5a7a;border-radius:3px;color:#7bc8e8;
+            font-size:9px;cursor:pointer;padding:1px 4px;line-height:1">複製</button>
+          <button onclick="downloadEtrCSV()" title="下載ETR2%資料CSV"
+            style="background:none;border:1px solid #2a6a3a;border-radius:3px;color:#7be8a8;
+            font-size:9px;cursor:pointer;padding:1px 4px;line-height:1">CSV</button>
+          <span onclick="toggleEtrPanel()" id="etr-panel-arrow" style="cursor:pointer;color:#6bc8e8;font-size:10px">▾</span>
+        </div>
       </div>
       <div id="etr-panel-body" style="padding:5px 7px;max-height:320px;overflow-y:auto">
         <div style="color:#5a8aaa;font-size:10px">載入中...</div>
       </div>
+      <textarea id="etr-copy-text" style="position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0" readonly></textarea>
     </div>
     <!-- 指北針：右上角，獨立 -->
     <div id="compass-wrap" style="position:absolute;top:12px;right:12px;z-index:600;display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
@@ -355,6 +365,48 @@ let townLayer = null, countyLayer = null;
 let sidebarOpen = true;
 // 自訂色階級距編輯器（僅自訂範圍模式可用）
 const DEFAULT_RAIN_BREAKS = [20,40,70,130,250];
+function downloadMapCSV(){
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const modeLabel = {rain:'累積雨量(mm)', etr:'ETR2%', risk:'風險指標'}[mode] || mode;
+
+  // 決定時間說明
+  let timeLabel = winKey;
+  if(winKey==='today') timeLabel=`今天(${fmtDay(BASE_TIME)})`;
+  else if(winKey.startsWith('past')){const n=parseInt(winKey.slice(4));timeLabel=fmtDay(new Date(BASE_TIME.getTime()-(n+1)*86400000));}
+  else if(winKey.startsWith('day')){const n=parseInt(winKey.slice(3));timeLabel=fmtDay(new Date(BASE_TIME.getTime()+(n-1)*86400000));}
+  else if(winKey.startsWith('fut6_')){const n=parseInt(winKey.slice(5));timeLabel=`+${(n-1)*6}h~+${n*6}h`;}
+
+  const rows = [
+    ['縣市','鄉鎮市區','警戒值(mm)','累積雨量(mm)','ETR2%','圖層數值','時間視窗','模式']
+  ];
+
+  TOWNSHIPS.forEach(t=>{
+    const acc = getAccum(t);
+    const etrPct = acc.etrPct !== null ? acc.etrPct.toFixed(1) : '';
+    const totalRain = acc.totalRain !== null ? acc.totalRain : '';
+    const dispVal = mode==='etr' ? etrPct : totalRain;
+    rows.push([
+      t.county, t.township,
+      t.alert_val || '',
+      t.rain_24h !== null && t.rain_24h !== undefined ? t.rain_24h : '',
+      etrPct,
+      dispVal,
+      timeLabel,
+      forecastModel,
+    ]);
+  });
+
+  const csvContent = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const bom = '\uFEFF';  // BOM for Excel UTF-8
+  const blob = new Blob([bom+csvContent], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `台灣降雨監測_${timeLabel}_${modeLabel}_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function toggleCustomScaleEditor(){
   const el = document.getElementById('custom-scale-editor');
   const btn = document.getElementById('bCustomScale');
@@ -397,14 +449,91 @@ function toggleEtrPanel(){
   if(arrow) arrow.textContent = etrPanelOpen ? '▾' : '▸';
 }
 
-const _etrCountyOpen = {};  // 各縣市收合狀態
+// 水保署分署→縣市對照（供ETR2面板分類用）
+const DISTRICT_COUNTIES = {
+  '臺北分署': ['基隆市','臺北市','新北市','桃園市','新竹縣','新竹市','宜蘭縣'],
+  '臺中分署': ['苗栗縣','臺中市'],
+  '南投分署': ['彰化縣','南投縣','雲林縣','嘉義市','嘉義縣'],
+  '臺南分署': ['臺南市','高雄市','屏東縣','澎湖縣','金門縣'],
+  '臺東分署': ['臺東縣'],
+  '花蓮分署': ['花蓮縣'],
+};
+const DISTRICT_ORDER = ['臺北分署','臺中分署','南投分署','臺南分署','臺東分署','花蓮分署'];
+// 縣市→分署反查
+const COUNTY_TO_DISTRICT_ETR = {};
+DISTRICT_ORDER.forEach(d=>{ DISTRICT_COUNTIES[d].forEach(c=>{ COUNTY_TO_DISTRICT_ETR[c]=d; }); });
+
+const _etrCountyOpen = {};   // 各縣市收合狀態
+const _etrDistrictOpen = {}; // 各分署收合狀態
+let _etrPrevPct = {};        // 上一期各鄉鎮的ETR2%，供箭頭對比用
+let _etrCurrPct = {};        // 本期各鄉鎮的ETR2%
+
+function copyEtrText(){
+  const ta = document.getElementById('etr-copy-text');
+  if(!ta || !ta.value){ alert('目前無警戒資料可複製'); return; }
+  ta.select(); ta.setSelectionRange(0,99999);
+  try{
+    document.execCommand('copy');
+    // 短暫提示已複製
+    const btn = event.target;
+    const orig = btn.textContent;
+    btn.textContent='✓';
+    setTimeout(()=>{ btn.textContent=orig; }, 1200);
+  }catch(e){ prompt('請手動複製以下內容：', ta.value); }
+}
+
+function downloadEtrCSV(){
+  // ETR2%面板專屬CSV：依分署/縣市/鄉鎮匯出
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  let panelSeg = 3;
+  if(winKey==='today') panelSeg=3;
+  else if(winKey.startsWith('past')){ const n=parseInt(winKey.slice(4)); panelSeg=-(n*4+1); }
+  else if(winKey.startsWith('day')){ const n=parseInt(winKey.slice(3)); panelSeg=(n-1)*4+3; }
+
+  const rows=[['分署','縣市','鄉鎮市區','警戒值(mm)','ETR2%','趨勢']];
+  DISTRICT_ORDER.forEach(district=>{
+    DISTRICT_COUNTIES[district].forEach(county=>{
+      TOWNSHIPS.filter(t=>t.county===county&&t.alert_val>0).forEach(t=>{
+        const etr2 = calcEtr2AtSeg(t, panelSeg, qpfField);
+        const pct = Math.round(etr2/t.alert_val*100);
+        const key = t.county+t.township;
+        const prev = _etrPrevPct[key];
+        const trend = prev===undefined?'':pct>prev?'↑':pct<prev?'↓':'─';
+        rows.push([district, t.county, t.township, t.alert_val, pct+'%', trend]);
+      });
+    });
+  });
+
+  const csv = '\uFEFF'+rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href=url; a.download=`ETR2警戒_${fmtDay(BASE_TIME)}.csv`; a.click();
+  URL.revokeObjectURL(url);
+}
 
 function toggleEtrCounty(county){
   _etrCountyOpen[county] = !_etrCountyOpen[county];
   const el = document.getElementById('etr-county-'+encodeURIComponent(county));
-  const arrow = document.getElementById('etr-arrow-'+encodeURIComponent(county));
+  const arrow = document.getElementById('etr-arrow-c-'+encodeURIComponent(county));
   if(el) el.style.display = _etrCountyOpen[county] ? 'block' : 'none';
   if(arrow) arrow.textContent = _etrCountyOpen[county] ? '▾' : '▸';
+}
+function toggleEtrDistrict(district){
+  _etrDistrictOpen[district] = !_etrDistrictOpen[district];
+  const el = document.getElementById('etr-district-'+encodeURIComponent(district));
+  const arrow = document.getElementById('etr-arrow-d-'+encodeURIComponent(district));
+  if(el) el.style.display = _etrDistrictOpen[district] ? 'block' : 'none';
+  if(arrow) arrow.textContent = _etrDistrictOpen[district] ? '▾' : '▸';
+}
+
+function pctColor(pct){ return pct>=100?'#BB00BB':pct>=90?'#DD2222':pct>=70?'#DDDD00':'#aaccee'; }
+function trendArrow(key, pct){
+  const prev = _etrPrevPct[key];
+  if(prev===undefined) return '';
+  if(pct>prev) return '<span style="color:#ff6666">▲</span>';
+  if(pct<prev) return '<span style="color:#66ff66">▼</span>';
+  return '<span style="color:#888">─</span>';
 }
 
 function updateEtrAlertPanel(){
@@ -412,81 +541,113 @@ function updateEtrAlertPanel(){
   if(!body) return;
 
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
-  const byCounty = {};  // {county: [{township, pct}]}
 
-  // 決定計算用的 seg：跟當前選取的時間視窗一致，讓面板跟地圖 ETR2% 完全連動
-  let panelSeg = 3;  // 預設：今天結束時
-  if(winKey === 'today') panelSeg = 3;
-  else if(winKey.startsWith('past')){
-    const n = parseInt(winKey.slice(4));
-    panelSeg = -(n*4+1);  // 過去天
-  } else if(winKey.startsWith('day')){
-    const n = parseInt(winKey.slice(3));
-    panelSeg = (n-1)*4+3;  // 逐日的最後一個時段
-  } else if(winKey.startsWith('fut6_')){
-    const n = parseInt(winKey.slice(5));
-    panelSeg = n-1;
-  }
+  // 決定計算用的 seg：跟當前選取的時間視窗連動
+  let panelSeg = 3;
+  if(winKey==='today') panelSeg=3;
+  else if(winKey.startsWith('past')){ const n=parseInt(winKey.slice(4)); panelSeg=-(n*4+1); }
+  else if(winKey.startsWith('day')){ const n=parseInt(winKey.slice(3)); panelSeg=(n-1)*4+3; }
+  else if(winKey.startsWith('fut6_')){ const n=parseInt(winKey.slice(5)); panelSeg=n-1; }
 
+  // 儲存上一期，計算本期
+  _etrPrevPct = Object.assign({}, _etrCurrPct);
+  _etrCurrPct = {};
+
+  // 依分署→縣市→鄉鎮收集資料
+  const byDistrict = {};  // {district: {county: [{township,pct}]}}
   TOWNSHIPS.forEach(t=>{
-    if(!t.alert_val || t.alert_val <= 0) return;
+    if(!t.alert_val || t.alert_val<=0) return;
     const etr2 = calcEtr2AtSeg(t, panelSeg, qpfField);
-    const pct = Math.round(etr2 / t.alert_val * 100);
-    if(pct >= 70){
-      if(!byCounty[t.county]) byCounty[t.county] = [];
-      byCounty[t.county].push({ township: t.township, pct });
-    }
+    const pct = Math.round(etr2/t.alert_val*100);
+    const key = t.county+t.township;
+    _etrCurrPct[key] = pct;
+    if(pct<70) return;
+    const district = COUNTY_TO_DISTRICT_ETR[t.county] || '其他';
+    if(!byDistrict[district]) byDistrict[district]={};
+    if(!byDistrict[district][t.county]) byDistrict[district][t.county]=[];
+    byDistrict[district][t.county].push({township:t.township, pct, key});
   });
 
-  const counties = Object.keys(byCounty);
-  if(counties.length === 0){
-    body.innerHTML = '<div style="color:#3a6080;font-size:10px;padding:4px 0">目前無達70%以上</div>';
+  const activeDistricts = DISTRICT_ORDER.filter(d=>byDistrict[d]);
+  if(activeDistricts.length===0){
+    body.innerHTML='<div style="color:#3a6080;font-size:10px;padding:4px 0">目前無達70%以上</div>';
     return;
   }
 
-  // 計算各縣市最高pct，依此排序
-  counties.sort((a,b)=>{
-    const maxA = Math.max(...byCounty[a].map(x=>x.pct));
-    const maxB = Math.max(...byCounty[b].map(x=>x.pct));
-    return maxB - maxA;
-  });
+  let html='';
+  for(const district of activeDistricts){
+    const countyMap = byDistrict[district];
+    const allPcts = Object.values(countyMap).flat().map(x=>x.pct);
+    const maxPct = Math.max(...allPcts);
+    const dColor = pctColor(maxPct);
+    const dKey = encodeURIComponent(district);
+    if(_etrDistrictOpen[district]===undefined) _etrDistrictOpen[district]=true;
+    const dOpen = _etrDistrictOpen[district];
 
-  let html = '';
-  for(const county of counties){
-    const items = byCounty[county].sort((a,b)=>b.pct-a.pct);
-    const maxPct = items[0].pct;
-    const countyColor = maxPct >= 100 ? '#BB00BB' : maxPct >= 90 ? '#DD2222' : '#DDDD00';
-    const countKey = encodeURIComponent(county);
-    if(_etrCountyOpen[county] === undefined) _etrCountyOpen[county] = true;
-    const isOpen = _etrCountyOpen[county];
-    const shortCounty = county.replace(/[縣市]$/,'');
-
-    html += `<div style="margin-bottom:2px">
-      <div onclick="toggleEtrCounty('${county}')" style="cursor:pointer;display:flex;
-        justify-content:space-between;align-items:center;padding:2px 4px;
-        background:#0d1e30;border-radius:3px">
-        <span style="color:${countyColor};font-weight:700;font-size:10px">${shortCounty}</span>
-        <div style="display:flex;align-items:center;gap:4px">
-          <span style="color:${countyColor};font-size:10px">${maxPct}%↑</span>
-          <span id="etr-arrow-${countKey}" style="color:#5a8aaa;font-size:9px">${isOpen?'▾':'▸'}</span>
+    html+=`<div style="margin-bottom:3px;border:1px solid #1a3348;border-radius:4px;overflow:hidden">
+      <div onclick="toggleEtrDistrict('${district}')" style="cursor:pointer;display:flex;
+        justify-content:space-between;align-items:center;padding:3px 6px;background:#0a1828">
+        <span style="color:${dColor};font-weight:700;font-size:10px">${district}</span>
+        <div style="display:flex;align-items:center;gap:3px">
+          <span style="color:${dColor};font-size:10px">${maxPct}%</span>
+          <span id="etr-arrow-d-${dKey}" style="color:#5a8aaa;font-size:9px">${dOpen?'▾':'▸'}</span>
         </div>
       </div>
-      <div id="etr-county-${countKey}" style="display:${isOpen?'block':'none'}">
-        ${items.map(it=>{
-          const c = it.pct>=100?'#BB00BB':it.pct>=90?'#DD2222':'#DDDD00';
-          return `<div style="display:flex;justify-content:space-between;padding:1px 6px;
-            border-bottom:1px dashed #152030">
-            <span style="color:#aaccee;font-size:10px">${it.township}</span>
-            <span style="color:${c};font-weight:700;font-size:10px">${it.pct}%</span>
-          </div>`;
-        }).join('')}
-      </div>
-    </div>`;
+      <div id="etr-district-${dKey}" style="display:${dOpen?'block':'none'}">`;
+
+    // 在分署內，依縣市排序（最高ETR2優先）
+    const counties = Object.keys(countyMap).sort((a,b)=>{
+      return Math.max(...countyMap[b].map(x=>x.pct)) - Math.max(...countyMap[a].map(x=>x.pct));
+    });
+    for(const county of counties){
+      const items = countyMap[county].sort((a,b)=>b.pct-a.pct);
+      const cMaxPct = items[0].pct;
+      const cColor = pctColor(cMaxPct);
+      const cKey = encodeURIComponent(county);
+      if(_etrCountyOpen[county]===undefined) _etrCountyOpen[county]=true;
+      const cOpen = _etrCountyOpen[county];
+      const shortC = county.replace(/[縣市]$/,'');
+
+      html+=`<div style="background:#0d1e30;border-top:1px solid #1a3348">
+        <div onclick="toggleEtrCounty('${county}')" style="cursor:pointer;display:flex;
+          justify-content:space-between;align-items:center;padding:2px 8px">
+          <span style="color:#aaccee;font-size:10px">${shortC}</span>
+          <div style="display:flex;align-items:center;gap:2px">
+            <span style="color:${cColor};font-size:10px">${cMaxPct}%</span>
+            <span id="etr-arrow-c-${cKey}" style="color:#5a8aaa;font-size:9px">${cOpen?'▾':'▸'}</span>
+          </div>
+        </div>
+        <div id="etr-county-${cKey}" style="display:${cOpen?'block':'none'}">
+          ${items.map(it=>{
+            const tc=pctColor(it.pct);
+            const arrow=trendArrow(it.key,it.pct);
+            return `<div style="display:flex;justify-content:space-between;align-items:center;
+              padding:1px 12px;border-top:1px dashed #152030">
+              <span style="color:#8ab8cc;font-size:10px">${it.township}</span>
+              <span style="color:${tc};font-weight:700;font-size:10px">${arrow}${it.pct}%</span>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+    }
+    html+=`</div></div>`;
   }
+  body.innerHTML=html;
 
-  body.innerHTML = html;
+  // 同時輸出可複製文字摘要到 hidden textarea 備用
+  let textSummary='';
+  for(const district of activeDistricts){
+    textSummary+=`【${district}】
+`;
+    Object.entries(byDistrict[district]).forEach(([county,items])=>{
+      textSummary+=`  ${county}: `;
+      textSummary+=items.sort((a,b)=>b.pct-a.pct).map(it=>`${it.township}${it.pct}%`).join('、');
+      textSummary+='\n';
+    });
+  }
+  let ta=document.getElementById('etr-copy-text');
+  if(ta) ta.value=textSummary;
 }
-
 function toggleSidebar(){
   sidebarOpen = !sidebarOpen;
   const sb  = document.getElementById('sb');
@@ -733,14 +894,13 @@ function getAccum(t){
 
   // ── 今天（00:00到24:00的整日：今日觀測 + 今日剩餘時段QPF）──
   if(key_is_today_window(segFrom, segTo)){
-    const obsToday = (t.daily_rain && t.daily_rain[0]) || 0;
+    const obsToday = (t.daily_rain && t.daily_rain[0]) || 0;  // 今天00:00起已觀測量
     const qpfArr = getQpfArr(t, qpfField);
-    // currentSeg：BASE_TIME 是最新更新時間，其小時//6 決定目前是哪個6h段
-    // 例如 12:00更新 → currentSeg=2（代表0-6h、6-12h已過，12h起之後是預測）
-    const currentSeg = Math.floor(BASE_TIME.getHours() / 6);
-    // 只累加今天「尚未發生的時段」的QPF（避免與已觀測的時段重複計算）
+    const currentSeg = Math.floor(BASE_TIME.getHours() / 6);  // 目前在哪個6h段
+    // 累加今天「currentSeg之後（未到）的時段」的QPF，不跨日
     let futureSum = 0;
-    for(let s = currentSeg; s <= 3; s++) futureSum += qpfArr[s]||0;
+    for(let s = currentSeg + 1; s <= 3; s++) futureSum += qpfArr[s]||0;
+    // totalRain = 已觀測量（含當前6h段） + 剩餘時段QPF
     const totalRain = Math.round((obsToday + futureSum)*10)/10;
     let etrPct = null;
     if(hasEtr){
