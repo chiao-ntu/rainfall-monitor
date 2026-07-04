@@ -414,9 +414,23 @@ function updateEtrAlertPanel(){
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
   const byCounty = {};  // {county: [{township, pct}]}
 
+  // 決定計算用的 seg：跟當前選取的時間視窗一致，讓面板跟地圖 ETR2% 完全連動
+  let panelSeg = 3;  // 預設：今天結束時
+  if(winKey === 'today') panelSeg = 3;
+  else if(winKey.startsWith('past')){
+    const n = parseInt(winKey.slice(4));
+    panelSeg = -(n*4+1);  // 過去天
+  } else if(winKey.startsWith('day')){
+    const n = parseInt(winKey.slice(3));
+    panelSeg = (n-1)*4+3;  // 逐日的最後一個時段
+  } else if(winKey.startsWith('fut6_')){
+    const n = parseInt(winKey.slice(5));
+    panelSeg = n-1;
+  }
+
   TOWNSHIPS.forEach(t=>{
     if(!t.alert_val || t.alert_val <= 0) return;
-    const etr2 = calcEtr2AtSeg(t, 3, qpfField);
+    const etr2 = calcEtr2AtSeg(t, panelSeg, qpfField);
     const pct = Math.round(etr2 / t.alert_val * 100);
     if(pct >= 70){
       if(!byCounty[t.county]) byCounty[t.county] = [];
@@ -441,7 +455,7 @@ function updateEtrAlertPanel(){
   for(const county of counties){
     const items = byCounty[county].sort((a,b)=>b.pct-a.pct);
     const maxPct = items[0].pct;
-    const countyColor = maxPct >= 100 ? '#ff5555' : maxPct >= 90 ? '#ffaa44' : '#ffdd88';
+    const countyColor = maxPct >= 100 ? '#BB00BB' : maxPct >= 90 ? '#DD2222' : '#DDDD00';
     const countKey = encodeURIComponent(county);
     if(_etrCountyOpen[county] === undefined) _etrCountyOpen[county] = true;
     const isOpen = _etrCountyOpen[county];
@@ -459,7 +473,7 @@ function updateEtrAlertPanel(){
       </div>
       <div id="etr-county-${countKey}" style="display:${isOpen?'block':'none'}">
         ${items.map(it=>{
-          const c = it.pct>=100?'#ff5555':it.pct>=90?'#ffaa44':'#ddaa44';
+          const c = it.pct>=100?'#BB00BB':it.pct>=90?'#DD2222':'#DDDD00';
           return `<div style="display:flex;justify-content:space-between;padding:1px 6px;
             border-bottom:1px dashed #152030">
             <span style="color:#aaccee;font-size:10px">${it.township}</span>
@@ -653,8 +667,9 @@ function calcEtr2AtSeg(t, seg, qpfField){
       const obsIdx = -day;
       rainVal = (obsIdx < dailyObs.length) ? dailyObs[obsIdx] : 0;
     } else {
-      // 未來：純QPF
-      rainVal = (day-1 < dailyQpf.length) ? dailyQpf[day-1] : 0;
+      // 未來：用 QPF，day=1 是明天對應 dailyQpf[1]，day=6 對應 dailyQpf[6]
+      // dailyQpf[0]=今天, [1]=明天, [2]=後天...  day=1→index1, day=N→indexN
+      rainVal = (day < dailyQpf.length) ? dailyQpf[day] : 0;
     }
     etr2 += ETR2_WEIGHTS[i] * rainVal;
   }
