@@ -636,7 +636,7 @@ def main():
 
     # Open-Meteo（四個模式）
     om_all, om_max_hourly_all = fetch_openmeteo(static_list)
-    om = om_all.get('best_match', {})  # 預設用 best_match
+    om = om_all.get('ecmwf_ifs025', {})  # 預設用 ECMWF IFS，對台灣地形雨準確度較高
 
     # 基準時間
     h=(now_tpe.hour//6)*6

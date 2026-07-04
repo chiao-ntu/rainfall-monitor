@@ -161,8 +161,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <!-- 預報模式選擇列（未來時段才顯示） -->
   <div class="ctrl-row" id="model-row-wrap" style="display:none">
     <div class="bg" id="model-row">
-      <button class="b model-btn on" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
-      <button class="b model-btn"    id="mEcmwf" onclick="setModel('ecmwf')">ECMWF</button>
+      <button class="b model-btn"    id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
+      <button class="b model-btn on" id="mEcmwf" onclick="setModel('ecmwf')">ECMWF</button>
       <button class="b model-btn"    id="mGfs"   onclick="setModel('gfs')">GFS</button>
       <button class="b model-btn"    id="mIcon"  onclick="setModel('icon')">ICON</button>
     </div>
@@ -372,7 +372,7 @@ let refreshTimer = null;
 // 過去資料來自 daily_rain[]（逐日觀測，index 0=今天）
 // 未來資料來自 qpf_15d 等（逐6h預測，index 0=現在這一段）
 let mode = 'rain', segFrom = 0, segTo = 3, winKey = 'today';
-let forecastModel = 'best';   // 'best' | 'ecmwf' | 'gfs' | 'icon'
+let forecastModel = 'ecmwf';   // 預設用 ECMWF IFS，對台灣地形雨準確度較高
 const MODEL_FIELD = {
   best:  'qpf_best',
   ecmwf: 'qpf_ecmwf',
@@ -686,30 +686,46 @@ function selectTownByName(county, township){
 function drawAllDistrictDailyChart(targetId){
   const cv = document.getElementById(targetId||'cv-all-daily');
   if(!cv || !TOWNSHIPS.length) return;
-  const W = cv.offsetWidth || 260, H = 110;
+  const isZoom = (targetId==='chart-zoom-canvas');
+  const W = isZoom ? 2048 : (cv.offsetWidth||260);
+  const H = isZoom ? 900 : 110;
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
   ctx.clearRect(0,0,W,H);
-  ctx.fillStyle='#060f18'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#040c14'; ctx.fillRect(0,0,W,H);
 
   const ext = getDailyChartExtremes();
   const mx = ext.rainMax || 100;
   const nDays = 15;
-  const pL=28,pR=6,pT=8,pB=22,cw=W-pL-pR,ch=H-pT-pB,xS=cw/(nDays-1);
+  const fs = isZoom ? 22 : 7;
+  const pL=isZoom?80:28, pR=isZoom?30:6, pT=isZoom?50:8, pB=isZoom?70:22;
+  const cw=W-pL-pR, ch=H-pT-pB, xS=cw/(nDays-1);
+
+  // 標題（放大版）
+  if(isZoom){
+    ctx.fillStyle='#ffffff'; ctx.font=`${fs+8}px sans-serif`; ctx.textAlign='left';
+    ctx.fillText('全台各分署逐日雨量（15天）', pL, pT*0.55);
+  }
 
   // 格線
-  ctx.strokeStyle='#1a3a5a'; ctx.lineWidth=0.4;
+  ctx.strokeStyle=isZoom?'rgba(255,255,255,0.2)':'#1a3a5a'; ctx.lineWidth=isZoom?1:0.4;
   [.25,.5,.75,1].forEach(r=>{
     const y=pT+ch*(1-r);
     ctx.beginPath();ctx.moveTo(pL,y);ctx.lineTo(W-pR,y);ctx.stroke();
-    ctx.fillStyle='#3a6080';ctx.font='7px sans-serif';ctx.textAlign='left';
-    ctx.fillText(ceilTo10(Math.round(mx*r)),2,y+3);
+    ctx.fillStyle=isZoom?'#ffffff':'#3a6080'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='right';
+    ctx.fillText(ceilTo10(Math.round(mx*r)), pL-4, y+fs*0.35);
   });
+  // 左軸標題
+  if(isZoom){
+    ctx.save(); ctx.translate(pL*0.3, pT+ch/2); ctx.rotate(-Math.PI/2);
+    ctx.fillStyle='#ffffff'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='center';
+    ctx.fillText('累積雨量 (mm)', 0, 0); ctx.restore();
+  }
   // X軸標籤
-  ctx.fillStyle='#3a6080';ctx.font='7px sans-serif';ctx.textAlign='center';
-  for(let i=0;i<nDays;i+=3){
+  ctx.fillStyle=isZoom?'#ffffff':'#3a6080'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='center';
+  for(let i=0;i<nDays;i+=(isZoom?1:3)){
     const dt=new Date(BASE_TIME.getTime()+i*86400000);
-    ctx.fillText(fmtDay(dt),pL+i*xS,H-6);
+    ctx.fillText(fmtDay(dt),pL+i*xS,H-pB*0.4);
   }
 
   // 各分署最高逐日QPF折線
@@ -738,18 +754,23 @@ function drawAllDistrictDailyChart(targetId){
 function drawAllDistrictHyetoChart(targetId){
   const cv = document.getElementById(targetId||'cv-all-hyeto');
   if(!cv || !TOWNSHIPS.length) return;
-  const W = cv.offsetWidth || 260, H = 110;
+  const isZoom = (targetId==='chart-zoom-canvas');
+  const W = isZoom ? 2048 : (cv.offsetWidth||260);
+  const H = isZoom ? 900 : 110;
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle='#040c14'; ctx.fillRect(0,0,W,H);
 
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
-  const nBars = 10; // 前天+昨天+未來8個6h段
-  const barW_total = (W-34-8)/nBars;
-  const pL=34,pR=8,pT=8,pB=22,ch=H-pT-pB;
-  let maxV=0;
+  const nBars = 10;
+  const fs = isZoom ? 22 : 7;
+  const pL=isZoom?80:34, pR=isZoom?30:8, pT=isZoom?50:8, pB=isZoom?70:22;
+  const cw = W-pL-pR;
+  const barW_total = cw/nBars;
+  const ch = H-pT-pB;
 
+  let maxV=0;
   DISTRICT_ORDER.forEach(district=>{
     const counties=DISTRICT_COUNTIES[district];
     TOWNSHIPS.filter(t=>counties.includes(t.county)).forEach(t=>{
@@ -760,22 +781,41 @@ function drawAllDistrictHyetoChart(targetId){
   });
   maxV=Math.max(maxV,10);
 
+  // 標題（放大版）
+  if(isZoom){
+    ctx.fillStyle='#ffffff'; ctx.font=`${fs+8}px sans-serif`; ctx.textAlign='left';
+    ctx.fillText('全台各分署組體雨量圖（過去2天+未來2天）', pL, pT*0.55);
+  }
+
   // 格線
-  ctx.strokeStyle='rgba(255,255,255,0.15)';ctx.lineWidth=0.4;
-  [.5,1].forEach(r=>{
+  ctx.strokeStyle=isZoom?'rgba(255,255,255,0.2)':'rgba(255,255,255,0.15)'; ctx.lineWidth=isZoom?1:0.4;
+  [.25,.5,.75,1].forEach(r=>{
     const y=pT+ch*(1-r);
     ctx.beginPath();ctx.moveTo(pL,y);ctx.lineTo(W-pR,y);ctx.stroke();
-    ctx.fillStyle='#3a6080';ctx.font='7px sans-serif';ctx.textAlign='left';
-    ctx.fillText(ceilTo10(Math.round(maxV*r)),2,y+3);
+    ctx.fillStyle=isZoom?'#ffffff':'#3a6080'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='right';
+    ctx.fillText(ceilTo10(Math.round(maxV*r)), pL-4, y+fs*0.35);
   });
+
+  // 左軸標題
+  if(isZoom){
+    ctx.save(); ctx.translate(pL*0.3, pT+ch/2); ctx.rotate(-Math.PI/2);
+    ctx.fillStyle='#ffffff'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='center';
+    ctx.fillText('雨量 (mm)', 0, 0); ctx.restore();
+  }
+
+  // X軸分隔線（過去/未來）
+  const splitX=pL+2*barW_total;
+  ctx.strokeStyle='rgba(255,153,51,0.6)'; ctx.lineWidth=isZoom?2:1; ctx.setLineDash([4,3]);
+  ctx.beginPath();ctx.moveTo(splitX,pT);ctx.lineTo(splitX,pT+ch);ctx.stroke();
+  ctx.setLineDash([]);
 
   // X軸標籤
   const labels=['前天','昨天','+6h','+12h','+18h','+24h','+30h','+36h','+42h','+48h'];
-  ctx.fillStyle='#3a6080';ctx.font='7px sans-serif';ctx.textAlign='center';
-  labels.forEach((l,i)=>ctx.fillText(l,pL+i*barW_total+barW_total/2,H-6));
+  ctx.fillStyle=isZoom?'#ffffff':'#3a6080'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='center';
+  labels.forEach((l,i)=>ctx.fillText(l, pL+i*barW_total+barW_total/2, H-pB*0.4));
 
-  // 各分署最高雨量條狀圖
-  DISTRICT_ORDER.forEach((district,di)=>{
+  // 各分署折線
+  DISTRICT_ORDER.forEach(district=>{
     const counties=DISTRICT_COUNTIES[district];
     const distColor=DISTRICT_COLOR[district]||'#aaccee';
     const barData=[];
@@ -793,14 +833,36 @@ function drawAllDistrictHyetoChart(targetId){
       });
       barData.push(maxBar);
     }
-    // 畫成折線（分署整合後用折線比較清楚）
-    ctx.beginPath();ctx.strokeStyle=distColor;ctx.lineWidth=1;
+    ctx.beginPath(); ctx.strokeStyle=distColor; ctx.lineWidth=isZoom?2.5:1;
     barData.forEach((v,i)=>{
-      const x=pL+i*barW_total+barW_total/2,y=pT+ch*(1-v/maxV);
+      const x=pL+i*barW_total+barW_total/2, y=pT+ch*(1-v/maxV);
       i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
     });
     ctx.stroke();
+    // 分署名稱標籤（放大版）
+    if(isZoom){
+      const lastV=barData[barData.length-1];
+      const lastX=pL+(barData.length-1)*barW_total+barW_total/2;
+      const lastY=pT+ch*(1-lastV/maxV);
+      ctx.fillStyle=distColor; ctx.font=`${fs-2}px sans-serif`; ctx.textAlign='left';
+      ctx.fillText(district.replace('分署',''), lastX+5, lastY+fs*0.35);
+    }
   });
+
+  // 圖例（放大版）
+  if(isZoom){
+    let legX=pL;
+    const legY=H-pB*0.18;
+    ctx.font=`${fs-2}px sans-serif`;
+    DISTRICT_ORDER.forEach(d=>{
+      const c=DISTRICT_COLOR[d]||'#aaccee';
+      ctx.strokeStyle=c; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(legX, legY-6); ctx.lineTo(legX+20, legY-6); ctx.stroke();
+      ctx.fillStyle=c; ctx.textAlign='left';
+      ctx.fillText(d.replace('分署',''), legX+22, legY);
+      legX += 130;
+    });
+  }
 }
 
 function updateEtrAlertPanel(){
@@ -2091,6 +2153,7 @@ function setMode(m){
   withTransition(()=>{
     renderLayer(); renderLegend();
     if(selected) updateInfo(selected);
+    if(!selected) updateAllDistrictCharts();
   });
 }
 
@@ -2150,6 +2213,7 @@ function setWin(key){
     hideNoData();
     renderLayer(); renderLegend();
     if(selected) updateInfo(selected);
+    if(!selected) updateAllDistrictCharts();
   });
 }
 
@@ -2181,6 +2245,7 @@ function onSlider(){
   withTransition(()=>{
     renderLayer(); renderLegend();
     if(selected) updateInfo(selected);
+    if(!selected) updateAllDistrictCharts();
   });
 }
 
