@@ -166,21 +166,21 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   </div>
 </div>
 <div id="main">
-  <!-- ETR2% 警戒統整面板（地圖左側，可收合） -->
-  <div id="etr-alert-panel" style="position:absolute;top:8px;left:8px;z-index:900;
-    background:#080f18ee;border:1px solid #1a3348;border-radius:6px;
-    max-width:200px;font-size:11px;color:#dde8f2;pointer-events:auto;min-width:140px">
-    <div onclick="toggleEtrPanel()" style="cursor:pointer;display:flex;justify-content:space-between;
-      align-items:center;padding:6px 10px;border-bottom:1px solid #1a3348;
-      background:#0a1828;border-radius:6px 6px 0 0">
-      <span style="font-weight:700;color:#ffcc44">⚠ ETR2%警戒</span>
-      <span id="etr-panel-arrow" style="color:#6bc8e8;font-size:10px">▾</span>
-    </div>
-    <div id="etr-panel-body" style="padding:6px 8px;max-height:300px;overflow-y:auto">
-      <div style="color:#5a8aaa;font-size:10px">載入中...</div>
-    </div>
-  </div>
   <div id="map" style="position:relative">
+    <!-- ETR2% 警戒統整面板（地圖左上角，可收合，不蓋住標題列） -->
+    <div id="etr-alert-panel" style="position:absolute;top:50px;left:8px;z-index:800;
+      background:#080f18ee;border:1px solid #2a4a6a;border-radius:6px;
+      max-width:190px;min-width:130px;font-size:11px;color:#dde8f2;pointer-events:auto">
+      <div onclick="toggleEtrPanel()" style="cursor:pointer;display:flex;justify-content:space-between;
+        align-items:center;padding:5px 8px;border-bottom:1px solid #1a3348;
+        background:#0a1828;border-radius:6px 6px 0 0">
+        <span style="font-weight:700;color:#ffcc44;font-size:11px">⚠ ETR2%警戒</span>
+        <span id="etr-panel-arrow" style="color:#6bc8e8;font-size:10px">▾</span>
+      </div>
+      <div id="etr-panel-body" style="padding:5px 7px;max-height:280px;overflow-y:auto">
+        <div style="color:#5a8aaa;font-size:10px">載入中...</div>
+      </div>
+    </div>
     <!-- 指北針：右上角，獨立 -->
     <div id="compass-wrap" style="position:absolute;top:12px;right:12px;z-index:600;display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
       <button id="map-panel-toggle" onclick="toggleMapPanel()" title="收合/展開圖例與比例尺"
@@ -401,13 +401,15 @@ function updateEtrAlertPanel(){
   const body = document.getElementById('etr-panel-body');
   if(!body) return;
 
-  // 收集所有鄉鎮的 ETR2%
-  const tier90plus = [];  // ≥ 90%
-  const tier70_90  = [];  // 70% ~ 90%
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const tier90plus = [];
+  const tier70_90  = [];
 
   TOWNSHIPS.forEach(t=>{
-    if(!t.alert_val || !t.etr2_pct) return;
-    const pct = Math.round(t.etr2_pct * 100);
+    if(!t.alert_val || t.alert_val <= 0) return;
+    // 用前端計算的「今天結束時」ETR2%（包含今天觀測+今天QPF）
+    const etr2 = calcEtr2AtSeg(t, 3, qpfField);
+    const pct = Math.round(etr2 / t.alert_val * 100);
     if(pct >= 70){
       const item = { county: t.county, township: t.township, pct };
       if(pct >= 90) tier90plus.push(item);
@@ -415,7 +417,6 @@ function updateEtrAlertPanel(){
     }
   });
 
-  // 排序（ETR2% 由高到低）
   tier90plus.sort((a,b)=>b.pct-a.pct);
   tier70_90.sort((a,b)=>b.pct-a.pct);
 
@@ -615,21 +616,22 @@ function calcEtr2AtSeg(t, seg, qpfField){
   for(let d=0; d<15; d++){
     dailyQpf.push(qpfArr.slice(d*4,(d+1)*4).reduce((a,b)=>a+(b||0),0));
   }
-  // 「今天」的代表雨量 = 今天觀測量 + 今天QPF預測量（觀測+預測同步，避免脫鉤）
-  // 這樣當計算明天的ETR2時，R1（今天）才是完整的預估雨量
+  // 「今天」的代表雨量 = 今天觀測量 + 今天QPF預測量
   const todayTotal = Math.round(((dailyObs[0]||0) + (dailyQpf[0]||0))*10)/10;
 
-  // seg 所在的「天」（0=今天, 正值=未來第N天）
-  const segDay = Math.floor(seg/4);
+  // seg 所在的「天」（0=今天, 正值=未來, 負值=過去）
+  // 用 Math.floor 對負數的行為：floor(-1/4)=-1, floor(-4/4)=-1, floor(-5/4)=-2
+  // 所以 seg=-4 對應 segDay=-1（昨天），seg=-8 對應 segDay=-2（前天）
+  const segDay = seg >= 0 ? Math.floor(seg/4) : -Math.ceil(Math.abs(seg)/4);
+
   let etr2 = 0;
   for(let i=0; i<=6; i++){
     const day = segDay - i;
     let rainVal;
     if(day === 0){
-      // 今天：用「觀測+QPF」合計
       rainVal = todayTotal;
     } else if(day < 0){
-      // 過去：純觀測
+      // 過去：純觀測，obsIdx=-day（昨天=1，前天=2...）
       const obsIdx = -day;
       rainVal = (obsIdx < dailyObs.length) ? dailyObs[obsIdx] : 0;
     } else {
@@ -682,10 +684,11 @@ function getAccum(t){
 
   // ── 過去整天（segTo < 0，表示某一天的0-24h，已結束的整天）──
   if(segTo < 0){
-    if(!hasObs) return {totalRain:null, etrPct:null};
     const dailyObs = t.daily_rain || [];
-    const dayIdx = Math.abs(Math.floor(segTo/4));  // 0=今天
-    const totalRain = dailyObs[dayIdx] !== undefined ? dailyObs[dayIdx] : null;
+    const dayIdx = Math.abs(Math.floor(segTo/4));  // 昨天=1, 前天=2...
+    const totalRain = (dailyObs[dayIdx] !== undefined && dailyObs[dayIdx] !== null)
+      ? dailyObs[dayIdx] : null;
+    // 即使 totalRain 是 null（真的無觀測），ETR2 仍嘗試計算
     let etrPct = null;
     if(hasEtr){
       const etr2 = calcEtr2AtSeg(t, segTo, qpfField);
@@ -840,9 +843,23 @@ function renderLayer(){
           `該時段累積雨量：${rainStr}<br>`+
           `最大時雨量：${maxIntensity.toFixed(1)} mm/h（${intensityLabel}）`;
       } else {
-        const isPastOrToday = (winKey.startsWith('past') || winKey==='today');
-        const rainLabel = isPastOrToday ? '過去24h觀測' : 'QPF預測';
-        tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>${rainLabel}：${rainStr} ｜ ETR2%：${etrStr}`;
+        let rainLabel;
+        if(winKey === 'today'){
+          // 今天：分開顯示觀測和預測
+          const obsToday = (t.daily_rain && t.daily_rain[0]) || 0;
+          const currentSeg = Math.floor(BASE_TIME.getHours() / 6);
+          const qpfField2 = MODEL_FIELD[forecastModel] || 'qpf_best';
+          const qpfArr2 = getQpfArr(t, qpfField2);
+          let futureQpf = 0;
+          for(let s=currentSeg; s<=3; s++) futureQpf += qpfArr2[s]||0;
+          futureQpf = Math.round(futureQpf*10)/10;
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
+            `觀測累積：${obsToday} mm ｜ 預測補足：${futureQpf} mm<br>ETR2%：${etrStr}`;
+        } else if(winKey.startsWith('past')){
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>觀測累積雨量：${rainStr} ｜ ETR2%：${etrStr}`;
+        } else {
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>預測累積雨量：${rainStr} ｜ ETR2%：${etrStr}`;
+        }
       }
       poly.bindTooltip(tooltipHtml, {sticky:true, opacity:.92});
       poly.on('click', (e)=>{
@@ -912,9 +929,10 @@ function updateInfo(t){
 
   // ── 區塊：現況觀測 ──
   document.getElementById('sec-obs').style.display = 'block';
+  const obsDayLabel = winKey==='today' ? '今日觀測累積（截至現在）' : '觀測累積雨量';
   document.getElementById('body-obs').innerHTML = `
     <div class="ir"><span class="l">ETR2警戒值</span>${wv('', hasEtr ? t.alert_val+' mm' : '無資料')}</div>
-    <div class="ir"><span class="l">過去24h累積雨量</span>${wv('', hasObs ? t.rain_24h+' mm' : '無資料')}</div>
+    <div class="ir"><span class="l">${obsDayLabel}</span>${wv('', hasObs ? t.rain_24h+' mm' : '無資料')}</div>
     <div class="ir"><span class="l">有效累積(ETR2)</span>${wv('', t.etr2!=null ? t.etr2+' mm' : '無資料')}</div>
     <div class="ir"><span class="l">現況ETR2%</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','無資料')}</div>
   `;
@@ -1309,12 +1327,14 @@ function drawHyetograph(t, canvasId, scale){
   const hasEtr = t.alert_val && t.alert_val>0;
   const etrLine = [];
   if(hasEtr){
-    for(let i=0;i<2;i++){
-      const dayIdx = 2-i;
-      let etr2=0;
-      for(let k=0;k<=6;k++) etr2 += ETR2_WEIGHTS[k]*(dailyObs[dayIdx-1+k]||0);
+    // 過去2天：用負數 seg 計算（前天=-8, 昨天=-4），calcEtr2AtSeg 已支援負數
+    // 注意：負數seg時，day=segDay-i，calcEtr2AtSeg 內部的 todayTotal 仍包含今天觀測+QPF
+    const pastSegs = [-8, -4];  // 前天、昨天對應的 seg 索引
+    for(const seg of pastSegs){
+      const etr2 = calcEtr2AtSeg(t, seg, qpfField);
       etrLine.push(Math.round(etr2/t.alert_val*1000)/10);
     }
+    // 未來8個6h段（seg=0到7）
     for(let i=0;i<8;i++){
       const etr2 = calcEtr2AtSeg(t, i, qpfField);
       etrLine.push(Math.round(etr2/t.alert_val*1000)/10);
@@ -1324,7 +1344,7 @@ function drawHyetograph(t, canvasId, scale){
   const districtColor = getDistrictColor(t.county);
 
   // ── 版面配置（雙縱軸：左=時雨量白色，右=ETR2%分署色）──
-  const padL = 70*scale, padR = 75*scale, padT = 30*scale, padB = 40*scale;
+  const padL = 70*scale, padR = 75*scale, padT = 30*scale, padB = 60*scale;
   const cw = W-padL-padR, ch = H-padT-padB;
   const barW = cw/n * 0.6;
   const gap  = cw/n;
@@ -1428,20 +1448,20 @@ function drawHyetograph(t, canvasId, scale){
     ctx.fillText(b.label, x, H-padB*0.4);
   });
 
-  // 圖例（放在圖表區域內部左下角，不跟X軸標籤衝突）
-  const legY = padT + ch - fs*1.5;  // 圖表區域底部往上一行
+  // 圖例（放在X軸標籤下方的空白區）
+  const legY = H - padB*0.3;  // 緊貼底部
   ctx.textAlign = 'left';
-  ctx.font = `${fs}px sans-serif`;
-  ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fillRect(padL, legY-fs*1.2, fs*22, fs*1.6);  // 半透明背景方便閱讀
-  ctx.fillStyle = '#4a7ab0'; ctx.fillRect(padL+fs*0.2, legY-fs*0.7, fs*0.8, fs*0.8);
-  ctx.fillStyle = '#fff'; ctx.fillText('觀測(日)', padL+fs*1.2, legY);
-  ctx.fillStyle = '#6ad8f0'; ctx.fillRect(padL+fs*7, legY-fs*0.7, fs*0.8, fs*0.8);
-  ctx.fillStyle = '#fff'; ctx.fillText('QPF預測(6h)', padL+fs*8, legY);
+  ctx.font = `${Math.round(fs*0.85)}px sans-serif`;  // 圖例字型略小於軸標籤
+  const legFs = Math.round(fs*0.85);
+  ctx.fillStyle = '#4a7ab0'; ctx.fillRect(padL, legY-legFs*0.8, legFs*0.8, legFs*0.8);
+  ctx.fillStyle = '#cce8ff'; ctx.fillText('觀測(日)', padL+legFs, legY);
+  ctx.fillStyle = '#6ad8f0'; ctx.fillRect(padL+legFs*7, legY-legFs*0.8, legFs*0.8, legFs*0.8);
+  ctx.fillStyle = '#cce8ff'; ctx.fillText('QPF預測(6h)', padL+legFs*8, legY);
   if(hasEtr){
     ctx.strokeStyle = districtColor; ctx.lineWidth=2*scale;
-    ctx.beginPath(); ctx.moveTo(padL+fs*17, legY-fs*0.3); ctx.lineTo(padL+fs*19, legY-fs*0.3); ctx.stroke();
-    ctx.fillStyle = '#fff'; ctx.fillText('ETR2%（'+(COUNTY_TO_DISTRICT[t.county]||'')+'）', padL+fs*19.5, legY);
+    ctx.beginPath(); ctx.moveTo(padL+legFs*17, legY-legFs*0.4); ctx.lineTo(padL+legFs*19, legY-legFs*0.4); ctx.stroke();
+    ctx.fillStyle = '#cce8ff';
+    ctx.fillText('ETR2%（'+(COUNTY_TO_DISTRICT[t.county]||'')+'）', padL+legFs*19.5, legY);
   }
 }
 
@@ -1535,7 +1555,7 @@ async function tryLoadLive(){
     DAILY_CHART_EXTREMES = null;
     const src = d.source || '';
     const note = document.getElementById('data-note');
-    if(note) note.textContent = `${src} · 產製：${d.generated_at ? d.generated_at.slice(0,16).replace('T',' ') : ''} | 雨量=過去24h觀測`;
+    if(note) note.textContent = `${src} · 產製：${d.generated_at ? d.generated_at.slice(0,16).replace('T',' ') : ''} | 雨量=今日00:00起累積觀測`;
   }catch(e){
     console.warn('data.json 載入失敗（使用示範資料）：', e.message);
   }
