@@ -36,7 +36,7 @@ input[type=range]{-webkit-appearance:none;width:110px;height:4px;border-radius:2
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#3a9adf;cursor:pointer}
 #rng-disp{font-size:10px;color:#8ac8e8;font-weight:700;min-width:150px}
 #main{display:flex;flex:1;overflow:hidden}
-#map{flex:1}
+#map{flex:1;background:#ffffff}
 /* 純白底 */
 .leaflet-container{background:#ffffff!important}
 #sb{width:300px;background:#091520;border-left:1px solid #1a3348;display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
@@ -168,16 +168,16 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 <div id="main">
   <div id="map" style="position:relative">
     <!-- ETR2% 警戒統整面板（地圖左上角，可收合，不蓋住標題列） -->
-    <div id="etr-alert-panel" style="position:absolute;top:50px;left:8px;z-index:800;
+    <div id="etr-alert-panel" style="position:absolute;top:90px;left:8px;z-index:800;
       background:#080f18ee;border:1px solid #2a4a6a;border-radius:6px;
-      max-width:190px;min-width:130px;font-size:11px;color:#dde8f2;pointer-events:auto">
+      max-width:210px;min-width:150px;font-size:11px;color:#dde8f2;pointer-events:auto">
       <div onclick="toggleEtrPanel()" style="cursor:pointer;display:flex;justify-content:space-between;
         align-items:center;padding:5px 8px;border-bottom:1px solid #1a3348;
         background:#0a1828;border-radius:6px 6px 0 0">
         <span style="font-weight:700;color:#ffcc44;font-size:11px">⚠ ETR2%警戒</span>
         <span id="etr-panel-arrow" style="color:#6bc8e8;font-size:10px">▾</span>
       </div>
-      <div id="etr-panel-body" style="padding:5px 7px;max-height:280px;overflow-y:auto">
+      <div id="etr-panel-body" style="padding:5px 7px;max-height:320px;overflow-y:auto">
         <div style="color:#5a8aaa;font-size:10px">載入中...</div>
       </div>
     </div>
@@ -397,59 +397,77 @@ function toggleEtrPanel(){
   if(arrow) arrow.textContent = etrPanelOpen ? '▾' : '▸';
 }
 
+const _etrCountyOpen = {};  // 各縣市收合狀態
+
+function toggleEtrCounty(county){
+  _etrCountyOpen[county] = !_etrCountyOpen[county];
+  const el = document.getElementById('etr-county-'+encodeURIComponent(county));
+  const arrow = document.getElementById('etr-arrow-'+encodeURIComponent(county));
+  if(el) el.style.display = _etrCountyOpen[county] ? 'block' : 'none';
+  if(arrow) arrow.textContent = _etrCountyOpen[county] ? '▾' : '▸';
+}
+
 function updateEtrAlertPanel(){
   const body = document.getElementById('etr-panel-body');
   if(!body) return;
 
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
-  const tier90plus = [];
-  const tier70_90  = [];
+  const byCounty = {};  // {county: [{township, pct}]}
 
   TOWNSHIPS.forEach(t=>{
     if(!t.alert_val || t.alert_val <= 0) return;
-    // 用前端計算的「今天結束時」ETR2%（包含今天觀測+今天QPF）
     const etr2 = calcEtr2AtSeg(t, 3, qpfField);
     const pct = Math.round(etr2 / t.alert_val * 100);
     if(pct >= 70){
-      const item = { county: t.county, township: t.township, pct };
-      if(pct >= 90) tier90plus.push(item);
-      else tier70_90.push(item);
+      if(!byCounty[t.county]) byCounty[t.county] = [];
+      byCounty[t.county].push({ township: t.township, pct });
     }
   });
 
-  tier90plus.sort((a,b)=>b.pct-a.pct);
-  tier70_90.sort((a,b)=>b.pct-a.pct);
-
-  if(tier90plus.length===0 && tier70_90.length===0){
+  const counties = Object.keys(byCounty);
+  if(counties.length === 0){
     body.innerHTML = '<div style="color:#3a6080;font-size:10px;padding:4px 0">目前無達70%以上</div>';
     return;
   }
 
+  // 計算各縣市最高pct，依此排序
+  counties.sort((a,b)=>{
+    const maxA = Math.max(...byCounty[a].map(x=>x.pct));
+    const maxB = Math.max(...byCounty[b].map(x=>x.pct));
+    return maxB - maxA;
+  });
+
   let html = '';
+  for(const county of counties){
+    const items = byCounty[county].sort((a,b)=>b.pct-a.pct);
+    const maxPct = items[0].pct;
+    const countyColor = maxPct >= 100 ? '#ff5555' : maxPct >= 90 ? '#ffaa44' : '#ffdd88';
+    const countKey = encodeURIComponent(county);
+    if(_etrCountyOpen[county] === undefined) _etrCountyOpen[county] = true;
+    const isOpen = _etrCountyOpen[county];
+    const shortCounty = county.replace(/[縣市]$/,'');
 
-  if(tier90plus.length > 0){
-    html += `<div style="color:#ffcc44;font-weight:700;margin-bottom:3px;font-size:10px">
-      ≥ 90%（${tier90plus.length}個）</div>`;
-    html += tier90plus.map(it=>{
-      const isOver100 = it.pct >= 100;
-      const color = isOver100 ? '#ff4444' : '#ffaa44';
-      return `<div style="display:flex;justify-content:space-between;padding:1px 0;
-        border-bottom:1px dashed #152030">
-        <span style="color:#aaccee">${it.county.replace('縣','').replace('市','')} ${it.township}</span>
-        <span style="color:${color};font-weight:700">${it.pct}%</span>
-      </div>`;
-    }).join('');
-  }
-
-  if(tier70_90.length > 0){
-    html += `<div style="color:#ffdd88;font-weight:700;margin:5px 0 3px;font-size:10px">
-      70–90%（${tier70_90.length}個）</div>`;
-    html += tier70_90.map(it=>`
-      <div style="display:flex;justify-content:space-between;padding:1px 0;
-        border-bottom:1px dashed #152030">
-        <span style="color:#aaccee">${it.county.replace('縣','').replace('市','')} ${it.township}</span>
-        <span style="color:#ddaa44;font-weight:700">${it.pct}%</span>
-      </div>`).join('');
+    html += `<div style="margin-bottom:2px">
+      <div onclick="toggleEtrCounty('${county}')" style="cursor:pointer;display:flex;
+        justify-content:space-between;align-items:center;padding:2px 4px;
+        background:#0d1e30;border-radius:3px">
+        <span style="color:${countyColor};font-weight:700;font-size:10px">${shortCounty}</span>
+        <div style="display:flex;align-items:center;gap:4px">
+          <span style="color:${countyColor};font-size:10px">${maxPct}%↑</span>
+          <span id="etr-arrow-${countKey}" style="color:#5a8aaa;font-size:9px">${isOpen?'▾':'▸'}</span>
+        </div>
+      </div>
+      <div id="etr-county-${countKey}" style="display:${isOpen?'block':'none'}">
+        ${items.map(it=>{
+          const c = it.pct>=100?'#ff5555':it.pct>=90?'#ffaa44':'#ddaa44';
+          return `<div style="display:flex;justify-content:space-between;padding:1px 6px;
+            border-bottom:1px dashed #152030">
+            <span style="color:#aaccee;font-size:10px">${it.township}</span>
+            <span style="color:${c};font-weight:700;font-size:10px">${it.pct}%</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
   }
 
   body.innerHTML = html;
@@ -542,7 +560,7 @@ const map = L.map('map', {
 // 不加任何 tileLayer → 背景純白（CSS 已設 background:#ffffff）
 // 加一個淡藍海域遮罩（用 SVG 全域矩形）
 const seaLayer = L.rectangle([[-90,-180],[90,180]], {
-  color:'none', fillColor:'#cce8f4', fillOpacity:0.55, interactive:false
+  color:'none', fillColor:'#ffffff', fillOpacity:1.0, interactive:false
 }).addTo(map);
 
 // ════════════════════════════════════════════════
@@ -854,7 +872,7 @@ function renderLayer(){
           for(let s=currentSeg; s<=3; s++) futureQpf += qpfArr2[s]||0;
           futureQpf = Math.round(futureQpf*10)/10;
           tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
-            `觀測累積：${obsToday} mm ｜ 預測補足：${futureQpf} mm<br>ETR2%：${etrStr}`;
+            `觀測累積：${obsToday} mm ｜ 預測補足：${futureQpf} mm ｜ 全天預估：${Math.round((obsToday+futureQpf)*10)/10} mm<br>ETR2%：${etrStr}`;
         } else if(winKey.startsWith('past')){
           tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>觀測累積雨量：${rainStr} ｜ ETR2%：${etrStr}`;
         } else {
@@ -929,13 +947,31 @@ function updateInfo(t){
 
   // ── 區塊：現況觀測 ──
   document.getElementById('sec-obs').style.display = 'block';
-  const obsDayLabel = winKey==='today' ? '今日觀測累積（截至現在）' : '觀測累積雨量';
-  document.getElementById('body-obs').innerHTML = `
-    <div class="ir"><span class="l">ETR2警戒值</span>${wv('', hasEtr ? t.alert_val+' mm' : '無資料')}</div>
-    <div class="ir"><span class="l">${obsDayLabel}</span>${wv('', hasObs ? t.rain_24h+' mm' : '無資料')}</div>
-    <div class="ir"><span class="l">有效累積(ETR2)</span>${wv('', t.etr2!=null ? t.etr2+' mm' : '無資料')}</div>
-    <div class="ir"><span class="l">現況ETR2%</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','無資料')}</div>
-  `;
+  if(winKey === 'today'){
+    const obsToday = (t.daily_rain && t.daily_rain[0]) || 0;
+    const currentSeg2 = Math.floor(BASE_TIME.getHours() / 6);
+    const qpfField2 = MODEL_FIELD[forecastModel] || 'qpf_best';
+    const qpfArr2 = getQpfArr(t, qpfField2);
+    let futureQpf2 = 0;
+    for(let s=currentSeg2; s<=3; s++) futureQpf2 += qpfArr2[s]||0;
+    futureQpf2 = Math.round(futureQpf2*10)/10;
+    const totalToday = Math.round((obsToday + futureQpf2)*10)/10;
+    document.getElementById('body-obs').innerHTML = `
+      <div class="ir"><span class="l">ETR2警戒值</span>${wv('', hasEtr ? t.alert_val+' mm' : '無資料')}</div>
+      <div class="ir"><span class="l">今日觀測累積</span>${wv('', obsToday+' mm')}</div>
+      <div class="ir"><span class="l">今日預測補足</span>${wv('', futureQpf2+' mm')}</div>
+      <div class="ir"><span class="l">今日全天預估</span>${wv('', totalToday+' mm')}</div>
+      <div class="ir"><span class="l">今日ETR2%</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','無資料')}</div>
+    `;
+  } else {
+    const obsDayLabel = winKey.startsWith('past') ? '觀測累積雨量' : '累積雨量';
+    document.getElementById('body-obs').innerHTML = `
+      <div class="ir"><span class="l">ETR2警戒值</span>${wv('', hasEtr ? t.alert_val+' mm' : '無資料')}</div>
+      <div class="ir"><span class="l">${obsDayLabel}</span>${wv('', hasObs ? t.rain_24h+' mm' : '無資料')}</div>
+      <div class="ir"><span class="l">有效累積(ETR2)</span>${wv('', t.etr2!=null ? t.etr2+' mm' : '無資料')}</div>
+      <div class="ir"><span class="l">現況ETR2%</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','無資料')}</div>
+    `;
+  }
 
   // ── 區塊：QPF預測 ──
   document.getElementById('sec-qpf').style.display = 'block';
@@ -1445,11 +1481,11 @@ function drawHyetograph(t, canvasId, scale){
   ctx.textAlign = 'center';
   allBars.forEach((b,i)=>{
     const x = padL + i*gap + gap/2;
-    ctx.fillText(b.label, x, H-padB*0.4);
+    ctx.fillText(b.label, x, H-padB*0.55);  // X軸標籤，在padB中段
   });
 
   // 圖例（放在X軸標籤下方的空白區）
-  const legY = H - padB*0.3;  // 緊貼底部
+  const legY = H - padB*0.18;  // 圖例貼近底部，X軸標籤在padB*0.55處
   ctx.textAlign = 'left';
   ctx.font = `${Math.round(fs*0.85)}px sans-serif`;  // 圖例字型略小於軸標籤
   const legFs = Math.round(fs*0.85);

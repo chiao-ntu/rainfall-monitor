@@ -115,11 +115,24 @@ def update_history(stations, now_tpe):
     history = json.load(open(HISTORY_FILE)) if os.path.exists(HISTORY_FILE) else {}
     for sid,st in stations.items():
         if sid not in history: history[sid]={}
-        history[sid][today] = st['rain_24h']
-        if y1 not in history[sid] and st['rain_2d']>0:
-            history[sid][y1] = max(0.0,round(st['rain_2d']-st['rain_24h'],1))
-        if y2 not in history[sid] and st['rain_3d']>0:
-            history[sid][y2] = max(0.0,round(st['rain_3d']-st['rain_2d'],1))
+        # 「今天」的雨量只更新當前時刻之前的累積（從00:00到現在）
+        # rain_24h 是「過去24小時滾動」，不等於今天00:00起的累積
+        # 正確做法：今天的量用 rain_2d - rain_24h 的補足方式反推
+        # 但最直接的是：保留 rain_24h 給前端用，歷史檔只存「完整的一天」
+        # 策略：用 rain_24h 作為今天到目前為止的最佳估計（前端會加QPF補足）
+        rain_today_so_far = st.get('rain_24h', 0.0) or 0.0
+        history[sid][today] = rain_today_so_far
+
+        # 昨天的量：用 rain_2d - rain_24h 估算（若尚未有昨天記錄）
+        if y1 not in history[sid]:
+            r2d = st.get('rain_2d', 0.0) or 0.0
+            r24h = st.get('rain_24h', 0.0) or 0.0
+            history[sid][y1] = max(0.0, round(r2d - r24h, 1))
+        # 前天的量：用 rain_3d - rain_2d 估算（若尚未有前天記錄）
+        if y2 not in history[sid]:
+            r3d = st.get('rain_3d', 0.0) or 0.0
+            r2d = st.get('rain_2d', 0.0) or 0.0
+            history[sid][y2] = max(0.0, round(r3d - r2d, 1))
     cutoff = (now_tpe-timedelta(days=9)).strftime('%Y-%m-%d')
     for sid in history: history[sid]={d:v for d,v in history[sid].items() if d>cutoff}
     with open(HISTORY_FILE,'w',encoding='utf-8') as f:
