@@ -8,48 +8,34 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:sans-serif;background:#1a2a3a;display:flex;height:100vh;color:#dde8f2}
-#toolbar{width:175px;flex-shrink:0;background:#0d1a28;display:flex;flex-direction:column;gap:4px;padding:10px;overflow-y:auto;border-right:1px solid #2a4a6a}
-#toolbar h3{font-size:13px;color:#7bd0f0;border-bottom:1px solid #2a4a6a;padding-bottom:5px;margin-bottom:2px}
+body{font-family:sans-serif;background:#fff;display:flex;height:100vh}
+#toolbar{width:178px;flex-shrink:0;background:#0d1a28;color:#dde8f2;display:flex;flex-direction:column;gap:3px;padding:10px;overflow-y:auto;border-right:1px solid #2a4a6a}
+#toolbar h3{font-size:12px;color:#7bd0f0;border-bottom:1px solid #2a4a6a;padding-bottom:5px}
 #map{flex:1}
-.color-btn{
-  padding:7px 8px;border:3px solid rgba(0,0,0,0.25);border-radius:5px;cursor:pointer;
-  font-size:12px;font-weight:700;margin:2px 0;text-align:center;
-  transition:all 0.1s;user-select:none;
-}
-.color-btn.active{
-  transform:translateY(2px);
-  box-shadow:inset 0 3px 7px rgba(0,0,0,0.55);
-  border-color:#fff !important;outline:2px solid #fff;
-}
-.color-btn:hover:not(.active){transform:translateY(-1px);box-shadow:0 2px 5px rgba(0,0,0,0.35);}
+.color-btn{padding:7px 8px;border:3px solid rgba(0,0,0,0.2);border-radius:5px;cursor:pointer;font-size:12px;font-weight:700;margin:2px 0;text-align:center;transition:all 0.1s;user-select:none}
+.color-btn.active{transform:translateY(2px);box-shadow:inset 0 3px 7px rgba(0,0,0,0.55);border-color:#fff!important;outline:2px solid #fff}
+.color-btn:hover:not(.active){transform:translateY(-1px);box-shadow:0 2px 5px rgba(0,0,0,0.3)}
 .action-btn{width:100%;padding:5px;border:1px solid;border-radius:4px;cursor:pointer;font-size:11px;background:none;text-align:center;margin-top:2px;color:inherit}
-#level-select{width:100%;background:#1a2a3a;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px;padding:4px;font-size:11px;margin-bottom:4px}
-.sect-title{font-size:10px;color:#7bd0f0;border-bottom:1px solid #1a3040;padding:2px 0;margin:4px 0 2px;font-weight:700}
+.sect{font-size:10px;color:#7bd0f0;border-bottom:1px solid #1a3040;padding:2px 0;margin:5px 0 2px;font-weight:700}
+#level-select{width:100%;background:#1a2a3a;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px;padding:4px;font-size:11px}
 </style>
 </head>
 <body>
 <div id="toolbar">
   <h3>🎨 繪圖地圖</h3>
-  <div class="sect-title">塗色層級</div>
-  <select id="level-select" onchange="changeLevel(this.value)">
-    <optgroup label="── 大 ──">
-      <option value="county">縣市</option>
-    </optgroup>
-    <optgroup label="── 中（特性分區，以縣市為單位）──">
-      <option value="special">特性分區</option>
-    </optgroup>
-    <optgroup label="── 小 ──">
-      <option value="town">鄉鎮市區</option>
-    </optgroup>
+  <div class="sect">塗色層級</div>
+  <select id="level-select" onchange="setLevel(this.value)">
+    <optgroup label="── 大 ──"><option value="county">縣市</option></optgroup>
+    <optgroup label="── 中（特性分區×縣市）──"><option value="special">特性分區</option></optgroup>
+    <optgroup label="── 小 ──"><option value="town">鄉鎮市區</option></optgroup>
   </select>
-  <div class="sect-title">色階（點選啟用）</div>
-  <div id="color-palette"></div>
-  <div class="sect-title">操作</div>
+  <div class="sect">色階（點選啟用）</div>
+  <div id="palette"></div>
+  <div class="sect">操作</div>
   <button class="action-btn" style="border-color:#556;color:#aac" onclick="undoLast()">↩ 撤銷上一步</button>
   <button class="action-btn" style="border-color:#644;color:#e88" onclick="resetAll()">🗑 全部清除</button>
   <button class="action-btn" style="border-color:#464;color:#8e8" onclick="exportCSV()">⬇ 匯出 CSV</button>
-  <div style="font-size:10px;color:#3a6080;margin-top:6px">已上色：<span id="count-label" style="color:#aaccee">0</span> 個</div>
+  <div style="font-size:10px;color:#3a6080;margin-top:6px">已上色：<span id="cnt" style="color:#aaccee">0</span> 個</div>
 </div>
 <div id="map"></div>
 <script>
@@ -161,108 +147,133 @@ const TOWN_TIER = {
   '宜蘭縣,蘇澳鎮':'沿海'
 };
 
-// 查詢分區（字串key格式：縣市,鄉鎮）
-function getTier(county, townName){
-  return TOWN_TIER[county+','+townName] || '平地';
-}
+function getTier(county, town){ return TOWN_TIER[county+','+town]||'平地'; }
 
-const COLOR_SCALE = [
-  {hex:'#ffffff',range:'5以下'},
-  {hex:'#87ceeb',range:'5-20mm'},
-  {hex:'#00cc44',range:'20-40mm'},
-  {hex:'#dddd00',range:'40-70mm'},
-  {hex:'#dd2222',range:'70-130mm'},
-  {hex:'#9900cc',range:'130-250mm'},
-  {hex:'#dda0dd',range:'250以上'},
+const COLORS = [
+  {hex:'#ffffff',label:'5以下'},
+  {hex:'#87ceeb',label:'5-20mm'},
+  {hex:'#00cc44',label:'20-40mm'},
+  {hex:'#dddd00',label:'40-70mm'},
+  {hex:'#dd2222',label:'70-130mm'},
+  {hex:'#9900cc',label:'130-250mm'},
+  {hex:'#dda0dd',label:'250以上'},
 ];
 
-let activeColor=null, fillData={}, history=[], geoLayers=[], paintMode='town';
+let activeColor=null, fillData={}, history=[], paintMode='town';
 
-const palette=document.getElementById('color-palette');
-COLOR_SCALE.forEach(c=>{
+const pal=document.getElementById('palette');
+COLORS.forEach(c=>{
   const isDark=!['#ffffff','#87ceeb','#dddd00','#dda0dd'].includes(c.hex);
-  const btn=document.createElement('div');
-  btn.className='color-btn'; btn.dataset.hex=c.hex;
-  btn.style.cssText=`background:${c.hex};color:${isDark?'#fff':'#333'};border-color:rgba(0,0,0,0.2);`;
-  btn.textContent=c.range;
-  btn.onclick=()=>{activeColor=c.hex;document.querySelectorAll('.color-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');};
-  palette.appendChild(btn);
+  const b=document.createElement('div');
+  b.className='color-btn'; b.dataset.hex=c.hex;
+  b.style.cssText='background:'+c.hex+';color:'+(isDark?'#fff':'#333')+';border-color:rgba(0,0,0,0.2)';
+  b.textContent=c.label;
+  b.onclick=()=>{
+    activeColor=c.hex;
+    document.querySelectorAll('.color-btn').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+  };
+  pal.appendChild(b);
 });
 
 const map=L.map('map',{zoomControl:true,attributionControl:false}).setView([23.8,121],7);
-L.rectangle([[-90,-180],[90,180]],{color:'none',fillColor:'#ffffff',fillOpacity:1,interactive:false}).addTo(map);
+L.rectangle([[-90,-180],[90,180]],{color:'none',fillColor:'#fff',fillOpacity:1,interactive:false}).addTo(map);
 
-function makeKey(county,townName){
-  if(paintMode==='county') return 'county:'+county;
-  if(paintMode==='special') return 'special:'+county+':'+getTier(county,townName);
-  return 'town:'+county+':'+townName;
+const countyBorder=L.geoJSON(COUNTY_GEO,{
+  style:{color:'#222',weight:1.4,fill:false},interactive:false
+}).addTo(map);
+
+let townLayerObj=null;
+
+function featureKey(county,town){
+  if(paintMode==='county')  return 'C:'+county;
+  if(paintMode==='special') return 'S:'+county+':'+getTier(county,town);
+  return 'T:'+county+':'+town;
 }
-function styleFor(key){
-  const c=fillData[key];
-  return {color:'rgba(80,100,120,0.4)',weight:0.5,fillColor:c||'#f8f8f8',fillOpacity:c?0.78:0.04};
+function featureColor(county,town){ return fillData[featureKey(county,town)]||null; }
+
+function refreshStyles(){
+  if(!townLayerObj) return;
+  townLayerObj.eachLayer(layer=>{
+    if(!layer.feature) return;
+    const p=layer.feature.properties;
+    const c=featureColor(p.COUNTYNAME||'',p.TOWNNAME||'');
+    layer.setStyle({fillColor:c||'#f0f0f0',fillOpacity:c?0.78:0.03,color:'#888',weight:0.3});
+  });
 }
-function refreshLayer(){
-  geoLayers.forEach(l=>map.removeLayer(l));
-  geoLayers=[];
-  const geo=(paintMode==='county')?COUNTY_GEO:TOWN_GEO;
-  const lyr=L.geoJSON(geo,{
+
+function buildTownLayer(){
+  townLayerObj=L.geoJSON(TOWN_GEO,{
     style(feat){
       const p=feat.properties;
-      return styleFor(makeKey(p.COUNTYNAME||'',p.TOWNNAME||''));
+      const c=featureColor(p.COUNTYNAME||'',p.TOWNNAME||'');
+      return {fillColor:c||'#f0f0f0',fillOpacity:c?0.78:0.03,color:'#888',weight:0.3};
     },
-    onEachFeature(feat,lyr){
+    onEachFeature(feat,layer){
       const p=feat.properties;
       const county=p.COUNTYNAME||'', town=p.TOWNNAME||'';
-      const key=makeKey(county,town);
-      const tier=paintMode==='special'?getTier(county,town):'';
-      const label=paintMode==='county'?county:paintMode==='special'?county+' '+town+'（'+tier+'）':county+' '+town;
-      lyr.bindTooltip(label,{sticky:true,opacity:0.85});
-      lyr.on('click',e=>{
+      const tier=getTier(county,town);
+      layer.on('click',e=>{
         L.DomEvent.stopPropagation(e);
         if(!activeColor) return;
-        history.push({key,prev:fillData[key]||null});
+        const key=featureKey(county,town);
+        const old=fillData[key];
+        history.push({key,prev:old||null});
         fillData[key]=activeColor;
-        geoLayers[0].eachLayer(l=>{
+        townLayerObj.eachLayer(l=>{
           if(!l.feature) return;
           const lp=l.feature.properties;
-          if(makeKey(lp.COUNTYNAME||'',lp.TOWNNAME||'')===key) l.setStyle(styleFor(key));
+          if(featureKey(lp.COUNTYNAME||'',lp.TOWNNAME||'')===key)
+            l.setStyle({fillColor:activeColor,fillOpacity:0.78,color:'#888',weight:0.3});
         });
-        document.getElementById('count-label').textContent=Object.keys(fillData).length;
+        document.getElementById('cnt').textContent=Object.keys(fillData).length;
       });
+      layer._tooltipUpdate=()=>{
+        const label=paintMode==='county'?county
+          :paintMode==='special'?county+' '+town+'（'+tier+'）'
+          :county+' '+town;
+        layer.bindTooltip(label,{sticky:true,opacity:0.85});
+      };
+      layer._tooltipUpdate();
     }
   }).addTo(map);
-  geoLayers.push(lyr);
-  if(paintMode!=='county'){
-    geoLayers.push(L.geoJSON(COUNTY_GEO,{style:{color:'#334455',weight:1.2,fill:false},interactive:false}).addTo(map));
-  }
+  countyBorder.bringToFront();
 }
-function changeLevel(val){ paintMode=val; refreshLayer(); }
+
+function setLevel(val){
+  paintMode=val;
+  refreshStyles();
+  if(townLayerObj) townLayerObj.eachLayer(l=>{if(l._tooltipUpdate)l._tooltipUpdate();});
+  countyBorder.bringToFront();
+}
+
 function undoLast(){
   if(!history.length) return;
   const last=history.pop();
   if(last.prev) fillData[last.key]=last.prev; else delete fillData[last.key];
-  refreshLayer();
-  document.getElementById('count-label').textContent=Object.keys(fillData).length;
+  refreshStyles();
+  document.getElementById('cnt').textContent=Object.keys(fillData).length;
 }
 function resetAll(){
   if(!confirm('確定清除所有塗色？')) return;
-  fillData={};history=[];refreshLayer();
-  document.getElementById('count-label').textContent=0;
+  fillData={};history=[];refreshStyles();
+  document.getElementById('cnt').textContent=0;
 }
 function exportCSV(){
   const rows=[['層級','縣市','鄉鎮市區','特性分區','顏色']];
-  Object.entries(fillData).forEach(([key,c])=>{
+  Object.entries(fillData).forEach(([key,color])=>{
     const parts=key.split(':');
-    if(parts[0]==='county') rows.push(['縣市',parts[1],'','',c]);
-    else if(parts[0]==='special') rows.push(['特性分區',parts[1],'',parts[2],c]);
-    else rows.push(['鄉鎮',parts[1],parts[2],getTier(parts[1],parts[2]),c]);
+    if(parts[0]==='C') rows.push(['縣市',parts[1],'','',color]);
+    else if(parts[0]==='S') rows.push(['特性分區',parts[1],'',parts[2],color]);
+    else rows.push(['鄉鎮',parts[1],parts[2],getTier(parts[1],parts[2]),color]);
   });
   const csv=rows.map(r=>r.map(v=>'"'+v.replace(/"/g,'""')+'"').join(',')).join('\n');
   const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');a.href=url;a.download='自訂繪圖.csv';a.click();URL.revokeObjectURL(url);
 }
-refreshLayer();
+buildTownLayer();
+
 </script>
 </body>
 </html>
