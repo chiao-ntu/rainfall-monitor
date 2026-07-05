@@ -66,6 +66,7 @@ const TOWN_TIER = {
   '臺東縣,延平鄉':'山區',
   '臺東縣,金峰鄉':'山區',
   '臺東縣,達仁鄉':'山區',
+  '臺東縣,卑南鄉':'山區',
   '花蓮縣,秀林鄉':'山區',
   '花蓮縣,萬榮鄉':'山區',
   '花蓮縣,卓溪鄉':'山區',
@@ -185,6 +186,9 @@ const TOWN_TIER = {
   '高雄市,永安區':'沿海',
   '高雄市,彌陀區':'沿海',
   '高雄市,梓官區':'沿海',
+  '高雄市,左營區':'沿海',
+  '高雄市,楠梓區':'沿海',
+  '高雄市,小港區':'沿海',
   '屏東縣,林邊鄉':'沿海',
   '屏東縣,東港鎮':'沿海',
   '屏東縣,新園鄉':'沿海',
@@ -196,9 +200,10 @@ const TOWN_TIER = {
   '臺東縣,成功鎮':'沿海',
   '臺東縣,東河鄉':'沿海',
   '臺東縣,大武鄉':'沿海',
-  '臺東縣,卑南鄉':'沿海',
+  '臺東縣,臺東市':'沿海',
   '花蓮縣,豐濱鄉':'沿海',
   '花蓮縣,新城鄉':'沿海',
+  '花蓮縣,花蓮市':'沿海',
   '宜蘭縣,頭城鎮':'沿海',
   '宜蘭縣,壯圍鄉':'沿海',
   '宜蘭縣,五結鄉':'沿海',
@@ -234,7 +239,8 @@ const COLORS = [
   {hex:'#dda0dd',label:'250以上'},
 ];
 
-let activeColor=null, fillData={}, history=[], paintMode='town';
+let activeColor=null, fillData={}, history=[], paintMode='county';
+let lastKeyType='C';  // 初始跟 paintMode 同步（county → C）
 
 const pal=document.getElementById('palette');
 COLORS.forEach(c=>{
@@ -269,7 +275,7 @@ function featureKey(county,town){
 
 // 顯示顏色：以「最後上色的 key」為最高優先，再依序查其他層級
 // lastPaintedKey 記錄最後一次塗色的 key 類型，讓最新的操作顯示在最上層
-let lastKeyType = null;  // 'T'|'S'|'C'，記錄最後一次塗色的層級類型
+// lastKeyType 已在上方宣告為 'C'
 
 function featureColor(county,town){
   const keyT = 'T:'+county+':'+town;
@@ -344,6 +350,8 @@ function buildTownLayer(){
 
 function setLevel(val){
   paintMode=val;
+  // 切換層級時，讓顯示優先序對齊當前層級（避免舊層級的顏色蓋過當前層級）
+  lastKeyType = val==='county'?'C' : val==='special'?'S' : 'T';
   refreshStyles();
   if(townLayerObj) townLayerObj.eachLayer(l=>{if(l._tooltipUpdate)l._tooltipUpdate();});
   countyBorder.bringToFront();
