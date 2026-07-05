@@ -555,7 +555,7 @@ def idw(lat, lng, pts, seg=None):
 # ── 風險分數 S*（ETR2 Risk Score）────────────────────
 def calc_risk_score(etr_pct, qpf_mm, pop_pct, n_hours,
                     alpha=0.5, beta=0.5, gamma=0.3,
-                    decay_per_6h=4, threshold_per_6h=40):
+                    decay_per_6h=4, threshold_per_6h=70):
     """
     etr_pct   : ETR2% 現況值（整數，如 110 = 110%）
     qpf_mm    : 該時窗的 QPF (mm)

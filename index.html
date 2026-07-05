@@ -1105,11 +1105,13 @@ const RAIN_SCALE=[
 ];
 // 未來6h段強度分級（依「該6h段內最大時雨量」判斷，非累積總量換算）
 // 標準：時雨量<40白；≥40黃(大雨)；≥100橘(豪雨)；≥200紅(大豪雨)；≥500紫(超大豪雨)
+// 強度分級依「該6h段的QPF累積量」判斷（與氣象署24h標準精神一致，縮短至6h窗口）
+// 40mm/6h≈大雨 / 70mm/6h≈豪雨 / 140mm/6h≈大豪雨 / 250mm/6h≈超大豪雨
 const INTENSITY_SCALE=[
-  {max:40,  color:'#FFFFFF', label:'未達標'},
-  {max:100, color:'#DDDD00', label:'大雨'},
-  {max:200, color:'#FF8800', label:'豪雨'},
-  {max:500, color:'#DD2222', label:'大豪雨'},
+  {max:40,  color:'#FFFFFF', label:'未達警示'},
+  {max:70,  color:'#DDDD00', label:'大雨'},
+  {max:140, color:'#FF8800', label:'豪雨'},
+  {max:250, color:'#DD2222', label:'大豪雨'},
   {max:1e9, color:'#9900CC', label:'超大豪雨'},
 ];
 function intensityColor(v){for(const s of INTENSITY_SCALE)if(v<s.max)return s.color;return'#9900CC'}
@@ -1276,13 +1278,9 @@ function getAccum(t){
   }
   if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
 
-  // 未來6h段模式：額外提供強度分級用的「該範圍內最大時雨量」
+  // 未來6h段模式：以「該6h段QPF累積量」判斷強度等級（改用6h累積，更符合氣象署標準精神）
   if(winKey.startsWith('fut6_')){
-    const maxhField = 'maxh_' + qpfField.replace('qpf_','');
-    const maxhArr = t[maxhField] || [];
-    let maxIntensity = 0;
-    for(let s=sf; s<=st; s++) maxIntensity = Math.max(maxIntensity, maxhArr[s]||0);
-    return {totalRain: total, etrPct, isIntensity:true, maxIntensity};
+    return {totalRain: total, etrPct, isIntensity:true, maxIntensity: total};
   }
 
   return {totalRain: total, etrPct};
@@ -1379,13 +1377,12 @@ function renderLayer(){
         // 未來6h段：只看該獨立時段的降雨強度（不累加），用於判斷哪裡容易下大雨
         const startH = segFrom*6, endH = (segTo+1)*6;
         const maxhField = 'maxh_' + (MODEL_FIELD[forecastModel]||'qpf_best').replace('qpf_','');
-        const maxIntensity = (t[maxhField]||[])[segFrom] || 0;
-        const intensityLabel = maxIntensity>=500?'超大豪雨':maxIntensity>=200?'大豪雨':
-                                maxIntensity>=100?'豪雨':maxIntensity>=40?'大雨':'未達警示';
+        const qpf6h = acc.totalRain || 0;  // 改用6h累積量判斷強度
+        const intensityLabel = qpf6h>=250?'超大豪雨':qpf6h>=140?'大豪雨':
+                                qpf6h>=70?'豪雨':qpf6h>=40?'大雨':'未達警示';
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
           `時段：+${startH}h ~ +${endH}h<br>`+
-          `該時段累積雨量：${rainStr}<br>`+
-          `最大時雨量：${maxIntensity.toFixed(1)} mm/h（${intensityLabel}）`;
+          `6h累積雨量：${rainStr}（${intensityLabel}）`;
       } else {
         let rainLabel;
         if(winKey === 'today'){
