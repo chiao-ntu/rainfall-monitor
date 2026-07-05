@@ -742,13 +742,30 @@ function drawAllDistrictDailyChart(targetId){
       });
       distDaily.push(maxV);
     }
-    ctx.beginPath();ctx.strokeStyle=distColor;ctx.lineWidth=1.2;
+    ctx.beginPath();ctx.strokeStyle=distColor;ctx.lineWidth=isZoom?2:1.2;
     distDaily.forEach((v,i)=>{
       const x=pL+i*xS,y=pT+ch*(1-v/mx);
       i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
     });
     ctx.stroke();
   });
+  // 圖例（放大版）— 右上角
+  if(isZoom){
+    const legLineH=(fs+6);
+    let legY=pT+10;
+    const legX=W-pR-220;
+    ctx.font=`${fs-2}px sans-serif`;
+    ctx.fillStyle='rgba(0,0,0,0.45)';
+    ctx.fillRect(legX-10, legY-fs, 220, DISTRICT_ORDER.length*legLineH+10);
+    DISTRICT_ORDER.forEach(d=>{
+      const c=DISTRICT_COLOR[d]||'#aaccee';
+      ctx.strokeStyle=c; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.moveTo(legX, legY-4); ctx.lineTo(legX+24, legY-4); ctx.stroke();
+      ctx.fillStyle=c; ctx.textAlign='left';
+      ctx.fillText(d, legX+28, legY);
+      legY+=legLineH;
+    });
+  }
 }
 
 function drawAllDistrictHyetoChart(targetId){
@@ -849,18 +866,22 @@ function drawAllDistrictHyetoChart(targetId){
     }
   });
 
-  // 圖例（放大版）
+  // 圖例（放大版）— 放右上角，不跟X軸標籤衝突
   if(isZoom){
-    let legX=pL;
-    const legY=H-pB*0.18;
+    const legLineH = (fs+6);
+    let legY = pT + 10;
+    const legX = W - pR - 200;
     ctx.font=`${fs-2}px sans-serif`;
+    // 半透明背景
+    ctx.fillStyle='rgba(0,0,0,0.45)';
+    ctx.fillRect(legX-10, legY-fs, 200, DISTRICT_ORDER.length*legLineH+10);
     DISTRICT_ORDER.forEach(d=>{
       const c=DISTRICT_COLOR[d]||'#aaccee';
-      ctx.strokeStyle=c; ctx.lineWidth=2;
-      ctx.beginPath(); ctx.moveTo(legX, legY-6); ctx.lineTo(legX+20, legY-6); ctx.stroke();
+      ctx.strokeStyle=c; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.moveTo(legX, legY-4); ctx.lineTo(legX+24, legY-4); ctx.stroke();
       ctx.fillStyle=c; ctx.textAlign='left';
-      ctx.fillText(d.replace('分署',''), legX+22, legY);
-      legX += 130;
+      ctx.fillText(d, legX+28, legY);
+      legY += legLineH;
     });
   }
 }
@@ -1571,8 +1592,12 @@ function drawChart(t){
 //  水保署分署轄區色碼對照
 // ════════════════════════════════════════════════
 const DISTRICT_COLOR = {
-  '臺北分署': '#FF00FF', '臺中分署': '#00BFFF', '南投分署': '#00FFFF',
-  '臺南分署': '#00FF00', '花蓮分署': '#FFFF00', '臺東分署': '#0000FF',
+  '臺北分署': '#FF00FF',  // 洋紅
+  '臺中分署': '#FF8C00',  // 橘色（原本就應該是橘色）
+  '南投分署': '#00FFFF',  // 青色
+  '臺南分署': '#00FF00',  // 綠色
+  '花蓮分署': '#FFFF00',  // 黃色
+  '臺東分署': '#6699FF',  // 藍色（改淡一點避免看不清）
 };
 const COUNTY_TO_DISTRICT = {
   '臺北市':'臺北分署','新北市':'臺北分署','基隆市':'臺北分署','桃園市':'臺北分署',
