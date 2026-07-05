@@ -35,11 +35,11 @@ jobs:
           CWA_API_KEY: ${{ secrets.CWA_API_KEY }}
         run: python fetch_rainfall.py
 
-      # 5. 把 data.json 推回 GitHub
+# 5. 把 data.json 和 obs_history.json 推回 GitHub
       - name: Commit and push data.json
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data.json
-          git diff --staged --quiet || git commit -m "自動更新：$(date '+%Y-%m-%d %H:%M') TST"
+          git add data.json obs_history.json
+          git diff --staged --quiet || git commit -m "自動更新：$(date '+%Y-%m-%d %H:%M') TST [skip ci]"
           git push
