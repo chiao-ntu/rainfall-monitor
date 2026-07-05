@@ -80,6 +80,7 @@ const TOWN_TIER = {
   '新竹縣,峨眉鄉':'淺山',
   '新竹縣,北埔鄉':'淺山',
   '新竹縣,芎林鄉':'淺山',
+  '新竹縣,竹東鎮':'淺山',
   '苗栗縣,南庄鄉':'淺山',
   '苗栗縣,獅潭鄉':'淺山',
   '苗栗縣,三義鄉':'淺山',
@@ -93,6 +94,7 @@ const TOWN_TIER = {
   '南投縣,國姓鄉':'淺山',
   '南投縣,水里鄉':'淺山',
   '南投縣,中寮鄉':'淺山',
+  '南投縣,埔里鎮':'淺山',
   '嘉義縣,竹崎鄉':'淺山',
   '嘉義縣,梅山鄉':'淺山',
   '嘉義縣,番路鄉':'淺山',
@@ -110,6 +112,7 @@ const TOWN_TIER = {
   '屏東縣,里港鄉':'淺山',
   '屏東縣,高樹鄉':'淺山',
   '屏東縣,鹽埔鄉':'淺山',
+  '屏東縣,長治鄉':'淺山',
   '花蓮縣,壽豐鄉':'淺山',
   '花蓮縣,鳳林鎮':'淺山',
   '花蓮縣,光復鄉':'淺山',
@@ -169,7 +172,6 @@ const TOWN_TIER = {
   '雲林縣,四湖鄉':'沿海',
   '雲林縣,口湖鄉':'沿海',
   '雲林縣,水林鄉':'沿海',
-  '雲林縣,褒忠鄉':'沿海',
   '嘉義縣,布袋鎮':'沿海',
   '嘉義縣,東石鄉':'沿海',
   '嘉義縣,義竹鄉':'沿海',
@@ -188,11 +190,13 @@ const TOWN_TIER = {
   '屏東縣,新園鄉':'沿海',
   '屏東縣,枋寮鄉':'沿海',
   '屏東縣,佳冬鄉':'沿海',
+  '屏東縣,琉球鄉':'沿海',
   '臺東縣,太麻里鄉':'沿海',
   '臺東縣,長濱鄉':'沿海',
   '臺東縣,成功鎮':'沿海',
   '臺東縣,東河鄉':'沿海',
   '臺東縣,大武鄉':'沿海',
+  '臺東縣,卑南鄉':'沿海',
   '花蓮縣,豐濱鄉':'沿海',
   '花蓮縣,新城鄉':'沿海',
   '宜蘭縣,頭城鎮':'沿海',
@@ -263,13 +267,20 @@ function featureKey(county,town){
   return 'T:'+county+':'+town;
 }
 
-// 顯示顏色時：查找最細粒度有塗色的 key（鄉鎮 > 特性分區 > 縣市）
-// 這樣切換層級後，其他層級畫過的顏色仍然可見
+// 顯示顏色：以「最後上色的 key」為最高優先，再依序查其他層級
+// lastPaintedKey 記錄最後一次塗色的 key 類型，讓最新的操作顯示在最上層
+let lastKeyType = null;  // 'T'|'S'|'C'，記錄最後一次塗色的層級類型
+
 function featureColor(county,town){
-  return fillData['T:'+county+':'+town]
-      || fillData['S:'+county+':'+getTier(county,town)]
-      || fillData['C:'+county]
-      || null;
+  const keyT = 'T:'+county+':'+town;
+  const keyS = 'S:'+county+':'+getTier(county,town);
+  const keyC = 'C:'+county;
+  // 依「最後塗色的層級」優先顯示，確保最新操作覆蓋舊的
+  if(lastKeyType==='T') return fillData[keyT]||fillData[keyS]||fillData[keyC]||null;
+  if(lastKeyType==='S') return fillData[keyS]||fillData[keyT]||fillData[keyC]||null;
+  if(lastKeyType==='C') return fillData[keyC]||fillData[keyS]||fillData[keyT]||null;
+  // 初始：細粒度優先
+  return fillData[keyT]||fillData[keyS]||fillData[keyC]||null;
 }
 
 // 依目前 paintMode 決定「點擊高亮的 key 範圍」（同 key 的 feature 一起反應）
@@ -310,6 +321,7 @@ function buildTownLayer(){
         const old=fillData[key];
         history.push({key,prev:old||null});
         fillData[key]=activeColor;
+        lastKeyType=key.split(':')[0];  // 記錄最後塗色的層級
         townLayerObj.eachLayer(l=>{
           if(!l.feature) return;
           const lp=l.feature.properties;
