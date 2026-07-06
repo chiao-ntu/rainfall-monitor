@@ -128,22 +128,30 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
       style="border-color:#3a5a8a;color:#8ab8e8" title="開啟空白繪圖地圖">🖌 繪圖地圖</button>
   </div>
   <div id="cust-ctrl">
-    <!-- 起始和結束在同一列 -->
-    <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
-      <label style="font-size:10px;color:#6bc8e8;white-space:nowrap">起</label>
-      <input type="range" id="slS" min="-28" max="59" value="0" oninput="onSlider()"
-        style="width:50%;height:6px">
-      <span id="slS-v" style="font-size:9px;color:#6bc8e8;min-width:70px"></span>
+    <!-- 起始在上，刻度在中，結束在下——但視覺上對齊同一條時間軸 -->
+    <div style="display:flex;align-items:center;gap:4px;margin-bottom:0px">
+      <label style="font-size:10px;color:#6bc8e8;white-space:nowrap;width:18px">起</label>
+      <div style="flex:1;position:relative">
+        <input type="range" id="slS" min="-28" max="59" value="0" oninput="onSlider()"
+          style="width:100%;height:5px;accent-color:#3a9adf">
+      </div>
+      <span id="slS-v" style="font-size:9px;color:#6bc8e8;width:75px;text-align:right;flex-shrink:0"></span>
     </div>
-    <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
-      <label style="font-size:10px;color:#6bc8e8;white-space:nowrap">迄</label>
-      <input type="range" id="slE" min="-27" max="60" value="3" oninput="onSlider()"
-        style="width:50%;height:6px">
-      <span id="slE-v" style="font-size:9px;color:#6bc8e8;min-width:70px"></span>
+    <!-- 刻度尺（起訖共用同一條）-->
+    <div style="display:flex;align-items:flex-start;gap:4px;margin:-1px 0 0">
+      <div style="width:18px;flex-shrink:0"></div>
+      <div id="sl-ticks" style="flex:1;position:relative;height:22px;overflow:hidden"></div>
+      <div style="width:75px;flex-shrink:0"></div>
     </div>
-    <!-- 時間刻度（點擊可跳轉）-->
-    <div id="sl-ticks" style="position:relative;height:28px;margin-left:22px;width:calc(50% - 6px)"></div>
-    <span id="rng-disp" style="font-size:10px;color:#8ac8e8;font-weight:700;margin-top:2px;display:block"></span>
+    <div style="display:flex;align-items:center;gap:4px;margin-top:0px">
+      <label style="font-size:10px;color:#e8a03a;white-space:nowrap;width:18px">迄</label>
+      <div style="flex:1;position:relative">
+        <input type="range" id="slE" min="-27" max="60" value="3" oninput="onSlider()"
+          style="width:100%;height:5px;accent-color:#e8803a">
+      </div>
+      <span id="slE-v" style="font-size:9px;color:#e8a03a;width:75px;text-align:right;flex-shrink:0"></span>
+    </div>
+    <span id="rng-disp" style="font-size:10px;color:#8ac8e8;font-weight:700;margin-top:3px;display:block"></span>
   </div>
   <div id="custom-scale-editor" style="display:none;padding:6px 14px;background:#0a1828;border-bottom:1px solid #1a3348">
     <div style="font-size:10px;color:#6bc8e8;margin-bottom:5px">
@@ -437,6 +445,7 @@ let selected = null;
 // 二次災害高風險區列表
 const DISASTER_ZONES = [{"county": "宜蘭縣", "township": "南澳鄉", "sites": [{"code": "宜縣DF146", "village": "碧候村", "landmark": "喬之約露營區"}], "t1h": 25.0, "t3h": 80.0, "t12h": 200.0}, {"county": "宜蘭縣", "township": "頭城鎮", "sites": [{"code": "宜縣DF151", "village": "石城里", "landmark": "石城火車站"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "花蓮縣", "township": "玉里鎮", "sites": [{"code": "花縣DF082", "village": "東豐里", "landmark": "坪頂部落"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "花蓮縣", "township": "秀林鄉", "sites": [{"code": "花縣SL0011", "village": "水源村", "landmark": "石壁街"}, {"code": "花縣DF172", "village": "和平村", "landmark": "和仁車站"}, {"code": "花縣U113-3", "village": "崇德村", "landmark": "崇德車站"}, {"code": "花縣DF173", "village": "崇德村", "landmark": "崇德公墓"}, {"code": "花縣SL0001", "village": "崇德村", "landmark": "崇德車站"}, {"code": "花縣SL0002", "village": "崇德村", "landmark": "崇德車站"}, {"code": "花縣SL0003", "village": "崇德村", "landmark": "崇德國小"}, {"code": "花縣SL0006", "village": "富世村", "landmark": "東部發電廠立霧廠"}, {"code": "花縣SL0016", "village": "富世村", "landmark": "太魯閣山月村"}, {"code": "花縣DF174", "village": "景美村", "landmark": "三棧國小"}, {"code": "花縣DF175", "village": "景美村", "landmark": "加灣橋"}], "t1h": 25.0, "t3h": 80.0, "t12h": 200.0}, {"county": "花蓮縣", "township": "卓溪鄉", "sites": [{"code": "花縣DF177", "village": "卓清村", "landmark": "台30線6.5K"}, {"code": "花縣DF178", "village": "卓溪村", "landmark": "卓溪8鄰部落"}, {"code": "花縣DF039", "village": "卓溪村", "landmark": "卓溪教會"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "花蓮縣", "township": "豐濱鄉", "sites": [{"code": "花縣SL0012", "village": "新社村", "landmark": "新豐隧道"}], "t1h": 25.0, "t3h": 80.0, "t12h": 200.0}, {"county": "南投縣", "township": "信義鄉", "sites": [{"code": "投縣DF185", "village": "明德村", "landmark": "保甲林溪"}, {"code": "投縣DF206", "village": "東埔村", "landmark": "開高巷125號"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "屏東縣", "township": "來義鄉", "sites": [{"code": "屏縣DF074", "village": "南和村", "landmark": "白鷺二號橋"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "屏東縣", "township": "高樹鄉", "sites": [{"code": "屏縣DF072", "village": "新豐村", "landmark": "金龍山法輪禪寺"}, {"code": "屏縣DF073", "village": "新豐村", "landmark": "新豐村18鄰"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "桃園市", "township": "復興區", "sites": [{"code": "光華", "village": "華陵里", "landmark": "光華"}], "t1h": 40.0, "t3h": 70.0, "t12h": 150.0}, {"county": "高雄市", "township": "六龜區", "sites": [{"code": "高市DF053", "village": "中興里", "landmark": "慧濟寺"}, {"code": "高市DF114", "village": "中興里", "landmark": "扇平山莊"}, {"code": "高市DF099", "village": "文武里", "landmark": "覺華寺"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "高雄市", "township": "那瑪夏區", "sites": [{"code": "高市DF069", "village": "瑪雅里", "landmark": "民族橋"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "高雄市", "township": "茂林區", "sites": [{"code": "高市DF116", "village": "茂林里", "landmark": "情人谷瀑布"}, {"code": "高市SL0002", "village": "茂林里", "landmark": "情人谷溫泉"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "高雄市", "township": "桃源區", "sites": [{"code": "小關山(克露橋)", "village": "桃源里", "landmark": "小關山(克露橋)"}, {"code": "高市E114-3", "village": "桃源里", "landmark": "北進巷107之32號"}, {"code": "高市DF082", "village": "勤和里", "landmark": "東莊橋"}], "t1h": 15.0, "t3h": 30.0, "t12h": 70.0}, {"county": "高雄市", "township": "旗山區", "sites": [{"code": "高市SL0001", "village": "新光里", "landmark": "勞碡坑三龍寺"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "新北市", "township": "汐止區", "sites": [{"code": "鵠鵠崙", "village": "東山里", "landmark": "鵠鵠崙"}], "t1h": 40.0, "t3h": 80.0, "t12h": 125.0}, {"county": "新竹縣", "township": "尖石鄉", "sites": [{"code": "秀巒國小", "village": "秀巒村", "landmark": "秀巒國小"}], "t1h": 40.0, "t3h": 70.0, "t12h": 150.0}, {"county": "嘉義縣", "township": "中埔鄉", "sites": [{"code": "嘉縣DF051", "village": "中崙村", "landmark": "中崙四號橋"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "臺東縣", "township": "太麻里鄉", "sites": [{"code": "東縣DF111", "village": "大王村", "landmark": "沙崙橋"}, {"code": "東縣DF124", "village": "華源村", "landmark": "南北坑"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "臺東縣", "township": "卑南鄉", "sites": [{"code": "東縣DF049", "village": "泰安村", "landmark": "大巴六九"}, {"code": "東縣DF059", "village": "溫泉村", "landmark": "木瓜溪鎮樂橋"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "臺東縣", "township": "金峰鄉", "sites": [{"code": "東縣DF076", "village": "新興村", "landmark": "豐收橋"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}];
 let townLayer = null, countyLayer = null;
+let _zoomCanvasType = 'cv';  // 目前放大中的圖表類型
 let disasterLayer = null;  // 二次災害高風險區紅框圖層
 let showDisaster = false;  // 是否顯示高風險區
 
@@ -1229,15 +1238,10 @@ function showChartTooltip(evt, canvasId){
   const W = cv.width, H = cv.height;
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
 
-  // 判斷 zoom canvas 目前顯示的是哪種圖
+  // 判斷 zoom canvas 目前顯示的是哪種圖（用全局變數，比解析標題可靠）
   let effectiveId = canvasId;
   if(canvasId === 'chart-zoom-canvas'){
-    const title = document.getElementById('chart-zoom-title')?.textContent || '';
-    if(title.includes('逐日'))  effectiveId = 'cv';
-    else if(title.includes('組體')) effectiveId = 'cv-district-hyeto';
-    else if(title.includes('各分署逐日')) effectiveId = 'cv-all-daily';
-    else if(title.includes('各分署組體')) effectiveId = 'cv-all-hyeto';
-    else effectiveId = 'cv';
+    effectiveId = _zoomCanvasType || 'cv';
   }
 
   let tip = document.getElementById('chart-hover-tip');
@@ -1256,7 +1260,7 @@ function showChartTooltip(evt, canvasId){
   const pTcommon=isZoom?50:8, pBcommon=isZoom?70:22;
 
   // ── 鄉鎮逐日雨量圖 ──
-  if((effectiveId==='cv'||effectiveId==='cv-all-daily') && selected){
+  if(effectiveId==='cv' && selected){
     const t=selected;
     const nDays=16;
     const pL=pLdaily, pR=pRdaily;
@@ -2427,6 +2431,17 @@ function drawChartHQ(t, canvasId){
     const dt=new Date(BASE_TIME.getTime()+i*86400000);
     ctx.fillText(fmtDay(dt), pL+i*xS, H-pB*0.5);
   });
+
+  // 資料標籤（每個資料點上方標數值）
+  ctx.font=`${FS-8}px sans-serif`; ctx.textAlign='center';
+  d.forEach((v,i)=>{
+    if(v<=0) return;
+    const x=pL+i*xS, y=pT+ch*(1-v/mx);
+    ctx.fillStyle='rgba(0,0,0,0.5)';
+    ctx.fillRect(x-22,y-FS+2,44,FS-4);
+    ctx.fillStyle=districtColor;
+    ctx.fillText(v+'mm', x, y-6);
+  });
 }
 
 function toggleChartZoom(canvasId){
@@ -2448,6 +2463,7 @@ function toggleChartZoom(canvasId){
     'cv-all-hyeto': '全台各分署組體雨量圖',
   };
   document.getElementById('chart-zoom-title').textContent = titleMap[canvasId] || '';
+  _zoomCanvasType = canvasId;  // 記錄目前放大的圖表類型
 
   const zoomCv = document.getElementById('chart-zoom-canvas');
   if(zoomCv){ zoomCv.width=2048; zoomCv.height=1024; }
@@ -2595,6 +2611,14 @@ function drawHyetograph(t, canvasId, scale){
     const y = padT+ch-barH;
     ctx.fillStyle = b.isObs ? '#4a7ab0' : '#6ad8f0';
     ctx.fillRect(x,y,barW,barH);
+    // 放大版加數值標籤
+    if(scale>=3 && b.value>0){
+      ctx.fillStyle='rgba(0,0,0,0.5)';
+      ctx.fillRect(x, y-fs*1.3, barW, fs*1.2);
+      ctx.fillStyle=b.isObs?'#88bbff':'#aaeeff';
+      ctx.font=`${fs-4}px sans-serif`; ctx.textAlign='center';
+      ctx.fillText(b.value+'mm', x+barW/2, y-4);
+    }
   });
 
   // ETR2% 折線（依分署顏色）
@@ -2874,27 +2898,24 @@ function buildSliderTicks(){
   const min=-28, max=60, total=max-min;
   ticks.innerHTML='';
   let lastDate='';
-  // 每4步（=1天）一個主刻度（00時），每2步（=12h）一個次刻度
   for(let seg=min;seg<=max;seg+=2){
     const pct=(seg-min)/total*100;
     const dt=new Date(BASE_TIME.getTime()+seg*6*3600000);
     const dateStr=`${dt.getMonth()+1}/${dt.getDate()}`;
     const h=dt.getHours();
-    const is00=(h===0);
-    const is12=(h===12);
+    const is00=(h===0), is12=(h===12);
     if(!is00&&!is12) continue;
 
     const tick=document.createElement('div');
-    tick.style.cssText=`position:absolute;left:${pct}%;cursor:pointer;transform:translateX(-50%);text-align:center`;
+    tick.style.cssText=`position:absolute;left:${pct}%;cursor:pointer;transform:translateX(-50%);text-align:center;top:0`;
 
-    // 刻度線
     const line=document.createElement('div');
     line.style.cssText=`width:1px;height:${is00?8:4}px;background:${is00?'#4a8aaa':'#2a4a5a'};margin:0 auto 1px`;
     tick.appendChild(line);
 
-    // 標籤：同一天只顯示時間（0時/12時），不同天才在00時顯示日期
     const label=document.createElement('div');
     label.style.cssText=`font-size:7px;color:${is00?'#6bc8e8':'#3a5a6a'};white-space:nowrap`;
+    // 同一天：顯示「M/D 0時」→第一次顯示日期，之後同天只顯示時間
     if(is00){
       label.textContent = dateStr!==lastDate ? dateStr : '0時';
       lastDate=dateStr;
@@ -2908,12 +2929,11 @@ function buildSliderTicks(){
       e.stopPropagation();
       const slS2=document.getElementById('slS');
       const slE2=document.getElementById('slE');
-      // 點起始端附近設起始，反之設結束
       const sCur=parseInt(slS2.value), eCur=parseInt(slE2.value);
       if(Math.abs(segVal-sCur)<=Math.abs(segVal-eCur)){
-        slS2.value=segVal; if(parseInt(slE2.value)<=segVal) slE2.value=segVal+2;
+        slS2.value=Math.min(segVal,parseInt(slE2.value)-1);
       } else {
-        slE2.value=segVal; if(parseInt(slS2.value)>=segVal) slS2.value=segVal-2;
+        slE2.value=Math.max(segVal,parseInt(slS2.value)+1);
       }
       onSlider();
     };
