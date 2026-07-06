@@ -196,6 +196,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
       <textarea id="etr-copy-text" style="position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0" readonly></textarea>
     </div>
+    <!-- 二次災害高風險區警戒面板（僅在二次災害圖層開啟時顯示） -->
+    <div id="disaster-alert-panel" style="display:none;position:absolute;top:90px;left:228px;z-index:800;
+      background:#1a0808ee;border:1px solid #6a2a2a;border-radius:6px;
+      max-width:200px;min-width:150px;font-size:11px;color:#dde8f2;pointer-events:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;
+        border-bottom:1px solid #4a1a1a;background:#280a0a;border-radius:6px 6px 0 0">
+        <span onclick="toggleDisasterPanel()" style="cursor:pointer;font-weight:700;color:#ff6644;font-size:11px">🔴 二次災害監測</span>
+        <span id="disaster-panel-arrow" onclick="toggleDisasterPanel()" style="cursor:pointer;color:#cc4422;font-size:10px">▾</span>
+      </div>
+      <div id="disaster-panel-body" style="padding:5px 7px;max-height:280px;overflow-y:auto;overscroll-behavior:contain"
+        onwheel="event.stopPropagation()">
+        <div style="color:#5a3030;font-size:10px">開啟二次災害圖層後顯示</div>
+      </div>
+    </div>
     <!-- 指北針：右上角，獨立 -->
     <div id="compass-wrap" style="position:absolute;top:12px;right:12px;z-index:600;display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
       <button id="map-panel-toggle" onclick="toggleMapPanel()" title="收合/展開圖例與比例尺"
@@ -796,16 +810,24 @@ function drawAllDistrictHyetoChart(targetId){
   const barW_total = cw/nBars;
   const ch = H-pT-pB;
 
-  let maxV=0;
+  let maxV=0, maxEtr=10;
   DISTRICT_ORDER.forEach(district=>{
     const counties=DISTRICT_COUNTIES[district];
     TOWNSHIPS.filter(t=>counties.includes(t.county)).forEach(t=>{
       const obs=t.daily_rain||[];
       const qpf=getQpfArr(t,qpfField);
       maxV=Math.max(maxV,obs[1]||0,obs[2]||0,...qpf.slice(0,8));
+      // ETR2% 最大值（供右軸用）
+      if(t.alert_val>0){
+        [-8,-4,0,1,2,3,4,5,6,7].forEach(seg=>{
+          const e=calcEtr2AtSeg(t,seg,qpfField);
+          maxEtr=Math.max(maxEtr,Math.round(e/t.alert_val*100));
+        });
+      }
     });
   });
-  maxV=Math.max(maxV,10);
+  maxV=Math.max(maxV,5);
+  maxEtr=Math.max(ceilTo10(maxEtr+10),20);  // 最小顯示 20%，且上限多留10%空間
 
   // 標題（放大版）
   if(isZoom){
@@ -918,23 +940,43 @@ function drawAllDistrictHyetoChart(targetId){
     ctx.stroke(); ctx.setLineDash([]);
   });
 
-  // 圖例（放大版）— 放右上角，不跟X軸標籤衝突
-  if(isZoom){
-    const legLineH = (fs+6);
-    let legY = pT + 10;
-    const legX = W - pR - 200;
-    ctx.font=`${fs-2}px sans-serif`;
-    // 半透明背景
-    ctx.fillStyle='rgba(0,0,0,0.45)';
-    ctx.fillRect(legX-10, legY-fs, 200, DISTRICT_ORDER.length*legLineH+10);
+  // 圖例：小圖在底部，放大圖在右上角
+  if(!isZoom){
+    // 小圖圖例：X軸下方，每條線一個小色塊+分署簡稱
+    let legX = pL;
+    const legY = H - 5;
+    ctx.font='6px sans-serif'; ctx.textAlign='left';
     DISTRICT_ORDER.forEach(d=>{
       const c=DISTRICT_COLOR[d]||'#aaccee';
-      ctx.strokeStyle=c; ctx.lineWidth=3;
-      ctx.beginPath(); ctx.moveTo(legX, legY-4); ctx.lineTo(legX+24, legY-4); ctx.stroke();
+      ctx.strokeStyle=c; ctx.lineWidth=1.2;
+      ctx.beginPath(); ctx.moveTo(legX, legY-3); ctx.lineTo(legX+8, legY-3); ctx.stroke();
+      ctx.fillStyle=c;
+      ctx.fillText(d.replace('分署',''), legX+9, legY);
+      legX += 30;
+    });
+  } else {
+    const legLineH = (fs+6);
+    let legY = pT + 10;
+    const legX = W - pR - 220;
+    ctx.font=`${fs-2}px sans-serif`;
+    ctx.fillStyle='rgba(0,0,0,0.45)';
+    ctx.fillRect(legX-10, legY-fs, 220, DISTRICT_ORDER.length*legLineH+fs*2+20);
+    DISTRICT_ORDER.forEach(d=>{
+      const c=DISTRICT_COLOR[d]||'#aaccee';
+      // 實線=雨量
+      ctx.strokeStyle=c; ctx.lineWidth=3; ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(legX, legY-4); ctx.lineTo(legX+20, legY-4); ctx.stroke();
       ctx.fillStyle=c; ctx.textAlign='left';
-      ctx.fillText(d, legX+28, legY);
+      ctx.fillText(d.replace('分署','')+'（雨量）', legX+24, legY);
       legY += legLineH;
     });
+    // ETR2% 虛線說明
+    legY += 4;
+    ctx.strokeStyle='#ffdd44'; ctx.lineWidth=2; ctx.setLineDash([4,3]);
+    ctx.beginPath(); ctx.moveTo(legX, legY-4); ctx.lineTo(legX+20, legY-4); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='#ffdd44'; ctx.textAlign='left';
+    ctx.fillText('各分署 ETR2%（右軸）', legX+24, legY);
   }
 }
 
@@ -1056,21 +1098,89 @@ function updateEtrAlertPanel(){
 // ════════════════════════════════════════════════
 //  二次災害高風險區圖層
 // ════════════════════════════════════════════════
+let disasterPanelOpen = true;
+function toggleDisasterPanel(){
+  disasterPanelOpen = !disasterPanelOpen;
+  const body = document.getElementById('disaster-panel-body');
+  const arrow = document.getElementById('disaster-panel-arrow');
+  if(body) body.style.display = disasterPanelOpen ? 'block' : 'none';
+  if(arrow) arrow.textContent = disasterPanelOpen ? '▾' : '▸';
+}
+
+function updateDisasterPanel(){
+  const panel = document.getElementById('disaster-alert-panel');
+  const body = document.getElementById('disaster-panel-body');
+  if(!panel||!body) return;
+
+  // 只在災害圖層開啟時顯示
+  panel.style.display = showDisaster ? 'block' : 'none';
+  if(!showDisaster) return;
+
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const alerts = [];  // 有累積雨量達警戒的高風險區
+
+  DISASTER_ZONES.forEach(zone=>{
+    const t = TOWNSHIPS.find(x=>x.county===zone.county&&x.township===zone.township);
+    if(!t) return;
+    const rain = t.rain_24h || 0;
+    const qpfToday = getQpfArr(t,qpfField).slice(0,4).reduce((a,b)=>a+(b||0),0);
+    const totalRain = Math.round((rain + qpfToday)*10)/10;
+    const t1h = zone.t1h || 999;
+    const etr2 = t.alert_val>0 ? calcEtr2AtSeg(t,3,qpfField) : null;
+    const etrPct = etr2!=null && t.alert_val>0 ? Math.round(etr2/t.alert_val*100) : null;
+
+    // 判斷是否需要注意（QPF超過警戒值 or ETR2%>=70）
+    const rainAlert = qpfToday >= t1h;
+    const etrAlert = etrPct!=null && etrPct>=70;
+    alerts.push({county:zone.county,township:zone.township,
+      totalRain,qpfToday,t1h,etrPct,rainAlert,etrAlert,
+      sites:zone.sites.length});
+  });
+
+  const alerting = alerts.filter(a=>a.rainAlert||a.etrAlert);
+  const normal   = alerts.filter(a=>!a.rainAlert&&!a.etrAlert);
+
+  if(alerting.length===0){
+    body.innerHTML='<div style="color:#5a3030;font-size:10px;padding:3px 0">目前無高風險區達警戒</div>'+
+      `<div style="color:#3a2020;font-size:9px;margin-top:3px">監測中：${normal.length}個鄉鎮</div>`;
+    return;
+  }
+
+  let html='';
+  alerting.sort((a,b)=>b.etrPct-a.etrPct).forEach(a=>{
+    const etrColor = a.etrPct>=100?'#BB00BB':a.etrPct>=90?'#DD2222':a.etrPct>=70?'#DDDD00':'#aaccee';
+    html+=`<div style="padding:2px 0;border-bottom:1px dashed #3a1a1a;cursor:pointer"
+      onclick="selectTownByName('${a.county}','${a.township}')">
+      <div style="display:flex;justify-content:space-between">
+        <span style="color:#ffaa88;font-size:10px;text-decoration:underline dotted">${a.county.replace(/[縣市]$/,'')} ${a.township}</span>
+        ${a.etrPct!=null?`<span style="color:${etrColor};font-size:10px;font-weight:700">${a.etrPct}%</span>`:''}
+      </div>
+      <div style="font-size:9px;color:#886655">
+        ${a.rainAlert?`<span style="color:#ff8844">QPF ${a.qpfToday.toFixed(0)}mm ≥ 警戒${a.t1h}mm</span> `:''}
+      </div>
+    </div>`;
+  });
+  if(normal.length>0){
+    html+=`<div style="color:#3a2020;font-size:9px;margin-top:4px">其餘${normal.length}個監測中</div>`;
+  }
+  body.innerHTML=html;
+}
+
 function toggleDisasterLayer(){
   showDisaster = !showDisaster;
   const btn = document.getElementById('bDisaster');
   if(btn) btn.classList.toggle('on', showDisaster);
   renderDisasterLayer();
+  updateDisasterPanel();
 }
 
 function renderDisasterLayer(){
   if(disasterLayer){ map.removeLayer(disasterLayer); disasterLayer=null; }
   if(!showDisaster) return;
 
-  // 建立高風險區的鄉鎮名稱 Set，用於查找
   const disasterSet = new Set(DISASTER_ZONES.map(z=>z.county+z.township));
-
   disasterLayer = L.layerGroup();
+
   TOWN_GEO.features.forEach(feat=>{
     const p = feat.properties;
     const key = (p.COUNTYNAME||'')+(p.TOWNNAME||'');
@@ -1081,19 +1191,14 @@ function renderDisasterLayer(){
     const toLL = c=>[c[1],c[0]];
     const polys = g.type==='Polygon' ? [g.coordinates] : g.coordinates;
     polys.forEach(parts=>{
-      // 紅框高風險區
       const outline = L.polygon(parts.map(ring=>ring.map(toLL)),{
-        color:'#ff2200', weight:2.5, fillColor:'#ff2200',
-        fillOpacity:0.12, dashArray:'6,4', interactive:true,
+        color:'#ff2200', weight:2.5, fillColor:'transparent',
+        fillOpacity:0, dashArray:'5,3', interactive:true, smoothFactor:0,
       });
-      // tooltip 顯示警戒值
-      const sitesStr = zone.sites.slice(0,3).map(s=>s.landmark).join('、');
-      const moreStr = zone.sites.length>3 ? `等${zone.sites.length}處` : '';
       outline.bindTooltip(
-        `<b style="color:#ff6644">⚠ ${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
-        `地點：${sitesStr}${moreStr}<br>`+
-        `警戒值：1h≥${zone.t1h||'—'}mm / 3h≥${zone.t3h||'—'}mm`,
-        {sticky:true, opacity:0.95}
+        `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b>　二次災害高風險區<br>`+
+        `警戒值：1h≥${zone.t1h||'—'}mm`,
+        {sticky:true, opacity:0.9}
       );
       outline.on('click', e=>{
         L.DomEvent.stopPropagation(e);
@@ -1101,17 +1206,6 @@ function renderDisasterLayer(){
         if(t){ selected=t; renderLayer(); updateInfo(t); renderDisasterLayer(); }
       });
       outline.addTo(disasterLayer);
-
-      // 角落的警示標籤
-      const bounds = outline.getBounds();
-      const center = bounds.getNorthWest();
-      L.marker([center.lat, center.lng],{
-        icon: L.divIcon({
-          className:'',
-          html:`<div style="background:#cc2200;color:#fff;font-size:9px;padding:1px 3px;border-radius:2px;white-space:nowrap;opacity:0.85">⚠${p.TOWNNAME}</div>`,
-          iconAnchor:[0,0]
-        }), interactive:false
-      }).addTo(disasterLayer);
     });
   });
 
@@ -1539,6 +1633,7 @@ function renderLayer(){
   countyLayer.addTo(map);
   updateEtrAlertPanel();  // 同步更新ETR2%警戒統整面板
   if(showDisaster) renderDisasterLayer();  // 保持災害圖層在最上層
+  if(showDisaster) updateDisasterPanel();  // 同步更新災害面板
 }
 
 // ════════════════════════════════════════════════
