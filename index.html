@@ -140,7 +140,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     <!-- 刻度尺（起訖共用同一條）-->
     <div style="display:flex;align-items:flex-start;gap:4px;margin:-1px 0 0">
       <div style="width:18px;flex-shrink:0"></div>
-      <div id="sl-ticks" style="flex:1;position:relative;height:22px;overflow:hidden"></div>
+      <div id="sl-ticks" style="flex:1;position:relative;height:22px;overflow:hidden;padding:0 7px;box-sizing:border-box"></div>
       <div style="width:75px;flex-shrink:0"></div>
     </div>
     <div style="display:flex;align-items:center;gap:4px;margin-top:0px">
@@ -886,22 +886,20 @@ function drawAllDistrictDailyChart(targetId){
       legX+=30;
     });
   } else {
-    const legLineH=fs+6; let legY=pT+10; const legX=W-pR-240;
-    ctx.fillStyle='rgba(0,0,0,0.5)';
-    ctx.fillRect(legX-10,legY-fs,240,DISTRICT_ORDER.length*legLineH+fs*2+20);
+    const legLineH=fs+4; let legY=pT+10; const legX=W-pR-200;
+    ctx.fillStyle='rgba(0,0,0,0.55)';
+    ctx.fillRect(legX-8, legY-fs, 200, (DISTRICT_ORDER.length+1)*legLineH+8);
     DISTRICT_ORDER.forEach(d=>{
       const c=DISTRICT_COLOR[d]||'#aaccee';
-      ctx.fillStyle=c; ctx.fillRect(legX,legY-fs+2,14,fs-2);
-      ctx.strokeStyle=c; ctx.lineWidth=2;
-      ctx.beginPath(); ctx.moveTo(legX+18,legY-fs/2); ctx.lineTo(legX+38,legY-fs/2); ctx.stroke();
+      ctx.fillStyle=c; ctx.fillRect(legX, legY-fs+3, fs-2, fs-4);
       ctx.fillStyle=c; ctx.font=`${fs-2}px sans-serif`; ctx.textAlign='left';
-      ctx.fillText(d.replace('分署',''), legX+42, legY);
+      ctx.fillText(d.replace('分署',''), legX+fs+2, legY);
       legY+=legLineH;
     });
-    ctx.strokeStyle='#ffdd44'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.moveTo(legX,legY-fs/2); ctx.lineTo(legX+38,legY-fs/2); ctx.stroke();
+    // ETR2% 說明列
+    ctx.fillStyle='rgba(255,220,60,0.8)'; ctx.fillRect(legX, legY-fs+3, fs-2, fs-4);
     ctx.fillStyle='#ffdd44'; ctx.font=`${fs-2}px sans-serif`; ctx.textAlign='left';
-    ctx.fillText('實線 = ETR2%（右軸）', legX+42, legY);
+    ctx.fillText('ETR2%（右軸）', legX+fs+2, legY);
   }
 }
 
@@ -1059,14 +1057,6 @@ function drawAllDistrictHyetoChart(targetId){
       i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
     });
     ctx.stroke();
-    // 放大版：末端標籤
-    if(isZoom){
-      const lastV=etrRow[etrRow.length-1];
-      ctx.fillStyle=color; ctx.font=`${fs-2}px sans-serif`; ctx.textAlign='left';
-      ctx.fillText(district.replace('分署',''),
-        pL+(etrRow.length-1)*barW_total+barW_total/2+4,
-        pT+ch*(1-lastV/maxEtr)+fs*0.35);
-    }
   });
 
   // 圖例
@@ -1080,25 +1070,21 @@ function drawAllDistrictHyetoChart(targetId){
       legX+=30;
     });
   } else {
-    const legLineH=fs+6;
+    const legLineH=fs+4;
     let legY=pT+10;
-    const legX=W-pR-240;
-    ctx.fillStyle='rgba(0,0,0,0.5)';
-    ctx.fillRect(legX-10,legY-fs,240,DISTRICT_ORDER.length*legLineH+fs*2+20);
+    const legX=W-pR-200;
+    ctx.fillStyle='rgba(0,0,0,0.55)';
+    ctx.fillRect(legX-8,legY-fs,200,(DISTRICT_ORDER.length+1)*legLineH+8);
     DISTRICT_ORDER.forEach(d=>{
       const c=DISTRICT_COLOR[d]||'#aaccee';
-      ctx.fillStyle=c; ctx.fillRect(legX,legY-fs+2,14,fs-2);
-      ctx.strokeStyle=c; ctx.lineWidth=2; ctx.setLineDash([5,3]);
-      ctx.beginPath(); ctx.moveTo(legX+18,legY-fs/2); ctx.lineTo(legX+38,legY-fs/2); ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.fillStyle=c; ctx.fillRect(legX,legY-fs+3,fs-2,fs-4);
       ctx.fillStyle=c; ctx.font=`${fs-2}px sans-serif`; ctx.textAlign='left';
-      ctx.fillText(d.replace('分署',''), legX+42, legY);
+      ctx.fillText(d.replace('分署',''), legX+fs+2, legY);
       legY+=legLineH;
     });
-    ctx.strokeStyle='#ffdd44'; ctx.lineWidth=2; ctx.setLineDash([]);
-    ctx.beginPath(); ctx.moveTo(legX,legY-fs/2); ctx.lineTo(legX+38,legY-fs/2); ctx.stroke();
+    ctx.fillStyle='rgba(255,220,60,0.8)'; ctx.fillRect(legX,legY-fs+3,fs-2,fs-4);
     ctx.fillStyle='#ffdd44'; ctx.font=`${fs-2}px sans-serif`; ctx.textAlign='left';
-    ctx.fillText('實線 = ETR2%（右軸）', legX+42, legY);
+    ctx.fillText('ETR2%（右軸）', legX+fs+2, legY);
   }
 }
 
@@ -1472,80 +1458,72 @@ function updateDisasterPanel(){
   const panel = document.getElementById('disaster-alert-panel');
   const body  = document.getElementById('disaster-panel-body');
   if(!panel||!body) return;
-
   panel.style.display = showDisaster ? 'block' : 'none';
   if(!showDisaster) return;
 
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
 
-  // 「當前時段」的累積雨量
+  // 依當前選取時段計算該時段的雨量（跟 getAccum 一樣邏輯）
   const getSegRain = (t)=>{
     const qa = getQpfArr(t, qpfField);
     if(winKey==='today') return Math.round(qa.slice(0,4).reduce((a,b)=>a+(b||0),0)*10)/10;
-    if(winKey.startsWith('past')){ const n=parseInt(winKey.slice(4)); return (t.daily_rain||[])[n+1]||0; }
-    if(winKey.startsWith('day')){ const n=parseInt(winKey.slice(3));
-      let s=0; for(let i=(n-1)*4;i<=(n-1)*4+3;i++) s+=qa[i]||0; return Math.round(s*10)/10; }
-    if(winKey.startsWith('fut6_')){ const n=parseInt(winKey.slice(5)); return Math.round((qa[n-1]||0)*10)/10; }
-    return 0;
+    if(winKey.startsWith('past')){
+      const n=parseInt(winKey.slice(4));
+      return (t.daily_rain||[])[n+1]||0;
+    }
+    if(winKey.startsWith('day')){
+      const n=parseInt(winKey.slice(3));
+      let s=0; for(let i=(n-1)*4;i<=(n-1)*4+3;i++) s+=qa[i]||0;
+      return Math.round(s*10)/10;
+    }
+    if(winKey.startsWith('fut6_')){
+      const n=parseInt(winKey.slice(5));
+      return Math.round((qa[n-1]||0)*10)/10;
+    }
+    // 自訂範圍
+    let s=0;
+    const sf=Math.max(0,segFrom), st=Math.min(59,segTo);
+    for(let i=sf;i<=st;i++) s+=qa[i]||0;
+    return Math.round(s*10)/10;
   };
 
-  // 找「最早哪個未來時段的累積QPF」會超過任一警戒值（1h/3h/12h）
-  const findFutureAlert = (t, zone)=>{
-    const qa = getQpfArr(t, qpfField);
-    const t1h=zone.t1h||999, t3h=zone.t3h||999, t12h=zone.t12h||999;
-    // 1h≈單6h段（最大6h段）；3h≈連續2個6h段中最大；12h≈連續2天
-    // 今天全天QPF（24h）
-    const todayQpf=Math.round(qa.slice(0,4).reduce((a,b)=>a+(b||0),0)*10)/10;
-    // 6h段逐一檢查（1h 用單段近似）
-    for(let i=0;i<8;i++){
-      const s1=Math.round((qa[i]||0)*10)/10;  // 單6h
-      const s3=Math.round(((qa[i]||0)+(qa[i+1]||0))*10)/10;  // 連續2個6h≈12h
-      const s12=Math.round(qa.slice(Math.max(0,i-1),i+3).reduce((a,b)=>a+(b||0),0)*10)/10;  // 12h
-      const h=(i+1)*6;
-      if(s1>=t1h) return {when:`+${h}h段`, rain:s1, type:'1h'};
-      if(s3>=t3h) return {when:`+${h}h起連12h`, rain:s3, type:'3h'};
-      if(s12>=t12h) return {when:`+${h}h起12h累積`, rain:s12, type:'12h'};
-    }
-    // 逐日
-    for(let d=1;d<=15;d++){
-      let dayRain=0; for(let i=(d-1)*4;i<=(d-1)*4+3;i++) dayRain+=qa[i]||0;
-      dayRain=Math.round(dayRain*10)/10;
-      const dt=new Date(BASE_TIME.getTime()+d*86400000);
-      if(dayRain>=t12h) return {when:fmtDay(dt), rain:dayRain, type:'12h'};
-    }
-    return null;
-  };
+  // 判斷是否過去時段（已發生）
+  const isPast = winKey.startsWith('past');
 
-  const alerts=[], normal=[];
+  const alerts=[];
   DISASTER_ZONES.forEach(zone=>{
     const t=TOWNSHIPS.find(x=>x.county===zone.county&&x.township===zone.township);
     if(!t) return;
-    const currentRain=getSegRain(t);
+    const rain=getSegRain(t);
     const t1h=zone.t1h||999, t3h=zone.t3h||999, t12h=zone.t12h||999;
-    const etr2=t.alert_val>0?calcEtr2AtSeg(t,3,qpfField):null;
+    const etr2=t.alert_val>0?calcEtr2AtSeg(t,segTo>=0?segTo:3,qpfField):null;
     const etrPct=etr2!=null&&t.alert_val>0?Math.round(etr2/t.alert_val*100):null;
 
-    // 現況達標：任一時距
-    const rainNowAlert = currentRain>=t1h;
-    const etrAlert = etrPct!=null && etrPct>=70;
-    const futureAlert = !rainNowAlert ? findFutureAlert(t, zone) : null;
+    // 達標判斷：任一時距超過警戒值
+    const rainAlert = rain>=t1h || rain>=t3h || rain>=t12h;
+    const etrAlert  = etrPct!=null && etrPct>=70;
+    if(!rainAlert && !etrAlert) return;  // 未達標不顯示
 
-    const obj={county:zone.county,township:zone.township,
-               currentRain, t1h, t3h, t12h, etrPct, sites:zone.sites,
-               rainNowAlert, futureAlert};
-    if(rainNowAlert || etrAlert || futureAlert) alerts.push(obj);
-    else normal.push(obj);
+    // 顯示最嚴格的警戒類型
+    let alertType='', alertThreshold=0;
+    if(rain>=t1h){ alertType='1h'; alertThreshold=t1h; }
+    else if(rain>=t3h){ alertType='3h'; alertThreshold=t3h; }
+    else if(rain>=t12h){ alertType='12h'; alertThreshold=t12h; }
+
+    alerts.push({county:zone.county, township:zone.township, rain,
+      alertType, alertThreshold, etrPct, isPast, sites:zone.sites});
   });
 
   if(alerts.length===0){
-    body.innerHTML=`<div style="color:#5a3030;font-size:10px;padding:3px 0">目前無達警戒</div>
-      <div style="color:#3a2020;font-size:9px;margin-top:2px">監測中：${normal.length}個鄉鎮</div>`;
+    body.innerHTML=`<div style="color:#5a3030;font-size:10px;padding:3px 0">本時段無達警戒</div>`;
     return;
   }
 
+  alerts.sort((a,b)=>(b.etrPct||0)-(a.etrPct||0));
   let html='';
-  alerts.sort((a,b)=>(b.etrPct||0)-(a.etrPct||0)).forEach(a=>{
+  alerts.forEach(a=>{
     const etrColor=a.etrPct>=100?'#BB00BB':a.etrPct>=90?'#DD2222':a.etrPct>=70?'#DDDD00':'#aaccee';
+    const rainLabel = a.isPast ? '觀測' : '預測';
     html+=`<div style="border-bottom:1px dashed #4a1a1a;padding:2px 0">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <span style="color:#ffaa88;font-size:10px;text-decoration:underline dotted;cursor:pointer"
@@ -1553,24 +1531,17 @@ function updateDisasterPanel(){
         >${a.county.replace(/[縣市]$/,'')} ${a.township}</span>
         ${a.etrPct!=null?`<span style="color:${etrColor};font-size:10px;font-weight:700">${a.etrPct}%</span>`:''}
       </div>
-      ${a.rainNowAlert?
-        `<div style="font-size:9px;color:#ff6644">現況 ${a.currentRain}mm ≥ 警戒${a.t1h}mm</div>`:
-        a.futureAlert?
-        `<div style="font-size:9px;color:#ffaa44">預估 ${a.futureAlert.when} 達 ${a.futureAlert.rain}mm（警戒${a.t1h}mm）</div>`:
-        ''}
+      ${a.alertType?`<div style="font-size:9px;color:#ff8844">${rainLabel} ${a.rain}mm ≥ ${a.alertType}警戒${a.alertThreshold}mm</div>`:''}
       <div style="margin:1px 0">
         ${a.sites.map(s=>`<span style="font-size:8px;background:#330000;color:#ff9966;
           border:1px solid #ff4422;border-radius:2px;padding:0 2px;margin:0 1px;cursor:pointer;display:inline-block"
-          onmouseenter="showStationTooltip(event,'${s.code}','${s.landmark}','${a.county}${a.township}',${a.currentRain},${a.etrPct||0})"
+          onmouseenter="showStationTooltip(event,'${s.code}','${s.landmark}','${a.county}${a.township}',${a.rain},${a.etrPct||0})"
           onmouseleave="hideStationTooltip()"
           onclick="selectTownByName('${a.county}','${a.township}')"
         >${s.code}</span>`).join('')}
       </div>
     </div>`;
   });
-  if(normal.length>0){
-    html+=`<div style="color:#3a2020;font-size:9px;margin-top:3px">其餘${normal.length}個監測中</div>`;
-  }
   body.innerHTML=html;
 }
 
@@ -2386,61 +2357,110 @@ function drawChartHQ(t, canvasId){
 
   const d = t.daily_qpf || [];
   if(!d.length) return;
-  const ext = getDailyChartExtremes();  // 全台15天逐日QPF極值
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const ext = getDailyChartExtremes();
   const mx = ext.rainMax;
   const districtColor = getDistrictColor(t.county);
-  const FS = 30, FS_TITLE = 40;  // 標籤30px，標題40px
+  const FS = 28, FS_TITLE = 38;
 
-  const pL=120, pR=60, pT=70, pB=90, cw=W-pL-pR, ch=H-pT-pB, xS=cw/(d.length-1);
+  const pL=120, pR=100, pT=70, pB=100, cw=W-pL-pR, ch=H-pT-pB;
+  const nDays = d.length;
+  const barGroupW = cw/nDays;
+  const barW = barGroupW*0.65;
 
   // 標題
   ctx.fillStyle='#ffffff'; ctx.font=`${FS_TITLE}px sans-serif`; ctx.textAlign='left';
-  ctx.fillText(`${t.county}${t.township} 逐日雨量趨勢（15天）`, pL, pT*0.55);
+  ctx.fillText(`${t.county}${t.township} 逐日雨量（${nDays}天）`, pL, pT*0.55);
 
-  // 白色格線+刻度（統一字體）
-  ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.lineWidth=1;
+  // 左軸格線+刻度
+  ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1;
   [0,.25,.5,.75,1].forEach(r=>{
     const y=pT+ch*(1-r);
     ctx.beginPath();ctx.moveTo(pL,y);ctx.lineTo(W-pR,y);ctx.stroke();
     ctx.fillStyle='#ffffff'; ctx.font=`${FS}px sans-serif`; ctx.textAlign='right';
-    ctx.fillText(ceilTo10(Math.round(mx*r)), pL-10, y+5);
+    ctx.fillText(ceilTo10(Math.round(mx*r)), pL-10, y+FS*0.35);
   });
   ctx.save(); ctx.translate(pL*0.28, pT+ch/2); ctx.rotate(-Math.PI/2);
   ctx.fillStyle='#ffffff'; ctx.font=`${FS}px sans-serif`; ctx.textAlign='center';
   ctx.fillText('累積雨量 (mm)', 0, 0);
   ctx.restore();
 
-  // 選取範圍高亮
-  const dF=Math.max(0,Math.floor(segFrom/4)), dT=Math.min(d.length-1,Math.floor(segTo/4));
-  if(dT>=dF){ ctx.fillStyle='rgba(255,153,51,.15)'; ctx.fillRect(pL+dF*xS,pT,(dT-dF+1)*xS,ch); }
+  // 當前選取時段高亮
+  const dF=Math.max(0,Math.floor(segFrom/4)), dT=Math.min(nDays-1,Math.floor(segTo/4));
+  if(dT>=dF){
+    ctx.fillStyle='rgba(255,153,51,.15)';
+    ctx.fillRect(pL+dF*barGroupW, pT, (dT-dF+1)*barGroupW, ch);
+  }
 
-  // 折線（分署色）
-  ctx.beginPath(); ctx.strokeStyle=districtColor; ctx.lineWidth=3;
-  d.forEach((v,i)=>{ const x=pL+i*xS,y=pT+ch*(1-v/mx); i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
-  ctx.stroke();
+  // 長條圖
   d.forEach((v,i)=>{
-    const x=pL+i*xS,y=pT+ch*(1-v/mx);
-    ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2);
-    ctx.fillStyle=districtColor; ctx.fill();
-    ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
+    if(v<=0) return;
+    const barH=ch*v/mx;
+    const x=pL+i*barGroupW+(barGroupW-barW)/2;
+    const y=pT+ch-barH;
+    // 今天前用深藍，今天後用青色
+    ctx.fillStyle = i===0 ? '#3a7ab0' : '#6ad8f0';
+    ctx.globalAlpha=0.85;
+    ctx.fillRect(x, y, barW, barH);
+    ctx.globalAlpha=1.0;
+    // 數值標籤
+    ctx.fillStyle=i===0?'#88bbff':'#aaeeff';
+    ctx.font=`${FS-4}px sans-serif`; ctx.textAlign='center';
+    ctx.fillText(v+'mm', x+barW/2, y-6);
   });
 
-  // X軸標籤（白色，統一字體，含星期幾）
+  // ETR2% 右軸
+  const etrData=[];
+  let maxEtr=10;
+  for(let i=0;i<nDays;i++){
+    const seg=i===0?3:(i-1)*4+3;
+    const e=t.alert_val>0?calcEtr2AtSeg(t,seg,qpfField):null;
+    const pct=e!=null?Math.round(e/t.alert_val*100):0;
+    etrData.push(pct);
+    maxEtr=Math.max(maxEtr,pct);
+  }
+  maxEtr=ceilTo10(maxEtr+10);
+  // 右軸刻度
+  ctx.fillStyle='#ffdd44'; ctx.font=`${FS}px sans-serif`; ctx.textAlign='left';
+  [.25,.5,.75,1].forEach(r=>{
+    const y=pT+ch*(1-r);
+    ctx.fillText(ceilTo10(Math.round(maxEtr*r))+'%', W-pR+8, y+FS*0.35);
+  });
+  ctx.save(); ctx.translate(W-pR*0.18,pT+ch/2); ctx.rotate(Math.PI/2);
+  ctx.fillStyle='#ffdd44'; ctx.font=`${FS}px sans-serif`; ctx.textAlign='center';
+  ctx.fillText('ETR2%', 0, 0); ctx.restore();
+
+  // ETR2% 折線（實線）
+  const etrColor = districtColor;
+  ctx.beginPath(); ctx.strokeStyle=etrColor; ctx.lineWidth=3;
+  etrData.forEach((v,i)=>{
+    const x=pL+i*barGroupW+barGroupW/2;
+    const y=pT+ch*(1-v/maxEtr);
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+  etrData.forEach((v,i)=>{
+    const x=pL+i*barGroupW+barGroupW/2;
+    const y=pT+ch*(1-v/maxEtr);
+    ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2);
+    ctx.fillStyle=etrColor; ctx.fill();
+    ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
+    // ETR2%數值標籤
+    if(v>0){
+      ctx.font=`${FS-6}px sans-serif`; ctx.textAlign='center';
+      ctx.fillStyle='rgba(0,0,0,0.5)';
+      const lw=ctx.measureText(v+'%').width+6;
+      ctx.fillRect(x-lw/2, y-FS+4, lw, FS-6);
+      ctx.fillStyle=etrColor;
+      ctx.fillText(v+'%', x, y-6);
+    }
+  });
+
+  // X軸標籤
   ctx.fillStyle='#ffffff'; ctx.font=`${FS}px sans-serif`; ctx.textAlign='center';
   d.forEach((v,i)=>{
     const dt=new Date(BASE_TIME.getTime()+i*86400000);
-    ctx.fillText(fmtDay(dt), pL+i*xS, H-pB*0.5);
-  });
-
-  // 資料標籤（每個資料點上方標數值）
-  ctx.font=`${FS-8}px sans-serif`; ctx.textAlign='center';
-  d.forEach((v,i)=>{
-    if(v<=0) return;
-    const x=pL+i*xS, y=pT+ch*(1-v/mx);
-    ctx.fillStyle='rgba(0,0,0,0.5)';
-    ctx.fillRect(x-22,y-FS+2,44,FS-4);
-    ctx.fillStyle=districtColor;
-    ctx.fillText(v+'mm', x, y-6);
+    ctx.fillText(fmtDay(dt), pL+i*barGroupW+barGroupW/2, H-pB*0.45);
   });
 }
 
@@ -2641,6 +2661,15 @@ function drawHyetograph(t, canvasId, scale){
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 0.8*scale;
       ctx.stroke();
+      // ETR2%數值標籤（放大版才顯示）
+      if(scale>=3 && v>0){
+        ctx.font=`${fs-4}px sans-serif`; ctx.textAlign='center';
+        ctx.fillStyle='rgba(0,0,0,0.5)';
+        const lw=ctx.measureText(v+'%').width+4;
+        ctx.fillRect(x-lw/2, y-fs*1.4, lw, fs*1.1);
+        ctx.fillStyle=districtColor;
+        ctx.fillText(v+'%', x, y-fs*0.45);
+      }
     });
   }
 
@@ -2896,10 +2925,18 @@ function buildSliderTicks(){
   const ticks = document.getElementById('sl-ticks');
   if(!ticks) return;
   const min=-28, max=60, total=max-min;
+  // slider thumb 在瀏覽器中有內縮偏移，用 CSS calc 補正
+  // 一般 thumb 寬14px，track 寬100%，所以 pct% 對應實際位置需補正
+  const thumbW=14;  // thumb 寬度(px)，配合CSS設定
   ticks.innerHTML='';
   let lastDate='';
   for(let seg=min;seg<=max;seg+=2){
-    const pct=(seg-min)/total*100;
+    const pctRaw=(seg-min)/total*100;
+    // 補正 thumb 偏移：slider 實際可移動範圍是 100%-thumbW，
+    // CSS: left = calc(pct% - pct*thumbW/100 + thumbW/2)
+    // 但用 inline style left% 最接近：left: calc(${pctRaw}% * (1 - thumbW/containerW) + thumbW/2)
+    // 簡化：直接用 pctRaw，讓容器 overflow:hidden 處理邊界
+    const pct = pctRaw;
     const dt=new Date(BASE_TIME.getTime()+seg*6*3600000);
     const dateStr=`${dt.getMonth()+1}/${dt.getDate()}`;
     const h=dt.getHours();
