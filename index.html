@@ -102,6 +102,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b on" id="bRain"  onclick="setMode('rain')">累積雨量</button>
       <button class="b"    id="bEtr"   onclick="setMode('etr')">ETR2%</button>
       <button class="b"    id="bRisk"  onclick="setMode('risk')">風險指標</button>
+      <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
+        style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
     </div>
   </div>
   <div class="ctrl-row">
@@ -386,7 +388,12 @@ const MODEL_NOTE = {
   icon:  'DWD ICON · 時效 7 天',
 };
 let selected = null;
+
+// 二次災害高風險區列表
+const DISASTER_ZONES = [{"county": "宜蘭縣", "township": "南澳鄉", "sites": [{"code": "宜縣DF146", "village": "碧候村", "landmark": "喬之約露營區"}], "t1h": 25.0, "t3h": 80.0, "t12h": 200.0}, {"county": "宜蘭縣", "township": "頭城鎮", "sites": [{"code": "宜縣DF151", "village": "石城里", "landmark": "石城火車站"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "花蓮縣", "township": "玉里鎮", "sites": [{"code": "花縣DF082", "village": "東豐里", "landmark": "坪頂部落"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "花蓮縣", "township": "秀林鄉", "sites": [{"code": "花縣SL0011", "village": "水源村", "landmark": "石壁街"}, {"code": "花縣DF172", "village": "和平村", "landmark": "和仁車站"}, {"code": "花縣U113-3", "village": "崇德村", "landmark": "崇德車站"}, {"code": "花縣DF173", "village": "崇德村", "landmark": "崇德公墓"}, {"code": "花縣SL0001", "village": "崇德村", "landmark": "崇德車站"}, {"code": "花縣SL0002", "village": "崇德村", "landmark": "崇德車站"}, {"code": "花縣SL0003", "village": "崇德村", "landmark": "崇德國小"}, {"code": "花縣SL0006", "village": "富世村", "landmark": "東部發電廠立霧廠"}, {"code": "花縣SL0016", "village": "富世村", "landmark": "太魯閣山月村"}, {"code": "花縣DF174", "village": "景美村", "landmark": "三棧國小"}, {"code": "花縣DF175", "village": "景美村", "landmark": "加灣橋"}], "t1h": 25.0, "t3h": 80.0, "t12h": 200.0}, {"county": "花蓮縣", "township": "卓溪鄉", "sites": [{"code": "花縣DF177", "village": "卓清村", "landmark": "台30線6.5K"}, {"code": "花縣DF178", "village": "卓溪村", "landmark": "卓溪8鄰部落"}, {"code": "花縣DF039", "village": "卓溪村", "landmark": "卓溪教會"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "花蓮縣", "township": "豐濱鄉", "sites": [{"code": "花縣SL0012", "village": "新社村", "landmark": "新豐隧道"}], "t1h": 25.0, "t3h": 80.0, "t12h": 200.0}, {"county": "南投縣", "township": "信義鄉", "sites": [{"code": "投縣DF185", "village": "明德村", "landmark": "保甲林溪"}, {"code": "投縣DF206", "village": "東埔村", "landmark": "開高巷125號"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "屏東縣", "township": "來義鄉", "sites": [{"code": "屏縣DF074", "village": "南和村", "landmark": "白鷺二號橋"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "屏東縣", "township": "高樹鄉", "sites": [{"code": "屏縣DF072", "village": "新豐村", "landmark": "金龍山法輪禪寺"}, {"code": "屏縣DF073", "village": "新豐村", "landmark": "新豐村18鄰"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "桃園市", "township": "復興區", "sites": [{"code": "光華", "village": "華陵里", "landmark": "光華"}], "t1h": 40.0, "t3h": 70.0, "t12h": 150.0}, {"county": "高雄市", "township": "六龜區", "sites": [{"code": "高市DF053", "village": "中興里", "landmark": "慧濟寺"}, {"code": "高市DF114", "village": "中興里", "landmark": "扇平山莊"}, {"code": "高市DF099", "village": "文武里", "landmark": "覺華寺"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "高雄市", "township": "那瑪夏區", "sites": [{"code": "高市DF069", "village": "瑪雅里", "landmark": "民族橋"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "高雄市", "township": "茂林區", "sites": [{"code": "高市DF116", "village": "茂林里", "landmark": "情人谷瀑布"}, {"code": "高市SL0002", "village": "茂林里", "landmark": "情人谷溫泉"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "高雄市", "township": "桃源區", "sites": [{"code": "小關山(克露橋)", "village": "桃源里", "landmark": "小關山(克露橋)"}, {"code": "高市E114-3", "village": "桃源里", "landmark": "北進巷107之32號"}, {"code": "高市DF082", "village": "勤和里", "landmark": "東莊橋"}], "t1h": 15.0, "t3h": 30.0, "t12h": 70.0}, {"county": "高雄市", "township": "旗山區", "sites": [{"code": "高市SL0001", "village": "新光里", "landmark": "勞碡坑三龍寺"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "新北市", "township": "汐止區", "sites": [{"code": "鵠鵠崙", "village": "東山里", "landmark": "鵠鵠崙"}], "t1h": 40.0, "t3h": 80.0, "t12h": 125.0}, {"county": "新竹縣", "township": "尖石鄉", "sites": [{"code": "秀巒國小", "village": "秀巒村", "landmark": "秀巒國小"}], "t1h": 40.0, "t3h": 70.0, "t12h": 150.0}, {"county": "嘉義縣", "township": "中埔鄉", "sites": [{"code": "嘉縣DF051", "village": "中崙村", "landmark": "中崙四號橋"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "臺東縣", "township": "太麻里鄉", "sites": [{"code": "東縣DF111", "village": "大王村", "landmark": "沙崙橋"}, {"code": "東縣DF124", "village": "華源村", "landmark": "南北坑"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "臺東縣", "township": "卑南鄉", "sites": [{"code": "東縣DF049", "village": "泰安村", "landmark": "大巴六九"}, {"code": "東縣DF059", "village": "溫泉村", "landmark": "木瓜溪鎮樂橋"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}, {"county": "臺東縣", "township": "金峰鄉", "sites": [{"code": "東縣DF076", "village": "新興村", "landmark": "豐收橋"}], "t1h": 20.0, "t3h": 50.0, "t12h": 170.0}];
 let townLayer = null, countyLayer = null;
+let disasterLayer = null;  // 二次災害高風險區紅框圖層
+let showDisaster = false;  // 是否顯示高風險區
 
 // 右側欄收合/展開
 let sidebarOpen = true;
@@ -876,11 +883,11 @@ function drawAllDistrictHyetoChart(targetId){
     ctx.beginPath();ctx.moveTo(pL,y);ctx.lineTo(W-pR,y);ctx.stroke();
   });
   ctx.setLineDash([]);
-  // 右軸刻度
-  ctx.fillStyle=isZoom?'#ffdd44':'#886600'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='left';
+  // 右軸刻度（放在圖表區域內部右側，不超出canvas邊界）
+  ctx.fillStyle=isZoom?'#ffdd44':'#aa8800'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='right';
   [.25,.5,.75,1].forEach(r=>{
     const y=pT+ch*(1-r);
-    ctx.fillText(ceilTo10(Math.round(maxEtr*r))+'%', W-pR+2, y+fs*0.35);
+    ctx.fillText(ceilTo10(Math.round(maxEtr*r))+'%', W-2, y+fs*0.35);
   });
   if(isZoom){
     ctx.save(); ctx.translate(W-pR*0.25, pT+ch/2); ctx.rotate(Math.PI/2);
@@ -1046,6 +1053,71 @@ function updateEtrAlertPanel(){
   let ta=document.getElementById('etr-copy-text');
   if(ta) ta.value=textSummary;
 }
+// ════════════════════════════════════════════════
+//  二次災害高風險區圖層
+// ════════════════════════════════════════════════
+function toggleDisasterLayer(){
+  showDisaster = !showDisaster;
+  const btn = document.getElementById('bDisaster');
+  if(btn) btn.classList.toggle('on', showDisaster);
+  renderDisasterLayer();
+}
+
+function renderDisasterLayer(){
+  if(disasterLayer){ map.removeLayer(disasterLayer); disasterLayer=null; }
+  if(!showDisaster) return;
+
+  // 建立高風險區的鄉鎮名稱 Set，用於查找
+  const disasterSet = new Set(DISASTER_ZONES.map(z=>z.county+z.township));
+
+  disasterLayer = L.layerGroup();
+  TOWN_GEO.features.forEach(feat=>{
+    const p = feat.properties;
+    const key = (p.COUNTYNAME||'')+(p.TOWNNAME||'');
+    if(!disasterSet.has(key)) return;
+
+    const zone = DISASTER_ZONES.find(z=>z.county+z.township===key);
+    const g = feat.geometry;
+    const toLL = c=>[c[1],c[0]];
+    const polys = g.type==='Polygon' ? [g.coordinates] : g.coordinates;
+    polys.forEach(parts=>{
+      // 紅框高風險區
+      const outline = L.polygon(parts.map(ring=>ring.map(toLL)),{
+        color:'#ff2200', weight:2.5, fillColor:'#ff2200',
+        fillOpacity:0.12, dashArray:'6,4', interactive:true,
+      });
+      // tooltip 顯示警戒值
+      const sitesStr = zone.sites.slice(0,3).map(s=>s.landmark).join('、');
+      const moreStr = zone.sites.length>3 ? `等${zone.sites.length}處` : '';
+      outline.bindTooltip(
+        `<b style="color:#ff6644">⚠ ${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
+        `地點：${sitesStr}${moreStr}<br>`+
+        `警戒值：1h≥${zone.t1h||'—'}mm / 3h≥${zone.t3h||'—'}mm`,
+        {sticky:true, opacity:0.95}
+      );
+      outline.on('click', e=>{
+        L.DomEvent.stopPropagation(e);
+        const t = TOWNSHIPS.find(x=>x.county===zone.county&&x.township===zone.township);
+        if(t){ selected=t; renderLayer(); updateInfo(t); renderDisasterLayer(); }
+      });
+      outline.addTo(disasterLayer);
+
+      // 角落的警示標籤
+      const bounds = outline.getBounds();
+      const center = bounds.getNorthWest();
+      L.marker([center.lat, center.lng],{
+        icon: L.divIcon({
+          className:'',
+          html:`<div style="background:#cc2200;color:#fff;font-size:9px;padding:1px 3px;border-radius:2px;white-space:nowrap;opacity:0.85">⚠${p.TOWNNAME}</div>`,
+          iconAnchor:[0,0]
+        }), interactive:false
+      }).addTo(disasterLayer);
+    });
+  });
+
+  disasterLayer.addTo(map);
+}
+
 function toggleSidebar(){
   sidebarOpen = !sidebarOpen;
   const sb  = document.getElementById('sb');
@@ -1466,6 +1538,7 @@ function renderLayer(){
   });
   countyLayer.addTo(map);
   updateEtrAlertPanel();  // 同步更新ETR2%警戒統整面板
+  if(showDisaster) renderDisasterLayer();  // 保持災害圖層在最上層
 }
 
 // ════════════════════════════════════════════════
@@ -1511,11 +1584,17 @@ function updateInfo(t){
 
   // ── 區塊：現況觀測 ──
   document.getElementById('sec-obs').style.display = 'block';
+  // 二次災害高風險區資訊
+  const dzone = DISASTER_ZONES.find(z=>z.county===t.county&&z.township===t.township);
+  const dzoneHtml = dzone ? `<div class="ir" style="border-color:#cc2200">
+    <span class="l" style="color:#ff6644">⚠ 二次災害高風險</span>
+    <span style="color:#ff8844;font-size:10px">${dzone.sites.length}處 1h≥${dzone.t1h||'—'}mm</span>
+  </div>` : '';
   if(winKey === 'today'){
     const qpfField2b = MODEL_FIELD[forecastModel] || 'qpf_best';
     const qpfArr2b = getQpfArr(t, qpfField2b);
     const todayQpfTotal = Math.round(qpfArr2b.slice(0,4).reduce((a,b)=>a+(b||0),0)*10)/10;
-    document.getElementById('body-obs').innerHTML = `
+    document.getElementById('body-obs').innerHTML = dzoneHtml+`
       <div class="ir"><span class="l">ETR2警戒值</span>${wv('', hasEtr ? t.alert_val+' mm' : '無資料')}</div>
       <div class="ir"><span class="l">今日預測降雨（QPF）</span>${wv('', todayQpfTotal+' mm')}</div>
       <div class="ir"><span class="l">今日ETR2%</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','無資料')}</div>
@@ -2220,8 +2299,8 @@ function setMode(m){
   withTransition(()=>{
     renderLayer(); renderLegend();
     if(selected) updateInfo(selected);
-    if(!selected) updateAllDistrictCharts();
   });
+  if(!selected) setTimeout(()=>updateAllDistrictCharts(), 300);
 }
 
 // key 格式：
@@ -2280,8 +2359,8 @@ function setWin(key){
     hideNoData();
     renderLayer(); renderLegend();
     if(selected) updateInfo(selected);
-    if(!selected) updateAllDistrictCharts();
   });
+  if(!selected) setTimeout(()=>updateAllDistrictCharts(), 300);
 }
 
 function updateModelRowVisibility(show){
@@ -2312,8 +2391,8 @@ function onSlider(){
   withTransition(()=>{
     renderLayer(); renderLegend();
     if(selected) updateInfo(selected);
-    if(!selected) updateAllDistrictCharts();
   });
+  if(!selected) setTimeout(()=>updateAllDistrictCharts(), 300);
 }
 
 // 建立「過去7天」按鈕（每天=實際觀測，今天不算在內）
