@@ -174,41 +174,48 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 <div id="main">
   <div id="map" style="position:relative">
     <!-- ETR2% 警戒統整面板（地圖左上角，可收合，不蓋住標題列） -->
-    <div id="etr-alert-panel" style="position:absolute;top:90px;left:8px;z-index:800;
-      background:#080f18ee;border:1px solid #2a4a6a;border-radius:6px;
-      max-width:210px;min-width:150px;font-size:11px;color:#dde8f2;pointer-events:auto">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;
-        border-bottom:1px solid #1a3348;background:#0a1828;border-radius:6px 6px 0 0">
-        <span onclick="toggleEtrPanel()" style="cursor:pointer;font-weight:700;color:#ffcc44;font-size:11px">⚠ ETR2%警戒</span>
-        <div style="display:flex;align-items:center;gap:3px">
-          <button onclick="copyEtrText()" title="複製文字摘要"
-            style="background:none;border:1px solid #3a5a7a;border-radius:3px;color:#7bc8e8;
-            font-size:9px;cursor:pointer;padding:1px 4px;line-height:1">複製</button>
-          <button onclick="downloadEtrCSV()" title="下載ETR2%資料CSV"
-            style="background:none;border:1px solid #2a6a3a;border-radius:3px;color:#7be8a8;
-            font-size:9px;cursor:pointer;padding:1px 4px;line-height:1">CSV</button>
-          <span onclick="toggleEtrPanel()" id="etr-panel-arrow" style="cursor:pointer;color:#6bc8e8;font-size:10px">▾</span>
+    <!-- 左側浮動面板容器（可整體拖動，ETR2+二次災害垂直排列）-->
+    <div id="panels-container" style="position:absolute;top:90px;left:8px;z-index:800;
+      display:flex;flex-direction:column;gap:6px;pointer-events:auto;user-select:none">
+
+      <!-- ETR2% 警戒面板 -->
+      <div id="etr-alert-panel" style="background:#080f18ee;border:1px solid #2a4a6a;border-radius:6px;
+        max-width:210px;min-width:150px;font-size:11px;color:#dde8f2">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;
+          border-bottom:1px solid #1a3348;background:#0a1828;border-radius:6px 6px 0 0;cursor:move"
+          id="panels-drag-handle">
+          <span style="font-weight:700;color:#ffcc44;font-size:11px" onclick="toggleEtrPanel()">⚠ ETR2%警戒</span>
+          <div style="display:flex;align-items:center;gap:3px">
+            <button onclick="copyEtrText()" title="複製文字摘要"
+              style="background:none;border:1px solid #3a5a7a;border-radius:3px;color:#7bc8e8;
+              font-size:9px;cursor:pointer;padding:1px 4px;line-height:1">複製</button>
+            <button onclick="downloadEtrCSV()" title="下載ETR2%資料CSV"
+              style="background:none;border:1px solid #2a6a3a;border-radius:3px;color:#7be8a8;
+              font-size:9px;cursor:pointer;padding:1px 4px;line-height:1">CSV</button>
+            <span onclick="toggleEtrPanel()" id="etr-panel-arrow" style="cursor:pointer;color:#6bc8e8;font-size:10px">▾</span>
+          </div>
+        </div>
+        <div id="etr-panel-body" style="padding:5px 7px;max-height:320px;overflow-y:auto;overscroll-behavior:contain"
+          onwheel="event.stopPropagation()">
+          <div style="color:#5a8aaa;font-size:10px">載入中...</div>
+        </div>
+        <textarea id="etr-copy-text" style="position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0" readonly></textarea>
+      </div>
+
+      <!-- 二次災害高風險區警戒面板 -->
+      <div id="disaster-alert-panel" style="display:none;background:#1a0808ee;border:1px solid #6a2a2a;
+        border-radius:6px;max-width:210px;min-width:150px;font-size:11px;color:#dde8f2">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;
+          border-bottom:1px solid #4a1a1a;background:#280a0a;border-radius:6px 6px 0 0">
+          <span style="font-weight:700;color:#ff6644;font-size:11px">🔴 二次災害監測</span>
+          <span id="disaster-panel-arrow" onclick="toggleDisasterPanel()" style="cursor:pointer;color:#cc4422;font-size:10px">▾</span>
+        </div>
+        <div id="disaster-panel-body" style="padding:5px 7px;max-height:280px;overflow-y:auto;overscroll-behavior:contain"
+          onwheel="event.stopPropagation()">
+          <div style="color:#5a3030;font-size:10px">開啟二次災害圖層後顯示</div>
         </div>
       </div>
-      <div id="etr-panel-body" style="padding:5px 7px;max-height:320px;overflow-y:auto;overscroll-behavior:contain"
-        onwheel="event.stopPropagation()">
-        <div style="color:#5a8aaa;font-size:10px">載入中...</div>
-      </div>
-      <textarea id="etr-copy-text" style="position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0" readonly></textarea>
-    </div>
-    <!-- 二次災害高風險區警戒面板（僅在二次災害圖層開啟時顯示） -->
-    <div id="disaster-alert-panel" style="display:none;position:absolute;top:90px;left:8px;z-index:800;
-      background:#1a0808ee;border:1px solid #6a2a2a;border-radius:6px;
-      max-width:210px;min-width:150px;font-size:11px;color:#dde8f2;pointer-events:auto">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;
-        border-bottom:1px solid #4a1a1a;background:#280a0a;border-radius:6px 6px 0 0">
-        <span onclick="toggleDisasterPanel()" style="cursor:pointer;font-weight:700;color:#ff6644;font-size:11px">🔴 二次災害監測</span>
-        <span id="disaster-panel-arrow" onclick="toggleDisasterPanel()" style="cursor:pointer;color:#cc4422;font-size:10px">▾</span>
-      </div>
-      <div id="disaster-panel-body" style="padding:5px 7px;max-height:280px;overflow-y:auto;overscroll-behavior:contain"
-        onwheel="event.stopPropagation()">
-        <div style="color:#5a3030;font-size:10px">開啟二次災害圖層後顯示</div>
-      </div>
+
     </div>
     <!-- 指北針：右上角，獨立 -->
     <div id="compass-wrap" style="position:absolute;top:12px;right:12px;z-index:600;display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
@@ -715,79 +722,153 @@ function drawAllDistrictDailyChart(targetId){
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
   ctx.clearRect(0,0,W,H);
-  ctx.fillStyle='#040c14'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#060f18'; ctx.fillRect(0,0,W,H);
 
-  const ext = getDailyChartExtremes();
-  const mx = ext.rainMax || 100;
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
   const nDays = 15;
   const fs = isZoom ? 22 : 7;
-  const pL=isZoom?80:28, pR=isZoom?30:6, pT=isZoom?50:8, pB=isZoom?70:22;
+  const pL=isZoom?80:28, pR=isZoom?60:20, pT=isZoom?50:8, pB=isZoom?70:22;
   const cw=W-pL-pR, ch=H-pT-pB, xS=cw/(nDays-1);
+  const nDistricts = DISTRICT_ORDER.length;
 
-  // 標題（放大版）
+  // 各分署逐日最高雨量 + ETR2%
+  const districtRain = [];   // [di][day] = maxRain
+  const districtEtr  = [];   // [di][day] = maxEtrPct
+  let maxV=0, maxEtr=10;
+
+  DISTRICT_ORDER.forEach((district,di)=>{
+    const counties = DISTRICT_COUNTIES[district];
+    const rainRow=[], etrRow=[];
+    for(let d=0;d<nDays;d++){
+      let maxRain=0, maxEtrDay=0;
+      TOWNSHIPS.filter(t=>counties.includes(t.county)).forEach(t=>{
+        maxRain=Math.max(maxRain,(t.daily_qpf||[])[d]||0);
+        if(t.alert_val>0){
+          // ETR2% 跟著當前選取時段，但逐日圖用每天的最後一個6h段作為代表
+          const seg = d<=0 ? 3 : (d-1)*4+3;
+          const e=calcEtr2AtSeg(t,seg,qpfField);
+          maxEtrDay=Math.max(maxEtrDay,Math.round(e/t.alert_val*100));
+        }
+      });
+      rainRow.push(maxRain); etrRow.push(maxEtrDay);
+      maxV=Math.max(maxV,maxRain);
+      maxEtr=Math.max(maxEtr,maxEtrDay);
+    }
+    districtRain.push(rainRow);
+    districtEtr.push(etrRow);
+  });
+
+  maxV  = ceilTo10(maxV+5);
+  maxEtr = ceilTo10(maxEtr+10);
+
+  // 標題
   if(isZoom){
     ctx.fillStyle='#ffffff'; ctx.font=`${fs+8}px sans-serif`; ctx.textAlign='left';
     ctx.fillText('全台各分署逐日雨量（15天）', pL, pT*0.55);
   }
 
-  // 格線
-  ctx.strokeStyle=isZoom?'rgba(255,255,255,0.2)':'#1a3a5a'; ctx.lineWidth=isZoom?1:0.4;
+  // 左軸格線 + 刻度（雨量）
+  ctx.strokeStyle=isZoom?'rgba(255,255,255,0.18)':'#1a3a5a'; ctx.lineWidth=isZoom?1:0.4;
   [.25,.5,.75,1].forEach(r=>{
     const y=pT+ch*(1-r);
-    ctx.beginPath();ctx.moveTo(pL,y);ctx.lineTo(W-pR,y);ctx.stroke();
-    ctx.fillStyle=isZoom?'#ffffff':'#3a6080'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='right';
-    ctx.fillText(ceilTo10(Math.round(mx*r)), pL-4, y+fs*0.35);
+    ctx.beginPath(); ctx.moveTo(pL,y); ctx.lineTo(W-pR,y); ctx.stroke();
+    ctx.fillStyle=isZoom?'#aaccee':'#3a6080'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='right';
+    ctx.fillText(ceilTo10(Math.round(maxV*r)), pL-4, y+fs*0.35);
   });
-  // 左軸標題
   if(isZoom){
-    ctx.save(); ctx.translate(pL*0.3, pT+ch/2); ctx.rotate(-Math.PI/2);
-    ctx.fillStyle='#ffffff'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='center';
-    ctx.fillText('累積雨量 (mm)', 0, 0); ctx.restore();
-  }
-  // X軸標籤
-  ctx.fillStyle=isZoom?'#ffffff':'#3a6080'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='center';
-  for(let i=0;i<nDays;i+=(isZoom?1:3)){
-    const dt=new Date(BASE_TIME.getTime()+i*86400000);
-    ctx.fillText(fmtDay(dt),pL+i*xS,H-pB*0.4);
+    ctx.save(); ctx.translate(pL*0.3,pT+ch/2); ctx.rotate(-Math.PI/2);
+    ctx.fillStyle='#aaccee'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='center';
+    ctx.fillText('累積雨量 (mm)',0,0); ctx.restore();
   }
 
-  // 各分署最高逐日QPF折線
-  DISTRICT_ORDER.forEach(district=>{
-    const counties = DISTRICT_COUNTIES[district];
-    const distColor = DISTRICT_COLOR[district] || '#aaccee';
-    // 每天取分署內所有鄉鎮的最大QPF
-    const distDaily = [];
-    for(let d=0;d<nDays;d++){
-      let maxV=0;
-      TOWNSHIPS.filter(t=>counties.includes(t.county)).forEach(t=>{
-        const qpf=(t.daily_qpf||[])[d]||0;
-        if(qpf>maxV) maxV=qpf;
-      });
-      distDaily.push(maxV);
-    }
-    ctx.beginPath();ctx.strokeStyle=distColor;ctx.lineWidth=isZoom?2:1.2;
-    distDaily.forEach((v,i)=>{
-      const x=pL+i*xS,y=pT+ch*(1-v/mx);
+  // 右軸刻度（ETR2%）
+  ctx.fillStyle=isZoom?'#ffdd44':'#aa8800'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='left';
+  [.25,.5,.75,1].forEach(r=>{
+    const y=pT+ch*(1-r);
+    ctx.fillText(ceilTo10(Math.round(maxEtr*r))+'%', W-pR+2, y+fs*0.35);
+  });
+  if(isZoom){
+    ctx.save(); ctx.translate(W-pR*0.25,pT+ch/2); ctx.rotate(Math.PI/2);
+    ctx.fillStyle='#ffdd44'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='center';
+    ctx.fillText('ETR2%',0,0); ctx.restore();
+  }
+
+  // X軸標籤（日期）
+  ctx.fillStyle=isZoom?'#ffffff':'#3a6080'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='center';
+  for(let i=0;i<nDays;i+=isZoom?1:3){
+    const dt=new Date(BASE_TIME.getTime()+i*86400000);
+    ctx.fillText(fmtDay(dt), pL+i*xS, H-pB*0.4);
+  }
+
+  // 當前選取時段的高亮區塊
+  const dF=Math.max(0,Math.floor(segFrom/4)), dT=Math.min(nDays-1,Math.floor(segTo/4));
+  if(dT>=dF){
+    const xHL=pL+dF*xS-(xS*0.5), wHL=(dT-dF+1)*xS;
+    ctx.fillStyle='rgba(60,140,220,0.13)'; ctx.fillRect(xHL,pT,wHL,ch);
+  }
+
+  // 長條圖（各分署並排）
+  const barGroupW = xS * 0.85;
+  const barGap = isZoom ? 2 : 0.5;
+  const barW = (barGroupW - barGap*(nDistricts-1)) / nDistricts;
+
+  DISTRICT_ORDER.forEach((district,di)=>{
+    const color=DISTRICT_COLOR[district]||'#aaccee';
+    districtRain[di].forEach((v,i)=>{
+      if(v<=0) return;
+      const barH=ch*v/maxV;
+      const groupX=pL+i*xS - barGroupW/2;
+      const x=groupX + di*(barW+barGap);
+      ctx.fillStyle=color; ctx.globalAlpha=0.75;
+      ctx.fillRect(x, pT+ch-barH, Math.max(1,barW), barH);
+      ctx.globalAlpha=1.0;
+    });
+  });
+
+  // ETR2% 折線（實線）
+  DISTRICT_ORDER.forEach((district,di)=>{
+    const color=DISTRICT_COLOR[district]||'#aaccee';
+    ctx.beginPath(); ctx.strokeStyle=color;
+    ctx.lineWidth=isZoom?2:0.9; ctx.setLineDash([]);
+    districtEtr[di].forEach((v,i)=>{
+      const x=pL+i*xS, y=pT+ch*(1-v/maxEtr);
       i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
     });
     ctx.stroke();
+    if(isZoom){
+      const lastV=districtEtr[di][nDays-1];
+      ctx.fillStyle=color; ctx.font=`${fs-2}px sans-serif`; ctx.textAlign='left';
+      ctx.fillText(district.replace('分署',''), pL+(nDays-1)*xS+4, pT+ch*(1-lastV/maxEtr)+fs*0.35);
+    }
   });
-  // 圖例（放大版）— 右上角
-  if(isZoom){
-    const legLineH=(fs+6);
-    let legY=pT+10;
-    const legX=W-pR-220;
-    ctx.font=`${fs-2}px sans-serif`;
-    ctx.fillStyle='rgba(0,0,0,0.45)';
-    ctx.fillRect(legX-10, legY-fs, 220, DISTRICT_ORDER.length*legLineH+10);
+
+  // 圖例
+  if(!isZoom){
+    let legX=pL; const legY=H-5;
+    ctx.font='6px sans-serif'; ctx.textAlign='left';
     DISTRICT_ORDER.forEach(d=>{
       const c=DISTRICT_COLOR[d]||'#aaccee';
-      ctx.strokeStyle=c; ctx.lineWidth=3;
-      ctx.beginPath(); ctx.moveTo(legX, legY-4); ctx.lineTo(legX+24, legY-4); ctx.stroke();
-      ctx.fillStyle=c; ctx.textAlign='left';
-      ctx.fillText(d, legX+28, legY);
+      ctx.fillStyle=c; ctx.fillRect(legX,legY-5,6,5);
+      ctx.fillText(d.replace('分署',''),legX+7,legY);
+      legX+=30;
+    });
+  } else {
+    const legLineH=fs+6; let legY=pT+10; const legX=W-pR-240;
+    ctx.fillStyle='rgba(0,0,0,0.5)';
+    ctx.fillRect(legX-10,legY-fs,240,DISTRICT_ORDER.length*legLineH+fs*2+20);
+    DISTRICT_ORDER.forEach(d=>{
+      const c=DISTRICT_COLOR[d]||'#aaccee';
+      ctx.fillStyle=c; ctx.fillRect(legX,legY-fs+2,14,fs-2);
+      ctx.strokeStyle=c; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(legX+18,legY-fs/2); ctx.lineTo(legX+38,legY-fs/2); ctx.stroke();
+      ctx.fillStyle=c; ctx.font=`${fs-2}px sans-serif`; ctx.textAlign='left';
+      ctx.fillText(d.replace('分署',''), legX+42, legY);
       legY+=legLineH;
     });
+    ctx.strokeStyle='#ffdd44'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(legX,legY-fs/2); ctx.lineTo(legX+38,legY-fs/2); ctx.stroke();
+    ctx.fillStyle='#ffdd44'; ctx.font=`${fs-2}px sans-serif`; ctx.textAlign='left';
+    ctx.fillText('實線 = ETR2%（右軸）', legX+42, legY);
   }
 }
 
@@ -897,6 +978,17 @@ function drawAllDistrictHyetoChart(targetId){
   ctx.beginPath(); ctx.moveTo(splitX,pT); ctx.lineTo(splitX,pT+ch); ctx.stroke();
   ctx.setLineDash([]);
 
+  // 當前選取時段高亮
+  // 組體圖 bar 0=前天, 1=昨天, 2=+6h(seg=0), 3=+12h(seg=1) ...
+  let hlBar = -1;
+  if(winKey.startsWith('past')){ const n=parseInt(winKey.slice(4)); if(n<=1) hlBar=1-n; }
+  else if(winKey==='today') hlBar=1; // 今天顯示昨天位置
+  else if(winKey.startsWith('fut6_')){ const n=parseInt(winKey.slice(5)); hlBar=n+1; }
+  if(hlBar>=0&&hlBar<nBars){
+    ctx.fillStyle='rgba(100,180,255,0.15)';
+    ctx.fillRect(pL+hlBar*barW_total, pT, barW_total, ch);
+  }
+
   // X軸標籤
   const labels=['前天','昨天','+6h','+12h','+18h','+24h','+30h','+36h','+42h','+48h'];
   ctx.fillStyle=isZoom?'#ffffff':'#3a6080';
@@ -927,13 +1019,13 @@ function drawAllDistrictHyetoChart(targetId){
     const color = DISTRICT_COLOR[district]||'#aaccee';
     const etrRow = districtEtr[di];
     ctx.beginPath(); ctx.strokeStyle=color;
-    ctx.lineWidth=isZoom?2.5:0.9; ctx.setLineDash([isZoom?6:3,isZoom?3:2]);
+    ctx.lineWidth=isZoom?2.5:0.9; ctx.setLineDash([]);
     etrRow.forEach((v,i)=>{
       const x=pL+i*barW_total+barW_total/2;
       const y=pT+ch*(1-v/maxEtr);
       i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
     });
-    ctx.stroke(); ctx.setLineDash([]);
+    ctx.stroke();
     // 放大版：末端標籤
     if(isZoom){
       const lastV=etrRow[etrRow.length-1];
@@ -970,11 +1062,10 @@ function drawAllDistrictHyetoChart(targetId){
       ctx.fillText(d.replace('分署',''), legX+42, legY);
       legY+=legLineH;
     });
-    ctx.strokeStyle='#ffdd44'; ctx.lineWidth=2; ctx.setLineDash([5,3]);
+    ctx.strokeStyle='#ffdd44'; ctx.lineWidth=2; ctx.setLineDash([]);
     ctx.beginPath(); ctx.moveTo(legX,legY-fs/2); ctx.lineTo(legX+38,legY-fs/2); ctx.stroke();
-    ctx.setLineDash([]);
     ctx.fillStyle='#ffdd44'; ctx.font=`${fs-2}px sans-serif`; ctx.textAlign='left';
-    ctx.fillText('虛線 = ETR2%（右軸）', legX+42, legY);
+    ctx.fillText('實線 = ETR2%（右軸）', legX+42, legY);
   }
 }
 
@@ -1105,6 +1196,28 @@ function toggleDisasterPanel(){
   if(arrow) arrow.textContent = disasterPanelOpen ? '▾' : '▸';
 }
 
+// ── 面板拖動功能 ────────────────────────────────
+let _panelDragging = null;
+let _panelDragOX = 0, _panelDragOY = 0;
+
+function makeDraggable(panelId, handleId){
+  const panel = document.getElementById(panelId);
+  const handle = document.getElementById(handleId);
+  if(!panel||!handle) return;
+  handle.addEventListener('mousedown', e=>{
+    _panelDragging = panel;
+    _panelDragOX = e.clientX - panel.offsetLeft;
+    _panelDragOY = e.clientY - panel.offsetTop;
+    e.preventDefault();
+  });
+}
+document.addEventListener('mousemove', e=>{
+  if(!_panelDragging) return;
+  _panelDragging.style.left = Math.max(0, e.clientX - _panelDragOX) + 'px';
+  _panelDragging.style.top  = Math.max(0, e.clientY - _panelDragOY) + 'px';
+});
+document.addEventListener('mouseup', ()=>{ _panelDragging = null; });
+
 // 測站 tooltip（高風險區監測站懸停提示）
 function showStationTooltip(evt, code, landmark, townName, rain, etrPct){
   let tip = document.getElementById('station-tip');
@@ -1142,13 +1255,22 @@ function updateDisasterPanel(){
   panel.style.display = showDisaster ? 'block' : 'none';
   if(!showDisaster) return;
 
-  // 動態定位：ETR2% 面板底部再往下
+  // 動態定位：只有在 ETR2 面板下方時才自動跟隨（避免覆蓋）
+  // 若使用者已手動拖動則保持現在位置
   const etrPanel = document.getElementById('etr-alert-panel');
-  if(etrPanel && etrPanelOpen){
-    const etrBottom = etrPanel.offsetTop + etrPanel.offsetHeight + 6;
-    panel.style.top = etrBottom + 'px';
-  } else {
-    panel.style.top = '90px';
+  const panelLeft = parseInt(panel.style.left)||8;
+  const panelTop  = parseInt(panel.style.top)||90;
+  const etrLeft   = parseInt(etrPanel?.style.left||8);
+  const etrTop    = parseInt(etrPanel?.style.top||90);
+  // 如果左側位置相近（±30px），自動貼在 ETR2 面板下方
+  if(Math.abs(panelLeft-etrLeft)<=30 || panel.style.top==='90px'){
+    if(etrPanel && etrPanelOpen){
+      panel.style.left = etrPanel.style.left||'8px';
+      panel.style.top  = (etrPanel.offsetTop + etrPanel.offsetHeight + 6) + 'px';
+    } else if(etrPanel){
+      panel.style.left = etrPanel.style.left||'8px';
+      panel.style.top  = (parseInt(etrPanel.style.top||90) + 36) + 'px';
+    }
   }
 
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
@@ -1736,17 +1858,11 @@ function updateInfo(t){
 
   // ── 區塊：現況觀測 ──
   document.getElementById('sec-obs').style.display = 'block';
-  // 二次災害高風險區資訊
-  const dzone = DISASTER_ZONES.find(z=>z.county===t.county&&z.township===t.township);
-  const dzoneHtml = dzone ? `<div class="ir" style="border-color:#cc2200">
-    <span class="l" style="color:#ff6644">⚠ 二次災害高風險</span>
-    <span style="color:#ff8844;font-size:10px">${dzone.sites.length}處 1h≥${dzone.t1h||'—'}mm</span>
-  </div>` : '';
   if(winKey === 'today'){
     const qpfField2b = MODEL_FIELD[forecastModel] || 'qpf_best';
     const qpfArr2b = getQpfArr(t, qpfField2b);
     const todayQpfTotal = Math.round(qpfArr2b.slice(0,4).reduce((a,b)=>a+(b||0),0)*10)/10;
-    document.getElementById('body-obs').innerHTML = dzoneHtml+`
+    document.getElementById('body-obs').innerHTML = `
       <div class="ir"><span class="l">ETR2警戒值</span>${wv('', hasEtr ? t.alert_val+' mm' : '無資料')}</div>
       <div class="ir"><span class="l">今日預測降雨（QPF）</span>${wv('', todayQpfTotal+' mm')}</div>
       <div class="ir"><span class="l">今日ETR2%</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','無資料')}</div>
@@ -2646,9 +2762,11 @@ function init(){
   buildPastBtns();
   buildFuture6hBtns();
   buildDayBtns();
-  setWin('today');  // 預設顯示今天（觀測至今+預測補滿24h）
+  setWin('today');
   tryLoadLive();
   setInterval(()=>{ tryLoadLive(); }, 30*60*1000);
+  // 初始化面板拖動
+  makeDraggable('panels-container','panels-drag-handle');  // 整個面板容器統一拖動
 }
 
 // 等 DOM 完全載入後執行
