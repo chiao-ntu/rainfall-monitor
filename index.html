@@ -868,6 +868,49 @@ function drawAllDistrictHyetoChart(targetId){
     }
   });
 
+  // ETR2% 右軸格線（淡黃色）
+  const etrAxisColor = 'rgba(255,220,60,0.5)';
+  ctx.strokeStyle=etrAxisColor; ctx.lineWidth=isZoom?0.8:0.3; ctx.setLineDash([3,3]);
+  [.25,.5,.75,1].forEach(r=>{
+    const y=pT+ch*(1-r);
+    ctx.beginPath();ctx.moveTo(pL,y);ctx.lineTo(W-pR,y);ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  // 右軸刻度
+  ctx.fillStyle=isZoom?'#ffdd44':'#886600'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='left';
+  [.25,.5,.75,1].forEach(r=>{
+    const y=pT+ch*(1-r);
+    ctx.fillText(ceilTo10(Math.round(maxEtr*r))+'%', W-pR+2, y+fs*0.35);
+  });
+  if(isZoom){
+    ctx.save(); ctx.translate(W-pR*0.25, pT+ch/2); ctx.rotate(Math.PI/2);
+    ctx.fillStyle='#ffdd44'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='center';
+    ctx.fillText('ETR2%', 0, 0); ctx.restore();
+  }
+
+  // 各分署 ETR2% 折線（虛線，對應右軸）
+  DISTRICT_ORDER.forEach(district=>{
+    const counties=DISTRICT_COUNTIES[district];
+    const distColor=DISTRICT_COLOR[district]||'#aaccee';
+    const etrData=[];
+    // 前天(seg=-8)、昨天(seg=-4)、未來8段(seg=0-7)
+    [-8,-4,0,1,2,3,4,5,6,7].forEach(seg=>{
+      let maxPct=0;
+      TOWNSHIPS.filter(t=>counties.includes(t.county)&&t.alert_val>0).forEach(t=>{
+        const e=calcEtr2AtSeg(t,seg,qpfField);
+        maxPct=Math.max(maxPct,Math.round(e/t.alert_val*100));
+      });
+      etrData.push(maxPct);
+    });
+    ctx.beginPath(); ctx.strokeStyle=distColor; ctx.lineWidth=isZoom?2:0.8;
+    ctx.setLineDash([4,3]);
+    etrData.forEach((v,i)=>{
+      const x=pL+i*barW_total+barW_total/2, y=pT+ch*(1-v/maxEtr);
+      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+    });
+    ctx.stroke(); ctx.setLineDash([]);
+  });
+
   // 圖例（放大版）— 放右上角，不跟X軸標籤衝突
   if(isZoom){
     const legLineH = (fs+6);
