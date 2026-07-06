@@ -207,8 +207,16 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         border-radius:6px;max-width:210px;min-width:150px;font-size:11px;color:#dde8f2">
         <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;
           border-bottom:1px solid #4a1a1a;background:#280a0a;border-radius:6px 6px 0 0">
-          <span style="font-weight:700;color:#ff6644;font-size:11px">🔴 二次災害監測</span>
-          <span id="disaster-panel-arrow" onclick="toggleDisasterPanel()" style="cursor:pointer;color:#cc4422;font-size:10px">▾</span>
+          <span style="font-weight:700;color:#ff6644;font-size:11px">🔴 二次災害高風險區</span>
+          <div style="display:flex;align-items:center;gap:3px">
+            <button onclick="copyDisasterText()" title="複製文字摘要"
+              style="background:none;border:1px solid #6a2a2a;border-radius:3px;color:#ff9966;
+              font-size:9px;cursor:pointer;padding:1px 4px;line-height:1">複製</button>
+            <button onclick="downloadDisasterCSV()" title="下載CSV"
+              style="background:none;border:1px solid #4a3a1a;border-radius:3px;color:#cc9944;
+              font-size:9px;cursor:pointer;padding:1px 4px;line-height:1">CSV</button>
+            <span id="disaster-panel-arrow" onclick="toggleDisasterPanel()" style="cursor:pointer;color:#cc4422;font-size:10px">▾</span>
+          </div>
         </div>
         <div id="disaster-panel-body" style="padding:5px 7px;max-height:280px;overflow-y:auto;overscroll-behavior:contain"
           onwheel="event.stopPropagation()">
@@ -333,8 +341,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>逐日雨量（15天）</span><span class="sec-arrow" id="arrow-chart">▸</span>
       </div>
       <div class="sec-body" id="body-chart" style="display:none">
-        <canvas id="cv" style="width:100%;height:90px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv')"></canvas>
+        <canvas id="cv" style="width:100%;height:90px;display:block;background:#060f18;border-radius:3px;cursor:crosshair"
+          onclick="toggleChartZoom('cv')"
+          onmousemove="showChartTooltip(event,'cv')"
+          onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">點擊圖表可放大／縮小</div>
       </div>
     </div>
@@ -353,8 +363,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>行政區組體雨量圖（過去2天+未來2天）</span><span class="sec-arrow" id="arrow-hyeto">▸</span>
       </div>
       <div class="sec-body" id="body-hyeto" style="display:none">
-        <canvas id="cv-district-hyeto" width="260" height="100" style="width:100%;height:100px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-district-hyeto')"></canvas>
+        <canvas id="cv-district-hyeto" width="260" height="100" style="width:100%;height:100px;display:block;background:#040c14;border-radius:4px;cursor:crosshair"
+          onclick="toggleChartZoom('cv-district-hyeto')"
+          onmousemove="showChartTooltip(event,'cv-district-hyeto')"
+          onmouseleave="hideChartTooltip()">></canvas>
         <div style="display:flex;gap:8px;margin-top:4px;font-size:9px;color:#5a8aaa;flex-wrap:wrap">
           <span><span style="display:inline-block;width:8px;height:8px;background:#4a7ab0;margin-right:3px"></span>觀測(日)</span>
           <span><span style="display:inline-block;width:8px;height:8px;background:#6ad8f0;margin-right:3px"></span>QPF預測(6h)</span>
@@ -725,7 +737,7 @@ function drawAllDistrictDailyChart(targetId){
   ctx.fillStyle='#060f18'; ctx.fillRect(0,0,W,H);
 
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
-  const nDays = 15;
+  const nDays = 16;
   const fs = isZoom ? 22 : 7;
   const pL=isZoom?80:28, pR=isZoom?60:20, pT=isZoom?50:8, pB=isZoom?70:22;
   const cw=W-pL-pR, ch=H-pT-pB, xS=cw/(nDays-1);
@@ -1187,6 +1199,112 @@ function updateEtrAlertPanel(){
 // ════════════════════════════════════════════════
 //  二次災害高風險區圖層
 // ════════════════════════════════════════════════
+// ════════════════════════════════════════════════
+//  鄉鎮圖表 Hover Tooltip
+// ════════════════════════════════════════════════
+function showChartTooltip(evt, canvasId){
+  if(!selected) return;
+  const cv = document.getElementById(canvasId);
+  if(!cv) return;
+  const rect = cv.getBoundingClientRect();
+  const mx = evt.clientX - rect.left;
+  const W = rect.width;
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const t = selected;
+
+  let tip = document.getElementById('chart-hover-tip');
+  if(!tip){
+    tip = document.createElement('div');
+    tip.id='chart-hover-tip';
+    tip.style.cssText='position:fixed;z-index:9990;background:#0a1828ee;border:1px solid #2a6a8a;'+
+      'border-radius:4px;padding:6px 9px;font-size:10px;color:#dde8f2;pointer-events:none;'+
+      'max-width:200px;min-width:130px;line-height:1.5';
+    document.body.appendChild(tip);
+  }
+
+  if(canvasId==='cv'){
+    // 逐日雨量圖：15/16天，pL=28, pR=6(approx)
+    const nDays=16, pL=28, pR=6, cw=W-pL-pR;
+    const dayIdx = Math.round((mx-pL)/cw*(nDays-1));
+    if(dayIdx<0||dayIdx>=nDays){ tip.style.display='none'; return; }
+    const dt = new Date(BASE_TIME.getTime()+dayIdx*86400000);
+    const rain = (t.daily_qpf||[])[dayIdx]||0;
+    const seg = dayIdx===0 ? 3 : (dayIdx-1)*4+3;
+    const etr2 = t.alert_val>0 ? calcEtr2AtSeg(t,seg,qpfField) : null;
+    const etrPct = etr2!=null ? Math.round(etr2/t.alert_val*100) : null;
+    const etrColor = etrPct>=100?'#BB00BB':etrPct>=90?'#DD2222':etrPct>=70?'#DDDD00':'#aaccee';
+    tip.innerHTML=`<b>${fmtDay(dt)}</b><br>預測降雨：${rain}mm<br>`+
+      (etrPct!=null?`ETR2%：<span style="color:${etrColor}">${etrPct}%</span>`:'');
+  } else if(canvasId==='cv-district-hyeto'){
+    // 組體圖：10個時段
+    const nBars=10, pL=34, pR=8, cw=W-pL-pR;
+    const barW=cw/nBars;
+    const barIdx=Math.floor((mx-pL)/barW);
+    if(barIdx<0||barIdx>=nBars){ tip.style.display='none'; return; }
+    const labels=['前天','昨天','+6h','+12h','+18h','+24h','+30h','+36h','+42h','+48h'];
+    const label=labels[barIdx]||'';
+    let rain=0, etrStr='—';
+    const qa = getQpfArr(t,qpfField);
+    if(barIdx===0){ rain=(t.daily_rain||[])[2]||0; }
+    else if(barIdx===1){ rain=(t.daily_rain||[])[1]||0; }
+    else { rain=qa[barIdx-2]||0; }
+    const seg = barIdx<=1 ? -(barIdx===0?8:4) : barIdx-2;
+    const etr2 = t.alert_val>0 ? calcEtr2AtSeg(t,seg,qpfField) : null;
+    const etrPct = etr2!=null ? Math.round(etr2/t.alert_val*100) : null;
+    const etrColor = etrPct>=100?'#BB00BB':etrPct>=90?'#DD2222':etrPct>=70?'#DDDD00':'#aaccee';
+    // 分時資訊（若是未來6h段）
+    let segDetail='';
+    if(barIdx>=2){
+      const segIdx=barIdx-2;
+      const start=segIdx*6, end=start+6;
+      segDetail=`<br><span style="color:#5a8aaa">時段：+${start}h~+${end}h</span>`;
+    }
+    tip.innerHTML=`<b>${label}</b> ${segDetail}<br>累積雨量：${rain}mm<br>`+
+      (etrPct!=null?`ETR2%：<span style="color:${etrColor}">${etrPct}%</span>`:'');
+  }
+
+  tip.style.display='block';
+  tip.style.left=(evt.clientX+14)+'px';
+  tip.style.top=(evt.clientY-10)+'px';
+}
+function hideChartTooltip(){
+  const tip=document.getElementById('chart-hover-tip');
+  if(tip) tip.style.display='none';
+}
+
+function copyDisasterText(){
+  const body = document.getElementById('disaster-panel-body');
+  if(!body) return;
+  // 取得純文字
+  const text = body.innerText.replace(/\n{3,}/g,'\n\n');
+  navigator.clipboard ? navigator.clipboard.writeText(text) :
+    (()=>{ const ta=document.createElement('textarea'); ta.value=text;
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+      document.body.removeChild(ta); })();
+  alert('已複製二次災害高風險區監測資訊');
+}
+
+function downloadDisasterCSV(){
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const rows=[['縣市','鄉鎮市區','監測點位','雨量(mm)','1h警戒值(mm)','ETR2%','是否達警戒']];
+  DISASTER_ZONES.forEach(zone=>{
+    const t=TOWNSHIPS.find(x=>x.county===zone.county&&x.township===zone.township);
+    const rain = t ? Math.round((t.rain_24h||0)*10)/10 : 0;
+    const etr2 = t&&t.alert_val>0 ? calcEtr2AtSeg(t,3,qpfField) : null;
+    const etrPct = etr2!=null&&t.alert_val>0 ? Math.round(etr2/t.alert_val*100) : 0;
+    const alert = (rain>=(zone.t1h||999)||etrPct>=70) ? '是' : '否';
+    zone.sites.forEach(s=>{
+      rows.push([zone.county,zone.township,s.landmark,rain,zone.t1h||'—',etrPct+'%',alert]);
+    });
+  });
+  const csv='\uFEFF'+rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url;
+  a.download=`二次災害高風險區監測_${fmtDay(BASE_TIME)}.csv`; a.click();
+  URL.revokeObjectURL(url);
+}
+
 let disasterPanelOpen = true;
 function toggleDisasterPanel(){
   disasterPanelOpen = !disasterPanelOpen;
@@ -1209,6 +1327,9 @@ function makeDraggable(panelId, handleId){
     _panelDragOX = e.clientX - panel.offsetLeft;
     _panelDragOY = e.clientY - panel.offsetTop;
     e.preventDefault();
+    e.stopPropagation();
+    // 拖動面板時停用 Leaflet 地圖拖動
+    if(typeof map !== 'undefined' && map.dragging) map.dragging.disable();
   });
 }
 document.addEventListener('mousemove', e=>{
@@ -1216,7 +1337,13 @@ document.addEventListener('mousemove', e=>{
   _panelDragging.style.left = Math.max(0, e.clientX - _panelDragOX) + 'px';
   _panelDragging.style.top  = Math.max(0, e.clientY - _panelDragOY) + 'px';
 });
-document.addEventListener('mouseup', ()=>{ _panelDragging = null; });
+document.addEventListener('mouseup', ()=>{
+  if(_panelDragging){
+    _panelDragging = null;
+    // 重新啟用 Leaflet 地圖拖動
+    if(typeof map !== 'undefined' && map.dragging) map.dragging.enable();
+  }
+});
 
 // 測站 tooltip（高風險區監測站懸停提示）
 function showStationTooltip(evt, code, landmark, townName, rain, etrPct){
@@ -1330,7 +1457,6 @@ function updateDisasterPanel(){
       <div style="margin:1px 0">
         ${a.sites.map(s=>`<span style="font-size:8px;background:#330000;color:#ff9966;
           border:1px solid #ff4422;border-radius:2px;padding:0 2px;margin:0 1px;cursor:pointer;display:inline-block"
-          title="地點：${s.landmark}&#10;累積降雨：${a.rain}mm&#10;ETR2%：${a.etrPct!=null?a.etrPct+'%':'—'}"
           onmouseenter="showStationTooltip(event,'${s.code}','${s.landmark}','${a.county}${a.township}',${a.rain},${a.etrPct||0})"
           onmouseleave="hideStationTooltip()"
           onclick="selectTownByName('${a.county}','${a.township}')"
@@ -2716,8 +2842,8 @@ function buildDayBtns(){
   c.appendChild(btnToday);
   ALL_DYNAMIC_BTN_IDS.push('bToday');
 
-  // 第2-15天：純未來QPF預測
-  for(let i=2;i<=15;i++){
+  // 第2-16天：純未來QPF預測
+  for(let i=2;i<=16;i++){
     const dt=new Date(BASE_TIME.getTime()+(i-1)*86400000);
     const btn=document.createElement('button');
     btn.className='b';btn.id=`bday${i}`;btn.textContent=fmtDay(dt);

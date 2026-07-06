@@ -702,7 +702,7 @@ def main():
 
         # 預設用 best_match（CWA優先 > ECMWF > GFS=ICON 的綜合判斷已含在模式選擇邏輯中）
         qpf15d = qpf_best
-        daily  = [round(sum(qpf15d[i*4:(i+1)*4]),1) for i in range(15)]
+        daily  = [round(sum(qpf15d[i*4:(i+1)*4]),1) for i in range(16)]
 
         # PoP 序列（28個6h時段=7天）
         pop_6h = get_pop_6h_series(township, pop3d, pop7d, base_dt, num_segs=28)
@@ -802,7 +802,7 @@ def main():
         qpf_ecmwf_ns = get_ns_qpf('ecmwf_ifs025')
         qpf_gfs_ns   = get_ns_qpf('gfs_seamless')
         qpf_icon_ns  = get_ns_qpf('icon_seamless')
-        daily_ns = [round(sum(qpf_best_ns[d*4:(d+1)*4]),1) for d in range(15)]
+        daily_ns = [round(sum(qpf_best_ns[d*4:(d+1)*4]),1) for d in range(16)]
 
         station_list = [{'name': stations[s]['name'], 'alert_val': None,
                           'village': f"{at['county']}{at['township']}"}
