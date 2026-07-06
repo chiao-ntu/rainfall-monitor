@@ -28,13 +28,13 @@ body{font-family:'Microsoft JhengHei',sans-serif;background:#0c1822;color:#dde8f
 .b.on{background:#14507a;border-color:#3a8acc;color:#6bc8e8;font-weight:700}
 .b.pbtn{border-color:#5a4010;color:#c08030}
 .b.pbtn.on{background:#3a2a0a;border-color:#aa6010;color:#f0a030}
-#cust-ctrl{display:none;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 0}
+#cust-ctrl{display:none;flex-direction:column;gap:4px;padding:4px 14px 6px;background:#060d18;border-bottom:1px solid #1a3348}
 #cust-ctrl.show{display:flex}
 .sl-wrap{display:flex;align-items:center;gap:4px}
 .sl-wrap label{font-size:10px;color:#5a8aaa;white-space:nowrap}
-input[type=range]{-webkit-appearance:none;width:110px;height:4px;border-radius:2px;background:#1a3a5a;outline:none}
-input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#3a9adf;cursor:pointer}
-#rng-disp{font-size:10px;color:#8ac8e8;font-weight:700;min-width:150px}
+input[type=range]{-webkit-appearance:none;width:100%;height:6px;border-radius:3px;background:#1a3a5a;outline:none;cursor:pointer}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#3a9adf;cursor:pointer;border:2px solid #7bd0f0}
+#rng-disp{font-size:10px;color:#8ac8e8;font-weight:700}
 #main{display:flex;flex:1;overflow:hidden}
 #map{flex:1;background:#ffffff}
 /* 純白底 */
@@ -128,17 +128,25 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       style="border-color:#3a5a8a;color:#8ab8e8" title="開啟空白繪圖地圖">🖌 繪圖地圖</button>
   </div>
   <div id="cust-ctrl">
-    <div class="sl-wrap">
-      <label>起始（6h段）</label>
-      <input type="range" id="slS" min="-28" max="59" value="0" oninput="onSlider()">
-      <span id="slS-v" style="font-size:10px;color:#6bc8e8;width:60px"></span>
+    <div class="sl-wrap" style="flex-direction:column;align-items:stretch;width:100%">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+        <label style="font-size:10px;color:#6bc8e8">起始</label>
+        <span id="slS-v" style="font-size:10px;color:#6bc8e8"></span>
+      </div>
+      <input type="range" id="slS" min="-28" max="59" value="0" oninput="onSlider()"
+        style="width:100%;height:6px">
+      <!-- 日期刻度：每4步（=1天）一個標記 -->
+      <div id="sl-ticks" style="position:relative;height:14px;margin-top:1px"></div>
     </div>
-    <div class="sl-wrap">
-      <label>結束（6h段）</label>
-      <input type="range" id="slE" min="-27" max="60" value="3" oninput="onSlider()">
-      <span id="slE-v" style="font-size:10px;color:#6bc8e8;width:60px"></span>
+    <div class="sl-wrap" style="flex-direction:column;align-items:stretch;width:100%;margin-top:4px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+        <label style="font-size:10px;color:#6bc8e8">結束</label>
+        <span id="slE-v" style="font-size:10px;color:#6bc8e8"></span>
+      </div>
+      <input type="range" id="slE" min="-27" max="60" value="3" oninput="onSlider()"
+        style="width:100%;height:6px">
     </div>
-    <span id="rng-disp"></span>
+    <span id="rng-disp" style="margin-top:3px;font-size:10px;color:#8ac8e8;font-weight:700"></span>
   </div>
   <div id="custom-scale-editor" style="display:none;padding:6px 14px;background:#0a1828;border-bottom:1px solid #1a3348">
     <div style="font-size:10px;color:#6bc8e8;margin-bottom:5px">
@@ -207,7 +215,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         border-radius:6px;max-width:210px;min-width:150px;font-size:11px;color:#dde8f2">
         <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;
           border-bottom:1px solid #4a1a1a;background:#280a0a;border-radius:6px 6px 0 0">
-          <span style="font-weight:700;color:#ff6644;font-size:11px">🔴 二次災害高風險區</span>
+          <span style="font-weight:700;color:#ff6644;font-size:11px;cursor:pointer"
+            onclick="toggleDisasterPanel()">🔴 二次災害高風險區</span>
           <div style="display:flex;align-items:center;gap:3px">
             <button onclick="copyDisasterText()" title="複製文字摘要"
               style="background:none;border:1px solid #6a2a2a;border-radius:3px;color:#ff9966;
@@ -1281,7 +1290,6 @@ function copyDisasterText(){
     (()=>{ const ta=document.createElement('textarea'); ta.value=text;
       document.body.appendChild(ta); ta.select(); document.execCommand('copy');
       document.body.removeChild(ta); })();
-  alert('已複製二次災害高風險區監測資訊');
 }
 
 function downloadDisasterCSV(){
@@ -1382,57 +1390,62 @@ function updateDisasterPanel(){
   panel.style.display = showDisaster ? 'block' : 'none';
   if(!showDisaster) return;
 
-  // 動態定位：只有在 ETR2 面板下方時才自動跟隨（避免覆蓋）
-  // 若使用者已手動拖動則保持現在位置
-  const etrPanel = document.getElementById('etr-alert-panel');
-  const panelLeft = parseInt(panel.style.left)||8;
-  const panelTop  = parseInt(panel.style.top)||90;
-  const etrLeft   = parseInt(etrPanel?.style.left||8);
-  const etrTop    = parseInt(etrPanel?.style.top||90);
-  // 如果左側位置相近（±30px），自動貼在 ETR2 面板下方
-  if(Math.abs(panelLeft-etrLeft)<=30 || panel.style.top==='90px'){
-    if(etrPanel && etrPanelOpen){
-      panel.style.left = etrPanel.style.left||'8px';
-      panel.style.top  = (etrPanel.offsetTop + etrPanel.offsetHeight + 6) + 'px';
-    } else if(etrPanel){
-      panel.style.left = etrPanel.style.left||'8px';
-      panel.style.top  = (parseInt(etrPanel.style.top||90) + 36) + 'px';
-    }
-  }
-
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
-  // 依當前選取時段計算累積雨量
+
+  // 「當前時段」的累積雨量
   const getSegRain = (t)=>{
     const qa = getQpfArr(t, qpfField);
     if(winKey==='today') return Math.round(qa.slice(0,4).reduce((a,b)=>a+(b||0),0)*10)/10;
-    if(winKey.startsWith('past')){
-      const n=parseInt(winKey.slice(4));
-      return (t.daily_rain||[])[n+1]||0;
-    }
-    if(winKey.startsWith('day')){
-      const n=parseInt(winKey.slice(3));
-      const sf=(n-1)*4, st=(n-1)*4+3;
-      let s=0; for(let i=sf;i<=st;i++) s+=qa[i]||0;
-      return Math.round(s*10)/10;
-    }
-    if(winKey.startsWith('fut6_')){
-      const n=parseInt(winKey.slice(5));
-      return Math.round((qa[n-1]||0)*10)/10;
-    }
+    if(winKey.startsWith('past')){ const n=parseInt(winKey.slice(4)); return (t.daily_rain||[])[n+1]||0; }
+    if(winKey.startsWith('day')){ const n=parseInt(winKey.slice(3));
+      let s=0; for(let i=(n-1)*4;i<=(n-1)*4+3;i++) s+=qa[i]||0; return Math.round(s*10)/10; }
+    if(winKey.startsWith('fut6_')){ const n=parseInt(winKey.slice(5)); return Math.round((qa[n-1]||0)*10)/10; }
     return 0;
+  };
+
+  // 找「最早哪個未來時段的累積QPF」會超過警戒值
+  const findFutureAlert = (t, t1h)=>{
+    const qa = getQpfArr(t, qpfField);
+    // 先看今天全天QPF
+    const todayQpf=Math.round(qa.slice(0,4).reduce((a,b)=>a+(b||0),0)*10)/10;
+    if(todayQpf >= t1h) return {when:'今天全天', rain:todayQpf};
+    // 再看未來各6h段
+    for(let i=0;i<8;i++){
+      const segRain=Math.round((qa[i]||0)*10)/10;
+      if(segRain >= t1h){
+        const h=(i+1)*6;
+        return {when:`+${h}h段`, rain:segRain};
+      }
+    }
+    // 逐日預測
+    for(let d=1;d<=15;d++){
+      let dayRain=0; for(let i=(d-1)*4;i<=(d-1)*4+3;i++) dayRain+=qa[i]||0;
+      dayRain=Math.round(dayRain*10)/10;
+      if(dayRain >= t1h){
+        const dt=new Date(BASE_TIME.getTime()+d*86400000);
+        return {when:fmtDay(dt), rain:dayRain};
+      }
+    }
+    return null;
   };
 
   const alerts=[], normal=[];
   DISASTER_ZONES.forEach(zone=>{
     const t=TOWNSHIPS.find(x=>x.county===zone.county&&x.township===zone.township);
     if(!t) return;
-    const rain=getSegRain(t);
+    const currentRain=getSegRain(t);
     const t1h=zone.t1h||999;
     const etr2=t.alert_val>0?calcEtr2AtSeg(t,3,qpfField):null;
     const etrPct=etr2!=null&&t.alert_val>0?Math.round(etr2/t.alert_val*100):null;
-    const obj={county:zone.county,township:zone.township,rain,t1h,etrPct,
-               sites:zone.sites,alertVal:t.alert_val||0};
-    if(rain>=t1h||(etrPct!=null&&etrPct>=70)) alerts.push(obj);
+
+    const rainNowAlert = currentRain >= t1h;
+    const etrAlert = etrPct!=null && etrPct>=70;
+    const futureAlert = !rainNowAlert ? findFutureAlert(t, t1h) : null;
+
+    const obj={county:zone.county,township:zone.township,
+               currentRain, t1h, etrPct, sites:zone.sites,
+               rainNowAlert, futureAlert};
+    if(rainNowAlert || etrAlert || futureAlert) alerts.push(obj);
     else normal.push(obj);
   });
 
@@ -1445,7 +1458,6 @@ function updateDisasterPanel(){
   let html='';
   alerts.sort((a,b)=>(b.etrPct||0)-(a.etrPct||0)).forEach(a=>{
     const etrColor=a.etrPct>=100?'#BB00BB':a.etrPct>=90?'#DD2222':a.etrPct>=70?'#DDDD00':'#aaccee';
-    const rainAlert=a.rain>=a.t1h;
     html+=`<div style="border-bottom:1px dashed #4a1a1a;padding:2px 0">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <span style="color:#ffaa88;font-size:10px;text-decoration:underline dotted;cursor:pointer"
@@ -1453,11 +1465,15 @@ function updateDisasterPanel(){
         >${a.county.replace(/[縣市]$/,'')} ${a.township}</span>
         ${a.etrPct!=null?`<span style="color:${etrColor};font-size:10px;font-weight:700">${a.etrPct}%</span>`:''}
       </div>
-      ${rainAlert?`<div style="font-size:9px;color:#ff8844">雨量 ${a.rain}mm ≥ 警戒${a.t1h}mm</div>`:''}
+      ${a.rainNowAlert?
+        `<div style="font-size:9px;color:#ff6644">現況 ${a.currentRain}mm ≥ 警戒${a.t1h}mm</div>`:
+        a.futureAlert?
+        `<div style="font-size:9px;color:#ffaa44">預估 ${a.futureAlert.when} 達 ${a.futureAlert.rain}mm（警戒${a.t1h}mm）</div>`:
+        ''}
       <div style="margin:1px 0">
         ${a.sites.map(s=>`<span style="font-size:8px;background:#330000;color:#ff9966;
           border:1px solid #ff4422;border-radius:2px;padding:0 2px;margin:0 1px;cursor:pointer;display:inline-block"
-          onmouseenter="showStationTooltip(event,'${s.code}','${s.landmark}','${a.county}${a.township}',${a.rain},${a.etrPct||0})"
+          onmouseenter="showStationTooltip(event,'${s.code}','${s.landmark}','${a.county}${a.township}',${a.currentRain},${a.etrPct||0})"
           onmouseleave="hideStationTooltip()"
           onclick="selectTownByName('${a.county}','${a.township}')"
         >${s.code}</span>`).join('')}
@@ -2768,6 +2784,36 @@ function updateModelRowVisibility(show){
   }
 }
 
+function buildSliderTicks(){
+  const ticks = document.getElementById('sl-ticks');
+  if(!ticks) return;
+  const slS = document.getElementById('slS');
+  if(!slS) return;
+  const min=-28, max=60, total=max-min;
+  ticks.innerHTML='';
+  ticks.style.position='relative';
+  // 每4步（=1天）一個刻度，在 00 時對齊
+  for(let seg=min;seg<=max;seg+=4){
+    const pct=(seg-min)/total*100;
+    const dt=new Date(BASE_TIME.getTime()+seg*6*3600000);
+    const isDay0=(dt.getHours()===0);  // 每天 00 時
+    if(!isDay0) continue;
+    const tick=document.createElement('div');
+    tick.style.cssText=`position:absolute;left:${pct}%;top:0;transform:translateX(-50%);
+      font-size:8px;color:#3a6080;cursor:pointer;white-space:nowrap`;
+    tick.textContent=`${dt.getMonth()+1}/${dt.getDate()}`;
+    const segVal=seg;
+    tick.onclick=()=>{
+      const slS2=document.getElementById('slS');
+      const slE2=document.getElementById('slE');
+      slS2.value=segVal;
+      slE2.value=Math.min(segVal+4,60);
+      onSlider();
+    };
+    ticks.appendChild(tick);
+  }
+}
+
 function onSlider(){
   let s=parseInt(document.getElementById('slS').value);
   let e=parseInt(document.getElementById('slE').value);
@@ -2781,8 +2827,9 @@ function onSlider(){
   document.getElementById('slS-v').textContent = segLabel(s);
   document.getElementById('slE-v').textContent = segLabel(e);
   document.getElementById('rng-disp').textContent =
-    `${segLabel(s)} → ${segLabel(e)}（共${((e-s+1)*6/24).toFixed(1)}天）`;
+    `${segLabel(s)} → ${segLabel(e)}（共${((e-s)*6/24).toFixed(1)}天）`;
 
+  buildSliderTicks();
   updateModelRowVisibility(true);
   withTransition(()=>{
     renderLayer(); renderLegend();
