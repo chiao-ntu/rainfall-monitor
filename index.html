@@ -342,7 +342,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
           <span>逐日雨量（各分署，15天）</span><span class="sec-arrow" id="arrow-all-daily">▾</span>
         </div>
         <div class="sec-body" id="body-all-daily" style="display:block">
-          <canvas id="cv-all-daily" style="width:100%;height:110px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
+          <canvas id="cv-all-daily" width="280" height="110" style="width:100%;height:110px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
             onclick="toggleChartZoom('cv-all-daily')"
             onmousemove="showChartTooltip(event,'cv-all-daily')"
             onmouseleave="hideChartTooltip()"></canvas>
@@ -355,7 +355,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
           <span>組體雨量圖（各分署，過去2天+未來2天）</span><span class="sec-arrow" id="arrow-all-hyeto">▾</span>
         </div>
         <div class="sec-body" id="body-all-hyeto" style="display:block">
-          <canvas id="cv-all-hyeto" style="width:100%;height:110px;display:block;background:#040c14;border-radius:3px;cursor:zoom-in"
+          <canvas id="cv-all-hyeto" width="280" height="110" style="width:100%;height:110px;display:block;background:#040c14;border-radius:3px;cursor:zoom-in"
             onclick="toggleChartZoom('cv-all-hyeto')"
             onmousemove="showChartTooltip(event,'cv-all-hyeto')"
             onmouseleave="hideChartTooltip()"></canvas>
@@ -395,7 +395,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
         <span>逐日雨量（15天）</span><span class="sec-arrow" id="arrow-chart">▾</span>
       </div>
       <div class="sec-body" id="body-chart" style="display:block">
-        <canvas id="cv" style="width:100%;height:90px;display:block;background:#060f18;border-radius:3px;cursor:crosshair"
+        <canvas id="cv" width="280" height="90" style="width:100%;height:90px;display:block;background:#060f18;border-radius:3px;cursor:crosshair"
           onclick="toggleChartZoom('cv')"
           onmousemove="showChartTooltip(event,'cv')"
           onmouseleave="hideChartTooltip()"></canvas>
@@ -842,7 +842,9 @@ function drawAllDistrictDailyChart(targetId){
   const cv = document.getElementById(targetId||'cv-all-daily');
   if(!cv || !TOWNSHIPS.length) return;
   const isZoom = (targetId==='chart-zoom-canvas');
-  const W = isZoom ? 2048 : (cv.offsetWidth||270);
+  const sbEl = document.getElementById('sb');
+  const sbW = sbEl ? sbEl.clientWidth - 16 : 280;
+  const W = isZoom ? 2048 : (cv.offsetWidth > 10 ? cv.offsetWidth : (sbW > 50 ? sbW : 280));
   const H = isZoom ? 900 : 110;
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
@@ -967,7 +969,9 @@ function drawAllDistrictHyetoChart(targetId){
   const cv = document.getElementById(targetId||'cv-all-hyeto');
   if(!cv || !TOWNSHIPS.length) return;
   const isZoom = (targetId==='chart-zoom-canvas');
-  const W = isZoom ? 2048 : (cv.offsetWidth||270);
+  const sbEl2 = document.getElementById('sb');
+  const sbW2 = sbEl2 ? sbEl2.clientWidth - 16 : 280;
+  const W = isZoom ? 2048 : (cv.offsetWidth > 10 ? cv.offsetWidth : (sbW2 > 50 ? sbW2 : 280));
   const H = isZoom ? 900 : 110;
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
@@ -1683,20 +1687,26 @@ TOWNSHIPS.forEach(t => { TMAP[t.county + t.township] = t; });
 
 // ── 切換動畫 ─────────────────────────────────────
 let _transitionActive = false;
+let _transitionTimer = null;
 function withTransition(fn){
   const overlay = document.getElementById('map-overlay');
+  // 清除任何殘留的 timer
+  if(_transitionTimer){ clearTimeout(_transitionTimer); _transitionTimer=null; }
   if(_transitionActive){
-    // 如果已有動畫進行中，直接執行不加遮罩
+    // 強制重置並直接執行
+    overlay.classList.remove('dimming');
+    _transitionActive = false;
     fn();
     return;
   }
   _transitionActive = true;
   overlay.classList.add('dimming');
-  setTimeout(()=>{
+  _transitionTimer = setTimeout(()=>{
     fn();
     setTimeout(()=>{
       overlay.classList.remove('dimming');
       _transitionActive = false;
+      _transitionTimer = null;
     }, 60);
   }, 150);
 }
