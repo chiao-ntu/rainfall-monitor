@@ -163,7 +163,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     <div style="display:flex;align-items:center;gap:4px;margin-bottom:0px">
       <label style="font-size:10px;color:#6bc8e8;white-space:nowrap;width:18px">起</label>
       <div style="flex:1;position:relative">
-        <input type="range" id="slS" min="-28" max="60" value="0" oninput="onSlider()"
+        <input type="range" id="slS" min="-28" max="64" value="0" oninput="onSlider()"
           style="width:100%;height:5px;accent-color:#3a9adf">
       </div>
       <span id="slS-v" style="font-size:9px;color:#6bc8e8;width:75px;text-align:right;flex-shrink:0"></span>
@@ -177,7 +177,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     <div style="display:flex;align-items:center;gap:4px;margin-top:0px">
       <label style="font-size:10px;color:#e8a03a;white-space:nowrap;width:18px">迄</label>
       <div style="flex:1;position:relative">
-        <input type="range" id="slE" min="-28" max="60" value="3" oninput="onSlider()"
+        <input type="range" id="slE" min="-28" max="64" value="3" oninput="onSlider()"
           style="width:100%;height:5px;accent-color:#e8803a">
       </div>
       <span id="slE-v" style="font-size:9px;color:#e8a03a;width:75px;text-align:right;flex-shrink:0"></span>
@@ -726,6 +726,14 @@ function updateAllDistrictCharts(){
   updateDistrictSummary();
   drawAllDistrictDailyChart();
   drawAllDistrictHyetoChart();
+  // 若 canvas 寬度為 0（側欄未完全渲染），延後再繪一次
+  const cv = document.getElementById('cv-all-daily');
+  if(cv && cv.offsetWidth < 10){
+    setTimeout(()=>{
+      drawAllDistrictDailyChart();
+      drawAllDistrictHyetoChart();
+    }, 500);
+  }
 }
 
 function updateDistrictSummary(){
@@ -2841,7 +2849,7 @@ function updateModelRowVisibility(show){
 function buildSliderTicks(){
   const ticks = document.getElementById('sl-ticks');
   if(!ticks) return;
-  const min=-28, max=60, total=max-min;
+  const min=-28, max=64, total=max-min;
   ticks.innerHTML='';
   // 取得刻度容器的實際寬度來計算正確位置
   const containerW = ticks.offsetWidth || 200;
@@ -3019,6 +3027,13 @@ function init(){
   setInterval(()=>{ tryLoadLive(); }, 30*60*1000);
   // 初始化面板拖動
   makeDraggable('panels-container','panels-drag-handle');  // 整個面板容器統一拖動
+
+  // 確保圖表在 DOM 完全渲染後繪製（用 requestAnimationFrame 確保 layout 完成）
+  requestAnimationFrame(()=>{
+    requestAnimationFrame(()=>{
+      updateAllDistrictCharts();
+    });
+  });
 }
 
 // 等 DOM 完全載入後執行
