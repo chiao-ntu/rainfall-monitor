@@ -115,8 +115,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
         style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
     </div>
-    <!-- 外援連結按鈕（4×4 格，貼齊右側）-->
-    <div id="ext-links" style="margin-left:auto;display:grid;grid-template-columns:repeat(4,auto);gap:3px">
+  </div>
+  <!-- 外援連結獨立一列（4欄×4列）-->
+  <div class="ctrl-row" style="flex-wrap:wrap">
+    <span class="cl">外援</span>
+    <div id="ext-links" style="display:grid;grid-template-columns:repeat(4,auto);gap:3px">
       <a href="https://www.cwa.gov.tw/V8/C/P/Warning/FIFOWS.html" target="_blank" class="ext-btn">警特報</a>
       <a href="https://www.cwa.gov.tw/V8/C/W/OBS_Sat.html?Area=2" target="_blank" class="ext-btn">紅外線雲圖</a>
       <a href="https://www.cwa.gov.tw/V8/C/W/OBS_Radar.html" target="_blank" class="ext-btn">雷達回波圖</a>
@@ -169,7 +172,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     <!-- 刻度尺（起訖共用同一條）-->
     <div style="display:flex;align-items:flex-start;gap:4px;margin:-1px 0 0">
       <div style="width:18px;flex-shrink:0"></div>
-      <div id="sl-ticks" style="flex:1;position:relative;height:22px;margin:0 7px"></div>
+      <div id="sl-ticks" style="flex:1;position:relative;height:26px;margin:0 7px;overflow:visible"></div>
       <div style="width:75px;flex-shrink:0"></div>
     </div>
     <div style="display:flex;align-items:center;gap:4px;margin-top:0px">
@@ -2132,6 +2135,16 @@ function toggleSec(name){
   const arrow = document.getElementById('arrow-'+name);
   if(body)  body.style.display  = secOpen[name] ? 'block' : 'none';
   if(arrow) arrow.textContent   = secOpen[name] ? '▾' : '▸';
+  // 展開時重新繪圖（canvas 在收合狀態 offsetWidth=0 導致圖形空白）
+  if(secOpen[name] && selected){
+    if(name==='chart')   setTimeout(()=>drawChart(selected), 30);
+    if(name==='hyeto')   setTimeout(()=>drawDistrictHyetograph(selected), 30);
+    if(name==='all-daily') setTimeout(()=>drawAllDistrictDailyChart('cv-all-daily'), 30);
+    if(name==='all-hyeto') setTimeout(()=>drawAllDistrictHyetoChart('cv-all-hyeto'), 30);
+  } else if(secOpen[name] && !selected){
+    if(name==='all-daily') setTimeout(()=>drawAllDistrictDailyChart('cv-all-daily'), 30);
+    if(name==='all-hyeto') setTimeout(()=>drawAllDistrictHyetoChart('cv-all-hyeto'), 30);
+  }
 }
 
 function updateInfo(t){
@@ -2911,13 +2924,13 @@ function buildSliderTicks(){
 
     // 刻度線
     const line=document.createElement('div');
-    line.style.cssText=`width:1px;height:${is00?8:4}px;background:${is00?'#5a9aaa':'#2a4a5a'};margin:0 auto 1px`;
+    line.style.cssText=`width:1px;height:${is00?10:5}px;background:${is00?'#6ab0cc':'#3a5a6a'};margin:0 auto 1px`;
     tick.appendChild(line);
 
     // 標籤：只在 00 時且日期不重複時顯示
     if(is00){
       const lbl=document.createElement('div');
-      lbl.style.cssText='font-size:7px;color:#5a9aaa;white-space:nowrap';
+      lbl.style.cssText='font-size:8px;color:#6ab0cc;white-space:nowrap';
       lbl.textContent=dateStr!==prevDate?dateStr:'';
       prevDate=dateStr;
       tick.appendChild(lbl);
