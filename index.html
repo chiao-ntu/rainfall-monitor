@@ -724,16 +724,21 @@ function trendArrow(key, pct){
 // ════════════════════════════════════════════════
 function updateAllDistrictCharts(){
   updateDistrictSummary();
-  drawAllDistrictDailyChart();
-  drawAllDistrictHyetoChart();
-  // 若 canvas 寬度為 0（側欄未完全渲染），延後再繪一次
-  const cv = document.getElementById('cv-all-daily');
-  if(cv && cv.offsetWidth < 10){
-    setTimeout(()=>{
+  // 用 setTimeout 確保 DOM layout 完成後才繪圖
+  setTimeout(()=>{
+    const cvD = document.getElementById('cv-all-daily');
+    const cvH = document.getElementById('cv-all-hyeto');
+    // 若 canvas 寬度已知，直接繪；否則再等一次
+    if(cvD && cvD.parentElement && cvD.parentElement.offsetWidth > 10){
       drawAllDistrictDailyChart();
       drawAllDistrictHyetoChart();
-    }, 500);
-  }
+    } else {
+      setTimeout(()=>{
+        drawAllDistrictDailyChart();
+        drawAllDistrictHyetoChart();
+      }, 600);
+    }
+  }, 50);
 }
 
 function updateDistrictSummary(){
@@ -842,9 +847,15 @@ function drawAllDistrictDailyChart(targetId){
   const cv = document.getElementById(targetId||'cv-all-daily');
   if(!cv || !TOWNSHIPS.length) return;
   const isZoom = (targetId==='chart-zoom-canvas');
-  const sbEl = document.getElementById('sb');
-  const sbW = sbEl ? sbEl.clientWidth - 16 : 280;
-  const W = isZoom ? 2048 : (cv.offsetWidth > 10 ? cv.offsetWidth : (sbW > 50 ? sbW : 280));
+  // 取得正確寬度：依序嘗試 offsetWidth > parentElement.offsetWidth > sb.clientWidth > 280
+  let W;
+  if(isZoom){
+    W = 2048;
+  } else {
+    const pW = cv.parentElement ? cv.parentElement.offsetWidth : 0;
+    const sbW = (document.getElementById('sb')||{}).clientWidth || 300;
+    W = cv.offsetWidth > 10 ? cv.offsetWidth : (pW > 10 ? pW : (sbW > 50 ? sbW - 16 : 280));
+  }
   const H = isZoom ? 900 : 110;
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
@@ -969,9 +980,14 @@ function drawAllDistrictHyetoChart(targetId){
   const cv = document.getElementById(targetId||'cv-all-hyeto');
   if(!cv || !TOWNSHIPS.length) return;
   const isZoom = (targetId==='chart-zoom-canvas');
-  const sbEl2 = document.getElementById('sb');
-  const sbW2 = sbEl2 ? sbEl2.clientWidth - 16 : 280;
-  const W = isZoom ? 2048 : (cv.offsetWidth > 10 ? cv.offsetWidth : (sbW2 > 50 ? sbW2 : 280));
+  let W;
+  if(isZoom){
+    W = 2048;
+  } else {
+    const pW = cv.parentElement ? cv.parentElement.offsetWidth : 0;
+    const sbW = (document.getElementById('sb')||{}).clientWidth || 300;
+    W = cv.offsetWidth > 10 ? cv.offsetWidth : (pW > 10 ? pW : (sbW > 50 ? sbW - 16 : 280));
+  }
   const H = isZoom ? 900 : 110;
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
@@ -1686,29 +1702,11 @@ const TMAP = {};
 TOWNSHIPS.forEach(t => { TMAP[t.county + t.township] = t; });
 
 // ── 切換動畫 ─────────────────────────────────────
-let _transitionActive = false;
-let _transitionTimer = null;
+// withTransition: 直接執行，不加遮罩動畫（遮罩動畫在快速切換時容易卡住）
 function withTransition(fn){
   const overlay = document.getElementById('map-overlay');
-  // 清除任何殘留的 timer
-  if(_transitionTimer){ clearTimeout(_transitionTimer); _transitionTimer=null; }
-  if(_transitionActive){
-    // 強制重置並直接執行
-    overlay.classList.remove('dimming');
-    _transitionActive = false;
-    fn();
-    return;
-  }
-  _transitionActive = true;
-  overlay.classList.add('dimming');
-  _transitionTimer = setTimeout(()=>{
-    fn();
-    setTimeout(()=>{
-      overlay.classList.remove('dimming');
-      _transitionActive = false;
-      _transitionTimer = null;
-    }, 60);
-  }, 150);
+  if(overlay) overlay.classList.remove('dimming');
+  fn();
 }
 // ── 無資料提示 ───────────────────────────────────
 function showNoData(msg){
@@ -2207,10 +2205,9 @@ function updateInfo(t){
 function drawChart(t){
   const cv = document.getElementById('cv');
   if(!cv) return;
-  // 用 parentElement 寬度；若父容器是 display:none 則 fallback 280
-  const W = (cv.parentElement && cv.parentElement.offsetWidth > 0)
-    ? cv.parentElement.offsetWidth - 20
-    : 280;
+  const pW = cv.parentElement ? cv.parentElement.offsetWidth : 0;
+  const sbW = (document.getElementById('sb')||{}).clientWidth || 300;
+  const W = cv.offsetWidth > 10 ? cv.offsetWidth : (pW > 10 ? pW : (sbW > 50 ? sbW - 16 : 280));
   const H = 90;
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
