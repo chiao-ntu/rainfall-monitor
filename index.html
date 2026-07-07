@@ -163,7 +163,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     <div style="display:flex;align-items:center;gap:4px;margin-bottom:0px">
       <label style="font-size:10px;color:#6bc8e8;white-space:nowrap;width:18px">起</label>
       <div style="flex:1;position:relative">
-        <input type="range" id="slS" min="-28" max="59" value="0" oninput="onSlider()"
+        <input type="range" id="slS" min="-28" max="60" value="0" oninput="onSlider()"
           style="width:100%;height:5px;accent-color:#3a9adf">
       </div>
       <span id="slS-v" style="font-size:9px;color:#6bc8e8;width:75px;text-align:right;flex-shrink:0"></span>
@@ -177,7 +177,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     <div style="display:flex;align-items:center;gap:4px;margin-top:0px">
       <label style="font-size:10px;color:#e8a03a;white-space:nowrap;width:18px">迄</label>
       <div style="flex:1;position:relative">
-        <input type="range" id="slE" min="-27" max="60" value="3" oninput="onSlider()"
+        <input type="range" id="slE" min="-28" max="60" value="3" oninput="onSlider()"
           style="width:100%;height:5px;accent-color:#e8803a">
       </div>
       <span id="slE-v" style="font-size:9px;color:#e8a03a;width:75px;text-align:right;flex-shrink:0"></span>
@@ -834,7 +834,9 @@ function drawAllDistrictDailyChart(targetId){
   const cv = document.getElementById(targetId||'cv-all-daily');
   if(!cv || !TOWNSHIPS.length) return;
   const isZoom = (targetId==='chart-zoom-canvas');
-  const W = isZoom ? 2048 : (cv.offsetWidth||260);
+  // 取 canvas 寬度：先嘗試 offsetWidth，若還未渲染（=0）就用 sb 側欄寬度，最後 fallback 270
+  const sbW = document.getElementById('sb')?.offsetWidth || 300;
+  const W = isZoom ? 2048 : (cv.offsetWidth > 10 ? cv.offsetWidth : sbW - 16);
   const H = isZoom ? 900 : 110;
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
@@ -991,7 +993,8 @@ function drawAllDistrictHyetoChart(targetId){
   const cv = document.getElementById(targetId||'cv-all-hyeto');
   if(!cv || !TOWNSHIPS.length) return;
   const isZoom = (targetId==='chart-zoom-canvas');
-  const W = isZoom ? 2048 : (cv.offsetWidth||260);
+  const sbW2 = document.getElementById('sb')?.offsetWidth || 300;
+  const W = isZoom ? 2048 : (cv.offsetWidth > 10 ? cv.offsetWidth : sbW2 - 16);
   const H = isZoom ? 900 : 110;
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
@@ -2787,7 +2790,7 @@ async function tryLoadLive(){
   renderLayer();
   renderLegend();
   if(selected) updateInfo(selected);
-  else setTimeout(()=>updateAllDistrictCharts(), 100);  // 無選取時更新各分署整合圖
+  else setTimeout(()=>updateAllDistrictCharts(), 400);  // 延長等待側欄完全渲染
 }
 
 // ════════════════════════════════════════════════
@@ -2923,7 +2926,8 @@ function buildSliderTicks(){
     const dateStr=`${dt.getMonth()+1}/${dt.getDate()}`;
 
     const tick=document.createElement('div');
-    // 補正 input range thumb 的內縮偏移（thumb 約 14px，兩端各縮 7px）
+    // 精確補正：input range thumb 位置 = pct% * (100% - thumbW) + thumbW/2
+    // thumbW ≈ 14px（CSS accent-color thumb 的預設寬度）
     tick.style.cssText=`position:absolute;left:calc(${pct}% * (100% - 14px) / 100% + 7px);top:0;cursor:pointer;transform:translateX(-50%);text-align:center`;
 
     // 刻度線
@@ -3072,7 +3076,7 @@ function init(){
         if(sec) sec.style.display = 'none';
       });
       // 取消選取時更新各分署整合摘要
-      setTimeout(()=>updateAllDistrictCharts(), 50);
+      setTimeout(()=>updateAllDistrictCharts(), 200);
     }
   });
 
