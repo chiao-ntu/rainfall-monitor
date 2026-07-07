@@ -94,27 +94,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
       style="color:inherit;text-decoration:none">臺大天災中心</a></div>
   </div>
   <span class="tag time" id="base-tag"></span>
-  <!-- 外援連結按鈕區（右側，點選開新分頁）-->
-  <div id="ext-links" style="margin-left:auto;display:flex;flex-wrap:wrap;gap:3px;align-items:center;max-width:55%;justify-content:flex-end">
-    <a href="https://www.cwa.gov.tw/V8/C/P/Warning/FIFOWS.html" target="_blank" class="ext-btn">警特報</a>
-    <a href="https://www.cwa.gov.tw/V8/C/W/OBS_Sat.html?Area=2" target="_blank" class="ext-btn">紅外線雲圖</a>
-    <a href="https://www.cwa.gov.tw/V8/C/W/OBS_Radar.html" target="_blank" class="ext-btn">雷達回波圖</a>
-    <a href="https://qpeplus.cwa.gov.tw/pub/?tab=monitor" target="_blank" class="ext-btn">QPEplus</a>
-    <a href="https://www.cwa.gov.tw/V8/C/P/QPF.html?active=1" target="_blank" class="ext-btn">定量降雨</a>
-    <a href="https://www.cwa.gov.tw/V8/C/P/Rainfall/Rainfall_QZJ.html" target="_blank" class="ext-btn">日累積雨量</a>
-    <a href="https://mfcqpf.cwa.gov.tw/login/?next=/MFC/" target="_blank" class="ext-btn">郵票圖</a>
-    <a href="https://npd.cwa.gov.tw/NPD/resident_product/weather_pattern?version=public" target="_blank" class="ext-btn">高空天氣圖</a>
-    <a href="https://watch.ncdr.nat.gov.tw/watch_swcb" target="_blank" class="ext-btn">颱風資訊</a>
-    <a href="https://watch.ncdr.nat.gov.tw/watch_tracks_pro" target="_blank" class="ext-btn">颱風路徑</a>
-    <a href="https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan" target="_blank" class="ext-btn">WISSDOM</a>
-    <a href="https://fema.ardswc.gov.tw/Portal/Layout" target="_blank" class="ext-btn">FEMA</a>
-    <a href="https://www.tropicaltidbits.com/analysis/models/?model=ecmwf&region=ea&pkg=mslp_pcpn" target="_blank" class="ext-btn">Tropical Tidbits</a>
-    <a href="https://tropic.ssec.wisc.edu/" target="_blank" class="ext-btn">CIMSS</a>
-    <a href="https://www.easterlywave.com/typhoon/ensemble/" target="_blank" class="ext-btn">EasterlyWave</a>
-    <a href="https://www.windy.com/?21.487,120.674,5" target="_blank" class="ext-btn">Windy</a>
-  </div>
   <button class="b" id="ctrl-toggle" onclick="toggleCtrl()" title="收合/展開控制列"
-    style="border-color:#2a4a6a;color:#7bb8d8;transition:transform 0.25s ease">&#9650;</button>
+    style="border-color:#2a4a6a;color:#7bb8d8;margin-left:auto;transition:transform 0.25s ease;display:none">&#9650;</button>
 </div>
 <!-- 控制列底部收合橫條（全寬可點擊）-->
 <div id="ctrl-collapser" onclick="toggleCtrl()"
@@ -133,6 +114,25 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
       <button class="b"    id="bRisk"  onclick="setMode('risk')">風險指標</button>
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
         style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
+    </div>
+    <!-- 外援連結按鈕（4×4 格，貼齊右側）-->
+    <div id="ext-links" style="margin-left:auto;display:grid;grid-template-columns:repeat(4,auto);gap:3px">
+      <a href="https://www.cwa.gov.tw/V8/C/P/Warning/FIFOWS.html" target="_blank" class="ext-btn">警特報</a>
+      <a href="https://www.cwa.gov.tw/V8/C/W/OBS_Sat.html?Area=2" target="_blank" class="ext-btn">紅外線雲圖</a>
+      <a href="https://www.cwa.gov.tw/V8/C/W/OBS_Radar.html" target="_blank" class="ext-btn">雷達回波圖</a>
+      <a href="https://qpeplus.cwa.gov.tw/pub/?tab=monitor" target="_blank" class="ext-btn">QPEplus</a>
+      <a href="https://www.cwa.gov.tw/V8/C/P/QPF.html?active=1" target="_blank" class="ext-btn">定量降雨</a>
+      <a href="https://www.cwa.gov.tw/V8/C/P/Rainfall/Rainfall_QZJ.html" target="_blank" class="ext-btn">日累積雨量</a>
+      <a href="https://mfcqpf.cwa.gov.tw/login/?next=/MFC/" target="_blank" class="ext-btn">郵票圖</a>
+      <a href="https://npd.cwa.gov.tw/NPD/resident_product/weather_pattern?version=public" target="_blank" class="ext-btn">高空天氣圖</a>
+      <a href="https://watch.ncdr.nat.gov.tw/watch_swcb" target="_blank" class="ext-btn">颱風資訊</a>
+      <a href="https://watch.ncdr.nat.gov.tw/watch_tracks_pro" target="_blank" class="ext-btn">颱風路徑</a>
+      <a href="https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan" target="_blank" class="ext-btn">WISSDOM</a>
+      <a href="https://fema.ardswc.gov.tw/Portal/Layout" target="_blank" class="ext-btn">FEMA</a>
+      <a href="https://www.tropicaltidbits.com/analysis/models/?model=ecmwf&region=ea&pkg=mslp_pcpn" target="_blank" class="ext-btn">Tropical Tidbits</a>
+      <a href="https://tropic.ssec.wisc.edu/" target="_blank" class="ext-btn">CIMSS</a>
+      <a href="https://www.easterlywave.com/typhoon/ensemble/" target="_blank" class="ext-btn">EasterlyWave</a>
+      <a href="https://www.windy.com/?21.487,120.674,5" target="_blank" class="ext-btn">Windy</a>
     </div>
   </div>
   <div class="ctrl-row">
@@ -187,17 +187,17 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
       設定5個顏色的分界值（mm 或 %，視圖層而定），輸入後按套用
     </div>
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-      <span style="font-size:10px;color:#5a8aaa">綠 &lt;</span>
+      <span style="display:inline-block;width:14px;height:14px;background:#00CC44;border-radius:2px;vertical-align:middle" title="綠"></span>
       <input type="number" id="cs0" value="40" style="width:55px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
-      <span style="font-size:10px;color:#5a8aaa">黃 &lt;</span>
+      <span style="display:inline-block;width:14px;height:14px;background:#DDDD00;border-radius:2px;vertical-align:middle" title="黃"></span>
       <input type="number" id="cs1" value="70" style="width:55px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
-      <span style="font-size:10px;color:#5a8aaa">紅 &lt;</span>
+      <span style="display:inline-block;width:14px;height:14px;background:#DD2222;border-radius:2px;vertical-align:middle" title="紅"></span>
       <input type="number" id="cs2" value="130" style="width:55px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
-      <span style="font-size:10px;color:#5a8aaa">紫 &lt;</span>
+      <span style="display:inline-block;width:14px;height:14px;background:#9900CC;border-radius:2px;vertical-align:middle" title="紫"></span>
       <input type="number" id="cs3" value="250" style="width:55px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
-      <span style="font-size:10px;color:#5a8aaa">淡紫 &lt;</span>
+      <span style="display:inline-block;width:14px;height:14px;background:#DDA0DD;border-radius:2px;border:1px solid #888;vertical-align:middle" title="淡紫"></span>
       <input type="number" id="cs4" value="999" style="width:55px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
-      <span style="font-size:10px;color:#5a8aaa">≥ 該值超出</span>
+      <span style="font-size:10px;color:#5a8aaa">≥ 超出</span>
       <button class="b" onclick="applyCustomScale()" style="border-color:#3a8a4a;color:#7be89a">套用</button>
       <button class="b" onclick="resetCustomScale()" style="border-color:#8a4a3a;color:#e8907b">重設預設值</button>
     </div>
@@ -485,6 +485,56 @@ let showDisaster = false;  // 是否顯示高風險區
 let sidebarOpen = true;
 // 自訂色階級距編輯器（僅自訂範圍模式可用）
 const DEFAULT_RAIN_BREAKS = [40,70,130,250,1e9];  // 對應綠/黃/紅/紫/淡紫的上限
+
+// ════ 工具函式（缺少時圖表全部當機）════
+function ceilTo10(v){ return Math.ceil(v/10)*10; }
+
+function getDistrictColor(county){
+  for(const [district, counties] of Object.entries(DISTRICT_COUNTIES)){
+    if(counties.includes(county)) return DISTRICT_COLOR[district] || '#aaccee';
+  }
+  return '#aaccee';
+}
+
+let NATIONWIDE_EXTREMES = null;
+function getNationwideExtremes(){
+  if(NATIONWIDE_EXTREMES) return NATIONWIDE_EXTREMES;
+  let maxRain=10, maxEtr=20;
+  TOWNSHIPS.forEach(t=>{
+    const qa = getQpfArr(t, MODEL_FIELD[forecastModel]||'qpf_best');
+    if(qa) qa.forEach(v=>{ if(v>maxRain) maxRain=v; });
+    if(t.alert_val>0){
+      for(let i=0;i<8;i++){
+        const e=calcEtr2AtSeg(t,i,MODEL_FIELD[forecastModel]||'qpf_best');
+        const pct=Math.round(e/t.alert_val*100);
+        if(pct>maxEtr) maxEtr=pct;
+      }
+    }
+  });
+  NATIONWIDE_EXTREMES={rainMax:ceilTo10(maxRain+10), etrMax:ceilTo10(maxEtr+10)};
+  return NATIONWIDE_EXTREMES;
+}
+
+let DAILY_CHART_EXTREMES = null;
+function getDailyChartExtremes(){
+  if(DAILY_CHART_EXTREMES) return DAILY_CHART_EXTREMES;
+  let maxRain=10, maxEtr=20;
+  TOWNSHIPS.forEach(t=>{
+    const qpf = t.daily_qpf || [];
+    qpf.forEach(v=>{ if(v>maxRain) maxRain=v; });
+    if(t.alert_val>0){
+      for(let d=0;d<16;d++){
+        const seg=d===0?3:d*4+3;
+        const e=calcEtr2AtSeg(t,seg,MODEL_FIELD[forecastModel]||'qpf_best');
+        const pct=Math.round(e/t.alert_val*100);
+        if(pct>maxEtr) maxEtr=pct;
+      }
+    }
+  });
+  DAILY_CHART_EXTREMES={rainMax:ceilTo10(maxRain+20), etrMax:ceilTo10(maxEtr+10)};
+  return DAILY_CHART_EXTREMES;
+}
+
 function downloadMapCSV(){
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
   const modeLabel = {rain:'累積雨量(mm)', etr:'ETR2%', risk:'風險指標'}[mode] || mode;
@@ -2845,41 +2895,33 @@ function buildSliderTicks(){
   const ticks = document.getElementById('sl-ticks');
   if(!ticks) return;
   const min=-28, max=60, total=max-min;
-  // slider thumb 在瀏覽器中有內縮偏移，用 CSS calc 補正
-  // 一般 thumb 寬14px，track 寬100%，所以 pct% 對應實際位置需補正
-  const thumbW=14;  // thumb 寬度(px)，配合CSS設定
   ticks.innerHTML='';
-  let lastDate='';
+  let prevDate='';
+  // 每天 00 時一個主刻度，每天 12 時一個次刻度
   for(let seg=min;seg<=max;seg+=2){
-    const pctRaw=(seg-min)/total*100;
-    // 補正 thumb 偏移：slider 實際可移動範圍是 100%-thumbW，
-    // CSS: left = calc(pct% - pct*thumbW/100 + thumbW/2)
-    // 但用 inline style left% 最接近：left: calc(${pctRaw}% * (1 - thumbW/containerW) + thumbW/2)
-    // 簡化：直接用 pctRaw，讓容器 overflow:hidden 處理邊界
-    const pct = pctRaw;
     const dt=new Date(BASE_TIME.getTime()+seg*6*3600000);
-    const dateStr=`${dt.getMonth()+1}/${dt.getDate()}`;
     const h=dt.getHours();
-    const is00=(h===0), is12=(h===12);
-    if(!is00&&!is12) continue;
+    if(h!==0 && h!==12) continue;
+    const is00=(h===0);
+    const pct=(seg-min)/total*100;
+    const dateStr=`${dt.getMonth()+1}/${dt.getDate()}`;
 
     const tick=document.createElement('div');
-    tick.style.cssText=`position:absolute;left:${pct}%;cursor:pointer;transform:translateX(-50%);text-align:center;top:0`;
+    tick.style.cssText=`position:absolute;left:${pct}%;top:0;cursor:pointer;transform:translateX(-50%);text-align:center`;
 
+    // 刻度線
     const line=document.createElement('div');
-    line.style.cssText=`width:1px;height:${is00?8:4}px;background:${is00?'#4a8aaa':'#2a4a5a'};margin:0 auto 1px`;
+    line.style.cssText=`width:1px;height:${is00?8:4}px;background:${is00?'#5a9aaa':'#2a4a5a'};margin:0 auto 1px`;
     tick.appendChild(line);
 
-    const label=document.createElement('div');
-    label.style.cssText=`font-size:7px;color:${is00?'#6bc8e8':'#3a5a6a'};white-space:nowrap`;
-    // 同一天：顯示「M/D 0時」→第一次顯示日期，之後同天只顯示時間
+    // 標籤：只在 00 時且日期不重複時顯示
     if(is00){
-      label.textContent = dateStr!==lastDate ? dateStr : '0時';
-      lastDate=dateStr;
-    } else {
-      label.textContent='12時';
+      const lbl=document.createElement('div');
+      lbl.style.cssText='font-size:7px;color:#5a9aaa;white-space:nowrap';
+      lbl.textContent=dateStr!==prevDate?dateStr:'';
+      prevDate=dateStr;
+      tick.appendChild(lbl);
     }
-    tick.appendChild(label);
 
     const segVal=seg;
     tick.onclick=(e)=>{
@@ -2897,6 +2939,7 @@ function buildSliderTicks(){
     ticks.appendChild(tick);
   }
 }
+
 
 function onSlider(){
   let s=parseInt(document.getElementById('slS').value);
