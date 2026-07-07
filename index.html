@@ -633,6 +633,14 @@ const DISTRICT_COUNTIES = {
   '花蓮分署': ['花蓮縣'],
 };
 const DISTRICT_ORDER = ['臺北分署','臺中分署','南投分署','臺南分署','臺東分署','花蓮分署'];
+const DISTRICT_COLOR = {
+  '臺北分署': '#FF00FF',
+  '臺中分署': '#FF8C00',
+  '南投分署': '#00FFFF',
+  '臺南分署': '#00FF00',
+  '臺東分署': '#6699FF',
+  '花蓮分署': '#FFFF00',
+};
 // 縣市→分署反查
 const COUNTY_TO_DISTRICT_ETR = {};
 DISTRICT_ORDER.forEach(d=>{ DISTRICT_COUNTIES[d].forEach(c=>{ COUNTY_TO_DISTRICT_ETR[c]=d; }); });
@@ -2649,6 +2657,11 @@ function updateModelRowVisibility(show){
 function buildSliderTicks(){
   const ticks = document.getElementById('sl-ticks');
   if(!ticks) return;
+  // 若面板剛打開 offsetWidth=0，延遲重試
+  if(ticks.offsetWidth < 10){
+    setTimeout(buildSliderTicks, 100);
+    return;
+  }
   const min=-28, max=64, total=max-min;
   ticks.innerHTML='';
   // 取得刻度容器的實際寬度來計算正確位置
