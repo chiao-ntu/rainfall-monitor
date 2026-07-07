@@ -106,20 +106,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
   <div id="ctrl-collapser-indicator" style="width:36px;height:3px;background:#2a4a6a;border-radius:2px"></div>
 </div>
 <div id="ctrl">
-  <div class="ctrl-row">
-    <span class="cl">圖層</span>
-    <div class="bg">
-      <button class="b on" id="bRain"  onclick="setMode('rain')">累積雨量</button>
-      <button class="b"    id="bEtr"   onclick="setMode('etr')">ETR2%</button>
-      <button class="b"    id="bRisk"  onclick="setMode('risk')">風險指標</button>
-      <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
-        style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
-    </div>
-  </div>
-  <!-- 外援連結獨立一列（4欄×4列）-->
-  <div class="ctrl-row" style="flex-wrap:wrap">
-    <span class="cl">外援</span>
-    <div id="ext-links" style="display:grid;grid-template-columns:repeat(4,auto);gap:3px">
+  <!-- 外援連結：圖層上方，單排 flex wrap -->
+  <div class="ctrl-row" style="flex-wrap:wrap;padding:3px 0">
+    <div id="ext-links" style="display:flex;flex-wrap:wrap;gap:3px">
       <a href="https://www.cwa.gov.tw/V8/C/P/Warning/FIFOWS.html" target="_blank" class="ext-btn">警特報</a>
       <a href="https://www.cwa.gov.tw/V8/C/W/OBS_Sat.html?Area=2" target="_blank" class="ext-btn">紅外線雲圖</a>
       <a href="https://www.cwa.gov.tw/V8/C/W/OBS_Radar.html" target="_blank" class="ext-btn">雷達回波圖</a>
@@ -136,6 +125,16 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
       <a href="https://tropic.ssec.wisc.edu/" target="_blank" class="ext-btn">CIMSS</a>
       <a href="https://www.easterlywave.com/typhoon/ensemble/" target="_blank" class="ext-btn">EasterlyWave</a>
       <a href="https://www.windy.com/?21.487,120.674,5" target="_blank" class="ext-btn">Windy</a>
+    </div>
+  </div>
+  <div class="ctrl-row">
+    <span class="cl">圖層</span>
+    <div class="bg">
+      <button class="b on" id="bRain"  onclick="setMode('rain')">累積雨量</button>
+      <button class="b"    id="bEtr"   onclick="setMode('etr')">ETR2%</button>
+      <button class="b"    id="bRisk"  onclick="setMode('risk')">風險指標</button>
+      <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
+        style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
     </div>
   </div>
   <div class="ctrl-row">
@@ -393,9 +392,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     <!-- 區塊：逐日趨勢（預設收合） -->
     <div class="sec" id="sec-chart" style="display:none">
       <div class="sec-h" onclick="toggleSec('chart')">
-        <span>逐日雨量（15天）</span><span class="sec-arrow" id="arrow-chart">▸</span>
+        <span>逐日雨量（15天）</span><span class="sec-arrow" id="arrow-chart">▾</span>
       </div>
-      <div class="sec-body" id="body-chart" style="display:none">
+      <div class="sec-body" id="body-chart" style="display:block">
         <canvas id="cv" style="width:100%;height:90px;display:block;background:#060f18;border-radius:3px;cursor:crosshair"
           onclick="toggleChartZoom('cv')"
           onmousemove="showChartTooltip(event,'cv')"
@@ -407,17 +406,17 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     <!-- 區塊：6h分段（預設收合） -->
     <div class="sec" id="sec-seg" style="display:none">
       <div class="sec-h" onclick="toggleSec('seg')">
-        <span>6小時分段（前48h）</span><span class="sec-arrow" id="arrow-seg">▸</span>
+        <span>6小時分段（前48h）</span><span class="sec-arrow" id="arrow-seg">▾</span>
       </div>
-      <div class="sec-body" id="seg-rows" style="display:none"></div>
+      <div class="sec-body" id="seg-rows" style="display:block"></div>
     </div>
 
     <!-- 區塊：行政區組體雨量圖（緊接在6h分段之後，預設收合） -->
     <div class="sec" id="sec-hyeto" style="display:none">
       <div class="sec-h" onclick="toggleSec('hyeto')">
-        <span>行政區組體雨量圖（過去2天+未來2天）</span><span class="sec-arrow" id="arrow-hyeto">▸</span>
+        <span>行政區組體雨量圖（過去2天+未來2天）</span><span class="sec-arrow" id="arrow-hyeto">▾</span>
       </div>
-      <div class="sec-body" id="body-hyeto" style="display:none">
+      <div class="sec-body" id="body-hyeto" style="display:block">
         <canvas id="cv-district-hyeto" width="260" height="100" style="width:100%;height:100px;display:block;background:#040c14;border-radius:4px;cursor:crosshair"
           onclick="toggleChartZoom('cv-district-hyeto')"
           onmousemove="showChartTooltip(event,'cv-district-hyeto')"
@@ -2128,7 +2127,7 @@ function renderLayer(){
 // ════════════════════════════════════════════════
 function wv(cls,txt){return`<span class="v ${cls}">${txt}</span>`;}
 // 分區展開/收合狀態
-const secOpen = {obs:true, qpf:true, risk:true, chart:false, seg:false, hyeto:false, stations:false};
+const secOpen = {obs:true, qpf:true, risk:true, chart:true, seg:true, hyeto:true, stations:false};
 function toggleSec(name){
   secOpen[name] = !secOpen[name];
   const body  = document.getElementById('body-'+name) || document.getElementById(name+'-rows');
@@ -2259,7 +2258,11 @@ function updateInfo(t){
 function drawChart(t){
   const cv = document.getElementById('cv');
   if(!cv) return;
-  const W = cv.offsetWidth || 260, H = 90;
+  // 用 parentElement 寬度；若父容器是 display:none 則 fallback 280
+  const W = (cv.parentElement && cv.parentElement.offsetWidth > 0)
+    ? cv.parentElement.offsetWidth - 20
+    : 280;
+  const H = 90;
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
   ctx.clearRect(0,0,W,H);
@@ -2920,7 +2923,8 @@ function buildSliderTicks(){
     const dateStr=`${dt.getMonth()+1}/${dt.getDate()}`;
 
     const tick=document.createElement('div');
-    tick.style.cssText=`position:absolute;left:${pct}%;top:0;cursor:pointer;transform:translateX(-50%);text-align:center`;
+    // 補正 input range thumb 的內縮偏移（thumb 約 14px，兩端各縮 7px）
+    tick.style.cssText=`position:absolute;left:calc(${pct}% * (100% - 14px) / 100% + 7px);top:0;cursor:pointer;transform:translateX(-50%);text-align:center`;
 
     // 刻度線
     const line=document.createElement('div');
