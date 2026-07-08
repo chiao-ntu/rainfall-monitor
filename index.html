@@ -149,14 +149,22 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   </div>
   <div id="cust-ctrl">
     <div class="sl-wrap">
-      <label>起始（6h段）</label>
-      <input type="range" id="slS" min="-28" max="59" value="0" oninput="onSlider()">
-      <span id="slS-v" style="font-size:10px;color:#6bc8e8;width:60px"></span>
+      <label style="width:18px">起</label>
+      <input type="range" id="slS" min="-28" max="64" value="0" oninput="onSlider()"
+        style="flex:1;accent-color:#3a9adf">
+      <span id="slS-v" style="font-size:10px;color:#6bc8e8;width:75px;text-align:right;flex-shrink:0"></span>
+    </div>
+    <!-- 時間刻度尺（起訖共用） -->
+    <div style="display:flex;align-items:flex-start;gap:6px;margin:-2px 0">
+      <div style="width:18px;flex-shrink:0"></div>
+      <div id="sl-ticks" style="flex:1;position:relative;height:28px;overflow:visible"></div>
+      <div style="width:75px;flex-shrink:0"></div>
     </div>
     <div class="sl-wrap">
-      <label>結束（6h段）</label>
-      <input type="range" id="slE" min="-27" max="60" value="3" oninput="onSlider()">
-      <span id="slE-v" style="font-size:10px;color:#6bc8e8;width:60px"></span>
+      <label style="width:18px;color:#e8a03a">迄</label>
+      <input type="range" id="slE" min="-28" max="64" value="3" oninput="onSlider()"
+        style="flex:1;accent-color:#e8803a">
+      <span id="slE-v" style="font-size:10px;color:#e8a03a;width:75px;text-align:right;flex-shrink:0"></span>
     </div>
     <span id="rng-disp"></span>
   </div>
@@ -240,6 +248,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     display:none;align-items:center;justify-content:center;flex-direction:column">
     <div style="font-size:13px;color:#7bd0f0;margin-bottom:8px" id="chart-zoom-title">圖表</div>
     <canvas id="chart-zoom-canvas" width="2048" height="1024"
+      onmousemove="showChartTooltip(event,'chart-zoom-canvas')"
+      onmouseleave="hideChartTooltip()"
       style="max-width:92vw;max-height:85vh;background:#040c14;border-radius:6px;
       box-shadow:0 6px 30px rgba(0,0,0,.6)"></canvas>
     <div style="font-size:11px;color:#5a8aaa;margin-top:8px">點擊任意處關閉</div>
@@ -267,6 +277,42 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <div id="sb-scroll" style="overflow-y:auto;flex:1;padding:0 4px">
     <div id="iCont-hint" class="hint" style="padding:10px 10px">
       在地圖點選任一區域，可查看累積雨量、ETR2% 及逐日趨勢。
+    </div>
+
+    <!-- 未選鄉鎮時：各分署摘要 + 整合圖表 -->
+    <div class="sec" id="sec-all-summary" style="display:block">
+      <div class="sec-h" onclick="toggleSec('all-summary')">
+        <span>各分署警戒摘要</span><span class="sec-arrow" id="arrow-all-summary">▾</span>
+      </div>
+      <div class="sec-body" id="district-summary" style="display:block"></div>
+    </div>
+
+    <div class="sec" id="sec-all-daily" style="display:block">
+      <div class="sec-h" onclick="toggleSec('all-daily')">
+        <span>逐日雨量（各分署，15天）</span><span class="sec-arrow" id="arrow-all-daily">▾</span>
+      </div>
+      <div class="sec-body" id="body-all-daily" style="display:block">
+        <canvas id="cv-all-daily" width="280" height="130"
+          style="width:100%;height:130px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-all-daily')"
+          onmousemove="showChartTooltip(event,'cv-all-daily')"
+          onmouseleave="hideChartTooltip()"></canvas>
+        <div class="hint" style="font-size:9px;padding:2px 0">點擊圖表可放大 / 滑鼠移過顯示數值</div>
+      </div>
+    </div>
+
+    <div class="sec" id="sec-all-hyeto" style="display:block">
+      <div class="sec-h" onclick="toggleSec('all-hyeto')">
+        <span>組體雨量圖（各分署，未來48h）</span><span class="sec-arrow" id="arrow-all-hyeto">▾</span>
+      </div>
+      <div class="sec-body" id="body-all-hyeto" style="display:block">
+        <canvas id="cv-all-hyeto" width="280" height="130"
+          style="width:100%;height:130px;display:block;background:#040c14;border-radius:3px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-all-hyeto')"
+          onmousemove="showChartTooltip(event,'cv-all-hyeto')"
+          onmouseleave="hideChartTooltip()"></canvas>
+        <div class="hint" style="font-size:9px;padding:2px 0">點擊圖表可放大 / 滑鼠移過顯示數值</div>
+      </div>
     </div>
 
     <!-- 區塊：現況觀測（預設展開） -->
@@ -948,16 +994,30 @@ function renderLayer(){
 // ════════════════════════════════════════════════
 function wv(cls,txt){return`<span class="v ${cls}">${txt}</span>`;}
 // 分區展開/收合狀態
-const secOpen = {obs:true, qpf:true, risk:true, chart:true, seg:true, hyeto:true, stations:false};
+const secOpen = {obs:true, qpf:true, risk:true, chart:true, seg:true, hyeto:true, stations:false, 'all-summary':true, 'all-daily':true, 'all-hyeto':true};
 function toggleSec(name){
   secOpen[name] = !secOpen[name];
-  const body  = document.getElementById('body-'+name) || document.getElementById(name+'-rows');
+  const body  = document.getElementById('body-'+name)
+             || document.getElementById(name+'-rows')
+             || (name==='all-summary' ? document.getElementById('district-summary') : null);
   const arrow = document.getElementById('arrow-'+name);
   if(body)  body.style.display  = secOpen[name] ? 'block' : 'none';
   if(arrow) arrow.textContent   = secOpen[name] ? '▾' : '▸';
+  // 展開圖表區塊時重繪（canvas 在收合容器內 offsetWidth=0 導致空白）
+  if(secOpen[name]){
+    if(name==='all-daily')  setTimeout(()=>drawAllDistrictDailyChart(), 50);
+    if(name==='all-hyeto')  setTimeout(()=>drawAllDistrictHyetoChart(), 50);
+    if(name==='chart' && selected) setTimeout(()=>drawChart(selected), 50);
+    if(name==='hyeto' && selected) setTimeout(()=>drawDistrictHyetograph(selected), 50);
+  }
 }
 
 function updateInfo(t){
+  // 選取鄉鎮時隱藏各分署整合區塊
+  ['all-summary','all-daily','all-hyeto'].forEach(name=>{
+    const sec = document.getElementById('sec-'+name);
+    if(sec) sec.style.display = 'none';
+  });
   document.getElementById('iTitle').textContent = `${t.county} ${t.township}`;
   document.getElementById('iCont-hint').style.display = 'none';
 
@@ -1334,8 +1394,11 @@ function drawChartHQ(t, canvasId){
   });
 }
 
+let _zoomCanvasType = 'cv';  // 目前放大中的圖表類型
 function toggleChartZoom(canvasId){
-  if(!selected) return;
+  // 整合圖不需要 selected，鄉鎮圖才需要
+  const needsSelected = (canvasId==='cv'||canvasId==='cv-district-hyeto');
+  if(needsSelected && !selected) return;
   const modal = document.getElementById('chart-zoom-modal');
   const isOpen = modal.style.display === 'flex';
   if(isOpen){
@@ -1344,16 +1407,23 @@ function toggleChartZoom(canvasId){
   }
   modal.style.display = 'flex';
   const titleMap = {
-    'cv': '逐日雨量（15天）',
-    'cv-district-hyeto': `${selected.county}${selected.township} 組體雨量圖`,
+    'cv': selected ? `${selected.county}${selected.township} 逐日雨量（15天）` : '',
+    'cv-district-hyeto': selected ? `${selected.county}${selected.township} 組體雨量圖` : '',
+    'cv-all-daily': '全台各分署逐日雨量（15天）',
+    'cv-all-hyeto': '全台各分署組體雨量圖（未來48h）',
   };
   document.getElementById('chart-zoom-title').textContent = titleMap[canvasId] || '';
+  _zoomCanvasType = canvasId;
 
-  // 在 1280x1024 的高解析度畫布上重新繪製
-  if(canvasId === 'cv-district-hyeto'){
-    drawHyetograph(selected, 'chart-zoom-canvas', 4);  // scale=4 對應字體放大
-  } else if(canvasId === 'cv'){
+  // 在高解析度畫布上重新繪製
+  if(canvasId === 'cv-district-hyeto' && selected){
+    drawHyetograph(selected, 'chart-zoom-canvas', 4);
+  } else if(canvasId === 'cv' && selected){
     drawChartHQ(selected, 'chart-zoom-canvas');
+  } else if(canvasId === 'cv-all-daily'){
+    drawAllDistrictDailyChart('chart-zoom-canvas');
+  } else if(canvasId === 'cv-all-hyeto'){
+    drawAllDistrictHyetoChart('chart-zoom-canvas');
   }
 }
 // 點擊 modal 任意處關閉
@@ -1747,6 +1817,7 @@ function setWin(key){
     renderLayer(); renderLegend();
     if(selected) updateInfo(selected);
   });
+  if(!selected) setTimeout(()=>updateAllDistrictCharts(), 150);
 }
 
 function updateModelRowVisibility(show){
@@ -1779,6 +1850,7 @@ function onSlider(){
     renderLayer(); renderLegend();
     if(selected) updateInfo(selected);
   });
+  if(!selected) setTimeout(()=>updateAllDistrictCharts(), 200);
 }
 
 // 建立「過去7天」按鈕（每天=實際觀測，今天不算在內）
@@ -1865,10 +1937,16 @@ function init(){
       renderLayer();
       document.getElementById('iTitle').textContent = '點選鄉鎮查看詳情';
       document.getElementById('iCont-hint').style.display = 'block';
-      ['obs','qpf','risk','chart','seg','stations'].forEach(name=>{
+      ['obs','qpf','risk','chart','seg','hyeto','stations'].forEach(name=>{
         const sec = document.getElementById('sec-'+name);
         if(sec) sec.style.display = 'none';
       });
+      // 顯示各分署整合區塊
+      ['all-summary','all-daily','all-hyeto'].forEach(name=>{
+        const sec = document.getElementById('sec-'+name);
+        if(sec) sec.style.display = 'block';
+      });
+      setTimeout(()=>updateAllDistrictCharts(), 100);
     }
   });
 
@@ -1959,7 +2037,7 @@ function updateDistrictSummary(){
     </tr></thead><tbody>`;
   rows.forEach(({district,maxEtr,maxEtrTown})=>{
     const c=DISTRICT_COLOR[district]||'#aaccee';
-    const ec=pctColor(maxEtr);
+    const ec=etrColor(maxEtr);
     h+=`<tr style="border-bottom:1px solid #0d2030">
       <td style="padding:2px 4px;color:${c};font-weight:700">${district.replace('分署','')}</td>
       <td style="text-align:right;padding:2px 4px;color:#8ab8d8;font-size:9px">${maxEtrTown}</td>
@@ -2138,29 +2216,28 @@ function drawAllDistrictHyetoChart(targetId){
 function buildSliderTicks(){
   const ticks=document.getElementById('sl-ticks');
   if(!ticks) return;
-  if(ticks.offsetWidth<10){ setTimeout(buildSliderTicks,100); return; }
+  if(ticks.offsetWidth<10){ setTimeout(buildSliderTicks,120); return; }
   const min=-28,max=64,total=max-min;
   ticks.innerHTML='';
-  const containerW=ticks.offsetWidth||200;
-  let prevDate='';
-  for(let seg=min;seg<=max;seg+=2){
+  let prevDateStr='';
+  for(let seg=min;seg<=max;seg++){
     const dt=new Date(BASE_TIME.getTime()+seg*6*3600000);
-    const h=dt.getHours();
-    if(h!==0&&h!==12) continue;
-    const is00=(h===0);
     const dateStr=`${dt.getMonth()+1}/${dt.getDate()}`;
+    const isNewDay=(dateStr!==prevDateStr);   // 該日第一個6h段=主刻度
+    const isMinor=(!isNewDay && seg%2===0);   // 其他偶數段=次刻度
+    if(!isNewDay && !isMinor){ continue; }
     const pct=(seg-min)/total*100;
     const tick=document.createElement('div');
     tick.style.cssText=`position:absolute;left:${pct}%;top:0;cursor:pointer;transform:translateX(-50%);text-align:center`;
     const line=document.createElement('div');
-    line.style.cssText=`width:1px;height:${is00?10:5}px;background:${is00?'#6ab0cc':'#3a5a6a'};margin:0 auto 1px`;
+    line.style.cssText=`width:1px;height:${isNewDay?10:5}px;background:${isNewDay?'#6ab0cc':'#3a5a6a'};margin:0 auto 1px`;
     tick.appendChild(line);
-    if(is00){
+    if(isNewDay){
       const lbl=document.createElement('div');
       lbl.style.cssText='font-size:8px;color:#6ab0cc;white-space:nowrap';
-      lbl.textContent=dateStr!==prevDate?dateStr:'';
-      prevDate=dateStr;
+      lbl.textContent=dateStr;
       tick.appendChild(lbl);
+      prevDateStr=dateStr;
     }
     const segVal=seg;
     tick.onclick=(e)=>{
@@ -2179,6 +2256,122 @@ function buildSliderTicks(){
   }
 }
 
+
+
+// ════════════════════════════════════════════════
+//  圖表 hover 浮動面板（各分署整合圖）
+// ════════════════════════════════════════════════
+function hideChartTooltip(){
+  const tip = document.getElementById('chart-hover-tip');
+  if(tip) tip.style.display='none';
+}
+
+function showChartTooltip(evt, canvasId){
+  const cv = document.getElementById(canvasId);
+  if(!cv) return;
+  const rect = cv.getBoundingClientRect();
+  const scaleX = cv.width / rect.width;
+  const cx = (evt.clientX - rect.left) * scaleX;
+  const W = cv.width;
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+
+  // zoom canvas 用 _zoomCanvasType 判斷實際圖表
+  let effectiveId = canvasId;
+  const isZoom = (canvasId==='chart-zoom-canvas');
+  if(isZoom) effectiveId = _zoomCanvasType || 'cv';
+
+  // 只處理各分署整合圖（鄉鎮圖已有自己的顯示）
+  if(effectiveId!=='cv-all-daily' && effectiveId!=='cv-all-hyeto'){ hideChartTooltip(); return; }
+
+  let tip = document.getElementById('chart-hover-tip');
+  if(!tip){
+    tip = document.createElement('div');
+    tip.id='chart-hover-tip';
+    tip.style.cssText='position:fixed;z-index:9990;background:#0a1828f2;border:1px solid #2a6a8a;'+
+      'border-radius:5px;padding:7px 10px;font-size:11px;color:#dde8f2;pointer-events:none;'+
+      'max-width:260px;min-width:150px;line-height:1.7;box-shadow:0 4px 16px rgba(0,0,0,.5)';
+    document.body.appendChild(tip);
+  }
+
+  // 幾何參數（與 _drawDistrictChart 一致）
+  const pL=isZoom?72:32, pR=isZoom?72:32;
+  const cw=W-pL-pR;
+
+  if(effectiveId==='cv-all-daily'){
+    const nDays=15;
+    const itemW=cw/nDays;
+    const dayIdx=Math.floor((cx-pL)/itemW);
+    if(dayIdx<0||dayIdx>=nDays){ hideChartTooltip(); return; }
+    const dt=new Date(BASE_TIME.getTime()+dayIdx*86400000);
+    const seg=dayIdx===0?3:dayIdx*4+3;
+    let lines=`<b style="color:#d0e8ff">${fmtDay(dt)}（第${dayIdx+1}天）</b><br>`+
+      `<span style="color:#5a8aaa;font-size:9px">分署：雨量 / ETR2% / 風險</span><br>`;
+    DISTRICT_ORDER.forEach(district=>{
+      const c=DISTRICT_COLOR[district]||'#aaccee';
+      let mxR=0,mxE=0,mxRisk=null;
+      DISTRICT_COUNTIES[district].forEach(county=>{
+        TOWNSHIPS.filter(t=>t.county===county).forEach(t=>{
+          mxR=Math.max(mxR,(t.daily_qpf||[])[dayIdx]||0);
+          if(t.alert_val>0){
+            const e=calcEtr2AtSeg(t,seg,qpfField);
+            mxE=Math.max(mxE,Math.round(e/t.alert_val*100));
+          }
+          const rs=(t.risk_score||[])[Math.max(0,seg)];
+          if(rs!=null) mxRisk=Math.max(mxRisk??0,rs);
+        });
+      });
+      const ec=mxE>=100?'#BB00BB':mxE>=90?'#DD2222':mxE>=70?'#DDDD00':'#aaccee';
+      lines+=`<span style="color:${c};font-weight:700">${district.replace('分署','')}</span>：`+
+        `<b>${Math.round(mxR)}mm</b>`+
+        (mxE>0?` <span style="color:${ec}">${mxE}%</span>`:'')+
+        (mxRisk!=null?` <span style="color:#cc8855;font-size:9px">風險${Math.round(mxRisk)}</span>`:'')+
+        '<br>';
+    });
+    tip.innerHTML=lines;
+  } else {
+    // cv-all-hyeto：8 個未來 6h 段
+    const nBars=8;
+    const itemW=cw/nBars;
+    const barIdx=Math.floor((cx-pL)/itemW);
+    if(barIdx<0||barIdx>=nBars){ hideChartTooltip(); return; }
+    const labels=['+6h','+12h','+18h','+24h','+30h','+36h','+42h','+48h'];
+    const t0=new Date(BASE_TIME.getTime()+(barIdx+1)*6*3600000);
+    let lines=`<b style="color:#d0e8ff">${labels[barIdx]}（至${fmtDT(t0)}）</b><br>`+
+      `<span style="color:#5a8aaa;font-size:9px">分署：6h雨量 / ETR2% / 風險</span><br>`;
+    DISTRICT_ORDER.forEach(district=>{
+      const c=DISTRICT_COLOR[district]||'#aaccee';
+      let mxR=0,mxE=0,mxRisk=null;
+      DISTRICT_COUNTIES[district].forEach(county=>{
+        TOWNSHIPS.filter(t=>t.county===county).forEach(t=>{
+          mxR=Math.max(mxR,getQpfArr(t,qpfField)[barIdx]||0);
+          if(t.alert_val>0){
+            const e=calcEtr2AtSeg(t,barIdx,qpfField);
+            mxE=Math.max(mxE,Math.round(e/t.alert_val*100));
+          }
+          const rs=(t.risk_score||[])[barIdx];
+          if(rs!=null) mxRisk=Math.max(mxRisk??0,rs);
+        });
+      });
+      const ec=mxE>=100?'#BB00BB':mxE>=90?'#DD2222':mxE>=70?'#DDDD00':'#aaccee';
+      const intensity=mxR>=250?'超大豪雨':mxR>=140?'大豪雨':mxR>=70?'豪雨':mxR>=40?'大雨':'';
+      lines+=`<span style="color:${c};font-weight:700">${district.replace('分署','')}</span>：`+
+        `<b>${Math.round(mxR)}mm</b>`+
+        (mxE>0?` <span style="color:${ec}">${mxE}%</span>`:'')+
+        (mxRisk!=null?` <span style="color:#cc8855;font-size:9px">風險${Math.round(mxRisk)}</span>`:'')+
+        (intensity?` <span style="color:#dd7744;font-size:9px">${intensity}</span>`:'')+
+        '<br>';
+    });
+    tip.innerHTML=lines;
+  }
+
+  // 定位（不超出視窗）
+  tip.style.display='block';
+  tip.style.left=(evt.clientX+14)+'px';
+  tip.style.top=(evt.clientY-10)+'px';
+  const tipW=tip.offsetWidth, tipH=tip.offsetHeight;
+  if(evt.clientX+14+tipW > window.innerWidth) tip.style.left=(evt.clientX-tipW-14)+'px';
+  if(evt.clientY-10+tipH > window.innerHeight) tip.style.top=(window.innerHeight-tipH-8)+'px';
+}
 
 </script>
 </body>
