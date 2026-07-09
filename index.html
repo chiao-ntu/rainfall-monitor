@@ -215,13 +215,13 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     background:#091520;border-right:1px solid #1a3348;overflow:hidden;transition:width 0.25s ease">
     <!-- ETR2% 警戒區塊 -->
     <div style="display:flex;flex-direction:column;min-height:60px;max-height:45%;flex-shrink:0;overflow:hidden">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
-        border-bottom:1px solid #1a3348;background:#0a1828;flex-shrink:0">
-        <span style="font-weight:700;color:#ffcc44;font-size:11px">⚠ ETR2%警戒</span>
+      <div onclick="toggleLsbSection('etr')" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
+        border-bottom:1px solid #1a3348;background:#0a1828;flex-shrink:0;cursor:pointer">
+        <span style="font-weight:700;color:#ffcc44;font-size:11px"><span id="lsb-etr-arrow">▾</span> ⚠ ETR2%警戒</span>
         <span style="display:flex;gap:4px;align-items:center">
-          <button onclick="copyEtrPanel(this)"
+          <button onclick="event.stopPropagation();copyEtrPanel(this)"
             style="font-size:9px;padding:1px 5px;background:#0d2035;color:#8ac8e8;border:1px solid #2a4a6a;border-radius:3px;cursor:pointer">複製</button>
-          <button onclick="downloadEtrCsv()"
+          <button onclick="event.stopPropagation();downloadEtrCsv()"
             style="font-size:9px;padding:1px 5px;background:#0d2035;color:#5ad88a;border:1px solid #2a5a4a;border-radius:3px;cursor:pointer">CSV</button>
         </span>
       </div>
@@ -229,13 +229,13 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     </div>
     <!-- 二次災害高風險區區塊 -->
     <div style="display:flex;flex-direction:column;flex:1;min-height:0;border-top:2px solid #4a2a18;overflow:hidden">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
-        border-bottom:1px solid #4a2a18;background:#2a140a;flex-shrink:0">
-        <span style="font-weight:700;color:#ff8855;font-size:11px">● 二次災害高風險區</span>
+      <div onclick="toggleLsbSection('disaster')" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
+        border-bottom:1px solid #4a2a18;background:#2a140a;flex-shrink:0;cursor:pointer">
+        <span style="font-weight:700;color:#ff8855;font-size:11px"><span id="lsb-disaster-arrow">▾</span> ● 二次災害高風險區</span>
         <span style="display:flex;gap:4px;align-items:center">
-          <button onclick="copyDisasterPanel(this)"
+          <button onclick="event.stopPropagation();copyDisasterPanel(this)"
             style="font-size:9px;padding:1px 5px;background:#2a1810;color:#e8a888;border:1px solid #5a3a2a;border-radius:3px;cursor:pointer">複製</button>
-          <button onclick="downloadDisasterCsv()"
+          <button onclick="event.stopPropagation();downloadDisasterCsv()"
             style="font-size:9px;padding:1px 5px;background:#2a1810;color:#8ad8a8;border:1px solid #3a5a3a;border-radius:3px;cursor:pointer">CSV</button>
         </span>
       </div>
@@ -1991,7 +1991,7 @@ function _drawDistrictChart(ctx,W,H,isZoom,type,data){
   const nItems=type==='daily'?data.nDays:data.nBars;
   const nD=DISTRICT_ORDER.length;
   const fs=isZoom?54:12;
-  const xFs=isZoom?34:10;                        // X軸字型（縮小20）
+  const xFs=isZoom?20:10;                        // X軸字型
   const axFs=isZoom?30:9;                        // 軸標題字型（縮小）
   const xLabelH=isZoom?56:16, legendH=isZoom?80:18, axTitleH=isZoom?44:14;
   const pL=isZoom?170:46, pR=isZoom?160:44, pT=isZoom?130:16;
@@ -2673,6 +2673,28 @@ function _windowRisk(t){
     if(rs != null) v = Math.max(v ?? 0, rs);
   }
   return v != null ? `<span style="color:#cc8855;font-weight:700">${Math.round(v)}</span>` : '—';
+}
+
+
+// 左側欄各面板收合
+const _lsbSecOpen = {etr:true, disaster:true};
+function toggleLsbSection(name){
+  _lsbSecOpen[name] = !_lsbSecOpen[name];
+  const body = document.getElementById(name==='etr' ? 'etr-panel-body' : 'disaster-panel-body');
+  const arrow = document.getElementById('lsb-'+name+'-arrow');
+  if(body) body.style.display = _lsbSecOpen[name] ? 'block' : 'none';
+  if(arrow) arrow.textContent = _lsbSecOpen[name] ? '▾' : '▸';
+  // 收合時該區塊縮到只剩標題列
+  const section = body ? body.parentElement : null;
+  if(section){
+    if(name==='etr'){
+      section.style.maxHeight = _lsbSecOpen[name] ? '45%' : 'none';
+      section.style.minHeight = _lsbSecOpen[name] ? '60px' : '0';
+    } else {
+      section.style.flex = _lsbSecOpen[name] ? '1' : '0 0 auto';
+      section.style.minHeight = _lsbSecOpen[name] ? '0' : '0';
+    }
+  }
 }
 
 </script>

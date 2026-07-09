@@ -641,7 +641,6 @@ function importCSV(input){
         count++;
       }
       refreshStyles();
-      alert(`已匯入 ${count} 筆著色資料`);
     }catch(err){
       alert('匯入失敗：'+err.message);
     }
@@ -649,6 +648,15 @@ function importCSV(input){
   };
   reader.readAsText(file, 'utf-8');
 }
+
+
+// Ctrl+Z 撤銷上一步
+document.addEventListener('keydown', function(e){
+  if((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z'){
+    e.preventDefault();
+    undoLast();
+  }
+});
 
 </script>
 </body>
