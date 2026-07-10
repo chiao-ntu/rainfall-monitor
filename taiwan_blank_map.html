@@ -21,6 +21,7 @@ body{font-family:sans-serif;background:#fff;display:flex;height:100vh;position:r
 .action-btn{width:100%;padding:5px;border:1px solid;border-radius:4px;cursor:pointer;font-size:11px;background:none;text-align:center;margin-top:2px;color:inherit}
 .sect{font-size:10px;color:#7bd0f0;border-bottom:1px solid #1a3040;padding:2px 0;margin:5px 0 2px;font-weight:700}
 #level-select{width:100%;background:#1a2a3a;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px;padding:4px;font-size:11px}
+.interp-crisp{image-rendering:pixelated;image-rendering:crisp-edges;}
 </style>
 </head>
 <body>
@@ -688,7 +689,7 @@ function renderInterpolated(){
   if(!_blurOn) return;
   const [ [lat0,lng0], [lat1,lng1] ] = INTERP_BOUNDS;
   const my0=_mercY(lat0), my1=_mercY(lat1);
-  const NX=96, NY=128, UP=4, W=NX*UP, H=NY*UP;
+  const NX=96, NY=128, UP=10, W=NX*UP, H=NY*UP;  // 960×1280 高解析度，避免瀏覽器放大暈染
 
   // 1. 蒐集著色鄉鎮（canvas座標 + RGB）
   const pts=[];
@@ -782,10 +783,12 @@ function renderInterpolated(){
 
   // 5. 疊加/更新 imageOverlay
   const url=cv.toDataURL();
+  const _tp=map.getPane('townPane');
+  if(_tp) _tp.style.filter='';  // 防禦：確保無殘留模糊濾鏡（舊版曾設blur）
   if(_interpOverlay){ _interpOverlay.setUrl(url); }
   else{
     _interpOverlay=L.imageOverlay(url, INTERP_BOUNDS,
-      {pane:'townPane', opacity:1.0, interactive:false}).addTo(map);
+      {pane:'townPane', opacity:1.0, interactive:false, className:'interp-crisp'}).addTo(map);
   }
 }
 

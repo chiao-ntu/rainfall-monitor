@@ -85,6 +85,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 .ext-btn{display:inline-block;padding:2px 7px;font-size:10px;color:#8ac8e8;background:#061220;
   border:1px solid #1a4060;border-radius:3px;text-decoration:none;cursor:pointer}
 .ext-btn:hover{background:#0d2030;color:#c8e8ff}
+.interp-crisp{image-rendering:pixelated;image-rendering:crisp-edges;}
 </style>
 </head>
 <body>
@@ -2982,7 +2983,7 @@ function renderInterpolated(){
   if(!_blurOn) return;
   const [ [lat0,lng0], [lat1,lng1] ] = INTERP_BOUNDS;
   const my0=_mercY(lat0), my1=_mercY(lat1);
-  const NX=96, NY=128, UP=4, W=NX*UP, H=NY*UP;
+  const NX=96, NY=128, UP=10, W=NX*UP, H=NY*UP;  // 960×1280 高解析度，避免瀏覽器放大暈染
 
   // 1. 蒐集鄉鎮點（canvas座標 + 數值）
   const pts=[];
@@ -3057,10 +3058,12 @@ function renderInterpolated(){
 
   // 5. 疊加/更新 imageOverlay
   const url=cv.toDataURL();
+  const _tp=map.getPane('townPane');
+  if(_tp) _tp.style.filter='';  // 防禦：確保無殘留模糊濾鏡
   if(_interpOverlay){ _interpOverlay.setUrl(url); }
   else{
     _interpOverlay=L.imageOverlay(url, INTERP_BOUNDS,
-      {pane:'townPane', opacity:1.0, interactive:false}).addTo(map);
+      {pane:'townPane', opacity:1.0, interactive:false, className:'interp-crisp'}).addTo(map);
   }
 }
 
