@@ -498,7 +498,7 @@ function refreshStyles(){
     const c=featureColor(county,town);
     // 邊框顏色跟填色同色（消除視覺空隙）
     const _outIsland = county==='金門縣' || county==='連江縣';
-    const _hideFill = _blurOn && c && !_outIsland;
+    const _hideFill = _blurOn && !_outIsland;
     layer.setStyle({
       fillColor:c||'#f8f8f8',
       // 渲染模式：著色鄉鎮改由內插色帶層顯示（金馬在範圍外，維持原色）
@@ -707,27 +707,25 @@ function renderInterpolated(){
     return;
   }
 
-  // 2. 小網格 RGB IDW + 最近距離（供距離衰減）
-  const R=new Float32Array(NX*NY), G=new Float32Array(NX*NY),
-        B=new Float32Array(NX*NY), MD=new Float32Array(NX*NY);
+  // 2. 小網格 RGB IDW（power 4，全域覆蓋，與 index 相同）
+  const R=new Float32Array(NX*NY), G=new Float32Array(NX*NY), B=new Float32Array(NX*NY);
   for(let gy=0; gy<NY; gy++){
     for(let gx=0; gx<NX; gx++){
-      let nr=0,ng=0,nb=0,den=0,minD2=1e18,hit=-1;
+      let nr=0,ng=0,nb=0,den=0,hit=-1;
       for(let k=0;k<pts.length;k++){
         const dx=gx+0.5-pts[k][0], dy=gy+0.5-pts[k][1];
         const d2=dx*dx+dy*dy;
-        if(d2<minD2) minD2=d2;
         if(d2<0.25){ hit=k; break; }
         const w=1/(d2*d2);
         nr+=w*pts[k][2]; ng+=w*pts[k][3]; nb+=w*pts[k][4]; den+=w;
       }
       const i=gy*NX+gx;
-      if(hit>=0){ R[i]=pts[hit][2]; G[i]=pts[hit][3]; B[i]=pts[hit][4]; MD[i]=0; }
-      else{ R[i]=nr/den; G[i]=ng/den; B[i]=nb/den; MD[i]=Math.sqrt(minD2); }
+      if(hit>=0){ R[i]=pts[hit][2]; G[i]=pts[hit][3]; B[i]=pts[hit][4]; }
+      else{ R[i]=nr/den; G[i]=ng/den; B[i]=nb/den; }
     }
   }
 
-  // 3. 上採樣 + 距離衰減 alpha（近=實色，6~10格漸淡，>10格透明）
+  // 3. 雙線性上採樣（不透明連續色面，與 index 相同）
   const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
   const ctx=cv.getContext('2d');
   const img=ctx.createImageData(W,H), d=img.data;
@@ -740,13 +738,11 @@ function renderInterpolated(){
     const fy=Math.min(y/UP, NY-1.001);
     for(let x=0;x<W;x++){
       const fx=Math.min(x/UP, NX-1.001);
-      const md=bilerp(MD,fx,fy);
       const i=(y*W+x)*4;
-      if(md>10){ d[i+3]=0; continue; }
       d[i]  =Math.round(bilerp(R,fx,fy));
       d[i+1]=Math.round(bilerp(G,fx,fy));
       d[i+2]=Math.round(bilerp(B,fx,fy));
-      d[i+3]=Math.round(200 * (md<=6 ? 1 : (10-md)/4));
+      d[i+3]=255;
     }
   }
   ctx.putImageData(img,0,0);
