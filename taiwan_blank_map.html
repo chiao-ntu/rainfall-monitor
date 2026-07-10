@@ -725,7 +725,14 @@ function renderInterpolated(){
     }
   }
 
-  // 3. 雙線性上採樣（不透明連續色面，與 index 相同）
+  // 3. 雙線性上採樣 + 量化到最近的使用中顏色
+  //    （連續場→離散色階，色帶邊界成為平滑曲線；不量化=連續混色=模糊感）
+  const palette=[];
+  const seen={};
+  pts.forEach(p=>{
+    const key=p[2]+','+p[3]+','+p[4];
+    if(!seen[key]){ seen[key]=1; palette.push([p[2],p[3],p[4]]); }
+  });
   const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
   const ctx=cv.getContext('2d');
   const img=ctx.createImageData(W,H), d=img.data;
@@ -738,11 +745,15 @@ function renderInterpolated(){
     const fy=Math.min(y/UP, NY-1.001);
     for(let x=0;x<W;x++){
       const fx=Math.min(x/UP, NX-1.001);
+      const r=bilerp(R,fx,fy), g=bilerp(G,fx,fy), b=bilerp(B,fx,fy);
+      let br=palette[0][0], bg=palette[0][1], bb=palette[0][2], bd=1e18;
+      for(let k=0;k<palette.length;k++){
+        const dr=r-palette[k][0], dg=g-palette[k][1], db=b-palette[k][2];
+        const dd=dr*dr+dg*dg+db*db;
+        if(dd<bd){ bd=dd; br=palette[k][0]; bg=palette[k][1]; bb=palette[k][2]; }
+      }
       const i=(y*W+x)*4;
-      d[i]  =Math.round(bilerp(R,fx,fy));
-      d[i+1]=Math.round(bilerp(G,fx,fy));
-      d[i+2]=Math.round(bilerp(B,fx,fy));
-      d[i+3]=255;
+      d[i]=br; d[i+1]=bg; d[i+2]=bb; d[i+3]=255;
     }
   }
   ctx.putImageData(img,0,0);
