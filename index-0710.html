@@ -126,6 +126,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b on" id="bRain"  onclick="setMode('rain')">累積雨量</button>
       <button class="b"    id="bEtr"   onclick="setMode('etr')">ETR2%</button>
       <button class="b"    id="bRisk"  onclick="setMode('risk')">風險指標</button>
+      <button class="b"    id="bWarn"  onclick="setMode('warn')">警特報</button>
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
         style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
     </div>
@@ -564,6 +565,8 @@ const MODEL_NOTE = {
 };
 let selected = null;
 let townLayer = null, countyLayer = null;
+let _blurOn = false;  // 渲染（邊界漸層）開關
+let _cwaQpfActive = false;  // 前48h是否為CWA QPF覆蓋
 
 // 右側欄收合/展開
 let sidebarOpen = true;
@@ -819,9 +822,19 @@ const ETR_SCALE=[
   {max:1e9, color:'#BB00BB',label:'≥ 100%'},
 ];
 // 複合風險色階
+// 警特報色階（無/大雨/豪雨/大豪雨/超大豪雨）
+const WARN_MAP_SCALE=[
+  {max:0.5, color:'#FFFFFF', label:'未達標準'},
+  {max:1.5, color:'#87CEEB', label:'大雨'},
+  {max:2.5, color:'#DDDD00', label:'豪雨'},
+  {max:3.5, color:'#DD2222', label:'大豪雨'},
+  {max:1e9, color:'#BB00BB', label:'超大豪雨'},
+];
+function warnMapColor(v){for(const s of WARN_MAP_SCALE)if(v<s.max)return s.color;return'#BB00BB'}
+
 const RISK_SCALE=[
-  {max:50,  color:'#8899aa', label:'< 50 未達標'},
-  {max:70,  color:'#4ba6ff', label:'50–70 低'},
+  {max:50,  color:'#FFFFFF', label:'< 50 未達標'},
+  {max:70,  color:'#00CC44', label:'50–70 低'},
   {max:90,  color:'#DDDD00', label:'70–90 中'},
   {max:100, color:'#DD2222', label:'90–100 高'},
   {max:1e9, color:'#BB00BB', label:'≥100 超高'},
@@ -925,6 +938,16 @@ function getAccum(t){
     return {totalRain: r.R, etrPct: r.R, isRisk: true};
   }
 
+  // ── 警特報模式：時間視窗內最高警特報級（0-4）──
+  if(mode==='warn'){
+    let lv = 0;
+    for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
+      lv = Math.max(lv, _warnLevelAt(t, s));
+      if(lv >= 4) break;
+    }
+    return {totalRain: lv, etrPct: lv, isWarn: true};
+  }
+
   // ── 過去整天（segTo < 0，表示某一天的0-24h，已結束的整天）──
   if(segTo < 0){
     const dailyObs = t.daily_rain || [];
@@ -1024,6 +1047,9 @@ function renderLayer(){
       if(totalRain === null || totalRain === undefined){
         // 無資料：顯示淡灰色，保留視覺邊界（不設為0.0，否則鄉鎮消失）
         fillColor='#FFFFFF'; fillOp=1.0;
+      } else if(acc.isWarn){
+        fillColor = warnMapColor(totalRain);
+        fillOp    = totalRain>0 ? (isSel?0.93:0.82) : 1.0;
       } else if(acc.isRisk){
         fillColor = riskColor(totalRain);
         fillOp    = isSel?0.93:0.78;
@@ -1045,7 +1071,9 @@ function renderLayer(){
     const opts={
       pane: 'townPane',
       color: isSel ? '#ffff44' : fillColor,
-      weight: isSel ? 1.5 : 0.3,
+      // 渲染模式：移除描邊（邊線被暈開是「整體模糊感」的來源），只留色塊交界漸層
+      weight: _blurOn ? (isSel ? 1.5 : 0) : (isSel ? 1.5 : 0.3),
+      stroke: _blurOn ? isSel : true,
       fillColor, fillOpacity: fillOp,
       smoothFactor: 0  // 停用Leaflet的路徑平滑，避免縮放時端點偏移
     };
@@ -1067,7 +1095,12 @@ function renderLayer(){
       const etrStr  = etrPct    !== null ? etrPct.toFixed(0)+'%' : '—';
 
       let tooltipHtml;
-      if(mode==='etr'){
+      if(mode==='warn'){
+        const lv = totalRain || 0;
+        tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
+          `警特報預估：${lv>0?`<span style="color:${WARN_COLORS[lv]};font-weight:700">${WARN_NAMES[lv]}</span>`:'未達標準'}<br>`+
+          `<span style="font-size:10px">${_warnSummaryHtml(t)}</span>`;
+      } else if(mode==='etr'){
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>ETR2%：${etrStr}<br>風險指標：${_windowRisk(t)}`;
       } else if(mode==='risk'){
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>風險指標：${totalRain!=null?totalRain.toFixed(1):'—'}`;
@@ -1319,8 +1352,8 @@ function _townChartData(t, type, qpfField){
         e=Math.round(v/t.alert_val*100);
       }
       etr.push(e);
-      const dt=segTime(s+1);
-      labels.push(`${dt.getHours()===0?24:dt.getHours()}時`);
+      const d0=segTime(s), d1=segTime(s+1);
+      labels.push(`${d0.getMonth()+1}/${d0.getDate()} ${String(d0.getHours()).padStart(2,'0')}-${d1.getHours()===0?24:d1.getHours()}時`);
     }
     return {rain, etr, labels, nItems:10, splitAfter:2};
   }
@@ -1385,7 +1418,7 @@ function _drawTownChart(t, canvasId, isZoom, type){
   const xLabelY=pT+ch+xLabelH*0.75;
   ctx.fillStyle='#ccddee';ctx.font=`${xFs}px sans-serif`;ctx.textAlign='center';
   labels.forEach((lb,i)=>{
-    if(!isZoom&&type==='daily'&&i%2!==0) return;
+    if(!isZoom&&i%2!==0) return;
     ctx.fillText(lb,pL+i*itemW+itemW/2,xLabelY);
   });
 
@@ -1418,20 +1451,6 @@ function _drawTownChart(t, canvasId, isZoom, type){
       ctx.fillText(v+'%',x,y-(isZoom?18:5));
     }
   });
-
-  // 警特報預估標記（組體圖未來段，達標畫徽章）
-  if(type==='hyeto'){
-    for(let i=2;i<nItems;i++){
-      const wSeg=i-2;
-      const lv=_warnLevelAt(t,wSeg);
-      if(lv<=0) continue;
-      const x=pL+i*itemW+itemW/2;
-      const by=pT+(isZoom?26:8);
-      ctx.beginPath();ctx.arc(x,by,isZoom?11:3.5,0,Math.PI*2);
-      ctx.fillStyle=WARN_COLORS[lv];ctx.fill();
-      ctx.strokeStyle='#ffffff';ctx.lineWidth=isZoom?2:0.8;ctx.stroke();
-    }
-  }
 
   // 圖例（X軸標籤下面）
   const legY=pT+ch+xLabelH+legendH*0.72;
@@ -1479,8 +1498,9 @@ function renderLegend(){
   const sc = isFuture6h ? INTENSITY_SCALE
            : mode==='rain' ? RAIN_SCALE
            : mode==='etr'  ? ETR_SCALE
+           : mode==='warn' ? WARN_MAP_SCALE
            : RISK_SCALE;
-  const titles = { rain: isFuture6h ? '降雨強度' : '累積雨量(mm)', etr: 'ETR2%', risk: '風險指標' };
+  const titles = { rain: isFuture6h ? '降雨強度' : '累積雨量(mm)', etr: 'ETR2%', risk: '風險指標', warn: '警特報預估' };
   const titleText = titles[mode] || '';
 
   // 強度分級用描述性文字，不顯示數字範圍
@@ -1488,6 +1508,7 @@ function renderLegend(){
 
   function rangeLabel(scale, idx){
     if(isFuture6h) return INTENSITY_DESC[idx] || '';
+    if(mode==='warn') return scale[idx].label || '';
     const s = scale[idx];
     const prevMax = idx>0 ? scale[idx-1].max : 0;
     if(s.max >= 1e9) return `≥ ${prevMax}`;
@@ -1537,6 +1558,13 @@ async function tryLoadLive(){
           TMAP[live.county+live.township] = live;
         }
       });
+    }
+
+    // CWA QPF 資料來源標示（颱風警報期間前48h為CWA F-C0041覆蓋）
+    _cwaQpfActive = !!d.cwa_qpf_active;
+    const srcNote = document.getElementById('model-src-note');
+    if(srcNote && _cwaQpfActive){
+      srcNote.innerHTML = '<span style="color:#ffcc44;font-weight:700">⚡前48h已採用CWA定量降水預報（F-C0041）</span>';
     }
 
     BASE_TIME = new Date(d.base_time);
@@ -1593,11 +1621,11 @@ function setModel(m){
 
 function setMode(m){
   mode=m;
-  ['bRain','bEtr','bRisk'].forEach(id=>{
+  ['bRain','bEtr','bRisk','bWarn'].forEach(id=>{
     const el=document.getElementById(id);
     if(el) el.classList.remove('on');
   });
-  const modeMap={rain:'bRain',etr:'bEtr',risk:'bRisk'};
+  const modeMap={rain:'bRain',etr:'bEtr',risk:'bRisk',warn:'bWarn'};
   const el=document.getElementById(modeMap[m]);
   if(el) el.classList.add('on');
   withTransition(()=>{
@@ -2906,7 +2934,7 @@ function calcRiskIndicator(t, seg){
   if(R >= 100){ level=4; name='超高'; color='#BB00BB'; }
   else if(R >= 90){ level=3; name='高'; color='#DD2222'; }
   else if(R >= 70){ level=2; name='中'; color='#DDDD00'; }
-  else if(R >= 50){ level=1; name='低'; color='#4ba6ff'; }
+  else if(R >= 50){ level=1; name='低'; color='#00CC44'; }
   else { level=0; name='未達標'; color='#8899aa'; }
 
   return {R, R_now, level, name, color, arrow, arrowColor, warnLv, E_now, E_proj};
@@ -2939,13 +2967,14 @@ function _warnSummaryHtml(t){
 
 
 // 渲染效果：鄉鎮塗色邊界模糊（僅作用於 townPane，縣界/災害框線不受影響）
-let _blurOn = false;
 function toggleBlurRender(){
   _blurOn = !_blurOn;
   const pane = map.getPane('townPane');
-  if(pane) pane.style.filter = _blurOn ? 'blur(4px)' : '';
+  // 3px 輕度模糊：單色內部不可見，只在色彩交界形成漸層
+  if(pane) pane.style.filter = _blurOn ? 'blur(3px)' : '';
   const btn = document.getElementById('bBlurRender');
   if(btn) btn.classList.toggle('on', _blurOn);
+  renderLayer();  // 重繪以套用描邊開關
 }
 
 </script>

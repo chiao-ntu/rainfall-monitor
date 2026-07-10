@@ -862,6 +862,7 @@ def main():
         'base_time':base_time_str,
         'generated_at':now_tpe.strftime('%Y-%m-%dT%H:%M:%S'),
         'source':'CWA_OBS+POP' if stations else 'DEMO',
+        'cwa_qpf_active': is_typhoon,  # True=前48h已覆蓋CWA F-C0041 QPF（颱風警報期間）
         'township_count':len(out_towns),
         'townships':out_towns,
     }
