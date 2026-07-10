@@ -39,7 +39,6 @@ body{font-family:sans-serif;background:#fff;display:flex;height:100vh;position:r
   <button class="action-btn" style="border-color:#644;color:#e88" onclick="resetAll()">🗑 全部清除</button>
   <button class="action-btn" style="border-color:#464;color:#8e8" onclick="exportCSV()">⬇ 匯出 CSV</button>
   <button class="action-btn" style="border-color:#446;color:#8ae" onclick="document.getElementById('csv-import-input').click()">⬆ 匯入 CSV</button>
-  <button class="action-btn" id="blur-btn" style="border-color:#3a7a8a;color:#7ad8e8" onclick="toggleBlurRender()">✨ 渲染</button>
   <input type="file" id="csv-import-input" accept=".csv" style="display:none" onchange="importCSV(this)">
   <div style="font-size:10px;color:#3a6080;margin-top:6px">已上色：<span id="cnt" style="color:#aaccee">0</span> 個</div>
 </div>
@@ -433,7 +432,6 @@ const COLORS = [
 ];
 
 let activeColor=null, fillData={}, history=[], paintMode='county';
-let _blurOn=false;  // 渲染（邊界漸層）開關
 let lastKeyType='C';  // 初始跟 paintMode 同步（county → C）
 
 const pal=document.getElementById('palette');
@@ -452,10 +450,7 @@ COLORS.forEach(c=>{
 });
 
 const map=L.map('map',{zoomControl:true,attributionControl:false}).setView([23.8,121],7);
-// 分層：seaPane(390) < townPane(395) < overlayPane(400: 縣界)
-map.createPane('seaPane');  map.getPane('seaPane').style.zIndex=390;
-map.createPane('townPane'); map.getPane('townPane').style.zIndex=395;
-L.rectangle([[-90,-180],[90,180]],{pane:'seaPane',color:'none',fillColor:'#fff',fillOpacity:1,interactive:false}).addTo(map);
+L.rectangle([[-90,-180],[90,180]],{color:'none',fillColor:'#fff',fillOpacity:1,interactive:false}).addTo(map);
 
 const countyBorder=L.geoJSON(COUNTY_GEO,{
   style:{color:'#222',weight:1.4,fill:false},interactive:false
@@ -501,9 +496,7 @@ function refreshStyles(){
       fillColor:c||'#f8f8f8',
       fillOpacity:c?0.78:0.03,
       color:c||'rgba(120,140,160,0.3)',
-      // 渲染模式：移除描邊，僅留色塊交界漸層
-      weight:_blurOn?0:0.3,
-      stroke:!_blurOn,
+      weight:c?0.3:0.3,
       smoothFactor:0,
     });
   });
@@ -511,7 +504,6 @@ function refreshStyles(){
 
 function buildTownLayer(){
   townLayerObj=L.geoJSON(TOWN_GEO,{
-    pane:'townPane',
     style(feat){
       const p=feat.properties;
       const c=featureColor(p.COUNTYNAME||'',p.TOWNNAME||'');
@@ -665,17 +657,6 @@ document.addEventListener('keydown', function(e){
     undoLast();
   }
 });
-
-
-// 渲染效果：色塊邊界漸層（描邊移除+輕度模糊，單色內部不受影響）
-function toggleBlurRender(){
-  _blurOn = !_blurOn;
-  const pane = map.getPane('townPane');
-  if(pane) pane.style.filter = _blurOn ? 'blur(3px)' : '';
-  const btn = document.getElementById('blur-btn');
-  if(btn) btn.style.background = _blurOn ? '#1a4a5a' : '';
-  refreshStyles();
-}
 
 </script>
 </body>
