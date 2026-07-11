@@ -428,6 +428,7 @@ def get_pop_6h_series(township_name, pop3d, pop7d, base_time, num_segs=28):
 # ── Open-Meteo ────────────────────────────────────
 # 逐時警特報掃描結果快取（best_match）：key → warn_seg[60]
 WARN_SEG_CACHE = {}
+HOURLY_CACHE = {}    # key -> 前48h逐時QPF（best_match）
 
 def fetch_openmeteo_model(townships, model='best_match'):
     """
@@ -494,6 +495,7 @@ def fetch_openmeteo_model(townships, model='best_match'):
         # 大豪雨: 24h≥350 或 3h≥200；超大豪雨: 24h≥500
         if model == 'best_match':
             pv = [v if v is not None else 0.0 for v in precip]
+            HOURLY_CACHE[key] = [round(v,1) for v in pv[:48]]  # 前48h逐時QPF（逐時化第一階段）
             warn_hourly = []
             r3 = 0.0; r24 = 0.0
             for h in range(len(pv)):
@@ -599,6 +601,14 @@ def fetch_ensemble_ratios(townships):
         ratios[counties[i]] = {'hi': hi_arr, 'lo': lo_arr}
     print(f"    系集比值：{len(ratios)} 縣市")
     return ratios
+
+
+def apply_hourly_ratio(hourly, county, ens_ratios, kind):
+    """逐時QPF × 縣級系集比值（比值以6h段為單位，套用至段內各小時）。"""
+    r = ens_ratios.get(county, {}).get(kind)
+    if not r or not hourly:
+        return list(hourly)
+    return [round(v * r[min(h//6, 7)], 1) for h, v in enumerate(hourly)]
 
 
 def apply_ensemble_ratio(qpf, maxh, county, ens_ratios, kind):
@@ -793,6 +803,12 @@ def main():
     om_all, om_max_hourly_all = fetch_openmeteo(static_list)
     om = om_all.get('ecmwf_ifs025', {})  # 預設用 ECMWF IFS，對台灣地形雨準確度較高
 
+    # 系集強弱降雨比值（縣級）+ 昨日模式偏差比
+    time.sleep(2)
+    ens_ratios = fetch_ensemble_ratios(static_list)
+    time.sleep(2)
+    model_yday = fetch_model_yesterday(static_list)
+
     # 基準時間
     h=(now_tpe.hour//6)*6
     base_dt = now_tpe.replace(hour=h,minute=0,second=0,microsecond=0)
@@ -898,6 +914,14 @@ def main():
             'qpf_ecmwf': qpf_ecmwf,
             'qpf_gfs':   qpf_gfs,
             'qpf_icon':  qpf_icon,
+            'qpf_hi':    apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'hi')[0],
+            'qpf_lo':    apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'lo')[0],
+            'maxh_hi':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'hi')[1],
+            'maxh_lo':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'lo')[1],
+            'bias_24h':  calc_bias_24h(obs.get('daily_rain', [0.0]*8), model_yday.get(f"{lat:.4f}_{lng:.4f}")),
+            'qpf_1h':    HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
+            'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'hi'),
+            'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'lo'),
             'warn_seg':  WARN_SEG_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
             'maxh_best':  maxh_best,
             'maxh_ecmwf': maxh_ecmwf,
@@ -987,6 +1011,9 @@ def main():
             'maxh_hi':   apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'hi')[1],
             'maxh_lo':   apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'lo')[1],
             'bias_24h':  None,
+            'qpf_1h':    HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
+            'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'hi'),
+            'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'lo'),
             'maxh_best': get_ns_maxh('best_match'),  'maxh_ecmwf': get_ns_maxh('ecmwf_ifs025'),
             'maxh_gfs':  get_ns_maxh('gfs_seamless'), 'maxh_icon': get_ns_maxh('icon_seamless'),
             'warn_seg':  WARN_SEG_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),

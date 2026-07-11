@@ -747,11 +747,23 @@ function renderInterpolated(){
     for(let x=0;x<W;x++){
       const fx=Math.min(x/UP, NX-1.001);
       const r=bilerp(R,fx,fy), g=bilerp(G,fx,fy), b=bilerp(B,fx,fy);
-      let br=palette[0][0], bg=palette[0][1], bb=palette[0][2], bd=1e18;
+      // 找最近兩色；等距邊界附近線性混色（細漸層帶，其餘保持純色）
+      let i1=0, d1=1e18, i2=0, d2=1e18;
       for(let k=0;k<palette.length;k++){
         const dr=r-palette[k][0], dg=g-palette[k][1], db=b-palette[k][2];
         const dd=dr*dr+dg*dg+db*db;
-        if(dd<bd){ bd=dd; br=palette[k][0]; bg=palette[k][1]; bb=palette[k][2]; }
+        if(dd<d1){ d2=d1; i2=i1; d1=dd; i1=k; }
+        else if(dd<d2){ d2=dd; i2=k; }
+      }
+      let br=palette[i1][0], bg=palette[i1][1], bb=palette[i1][2];
+      if(palette.length>1){
+        const ratio = Math.sqrt(d1)/(Math.sqrt(d1)+Math.sqrt(d2)+1e-9);  // 0=純第一色, 0.5=正好邊界
+        if(ratio > 0.4){
+          const t = (ratio-0.4)/0.1*0.5;  // 0.4→0.5 映射 0→50% 混色
+          br = br*(1-t)+palette[i2][0]*t;
+          bg = bg*(1-t)+palette[i2][1]*t;
+          bb = bb*(1-t)+palette[i2][2]*t;
+        }
       }
       const i=(y*W+x)*4;
       d[i]=br; d[i+1]=bg; d[i+2]=bb; d[i+3]=255;

@@ -1367,7 +1367,83 @@ function _townChartData(t, type, qpfField){
   }
 }
 
+function _hourlyField(){
+  return forecastModel==='hi' ? 'qpf_1h_hi' : forecastModel==='lo' ? 'qpf_1h_lo' : 'qpf_1h';
+}
+
+// 前48小時逐時降雨圖（zoom組體圖，有逐時資料時取代6h視圖）
+function _drawHourlyChart(t, canvasId){
+  const cv=document.getElementById(canvasId);
+  if(!cv||!t) return;
+  const arr=(t[_hourlyField()]||t.qpf_1h||[]).slice(0,48);
+  const W=2048, H=1024;
+  cv.width=W; cv.height=H;
+  const ctx=cv.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#040c14'; ctx.fillRect(0,0,W,H);
+
+  const fs=54, xFs=25;
+  const pL=130, pR=40, pT=110, pB=90;
+  const cw=W-pL-pR, ch=H-pT-pB;
+  const n=arr.length, bw=cw/n;
+  const axisMax=Math.max(ceilTo10(Math.max(...arr, 1)), 10);
+
+  // 標題
+  ctx.fillStyle='#d0e8ff'; ctx.font=`bold ${fs}px sans-serif`; ctx.textAlign='left';
+  const modeTag = forecastModel==='hi'?'（強降雨）':forecastModel==='lo'?'（弱降雨）':'';
+  ctx.fillText(`${t.county}${t.township}　前48小時逐時降雨 (mm/h)${modeTag}`, pL, 68);
+
+  // 左軸
+  ctx.font=`${Math.round(fs*0.6)}px sans-serif`; ctx.textAlign='right';
+  ctx.strokeStyle='#1a3048'; ctx.lineWidth=1;
+  for(let i=0;i<=4;i++){
+    const yv=axisMax*i/4, y=pT+ch-ch*i/4;
+    ctx.fillStyle='#5a88aa'; ctx.fillText(yv.toFixed(0), pL-14, y+10);
+    ctx.beginPath(); ctx.moveTo(pL,y); ctx.lineTo(pL+cw,y); ctx.stroke();
+  }
+
+  // 長條（≥40mm/h 大雨1h門檻 → 紅）
+  const ep=SEG_EPOCH();
+  for(let h=0;h<n;h++){
+    const v=arr[h]||0;
+    const x=pL+h*bw, bh=ch*v/axisMax;
+    ctx.fillStyle = v>=40 ? '#DD2222' : '#4ba6ff';
+    ctx.fillRect(x+bw*0.12, pT+ch-bh, bw*0.76, bh);
+    if(v>=1){
+      ctx.fillStyle='#cfe6ff'; ctx.font=`${xFs}px sans-serif`; ctx.textAlign='center';
+      ctx.fillText(v>=10?v.toFixed(0):v.toFixed(1), x+bw/2, pT+ch-bh-8);
+    }
+  }
+
+  // X軸：每3h標「HH時」，換日處標「M/D」
+  ctx.font=`${xFs}px sans-serif`; ctx.textAlign='center';
+  for(let h=0;h<n;h+=3){
+    const dt=new Date(ep.getTime()+h*3600e3);
+    const x=pL+h*bw+bw/2;
+    ctx.fillStyle='#5a88aa';
+    ctx.fillText(`${String(dt.getHours()).padStart(2,'0')}時`, x, pT+ch+38);
+    if(dt.getHours()===0 || h===0){
+      ctx.fillStyle='#8ab8d8';
+      ctx.fillText(`${dt.getMonth()+1}/${dt.getDate()}`, x, pT+ch+38+xFs+8);
+    }
+  }
+  // 目前時刻分隔線（過去/未來）
+  const nowH=Math.floor((Date.now()-ep.getTime())/3600e3);
+  if(nowH>0 && nowH<n){
+    const x=pL+nowH*bw;
+    ctx.strokeStyle='#ffcc44'; ctx.lineWidth=3; ctx.setLineDash([12,8]);
+    ctx.beginPath(); ctx.moveTo(x,pT); ctx.lineTo(x,pT+ch); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='#ffcc44'; ctx.font=`${xFs}px sans-serif`;
+    ctx.fillText('現在', x, pT-14);
+  }
+}
+
 function _drawTownChart(t, canvasId, isZoom, type){
+  // 逐時化第一階段：zoom組體圖若有逐時資料，改畫前48h逐時視圖
+  if(type==='hyeto' && isZoom && t && (t.qpf_1h||[]).length>=24){
+    return _drawHourlyChart(t, canvasId);
+  }
   const cv=document.getElementById(canvasId);
   if(!cv||!t) return;
   const W=isZoom?2048:(cv.offsetWidth||260);
@@ -2255,6 +2331,33 @@ function showChartTooltip(evt, canvasId){
   const isZoom = (canvasId==='chart-zoom-canvas');
   if(isZoom) effectiveId = _zoomCanvasType || 'cv';
 
+  // 逐時視圖 tooltip（zoom組體圖有逐時資料時，座標按48根長條對位）
+  if(isZoom && effectiveId==='cv-district-hyeto' && selected && (selected.qpf_1h||[]).length>=24){
+    const arr=(selected[_hourlyField()]||selected.qpf_1h||[]).slice(0,48);
+    const pL=130, pR=40, cw=W-pL-pR, bw=cw/arr.length;
+    const hIdx=Math.floor((cx-pL)/bw);
+    let tip2 = document.getElementById('chart-hover-tip');
+    if(!tip2){
+      tip2 = document.createElement('div');
+      tip2.id='chart-hover-tip';
+      tip2.style.cssText='position:fixed;z-index:9990;background:#0a1828f2;border:1px solid #2a6a8a;'+
+        'border-radius:5px;padding:7px 10px;font-size:11px;color:#dde8f2;pointer-events:none;'+
+        'max-width:280px;line-height:1.5';
+      document.body.appendChild(tip2);
+    }
+    if(hIdx<0 || hIdx>=arr.length){ tip2.style.display='none'; return; }
+    const ep=SEG_EPOCH();
+    const d0=new Date(ep.getTime()+hIdx*3600e3), d1=new Date(ep.getTime()+(hIdx+1)*3600e3);
+    const v=arr[hIdx]||0;
+    const warnTag = v>=40 ? ' <span style="color:#FFD500;font-weight:700">≥大雨1h標準</span>' : '';
+    tip2.innerHTML = `<b>${d0.getMonth()+1}/${d0.getDate()} ${String(d0.getHours()).padStart(2,'0')}-${String(d1.getHours()).padStart(2,'0')}時</b><br>`+
+      `時雨量：<b>${v.toFixed(1)} mm</b>${warnTag}`;
+    tip2.style.display='block';
+    tip2.style.left=(evt.clientX+14)+'px';
+    tip2.style.top =(evt.clientY-10)+'px';
+    return;
+  }
+
   let tip = document.getElementById('chart-hover-tip');
   if(!tip){
     tip = document.createElement('div');
@@ -2994,6 +3097,44 @@ function _valueColorForMode(v){
   return rainColor(v);
 }
 
+// 當前模式的色帶RGB表（供內插渲染邊界混色）
+function _modeBandsRgb(){
+  const hex2rgb = c => [parseInt(c.slice(1,3),16), parseInt(c.slice(3,5),16), parseInt(c.slice(5,7),16)];
+  let sc;
+  if(mode==='etr') sc = ETR_SCALE;
+  else if(mode==='risk') sc = RISK_SCALE;
+  else if(mode==='warn') sc = WARN_MAP_SCALE;
+  else sc = RAIN_SCALE;  // 自訂色階直接修改 RAIN_SCALE 本體，此處自動一致
+  return sc.map(s=>({max:s.max, rgb:hex2rgb(s.color)}));
+}
+
+// 數值→RGB，色帶邊界±15%帶寬內線性混色（warn模式維持硬邊）
+function _valueRgbSmooth(v, bands){
+  let i = 0;
+  while(i < bands.length-1 && v >= bands[i].max) i++;
+  if(mode==='warn') return bands[i].rgb;
+  const c = bands[i].rgb;
+  // 與上一帶邊界的混色（v略高於 bands[i-1].max）
+  const loEdge = i>0 ? bands[i-1].max : -1e18;
+  const hiEdge = bands[i].max;
+  const lo2 = i>1 ? bands[i-2].max : (i>0 ? 0 : -1e18);
+  const wLo = i>0 ? 0.15*Math.min(hiEdge-loEdge, loEdge-lo2 || hiEdge-loEdge) : 0;
+  if(i>0 && v < loEdge + wLo){
+    const t = 0.5 + 0.5*(v-loEdge)/wLo;   // loEdge處=0.5，往上漸回本帶色
+    const p = bands[i-1].rgb;
+    return [c[0]*t+p[0]*(1-t), c[1]*t+p[1]*(1-t), c[2]*t+p[2]*(1-t)];
+  }
+  // 與下一帶邊界的混色（v略低於 bands[i].max）
+  const hi2 = i<bands.length-1 ? bands[i+1].max : 1e18;
+  const wHi = 0.15*Math.min(hiEdge-loEdge, hi2-hiEdge);
+  if(i<bands.length-1 && isFinite(hiEdge) && v > hiEdge - wHi){
+    const t = 0.5*(hiEdge-v)/wHi + 0.5;   // hiEdge處=0.5，往下漸回本帶色
+    const n = bands[i+1].rgb;
+    return [c[0]*t+n[0]*(1-t), c[1]*t+n[1]*(1-t), c[2]*t+n[2]*(1-t)];
+  }
+  return c;
+}
+
 // 內插渲染層（等值色帶，仿CWA降雨分布圖）
 let _interpOverlay = null;
 const INTERP_BOUNDS = [[21.7, 119.2], [25.45, 122.05]];  // 本島+澎湖
@@ -3037,6 +3178,7 @@ function renderInterpolated(){
   const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
   const ctx=cv.getContext('2d');
   const img=ctx.createImageData(W,H), d=img.data;
+  const bands=_modeBandsRgb();
   for(let y=0;y<H;y++){
     const fy=Math.min(y/UP, NY-1.001), y0=Math.floor(fy), ty=fy-y0;
     for(let x=0;x<W;x++){
@@ -3044,12 +3186,9 @@ function renderInterpolated(){
       const v00=grid[y0*NX+x0], v01=grid[y0*NX+Math.min(x0+1,NX-1)],
             v10=grid[Math.min(y0+1,NY-1)*NX+x0], v11=grid[Math.min(y0+1,NY-1)*NX+Math.min(x0+1,NX-1)];
       const v=(v00*(1-tx)+v01*tx)*(1-ty)+(v10*(1-tx)+v11*tx)*ty;
-      const c=_valueColorForMode(v);
+      const c=_valueRgbSmooth(v, bands);
       const i=(y*W+x)*4;
-      d[i]  =parseInt(c.slice(1,3),16);
-      d[i+1]=parseInt(c.slice(3,5),16);
-      d[i+2]=parseInt(c.slice(5,7),16);
-      d[i+3]=255;
+      d[i]=c[0]; d[i+1]=c[1]; d[i+2]=c[2]; d[i+3]=255;
     }
   }
   ctx.putImageData(img,0,0);
