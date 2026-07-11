@@ -531,7 +531,8 @@ def fetch_openmeteo(townships):
 
 
 # ── QPESUMS 雷達整合網格觀測（O-A0038-001，~1.3km）──
-QPESUMS_URL  = f"{BASE_URL}/O-A0038-001"
+# O-A0038-001 是網格「檔案型」產品，走 fileapi 路徑（datastore 會 404）
+QPESUMS_URL  = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi/O-A0038-001"
 QPESUMS_HIST = "qpesums_history.json"
 # 網格參數（CWA QPESUMS 標準網格；若首跑log顯示筆數不符再調整）
 QP_LON0, QP_LAT0, QP_D, QP_NX, QP_NY = 118.0, 20.0, 0.0125, 441, 561
@@ -558,6 +559,11 @@ def fetch_qpesums_grid():
                 pass
         if not content:
             print(f"    QPESUMS 結構不符，頂層keys: {list(raw)[:5]}")
+            try:
+                ds = raw.get('cwaopendata', {}).get('dataset', {})
+                print(f"    dataset keys: {list(ds)[:8]}")
+            except Exception:
+                pass
             return None
         vals = []
         for tok in str(content).replace('\n', ',').split(','):

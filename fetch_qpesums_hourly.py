@@ -10,7 +10,8 @@ from datetime import datetime, timezone, timedelta
 
 CWA_API_KEY  = os.environ.get('CWA_API_KEY', '')
 BASE_URL     = "https://opendata.cwa.gov.tw/api/v1/rest/datastore"
-QPESUMS_URL  = f"{BASE_URL}/O-A0038-001"
+# 網格「檔案型」產品走 fileapi（datastore 會 404）
+QPESUMS_URL  = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi/O-A0038-001"
 HIST_FILE    = "qpesums_history.json"
 TOWNS_FILE   = "all_townships.json"
 # 網格參數（與 fetch_rainfall.py 保持一致）
@@ -35,6 +36,13 @@ def fetch_grid():
             pass
     if not content:
         print(f"結構不符，頂層keys: {list(raw)[:5]}")
+        try:
+            ds = raw.get('cwaopendata', {}).get('dataset', {})
+            print(f"dataset keys: {list(ds)[:8]}")
+            info = ds.get('datasetInfo', {})
+            print(f"datasetInfo: {json.dumps(info, ensure_ascii=False)[:300]}")
+        except Exception:
+            pass
         return None
     vals = []
     for tok in str(content).replace('\n', ',').split(','):
