@@ -758,8 +758,8 @@ function renderInterpolated(){
       let br=palette[i1][0], bg=palette[i1][1], bb=palette[i1][2];
       if(palette.length>1){
         const ratio = Math.sqrt(d1)/(Math.sqrt(d1)+Math.sqrt(d2)+1e-9);  // 0=純第一色, 0.5=正好邊界
-        if(ratio > 0.4){
-          const t = (ratio-0.4)/0.1*0.5;  // 0.4→0.5 映射 0→50% 混色
+        if(ratio > 0.46){
+          const t = (ratio-0.46)/0.04*0.5;  // 0.46→0.5 映射 0→50%（細窄過渡帶，不顯糊）
           br = br*(1-t)+palette[i2][0]*t;
           bg = bg*(1-t)+palette[i2][1]*t;
           bb = bb*(1-t)+palette[i2][2]*t;

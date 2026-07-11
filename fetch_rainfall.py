@@ -530,6 +530,80 @@ def fetch_openmeteo(townships):
     return all_results, all_max_hourly
 
 
+# ── QPESUMS 雷達整合網格觀測（O-A0038-001，~1.3km）──
+QPESUMS_URL  = f"{BASE_URL}/O-A0038-001"
+QPESUMS_HIST = "qpesums_history.json"
+# 網格參數（CWA QPESUMS 標準網格；若首跑log顯示筆數不符再調整）
+QP_LON0, QP_LAT0, QP_D, QP_NX, QP_NY = 118.0, 20.0, 0.0125, 441, 561
+
+def fetch_qpesums_grid():
+    """抓 QPESUMS 1h 網格。回傳 values(list, len=NX*NY, None=無效) 或 None。"""
+    if not CWA_API_KEY:
+        return None
+    try:
+        r = requests.get(QPESUMS_URL, params={'Authorization': CWA_API_KEY,
+                                              'downloadType':'WEB','format':'JSON'}, timeout=90)
+        r.raise_for_status()
+        raw = r.json()
+        # 防禦性多路徑解析（CWA 網格產品結構變體）
+        content = None
+        try:
+            content = raw['cwaopendata']['dataset']['contents']['content']
+        except (KeyError, TypeError):
+            pass
+        if content is None:
+            try:
+                content = raw['records']['contents']['content']
+            except (KeyError, TypeError):
+                pass
+        if not content:
+            print(f"    QPESUMS 結構不符，頂層keys: {list(raw)[:5]}")
+            return None
+        vals = []
+        for tok in str(content).replace('\n', ',').split(','):
+            tok = tok.strip()
+            if not tok: continue
+            try:
+                v = float(tok)
+                vals.append(None if v < 0 else v)   # -99/-999 無效值
+            except ValueError:
+                continue
+        print(f"    QPESUMS 網格：{len(vals)} 值（期望 {QP_NX*QP_NY}）")
+        if len(vals) < QP_NX*QP_NY*0.9:
+            return None
+        return vals
+    except Exception as e:
+        print(f"    QPESUMS 失敗：{e}")
+        return None
+
+def qpesums_at(vals, lat, lng):
+    """取最近格點的 1h 雨量（None=範圍外或無效）。網格：lon-major 逐列由南向北。"""
+    if not vals: return None
+    ix = round((lng - QP_LON0) / QP_D)
+    iy = round((lat - QP_LAT0) / QP_D)
+    if ix < 0 or ix >= QP_NX or iy < 0 or iy >= QP_NY: return None
+    idx = iy * QP_NX + ix
+    return vals[idx] if idx < len(vals) else None
+
+def load_qpesums_history():
+    """讀每小時累積腳本維護的歷史（{key: {iso_hour: mm}}），合成各鄉鎮 24h。"""
+    if not os.path.exists(QPESUMS_HIST):
+        return {}
+    try:
+        with open(QPESUMS_HIST, encoding='utf-8') as f:
+            hist = json.load(f)
+    except Exception:
+        return {}
+    out = {}
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    cutoff = (now - timedelta(hours=24)).strftime('%Y-%m-%dT%H')
+    for key, hours in hist.items():
+        vals = [v for h, v in hours.items() if h >= cutoff and v is not None]
+        if vals:
+            out[key] = round(sum(vals), 1)
+    return out
+
+
 # ── 系集強弱降雨比值（縣級） ──────────────────────
 ENSEMBLE_API = "https://ensemble-api.open-meteo.com/v1/ensemble"
 
@@ -803,6 +877,12 @@ def main():
     om_all, om_max_hourly_all = fetch_openmeteo(static_list)
     om = om_all.get('ecmwf_ifs025', {})  # 預設用 ECMWF IFS，對台灣地形雨準確度較高
 
+    # QPESUMS 網格觀測（1h 即時 + 24h 歷史合成）
+    print("抓取 QPESUMS 網格觀測...")
+    qp_grid = fetch_qpesums_grid()
+    qp_24h  = load_qpesums_history()
+    if qp_24h: print(f"    QPESUMS 24h 歷史：{len(qp_24h)} 個鄉鎮")
+
     # 系集強弱降雨比值（縣級）+ 昨日模式偏差比
     time.sleep(2)
     ens_ratios = fetch_ensemble_ratios(static_list)
@@ -919,6 +999,8 @@ def main():
             'maxh_hi':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'hi')[1],
             'maxh_lo':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'lo')[1],
             'bias_24h':  calc_bias_24h(obs.get('daily_rain', [0.0]*8), model_yday.get(f"{lat:.4f}_{lng:.4f}")),
+            'qpesums_1h':  qpesums_at(qp_grid, lat, lng),
+            'qpesums_24h': qp_24h.get(f"{county}{township}"),
             'qpf_1h':    HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
             'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'hi'),
             'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'lo'),
@@ -1011,6 +1093,8 @@ def main():
             'maxh_hi':   apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'hi')[1],
             'maxh_lo':   apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'lo')[1],
             'bias_24h':  None,
+            'qpesums_1h':  qpesums_at(qp_grid, avg_lat, avg_lng),
+            'qpesums_24h': qp_24h.get(f"{at['county']}{at['township']}"),
             'qpf_1h':    HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
             'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'hi'),
             'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'lo'),
@@ -1029,6 +1113,15 @@ def main():
         'township_count':len(out_towns),
         'townships':out_towns,
     }
+    # 無站觀測鄉鎮：以 QPESUMS 補 rain_24h（標記來源，前端可辨識）
+    qp_filled = 0
+    for t in out_towns:
+        if t.get('rain_24h') is None and t.get('qpesums_24h') is not None:
+            t['rain_24h'] = t['qpesums_24h']
+            t['obs_src'] = 'qpesums'
+            qp_filled += 1
+    if qp_filled: print(f"  QPESUMS 補值：{qp_filled} 個無站鄉鎮的 rain_24h")
+
     output['ens_active'] = len(ens_ratios) > 0  # 系集比值是否成功抓取
     # 全臺偏差比摘要（模式昨日≥10mm的鄉鎮之中位數）
     bias_vals = sorted(t['bias_24h'] for t in out_towns if t.get('bias_24h') is not None)

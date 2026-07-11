@@ -76,7 +76,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   pointer-events:none;}
 #no-data-msg .nd-icon{font-size:24px;margin-bottom:6px;}
 /* 預報模式列 */
-#model-row{display:none;align-items:center;gap:5px;flex-wrap:wrap;}
+#model-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap;}
 #model-row.show{display:flex;}
 .b.model-btn{border-color:#2a4a6a;background:#0d1f35;color:#5a88aa;}
 .b.model-btn.on{background:#0a3a5a;border-color:#3a7aaa;color:#5ab8e8;}
@@ -1159,8 +1159,13 @@ function renderLayer(){
     }
   });
   countyLayer.addTo(map);
-  // 渲染模式：重算內插色帶層（時間視窗/模式/資料變更皆經過此處）
-  try{ renderInterpolated(); }catch(e){ console.error('內插渲染失敗:', e); }
+  // 渲染模式：重算內插色帶層（防抖180ms：拉時間軸時不連續重算，停下才算一次）
+  if(_blurOn){
+    clearTimeout(window._interpDebounce);
+    window._interpDebounce = setTimeout(()=>{
+      try{ renderInterpolated(); }catch(e){ console.error('內插渲染失敗:', e); }
+    }, 180);
+  }
   // 同步更新左側兩面板（各自獨立，錯誤不互相影響）
   try{ updateEtrAlertPanel(); }catch(e){ console.error('ETR面板更新失敗:', e); }
   try{ updateDisasterPanel(); }catch(e){ console.error('二次災害面板更新失敗:', e); }
@@ -3118,7 +3123,7 @@ function _valueRgbSmooth(v, bands){
   const loEdge = i>0 ? bands[i-1].max : -1e18;
   const hiEdge = bands[i].max;
   const lo2 = i>1 ? bands[i-2].max : (i>0 ? 0 : -1e18);
-  const wLo = i>0 ? 0.15*Math.min(hiEdge-loEdge, loEdge-lo2 || hiEdge-loEdge) : 0;
+  const wLo = i>0 ? 0.05*Math.min(hiEdge-loEdge, loEdge-lo2 || hiEdge-loEdge) : 0;
   if(i>0 && v < loEdge + wLo){
     const t = 0.5 + 0.5*(v-loEdge)/wLo;   // loEdge處=0.5，往上漸回本帶色
     const p = bands[i-1].rgb;
@@ -3126,7 +3131,7 @@ function _valueRgbSmooth(v, bands){
   }
   // 與下一帶邊界的混色（v略低於 bands[i].max）
   const hi2 = i<bands.length-1 ? bands[i+1].max : 1e18;
-  const wHi = 0.15*Math.min(hiEdge-loEdge, hi2-hiEdge);
+  const wHi = 0.05*Math.min(hiEdge-loEdge, hi2-hiEdge);
   if(i<bands.length-1 && isFinite(hiEdge) && v > hiEdge - wHi){
     const t = 0.5*(hiEdge-v)/wHi + 0.5;   // hiEdge處=0.5，往下漸回本帶色
     const n = bands[i+1].rgb;
