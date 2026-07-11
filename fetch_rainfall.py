@@ -528,6 +528,137 @@ def fetch_openmeteo(townships):
     return all_results, all_max_hourly
 
 
+# ── 系集強弱降雨比值（縣級） ──────────────────────
+ENSEMBLE_API = "https://ensemble-api.open-meteo.com/v1/ensemble"
+
+def fetch_ensemble_ratios(townships):
+    """
+    以縣級代表點抓 ECMWF 系集（51成員），計算前48h各6h段的
+    強降雨放大倍率（前25%成員均值/中位數）與弱降雨縮小倍率（後25%/中位數）。
+    回傳 {county: {'hi':[8], 'lo':[8]}}；失敗回空dict（前端退回qpf_best）。
+    """
+    print("抓取 ECMWF 系集（縣級代表點）...")
+    # 縣級代表點：縣內鄉鎮座標平均
+    county_pts = {}
+    for t in townships:
+        c = t.get('county'); lat = t.get('lat'); lng = t.get('lng')
+        if not c or not lat: continue
+        county_pts.setdefault(c, []).append((lat, lng))
+    counties = sorted(county_pts.keys())
+    lats = [sum(p[0] for p in county_pts[c])/len(county_pts[c]) for c in counties]
+    lngs = [sum(p[1] for p in county_pts[c])/len(county_pts[c]) for c in counties]
+
+    params = {
+        'latitude':  ','.join(f"{x:.4f}" for x in lats),
+        'longitude': ','.join(f"{x:.4f}" for x in lngs),
+        'hourly':    'precipitation',
+        'models':    'ecmwf_ifs025',
+        'forecast_days': 3,
+        'timezone':  'Asia/Taipei',
+    }
+    for attempt in range(3):
+        try:
+            r = requests.get(ENSEMBLE_API, params=params, timeout=120)
+            if r.status_code == 429:
+                time.sleep(5*(attempt+1)); continue
+            r.raise_for_status(); raw = r.json()
+            break
+        except Exception as e:
+            print(f"    系集失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return {}
+            time.sleep(3)
+    else:
+        return {}
+
+    ratios = {}
+    data_list = raw if isinstance(raw, list) else [raw]
+    for i, loc in enumerate(data_list):
+        if i >= len(counties): break
+        hourly = loc.get('hourly', {})
+        # 蒐集所有成員的降雨序列（key: precipitation_memberXX 或 precipitation）
+        members = []
+        for k, v in hourly.items():
+            if k.startswith('precipitation') and isinstance(v, list):
+                members.append([x if x is not None else 0.0 for x in v])
+        if len(members) < 10:
+            continue
+        hi_arr, lo_arr = [], []
+        for sg in range(8):  # 前48h的8個6h段
+            seg_sums = sorted(sum(m[sg*6:(sg+1)*6]) for m in members)
+            n = len(seg_sums)
+            q = max(1, n//4)
+            med = seg_sums[n//2]
+            top_mean = sum(seg_sums[-q:]) / q
+            bot_mean = sum(seg_sums[:q]) / q
+            if med < 1.0:
+                # 段雨量太小，比值無意義 → 不放大不縮小
+                hi_arr.append(1.0); lo_arr.append(1.0)
+            else:
+                hi_arr.append(round(min(3.0, max(1.0, top_mean/med)), 2))
+                lo_arr.append(round(max(0.1, min(1.0, bot_mean/med)), 2))
+        ratios[counties[i]] = {'hi': hi_arr, 'lo': lo_arr}
+    print(f"    系集比值：{len(ratios)} 縣市")
+    return ratios
+
+
+def apply_ensemble_ratio(qpf, maxh, county, ens_ratios, kind):
+    """qpf_best × 縣級系集比值（前8段），8段之後維持原值。回傳新陣列。"""
+    r = ens_ratios.get(county, {}).get(kind)
+    if not r:
+        return list(qpf), list(maxh)
+    q2 = [round(v*r[i], 1) if i < 8 and v else v for i, v in enumerate(qpf)]
+    m2 = [round(v*r[i], 1) if i < 8 and v else v for i, v in enumerate(maxh)]
+    return q2, m2
+
+
+# ── 昨日模式偏差比（動態偏差比 v1，顯示層） ────────
+def fetch_model_yesterday(townships):
+    """
+    抓 best_match 昨日24h模式雨量（past_days=1），供計算
+    bias_24h = 昨日觀測 / 昨日模式。回傳 {key: model_yday_sum}。
+    """
+    print("抓取模式昨日回算（偏差比基準）...")
+    lats=[t.get('lat',0) for t in townships]
+    lngs=[t.get('lng',0) for t in townships]
+    params = {
+        'latitude':  ','.join(str(x) for x in lats),
+        'longitude': ','.join(str(x) for x in lngs),
+        'hourly':    'precipitation',
+        'past_days': 1,
+        'forecast_days': 1,
+        'timezone':  'Asia/Taipei',
+    }
+    for attempt in range(3):
+        try:
+            r = requests.get(OPENMETEO, params=params, timeout=120)
+            if r.status_code == 429:
+                time.sleep(5*(attempt+1)); continue
+            r.raise_for_status(); raw = r.json()
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return {}
+            time.sleep(3)
+    else:
+        return {}
+    out = {}
+    data_list = raw if isinstance(raw, list) else [raw]
+    for i, loc in enumerate(data_list):
+        key = f"{lats[i]:.4f}_{lngs[i]:.4f}"
+        precip = loc.get('hourly', {}).get('precipitation', [])[:24]  # 昨日00-24
+        out[key] = round(sum(v for v in precip if v is not None), 1)
+    print(f"    {len(out)} 個點")
+    return out
+
+
+def calc_bias_24h(daily_rain, model_yday):
+    """昨日觀測/昨日模式偏差比。門檻：模式≥10mm才有意義；限幅[0.2,8]。"""
+    obs_yday = daily_rain[1] if len(daily_rain) > 1 else 0.0
+    if model_yday is None or model_yday < 10.0:
+        return None
+    return round(max(0.2, min(8.0, obs_yday / model_yday)), 2)
+
+
 # ── 颱風期 QPF 格點 ──────────────────────────────
 QPF_TYPHOON = [f"{BASE_URL}/F-C0041-{str(i).zfill(3)}" for i in range(1,9)]
 
@@ -851,6 +982,11 @@ def main():
             'obs_6h':   [0.0]*8,
             'qpf_best':  qpf_best_ns,  'qpf_ecmwf': qpf_ecmwf_ns,
             'qpf_gfs':   qpf_gfs_ns,   'qpf_icon':  qpf_icon_ns,
+            'qpf_hi':    apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'hi')[0],
+            'qpf_lo':    apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'lo')[0],
+            'maxh_hi':   apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'hi')[1],
+            'maxh_lo':   apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'lo')[1],
+            'bias_24h':  None,
             'maxh_best': get_ns_maxh('best_match'),  'maxh_ecmwf': get_ns_maxh('ecmwf_ifs025'),
             'maxh_gfs':  get_ns_maxh('gfs_seamless'), 'maxh_icon': get_ns_maxh('icon_seamless'),
             'warn_seg':  WARN_SEG_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
@@ -866,10 +1002,33 @@ def main():
         'township_count':len(out_towns),
         'townships':out_towns,
     }
+    output['ens_active'] = len(ens_ratios) > 0  # 系集比值是否成功抓取
+    # 全臺偏差比摘要（模式昨日≥10mm的鄉鎮之中位數）
+    bias_vals = sorted(t['bias_24h'] for t in out_towns if t.get('bias_24h') is not None)
+    output['bias_24h_median'] = bias_vals[len(bias_vals)//2] if bias_vals else None
+    output['bias_24h_n'] = len(bias_vals)
+
     with open(OUTPUT_FILE,'w',encoding='utf-8') as f:
         json.dump(output,f,ensure_ascii=False,separators=(',',':'))
     print(f"\n完成：{OUTPUT_FILE}（{os.path.getsize(OUTPUT_FILE)//1024}KB）")
     print(f"  鄉鎮：{len(out_towns)}，PoP3d：{len(pop3d)}，PoP7d：{len(pop7d)}")
+    if output['bias_24h_median'] is not None:
+        print(f"  昨日偏差比中位數：{output['bias_24h_median']}（n={output['bias_24h_n']}）")
+
+    # ── 預測快照存檔（校驗資料庫基礎；保留60天） ──
+    try:
+        os.makedirs('archive', exist_ok=True)
+        snap_name = f"archive/{now_tpe.strftime('%Y%m%d%H')}.json"
+        with open(snap_name,'w',encoding='utf-8') as f:
+            json.dump(output,f,ensure_ascii=False,separators=(',',':'))
+        cutoff = (now_tpe - timedelta(days=60)).strftime('%Y%m%d%H')
+        removed = 0
+        for fn in os.listdir('archive'):
+            if fn.endswith('.json') and fn[:-5] < cutoff:
+                os.remove(os.path.join('archive', fn)); removed += 1
+        print(f"  快照：{snap_name}（清除{removed}個過期檔）")
+    except Exception as e:
+        print(f"  快照存檔失敗（不影響主流程）：{e}")
 
 if __name__=='__main__':
     main()

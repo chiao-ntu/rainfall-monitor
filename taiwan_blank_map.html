@@ -689,7 +689,7 @@ function renderInterpolated(){
   if(!_blurOn) return;
   const [ [lat0,lng0], [lat1,lng1] ] = INTERP_BOUNDS;
   const my0=_mercY(lat0), my1=_mercY(lat1);
-  const NX=96, NY=128, UP=10, W=NX*UP, H=NY*UP;  // 960×1280 高解析度，避免瀏覽器放大暈染
+  const NX=144, NY=192, UP=10, W=NX*UP, H=NY*UP;  // 1440×1920：IDW網格與輸出同步細緻化
 
   // 1. 蒐集著色鄉鎮（canvas座標 + RGB）
   const pts=[];

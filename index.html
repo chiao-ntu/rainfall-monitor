@@ -111,6 +111,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <a href="https://www.cwa.gov.tw/V8/C/P/Rainfall/Rainfall_QZJ.html" target="_blank" class="ext-btn">日累積雨量</a>
       <a href="https://mfcqpf.cwa.gov.tw/login/?next=/MFC/" target="_blank" class="ext-btn">郵票圖</a>
       <a href="https://npd.cwa.gov.tw/NPD/resident_product/weather_pattern?version=public" target="_blank" class="ext-btn">高空天氣圖</a>
+      <a href="https://watch.ncdr.nat.gov.tw/plotrainonline" target="_blank" class="ext-btn">雨量觀測累積</a>
       <a href="https://watch.ncdr.nat.gov.tw/watch_swcb" target="_blank" class="ext-btn">颱風資訊</a>
       <a href="https://watch.ncdr.nat.gov.tw/watch_tracks_pro" target="_blank" class="ext-btn">颱風路徑</a>
       <a href="https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan" target="_blank" class="ext-btn">WISSDOM</a>
@@ -205,6 +206,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b model-btn"    id="mEcmwf" onclick="setModel('ecmwf')">ECMWF</button>
       <button class="b model-btn"    id="mGfs"   onclick="setModel('gfs')">GFS</button>
       <button class="b model-btn"    id="mIcon"  onclick="setModel('icon')">ICON</button>
+      <button class="b model-btn"    id="mHi"    onclick="setModel('hi')" style="color:#ff8866">強降雨</button>
+      <button class="b model-btn"    id="mLo"    onclick="setModel('lo')" style="color:#66bbff">弱降雨</button>
     </div>
     <span id="model-src-note" style="font-size:10px;color:#3a6080;margin-left:4px"></span>
   </div>
@@ -557,12 +560,16 @@ const MODEL_FIELD = {
   ecmwf: 'qpf_ecmwf',
   gfs:   'qpf_gfs',
   icon:  'qpf_icon',
+  hi:    'qpf_hi',
+  lo:    'qpf_lo',
 };
 const MODEL_NOTE = {
   best:  '',
   ecmwf: 'ECMWF IFS 0.25° · 時效 10 天',
   gfs:   'NOAA GFS · 時效 16 天',
   icon:  'DWD ICON · 時效 7 天',
+  hi:    'CWA+ECMWF × 系集前25%放大倍率（前48h，縣級）',
+  lo:    'CWA+ECMWF × 系集後25%縮小倍率（前48h，縣級）',
 };
 let selected = null;
 let townLayer = null, countyLayer = null;
@@ -1567,6 +1574,19 @@ async function tryLoadLive(){
       srcNote.innerHTML = '<span style="color:#ffcc44;font-weight:700">⚡前48h已採用CWA定量降水預報（F-C0041）</span>';
     }
 
+    // 動態偏差比顯示（昨日觀測/昨日模式，顯示層：僅供人工判讀，不影響任何計算）
+    if(d.bias_24h_median != null && srcNote){
+      const b = d.bias_24h_median;
+      const col = b >= 2 ? '#ff6644' : b >= 1.3 ? '#ffcc44' : b <= 0.7 ? '#66bbff' : '#88aa88';
+      const tag = b >= 1.3 ? '模式低估中' : b <= 0.7 ? '模式高估中' : '模式大致準確';
+      srcNote.innerHTML += `${srcNote.innerHTML?' · ':''}<span style="color:${col}" title="昨日觀測雨量÷昨日模式雨量（僅統計模式昨日≥10mm的 ${d.bias_24h_n} 個鄉鎮）。此為判讀參考，未套用至任何計算。">24h偏差比 ${b}×（${tag}，n=${d.bias_24h_n}）</span>`;
+    }
+    // 系集比值失敗提示（強/弱降雨按鈕仍可按，但值=原始預測）
+    if(d.ens_active === false){
+      const hiBtn = document.getElementById('mHi'), loBtn = document.getElementById('mLo');
+      [hiBtn, loBtn].forEach(b=>{ if(b){ b.style.opacity=0.4; b.title='本次系集資料抓取失敗，強/弱降雨=原始預測'; } });
+    }
+
     BASE_TIME = new Date(d.base_time);
     NATIONWIDE_EXTREMES = null;   // 重置極值快取，讓下次繪圖重新計算
     DAILY_CHART_EXTREMES = null;
@@ -1604,10 +1624,10 @@ function clearBtns(){
 
 function setModel(m){
   forecastModel = m;
-  ['mBest','mEcmwf','mGfs','mIcon'].forEach(id=>{
+  ['mBest','mEcmwf','mGfs','mIcon','mHi','mLo'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.classList.remove('on');
   });
-  const btnMap={best:'mBest',ecmwf:'mEcmwf',gfs:'mGfs',icon:'mIcon'};
+  const btnMap={best:'mBest',ecmwf:'mEcmwf',gfs:'mGfs',icon:'mIcon',hi:'mHi',lo:'mLo'};
   const el=document.getElementById(btnMap[m]); if(el) el.classList.add('on');
   const note = document.getElementById('model-src-note');
   if(note) note.textContent = MODEL_NOTE[m] || '';
@@ -2983,7 +3003,7 @@ function renderInterpolated(){
   if(!_blurOn) return;
   const [ [lat0,lng0], [lat1,lng1] ] = INTERP_BOUNDS;
   const my0=_mercY(lat0), my1=_mercY(lat1);
-  const NX=96, NY=128, UP=10, W=NX*UP, H=NY*UP;  // 960×1280 高解析度，避免瀏覽器放大暈染
+  const NX=144, NY=192, UP=10, W=NX*UP, H=NY*UP;  // 1440×1920：IDW網格與輸出同步細緻化
 
   // 1. 蒐集鄉鎮點（canvas座標 + 數值）
   const pts=[];
