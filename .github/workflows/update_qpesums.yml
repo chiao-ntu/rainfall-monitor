@@ -32,6 +32,10 @@ jobs:
 
       - name: Commit and push
         run: |
+          if [ ! -f qpesums_history.json ]; then
+            echo "本次未產生 qpesums_history.json（抓取失敗或無資料），跳過 commit"
+            exit 0
+          fi
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add qpesums_history.json
