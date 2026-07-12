@@ -221,7 +221,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <div id="lsb" style="width:230px;flex-shrink:0;display:flex;flex-direction:column;
     background:#091520;border-right:1px solid #1a3348;overflow:hidden;transition:width 0.25s ease">
     <!-- ETR2% 警戒區塊 -->
-    <div style="display:flex;flex-direction:column;min-height:60px;max-height:45%;flex-shrink:0;overflow:hidden">
+    <div id="lsb-etr-sec" style="display:flex;flex-direction:column;flex:1 1 auto;min-height:60px;overflow:hidden">
       <div onclick="toggleLsbSection('etr')" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
         border-bottom:1px solid #1a3348;background:#0a1828;flex-shrink:0;cursor:pointer">
         <span style="font-weight:700;color:#ffcc44;font-size:11px"><span id="lsb-etr-arrow">▾</span> ⚠ ETR2%警戒</span>
@@ -235,7 +235,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div id="etr-panel-body" style="padding:5px 7px;overflow-y:auto;flex:1;font-size:11px;color:#dde8f2"></div>
     </div>
     <!-- 二次災害高風險區區塊 -->
-    <div style="display:flex;flex-direction:column;flex:1;min-height:0;border-top:2px solid #4a2a18;overflow:hidden">
+    <div id="lsb-dis-sec" style="display:flex;flex-direction:column;flex:1 1 auto;min-height:60px;border-top:2px solid #4a2a18;overflow:hidden">
       <div onclick="toggleLsbSection('disaster')" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
         border-bottom:1px solid #4a2a18;background:#2a140a;flex-shrink:0;cursor:pointer">
         <span style="font-weight:700;color:#ff8855;font-size:11px"><span id="lsb-disaster-arrow">▾</span> ● 二次災害高風險區</span>
@@ -886,6 +886,9 @@ function calcEtr2AtSeg(t, seg, qpfField){
   // seg 所在的「天」（0=今天, 正值=未來, 負值=過去）
   const segDay = seg >= 0 ? Math.floor(seg/4) : -Math.ceil(Math.abs(seg)/4);
 
+  // 日內進度 f（該seg結束時，0.25~1.0）：權重連續化的內插參數
+  const f = (seg - segDay*4 + 1) / 4;
+
   let etr2 = 0;
   for(let i=0; i<=6; i++){
     const day = segDay - i;
@@ -906,7 +909,19 @@ function calcEtr2AtSeg(t, seg, qpfField){
       // 未來完整日：QPF 00-24
       rainVal = (day < dailyQpf.length) ? (dailyQpf[day]||0) : 0;
     }
-    etr2 += ETR2_WEIGHTS[i] * rainVal;
+    // 權重連續化：雨齡中心 a = i-0.5+f（天），對 ETR2_WEIGHTS 線性內插。
+    // 正午（f=0.5）時 a=i 與逐日權重一致；換日交接完全連續，消除00時階梯。
+    const a = i - 0.5 + f;
+    let w;
+    if(a <= 0){
+      w = ETR2_WEIGHTS[0];
+    } else {
+      const lo = Math.floor(a), frac = a - lo;
+      const wLo = lo <= 6 ? (ETR2_WEIGHTS[lo]||0) : 0;
+      const wHi = (lo+1) <= 6 ? (ETR2_WEIGHTS[lo+1]||0) : 0;
+      w = wLo*(1-frac) + wHi*frac;
+    }
+    etr2 += w * rainVal;
   }
   return etr2;
 }
@@ -1376,7 +1391,7 @@ function _hourlyField(){
   return forecastModel==='hi' ? 'qpf_1h_hi' : forecastModel==='lo' ? 'qpf_1h_lo' : 'qpf_1h';
 }
 
-// 前48小時逐時降雨圖（zoom組體圖，有逐時資料時取代6h視圖）
+// 前48小時逐時降雨圖（zoom組體圖，有逐時資料時取代6h視圖；配置對齊分署QPF組體圖）
 function _drawHourlyChart(t, canvasId){
   const cv=document.getElementById(canvasId);
   if(!cv||!t) return;
@@ -1388,20 +1403,22 @@ function _drawHourlyChart(t, canvasId){
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle='#040c14'; ctx.fillRect(0,0,W,H);
 
-  const fs=54, xFs=25;
-  const pL=130, pR=130, pT=110, pB=90;   // 右側留軸位
+  // 幾何：與分署QPF組體圖(zoom)一致
+  const fs=54, xFs=25, axFs=30;
+  const xLabelH=56+xFs, axTitleH=44;
+  const pL=170, pR=160, pT=130;
+  const pB=xLabelH+axTitleH+30;
   const cw=W-pL-pR, ch=H-pT-pB;
   const n=arr.length, bw=cw/n;
   const axisMax=Math.max(ceilTo10(Math.max(...arr, 1)), 10);
   const districtColor=getDistrictColor(t.county);
   const ETR_LINE='#FFFFFF';
 
-  // ETR2% 各6h段界值（段結束時點）
+  // ETR2% 各6h段界值
   const etrPts=[];
   if(t.alert_val && t.alert_val>0){
     for(let sg=0; sg<8; sg++){
-      const e=calcEtr2AtSeg(t, sg, qpfField)/t.alert_val*100;
-      etrPts.push(Math.max(0,e));
+      etrPts.push(Math.max(0, calcEtr2AtSeg(t, sg, qpfField)/t.alert_val*100));
     }
   }
   const axisMaxEtr=Math.max(ceilTo10(Math.max(...etrPts, 10)), 10);
@@ -1409,30 +1426,24 @@ function _drawHourlyChart(t, canvasId){
   // 標題
   ctx.fillStyle='#d0e8ff'; ctx.font=`bold ${fs}px sans-serif`; ctx.textAlign='left';
   const modeTag = forecastModel==='hi'?'（強降雨）':forecastModel==='lo'?'（弱降雨）':'';
-  ctx.fillText(`${t.county}${t.township}　前48小時逐時降雨 (mm/h)${modeTag}`, pL, 68);
+  ctx.fillText(`${t.county}${t.township}　前48小時逐時降雨${modeTag}`, pL, 78);
 
-  // 左軸（雨量）
-  ctx.font=`${Math.round(fs*0.6)}px sans-serif`; ctx.textAlign='right';
+  // 左軸刻度（雨量）+ 格線
+  ctx.font=`${Math.round(fs*0.55)}px sans-serif`; ctx.textAlign='right';
   ctx.strokeStyle='#1a3048'; ctx.lineWidth=1;
   for(let i=0;i<=4;i++){
     const yv=axisMax*i/4, y=pT+ch-ch*i/4;
-    ctx.fillStyle='#5a88aa'; ctx.fillText(yv.toFixed(0), pL-14, y+10);
+    ctx.fillStyle='#9fc8e8'; ctx.fillText(yv.toFixed(0), pL-14, y+10);
     ctx.beginPath(); ctx.moveTo(pL,y); ctx.lineTo(pL+cw,y); ctx.stroke();
   }
-  // 右軸（ETR2%）
+  // 右軸刻度（ETR2%）
   ctx.textAlign='left';
   for(let i=0;i<=4;i++){
     const yv=axisMaxEtr*i/4, y=pT+ch-ch*i/4;
-    ctx.fillStyle='#cfe6ff'; ctx.fillText(yv.toFixed(0)+'%', pL+cw+14, y+10);
+    ctx.fillStyle='#e8e8e8'; ctx.fillText(yv.toFixed(0)+'%', pL+cw+14, y+10);
   }
-  // 軸標題
-  ctx.font=`${Math.round(fs*0.55)}px sans-serif`;
-  ctx.fillStyle='#5a88aa'; ctx.textAlign='left';
-  ctx.fillText('左軸：時雨量(mm)', pL, pT-14);
-  ctx.fillStyle='#cfe6ff'; ctx.textAlign='right';
-  ctx.fillText('右軸：ETR2%', pL+cw, pT-14);
 
-  // 長條（分署色；≥40mm/h 大雨1h門檻 → 紅色警示描邊）
+  // 長條（分署色；≥40mm/h 紅色警示描邊+紅字）
   const ep=SEG_EPOCH();
   for(let h=0;h<n;h++){
     const v=arr[h]||0;
@@ -1450,7 +1461,7 @@ function _drawHourlyChart(t, canvasId){
     }
   }
 
-  // ETR2% 折線（白色，點位於各6h段結束處）
+  // ETR2% 白色折線（點位於各6h段結束處）
   if(etrPts.length){
     ctx.strokeStyle=ETR_LINE; ctx.lineWidth=5;
     ctx.beginPath();
@@ -1466,13 +1477,12 @@ function _drawHourlyChart(t, canvasId){
       ctx.beginPath(); ctx.arc(x,y,9,0,Math.PI*2);
       ctx.fillStyle=ETR_LINE; ctx.fill();
       ctx.strokeStyle='#040c14'; ctx.lineWidth=3; ctx.stroke();
-      // 資料標籤
       ctx.fillStyle=ETR_LINE; ctx.font=`bold ${xFs}px sans-serif`; ctx.textAlign='center';
       ctx.fillText(e.toFixed(0)+'%', x, y-18);
     });
   }
 
-  // X軸：每3h標「HH時」，換日處標「M/D」
+  // X軸標籤：每3h「HH時」，換日標「M/D」
   ctx.font=`${xFs}px sans-serif`; ctx.textAlign='center';
   for(let h=0;h<n;h+=3){
     const dt=new Date(ep.getTime()+h*3600e3);
@@ -1484,14 +1494,22 @@ function _drawHourlyChart(t, canvasId){
       ctx.fillText(`${dt.getMonth()+1}/${dt.getDate()}`, x, pT+ch+38+xFs+8);
     }
   }
-  // 目前時刻分隔線（過去/未來）
+  // 軸標題（下方，同分署圖配置）
+  const axTitleY = pT+ch+xLabelH+axTitleH*0.75;
+  ctx.font=`${axFs}px sans-serif`;
+  ctx.fillStyle='#9fc8e8'; ctx.textAlign='left';
+  ctx.fillText('左軸：時雨量(mm/h)', pL, axTitleY);
+  ctx.fillStyle='#e8e8e8'; ctx.textAlign='right';
+  ctx.fillText('右軸：ETR2%（各6h段值）', pL+cw, axTitleY);
+
+  // 目前時刻分隔線
   const nowH=Math.floor((Date.now()-ep.getTime())/3600e3);
   if(nowH>0 && nowH<n){
     const x=pL+nowH*bw;
     ctx.strokeStyle='#ffcc44'; ctx.lineWidth=3; ctx.setLineDash([12,8]);
     ctx.beginPath(); ctx.moveTo(x,pT); ctx.lineTo(x,pT+ch); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle='#ffcc44'; ctx.font=`${xFs}px sans-serif`;
+    ctx.fillStyle='#ffcc44'; ctx.font=`${xFs}px sans-serif`; ctx.textAlign='center';
     ctx.fillText('現在', x, pT-14);
   }
 }
@@ -1784,6 +1802,7 @@ function setMode(m){
   withTransition(()=>{
     renderLayer(); renderLegend();
     if(selected) updateInfo(selected);
+    try{ updateDistrictSummary(); }catch(e){}
   });
 }
 
@@ -2067,11 +2086,9 @@ function updateDistrictSummary(){
   const rows = DISTRICT_ORDER.map(district=>{
     const counties = DISTRICT_COUNTIES[district];
     const towns = TOWNSHIPS.filter(t=>counties.includes(t.county));
-    let maxRain=-1, maxRainT=null, maxEtr=-1, maxEtrT=null;
+    let maxRain=-1, maxRainT=null, maxEtr=-1, maxEtrT=null,
+        maxRisk=-1, maxRiskT=null, maxWarn=0, maxWarnT=null;
     towns.forEach(t=>{
-      const acc = getAccum(t);   // 依 mode/winKey/segFrom/segTo 計算
-      const rain = (acc && acc.totalRain != null && !acc.isEtrMode && !acc.isRisk) ? acc.totalRain
-                 : (acc && acc.isEtrMode ? null : (acc ? acc.totalRain : null));
       // 雨量一律另外用 rain 模式邏輯：直接算 QPF/觀測累積
       const rainVal = _summaryRain(t);
       if(rainVal != null && rainVal > maxRain){ maxRain=rainVal; maxRainT=t; }
@@ -2079,8 +2096,19 @@ function updateDistrictSummary(){
         const ep = _summaryEtr(t);
         if(ep != null && ep > maxEtr){ maxEtr=ep; maxEtrT=t; }
       }
+      // 模式感知：風險指標 / 警特報（僅當前模式需要時計算，省效能）
+      if(mode==='risk'){
+        const r = calcRiskIndicator(t, Math.max(0, segTo));
+        if(r && r.R > maxRisk){ maxRisk=r.R; maxRiskT=t; }
+      } else if(mode==='warn'){
+        let lv=0;
+        for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
+          lv=Math.max(lv,_warnLevelAt(t,s)); if(lv>=4)break;
+        }
+        if(lv > maxWarn){ maxWarn=lv; maxWarnT=t; }
+      }
     });
-    return {district, maxRain, maxRainT, maxEtr, maxEtrT};
+    return {district, maxRain, maxRainT, maxEtr, maxEtrT, maxRisk, maxRiskT, maxWarn, maxWarnT};
   });
 
   const nameOf = t => t ? `${t.county}${t.township}` : '—';
@@ -2118,6 +2146,37 @@ function updateDistrictSummary(){
     </tr>`;
   });
   h += '</tbody></table>';
+
+  // ── 模式感知第三表：切到風險指標/警特報模式時，摘要同步呈現該特性 ──
+  if(mode==='risk' || mode==='warn'){
+    const title = mode==='risk' ? '風險指標最高鄉鎮市區' : '警特報最高鄉鎮市區';
+    const vh    = mode==='risk' ? '指標' : '級別';
+    h += `<div style="height:4px"></div>
+    <table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:4px">
+      <thead><tr style="background:#081420;color:#5a8aaa;font-size:9px">
+        <th style="text-align:left;padding:2px 4px">分署</th>
+        <th style="text-align:right;padding:2px 4px">${title}</th>
+        <th style="text-align:right;padding:2px 4px">${vh}</th>
+      </tr></thead><tbody>`;
+    rows.forEach(({district,maxRisk,maxRiskT,maxWarn,maxWarnT})=>{
+      const c=DISTRICT_COLOR[district]||'#aaccee';
+      let vT, vs, vc;
+      if(mode==='risk'){
+        vT=maxRiskT; vs=maxRisk<0?'—':Math.round(maxRisk); vc=riskColor(maxRisk<0?0:maxRisk);
+        if(vc==='#FFFFFF') vc='#aaccee';
+      } else {
+        vT=maxWarnT; vs=maxWarn>0?WARN_NAMES[maxWarn]:'—';
+        vc=maxWarn>0?WARN_COLORS[maxWarn]:'#8899aa';
+      }
+      h+=`<tr style="border-bottom:1px solid #0d2030">
+        <td style="padding:2px 4px;color:${c};font-weight:700">${district.replace('分署','')}</td>
+        <td style="text-align:right;padding:2px 4px;color:#8ab8d8;font-size:9px"><span ${linkAttr(vT)}>${nameOf(vT)}</span></td>
+        <td style="text-align:right;padding:2px 4px;color:${vc};font-weight:700">${vs}</td>
+      </tr>`;
+    });
+    h += '</tbody></table>';
+  }
+
   body.innerHTML = h;
 }
 
@@ -2311,12 +2370,171 @@ function drawAllDistrictHyetoChart(targetId){
   const cv=document.getElementById(targetId||'cv-all-hyeto');
   if(!cv||!TOWNSHIPS.length) return;
   const isZoom=(targetId==='chart-zoom-canvas');
+  // zoom 且有逐時資料：改畫分署逐時圖（48h×6署）
+  if(isZoom && TOWNSHIPS.some(t=>(t.qpf_1h||[]).length>=24)){
+    return _drawDistrictHourlyChart(cv);
+  }
   const W=isZoom?2048:(cv.offsetWidth||260);
   const H=isZoom?1024:150;
   cv.width=W;cv.height=H;
   const ctx=cv.getContext('2d');
   const qpfField=MODEL_FIELD[forecastModel]||'qpf_best';
   _drawDistrictChart(ctx,W,H,isZoom,'hyeto',_calcDistrictHyeto(qpfField));
+}
+
+// 各分署逐時聚合（各署各小時取鄉鎮最大值，與6h版聚合邏輯一致）
+function _calcDistrictHourly(){
+  const hf=_hourlyField();
+  const rows=[]; let gM=0;
+  DISTRICT_ORDER.forEach(district=>{
+    const counties=DISTRICT_COUNTIES[district];
+    const rr=[];
+    for(let h=0;h<48;h++){
+      let mx=0;
+      TOWNSHIPS.forEach(t=>{
+        if(!counties.includes(t.county)) return;
+        const a=t[hf]||t.qpf_1h||[];
+        mx=Math.max(mx, a[h]||0);
+      });
+      rr.push(mx); gM=Math.max(gM,mx);
+    }
+    rows.push(rr);
+  });
+  return {rows, maxRain:Math.max(ceilTo10(gM+2),10)};
+}
+
+// 分署逐時組體圖（zoom專用：48小時×6分署 grouped bars + ETR2%分署色折線）
+function _drawDistrictHourlyChart(cv){
+  const W=2048, H=1024;
+  cv.width=W; cv.height=H;
+  const ctx=cv.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#040c14'; ctx.fillRect(0,0,W,H);
+
+  const fs=54, xFs=25, axFs=30;
+  const xLabelH=56+xFs, axTitleH=44, legendH=80;
+  const pL=170, pR=160, pT=130;
+  const pB=xLabelH+axTitleH+legendH+30;
+  const cw=W-pL-pR, ch=H-pT-pB;
+  const {rows, maxRain}=_calcDistrictHourly();
+  const qpfField=MODEL_FIELD[forecastModel]||'qpf_best';
+  const nH=48, nD=DISTRICT_ORDER.length;
+  const grpW=cw/nH, barW=grpW/nD;
+
+  // 各署 ETR2% 段界值（沿用6h粒度）
+  const {etrRows, maxEtr}=(()=>{
+    const er=[]; let gE=10;
+    DISTRICT_ORDER.forEach(district=>{
+      const counties=DISTRICT_COUNTIES[district];
+      const r=[];
+      for(let sg=0;sg<8;sg++){
+        let mx=0;
+        TOWNSHIPS.forEach(t=>{
+          if(!counties.includes(t.county)||!(t.alert_val>0)) return;
+          mx=Math.max(mx, Math.round(calcEtr2AtSeg(t,sg,qpfField)/t.alert_val*100));
+        });
+        r.push(mx); gE=Math.max(gE,mx);
+      }
+      er.push(r);
+    });
+    return {etrRows:er, maxEtr:ceilTo10(gE+10)||100};
+  })();
+
+  // 標題
+  ctx.fillStyle='#d0e8ff'; ctx.font=`bold ${fs}px sans-serif`; ctx.textAlign='left';
+  const modeTag = forecastModel==='hi'?'（強降雨）':forecastModel==='lo'?'（弱降雨）':'';
+  ctx.fillText(`各分署　前48小時逐時降雨${modeTag}`, pL, 78);
+
+  // 左軸+格線
+  ctx.font=`${Math.round(fs*0.55)}px sans-serif`; ctx.textAlign='right';
+  ctx.strokeStyle='#1a3048'; ctx.lineWidth=1;
+  for(let i=0;i<=4;i++){
+    const yv=maxRain*i/4, y=pT+ch-ch*i/4;
+    ctx.fillStyle='#9fc8e8'; ctx.fillText(yv.toFixed(0), pL-14, y+10);
+    ctx.beginPath(); ctx.moveTo(pL,y); ctx.lineTo(pL+cw,y); ctx.stroke();
+  }
+  // 右軸
+  ctx.textAlign='left';
+  for(let i=0;i<=4;i++){
+    const yv=maxEtr*i/4, y=pT+ch-ch*i/4;
+    ctx.fillStyle='#e8e8e8'; ctx.fillText(yv.toFixed(0)+'%', pL+cw+14, y+10);
+  }
+
+  // grouped bars（分署色細條，無數值標籤——hover看tooltip）
+  for(let h=0;h<nH;h++){
+    for(let d=0;d<nD;d++){
+      const v=rows[d][h]||0;
+      if(v<=0) continue;
+      const x=pL+h*grpW+d*barW, bh=ch*v/maxRain;
+      ctx.fillStyle=DISTRICT_COLOR[DISTRICT_ORDER[d]]||'#88aacc';
+      ctx.fillRect(x+barW*0.1, pT+ch-bh, barW*0.8, bh);
+    }
+  }
+
+  // ETR2% 折線（分署色+白邊節點，點位於各6h段結束處）
+  etrRows.forEach((er,d)=>{
+    const c=DISTRICT_COLOR[DISTRICT_ORDER[d]]||'#88aacc';
+    ctx.strokeStyle=c; ctx.lineWidth=5;
+    ctx.beginPath();
+    er.forEach((e,sg)=>{
+      const x=pL+Math.min((sg+1)*6,nH)*grpW - grpW/2;
+      const y=pT+ch-ch*Math.min(e,maxEtr)/maxEtr;
+      sg===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+    er.forEach((e,sg)=>{
+      const x=pL+Math.min((sg+1)*6,nH)*grpW - grpW/2;
+      const y=pT+ch-ch*Math.min(e,maxEtr)/maxEtr;
+      ctx.beginPath(); ctx.arc(x,y,8,0,Math.PI*2);
+      ctx.fillStyle=c; ctx.fill();
+      ctx.strokeStyle='#ffffff'; ctx.lineWidth=2.5; ctx.stroke();
+    });
+  });
+
+  // X軸標籤
+  const ep=SEG_EPOCH();
+  ctx.font=`${xFs}px sans-serif`; ctx.textAlign='center';
+  for(let h=0;h<nH;h+=3){
+    const dt=new Date(ep.getTime()+h*3600e3);
+    const x=pL+h*grpW+grpW/2;
+    ctx.fillStyle='#5a88aa';
+    ctx.fillText(`${String(dt.getHours()).padStart(2,'0')}時`, x, pT+ch+38);
+    if(dt.getHours()===0 || h===0){
+      ctx.fillStyle='#8ab8d8';
+      ctx.fillText(`${dt.getMonth()+1}/${dt.getDate()}`, x, pT+ch+38+xFs+8);
+    }
+  }
+  // 軸標題
+  const axTitleY = pT+ch+xLabelH+axTitleH*0.75;
+  ctx.font=`${axFs}px sans-serif`;
+  ctx.fillStyle='#9fc8e8'; ctx.textAlign='left';
+  ctx.fillText('左軸：時雨量(mm/h，分署內鄉鎮最大)', pL, axTitleY);
+  ctx.fillStyle='#e8e8e8'; ctx.textAlign='right';
+  ctx.fillText('右軸：ETR2%（各6h段值）', pL+cw, axTitleY);
+
+  // 圖例（最下列）
+  const legY = axTitleY + legendH*0.7;
+  let lx=pL;
+  ctx.font=`${axFs}px sans-serif`; ctx.textAlign='left';
+  DISTRICT_ORDER.forEach(district=>{
+    const c=DISTRICT_COLOR[district]||'#88aacc';
+    ctx.fillStyle=c; ctx.fillRect(lx, legY-axFs*0.7, axFs*0.9, axFs*0.9);
+    ctx.fillStyle='#cfe6ff';
+    const nm=district.replace('分署','');
+    ctx.fillText(nm, lx+axFs*1.1, legY);
+    lx += axFs*1.1 + nm.length*axFs + 40;
+  });
+
+  // 現在分隔線
+  const nowH=Math.floor((Date.now()-ep.getTime())/3600e3);
+  if(nowH>0 && nowH<nH){
+    const x=pL+nowH*grpW;
+    ctx.strokeStyle='#ffcc44'; ctx.lineWidth=3; ctx.setLineDash([12,8]);
+    ctx.beginPath(); ctx.moveTo(x,pT); ctx.lineTo(x,pT+ch); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='#ffcc44'; ctx.font=`${xFs}px sans-serif`; ctx.textAlign='center';
+    ctx.fillText('現在', x, pT-14);
+  }
 }
 
 // ════════════════════════════════════════════════
@@ -2391,7 +2609,7 @@ function showChartTooltip(evt, canvasId){
   // 逐時視圖 tooltip（zoom組體圖有逐時資料時，座標按48根長條對位）
   if(isZoom && effectiveId==='cv-district-hyeto' && selected && (selected.qpf_1h||[]).length>=24){
     const arr=(selected[_hourlyField()]||selected.qpf_1h||[]).slice(0,48);
-    const pL=130, pR=130, cw=W-pL-pR, bw=cw/arr.length;  // 與 _drawHourlyChart 一致
+    const pL=170, pR=160, cw=W-pL-pR, bw=cw/arr.length;  // 與 _drawHourlyChart 一致
     const hIdx=Math.floor((cx-pL)/bw);
     let tip2 = document.getElementById('chart-hover-tip');
     if(!tip2){
@@ -2994,16 +3212,12 @@ function toggleLsbSection(name){
   const arrow = document.getElementById('lsb-'+name+'-arrow');
   if(body) body.style.display = _lsbSecOpen[name] ? 'block' : 'none';
   if(arrow) arrow.textContent = _lsbSecOpen[name] ? '▾' : '▸';
-  // 收合時該區塊縮到只剩標題列
-  const section = body ? body.parentElement : null;
+  // 收合區縮到只剩標題列（flex:0 0 auto），展開區自然吃掉全部剩餘空間；
+  // 兩區都展開時按內容比例分配並各自捲動，收合任一區另一區立即接上不留空白
+  const section = document.getElementById(name==='etr' ? 'lsb-etr-sec' : 'lsb-dis-sec');
   if(section){
-    if(name==='etr'){
-      section.style.maxHeight = _lsbSecOpen[name] ? '45%' : 'none';
-      section.style.minHeight = _lsbSecOpen[name] ? '60px' : '0';
-    } else {
-      section.style.flex = _lsbSecOpen[name] ? '1' : '0 0 auto';
-      section.style.minHeight = _lsbSecOpen[name] ? '0' : '0';
-    }
+    section.style.flex      = _lsbSecOpen[name] ? '1 1 auto' : '0 0 auto';
+    section.style.minHeight = _lsbSecOpen[name] ? '60px' : '0';
   }
 }
 
