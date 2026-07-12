@@ -1428,8 +1428,8 @@ function _drawHourlyChart(t, canvasId){
   const modeTag = forecastModel==='hi'?'（強降雨）':forecastModel==='lo'?'（弱降雨）':'';
   ctx.fillText(`${t.county}${t.township}　前48小時逐時降雨${modeTag}`, pL, 78);
 
-  // 左軸刻度（雨量）+ 格線
-  ctx.font=`${Math.round(fs*0.55)}px sans-serif`; ctx.textAlign='right';
+  // 左軸刻度（雨量）+ 格線（字級同分署圖 fs=54）
+  ctx.font=`${fs}px sans-serif`; ctx.textAlign='right';
   ctx.strokeStyle='#1a3048'; ctx.lineWidth=1;
   for(let i=0;i<=4;i++){
     const yv=axisMax*i/4, y=pT+ch-ch*i/4;
@@ -1787,6 +1787,7 @@ function setModel(m){
     renderLayer();
     renderLegend();
     if(selected) updateInfo(selected);
+    try{ updateAllDistrictCharts(); }catch(e){}  // 摘要+分署圖跟隨模式切換
   });
 }
 
@@ -2096,17 +2097,14 @@ function updateDistrictSummary(){
         const ep = _summaryEtr(t);
         if(ep != null && ep > maxEtr){ maxEtr=ep; maxEtrT=t; }
       }
-      // 模式感知：風險指標 / 警特報（僅當前模式需要時計算，省效能）
-      if(mode==='risk'){
-        const r = calcRiskIndicator(t, Math.max(0, segTo));
-        if(r && r.R > maxRisk){ maxRisk=r.R; maxRiskT=t; }
-      } else if(mode==='warn'){
-        let lv=0;
-        for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
-          lv=Math.max(lv,_warnLevelAt(t,s)); if(lv>=4)break;
-        }
-        if(lv > maxWarn){ maxWarn=lv; maxWarnT=t; }
+      // 風險指標 / 警特報（常駐計算，摘要四表齊全）
+      const r = calcRiskIndicator(t, Math.max(0, segTo));
+      if(r && r.R > maxRisk){ maxRisk=r.R; maxRiskT=t; }
+      let lv=0;
+      for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
+        lv=Math.max(lv,_warnLevelAt(t,s)); if(lv>=4)break;
       }
+      if(lv > maxWarn){ maxWarn=lv; maxWarnT=t; }
     });
     return {district, maxRain, maxRainT, maxEtr, maxEtrT, maxRisk, maxRiskT, maxWarn, maxWarnT};
   });
@@ -2147,10 +2145,8 @@ function updateDistrictSummary(){
   });
   h += '</tbody></table>';
 
-  // ── 模式感知第三表：切到風險指標/警特報模式時，摘要同步呈現該特性 ──
-  if(mode==='risk' || mode==='warn'){
-    const title = mode==='risk' ? '風險指標最高鄉鎮市區' : '警特報最高鄉鎮市區';
-    const vh    = mode==='risk' ? '指標' : '級別';
+  // ── 風險指標 + 警特報常駐表（摘要四表齊全，不需切換模式）──
+  [['risk','風險指標最高鄉鎮市區','指標'],['warn','警特報最高鄉鎮市區','級別']].forEach(([kind,title,vh])=>{
     h += `<div style="height:4px"></div>
     <table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:4px">
       <thead><tr style="background:#081420;color:#5a8aaa;font-size:9px">
@@ -2161,7 +2157,7 @@ function updateDistrictSummary(){
     rows.forEach(({district,maxRisk,maxRiskT,maxWarn,maxWarnT})=>{
       const c=DISTRICT_COLOR[district]||'#aaccee';
       let vT, vs, vc;
-      if(mode==='risk'){
+      if(kind==='risk'){
         vT=maxRiskT; vs=maxRisk<0?'—':Math.round(maxRisk); vc=riskColor(maxRisk<0?0:maxRisk);
         if(vc==='#FFFFFF') vc='#aaccee';
       } else {
@@ -2175,7 +2171,7 @@ function updateDistrictSummary(){
       </tr>`;
     });
     h += '</tbody></table>';
-  }
+  });
 
   body.innerHTML = h;
 }
@@ -2445,8 +2441,8 @@ function _drawDistrictHourlyChart(cv){
   const modeTag = forecastModel==='hi'?'（強降雨）':forecastModel==='lo'?'（弱降雨）':'';
   ctx.fillText(`各分署　前48小時逐時降雨${modeTag}`, pL, 78);
 
-  // 左軸+格線
-  ctx.font=`${Math.round(fs*0.55)}px sans-serif`; ctx.textAlign='right';
+  // 左軸+格線（字級同分署圖 fs=54）
+  ctx.font=`${fs}px sans-serif`; ctx.textAlign='right';
   ctx.strokeStyle='#1a3048'; ctx.lineWidth=1;
   for(let i=0;i<=4;i++){
     const yv=maxRain*i/4, y=pT+ch-ch*i/4;
