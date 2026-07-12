@@ -20,43 +20,90 @@ KEEP_HOURS   = 30   # 保留30小時（24h合成留餘裕）
 
 
 def fetch_grid():
+    """
+    二段式抓取：
+    1. fileapi 取後設資料（dataset.GeoInfo 網格定義 + dataset.Resource.ProductURL）
+    2. 下載 ProductURL 實際網格檔（自動判斷 zip/gzip/純文字）
+    回傳 values(list) 或 None；同時動態更新網格參數。
+    """
+    global QP_LON0, QP_LAT0, QP_D, QP_NX, QP_NY
     r = requests.get(QPESUMS_URL, params={'Authorization': CWA_API_KEY,
                                           'downloadType': 'WEB', 'format': 'JSON'}, timeout=90)
     r.raise_for_status()
     raw = r.json()
-    content = None
-    try:
-        content = raw['cwaopendata']['dataset']['contents']['content']
-    except (KeyError, TypeError):
-        pass
-    if content is None:
-        try:
-            content = raw['records']['contents']['content']
-        except (KeyError, TypeError):
-            pass
-    if not content:
-        print(f"結構不符，頂層keys: {list(raw)[:5]}")
-        try:
-            ds = raw.get('cwaopendata', {}).get('dataset', {})
-            print(f"dataset keys: {list(ds)[:8]}")
-            info = ds.get('datasetInfo', {})
-            print(f"datasetInfo: {json.dumps(info, ensure_ascii=False)[:300]}")
-        except Exception:
-            pass
+    ds = raw.get('cwaopendata', {}).get('dataset', {})
+    geo = ds.get('GeoInfo', {}) or {}
+    res = ds.get('Resource', {}) or {}
+    print(f"ObsTime: {json.dumps(ds.get('ObsTime',''), ensure_ascii=False)[:120]}")
+    print(f"GeoInfo: {json.dumps(geo, ensure_ascii=False)[:400]}")
+    print(f"Resource: {json.dumps(res, ensure_ascii=False)[:300]}")
+
+    # 動態網格參數（GeoInfo 欄位命名有多種變體，逐一嘗試）
+    def _num(d, *names):
+        for n in names:
+            v = d.get(n)
+            if v is not None:
+                try: return float(v)
+                except (ValueError, TypeError): pass
         return None
+    lon0 = _num(geo, 'BottomLeftLongitude', 'LowerLeftLongitude', 'MinLongitude')
+    lat0 = _num(geo, 'BottomLeftLatitude',  'LowerLeftLatitude',  'MinLatitude')
+    dres = _num(geo, 'GridResolution', 'Resolution', 'CellSize')
+    nx   = _num(geo, 'GridDimensionX', 'NumberOfColumns', 'Columns', 'Nx')
+    ny   = _num(geo, 'GridDimensionY', 'NumberOfRows', 'Rows', 'Ny')
+    if lon0 is not None: QP_LON0 = lon0
+    if lat0 is not None: QP_LAT0 = lat0
+    if dres is not None and dres > 0: QP_D = dres
+    if nx: QP_NX = int(nx)
+    if ny: QP_NY = int(ny)
+    print(f"網格參數: lon0={QP_LON0} lat0={QP_LAT0} d={QP_D} {QP_NX}x{QP_NY}")
+
+    # ProductURL（可能是 dict / list / 直接字串）
+    if isinstance(res, list):
+        res = res[0] if res else {}
+    url = None
+    if isinstance(res, dict):
+        url = res.get('ProductURL') or res.get('productUrl') or res.get('uri') or res.get('URI')
+    elif isinstance(res, str):
+        url = res
+    if not url:
+        print("找不到 ProductURL")
+        return None
+    print(f"下載: {url}")
+
+    r2 = requests.get(url, timeout=120)
+    r2.raise_for_status()
+    data = r2.content
+    text = None
+    if data[:2] == b'PK':          # zip
+        import zipfile, io
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            name = z.namelist()[0]
+            print(f"zip 內容: {z.namelist()[:3]}")
+            text = z.read(name).decode('utf-8', errors='replace')
+    elif data[:2] == b'\x1f\x8b':  # gzip
+        import gzip as _gz
+        text = _gz.decompress(data).decode('utf-8', errors='replace')
+    else:
+        text = data.decode('utf-8', errors='replace')
+    print(f"內容開頭: {text[:200]!r}")
+
+    # 解析：抓出所有數值（逗號/空白/換行分隔皆可；跳過非數值行）
     vals = []
-    for tok in str(content).replace('\n', ',').split(','):
-        tok = tok.strip()
-        if not tok:
-            continue
+    for tok in text.replace(',', ' ').split():
         try:
             v = float(tok)
-            vals.append(None if v < 0 else v)
         except ValueError:
             continue
+        vals.append(None if v < 0 else v)
     print(f"網格：{len(vals)} 值（期望 {QP_NX*QP_NY}）")
-    return vals if len(vals) >= QP_NX*QP_NY*0.9 else None
-
+    if len(vals) < QP_NX*QP_NY*0.9:
+        return None
+    # 若解析出的值比預期多（檔案含座標欄），只取尾端網格段長度
+    if len(vals) > QP_NX*QP_NY:
+        print(f"  值多於網格數，可能含座標欄——保守起見放棄本次（貼log給開發者調整）")
+        return None
+    return vals
 
 def grid_at(vals, lat, lng):
     ix = round((lng - QP_LON0) / QP_D)

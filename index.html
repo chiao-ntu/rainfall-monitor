@@ -1380,6 +1380,7 @@ function _hourlyField(){
 function _drawHourlyChart(t, canvasId){
   const cv=document.getElementById(canvasId);
   if(!cv||!t) return;
+  const qpfField=MODEL_FIELD[forecastModel]||'qpf_best';
   const arr=(t[_hourlyField()]||t.qpf_1h||[]).slice(0,48);
   const W=2048, H=1024;
   cv.width=W; cv.height=H;
@@ -1388,17 +1389,29 @@ function _drawHourlyChart(t, canvasId){
   ctx.fillStyle='#040c14'; ctx.fillRect(0,0,W,H);
 
   const fs=54, xFs=25;
-  const pL=130, pR=40, pT=110, pB=90;
+  const pL=130, pR=130, pT=110, pB=90;   // 右側留軸位
   const cw=W-pL-pR, ch=H-pT-pB;
   const n=arr.length, bw=cw/n;
   const axisMax=Math.max(ceilTo10(Math.max(...arr, 1)), 10);
+  const districtColor=getDistrictColor(t.county);
+  const ETR_LINE='#FFFFFF';
+
+  // ETR2% 各6h段界值（段結束時點）
+  const etrPts=[];
+  if(t.alert_val && t.alert_val>0){
+    for(let sg=0; sg<8; sg++){
+      const e=calcEtr2AtSeg(t, sg, qpfField)/t.alert_val*100;
+      etrPts.push(Math.max(0,e));
+    }
+  }
+  const axisMaxEtr=Math.max(ceilTo10(Math.max(...etrPts, 10)), 10);
 
   // 標題
   ctx.fillStyle='#d0e8ff'; ctx.font=`bold ${fs}px sans-serif`; ctx.textAlign='left';
   const modeTag = forecastModel==='hi'?'（強降雨）':forecastModel==='lo'?'（弱降雨）':'';
   ctx.fillText(`${t.county}${t.township}　前48小時逐時降雨 (mm/h)${modeTag}`, pL, 68);
 
-  // 左軸
+  // 左軸（雨量）
   ctx.font=`${Math.round(fs*0.6)}px sans-serif`; ctx.textAlign='right';
   ctx.strokeStyle='#1a3048'; ctx.lineWidth=1;
   for(let i=0;i<=4;i++){
@@ -1406,18 +1419,57 @@ function _drawHourlyChart(t, canvasId){
     ctx.fillStyle='#5a88aa'; ctx.fillText(yv.toFixed(0), pL-14, y+10);
     ctx.beginPath(); ctx.moveTo(pL,y); ctx.lineTo(pL+cw,y); ctx.stroke();
   }
+  // 右軸（ETR2%）
+  ctx.textAlign='left';
+  for(let i=0;i<=4;i++){
+    const yv=axisMaxEtr*i/4, y=pT+ch-ch*i/4;
+    ctx.fillStyle='#cfe6ff'; ctx.fillText(yv.toFixed(0)+'%', pL+cw+14, y+10);
+  }
+  // 軸標題
+  ctx.font=`${Math.round(fs*0.55)}px sans-serif`;
+  ctx.fillStyle='#5a88aa'; ctx.textAlign='left';
+  ctx.fillText('左軸：時雨量(mm)', pL, pT-14);
+  ctx.fillStyle='#cfe6ff'; ctx.textAlign='right';
+  ctx.fillText('右軸：ETR2%', pL+cw, pT-14);
 
-  // 長條（≥40mm/h 大雨1h門檻 → 紅）
+  // 長條（分署色；≥40mm/h 大雨1h門檻 → 紅色警示描邊）
   const ep=SEG_EPOCH();
   for(let h=0;h<n;h++){
     const v=arr[h]||0;
     const x=pL+h*bw, bh=ch*v/axisMax;
-    ctx.fillStyle = v>=40 ? '#DD2222' : '#4ba6ff';
+    ctx.fillStyle = districtColor;
     ctx.fillRect(x+bw*0.12, pT+ch-bh, bw*0.76, bh);
+    if(v>=40){
+      ctx.strokeStyle='#DD2222'; ctx.lineWidth=4;
+      ctx.strokeRect(x+bw*0.12, pT+ch-bh, bw*0.76, bh);
+    }
     if(v>=1){
-      ctx.fillStyle='#cfe6ff'; ctx.font=`${xFs}px sans-serif`; ctx.textAlign='center';
+      ctx.fillStyle = v>=40 ? '#ff6666' : '#cfe6ff';
+      ctx.font=`${xFs}px sans-serif`; ctx.textAlign='center';
       ctx.fillText(v>=10?v.toFixed(0):v.toFixed(1), x+bw/2, pT+ch-bh-8);
     }
+  }
+
+  // ETR2% 折線（白色，點位於各6h段結束處）
+  if(etrPts.length){
+    ctx.strokeStyle=ETR_LINE; ctx.lineWidth=5;
+    ctx.beginPath();
+    etrPts.forEach((e,sg)=>{
+      const x=pL+Math.min((sg+1)*6, n)*bw - bw/2;
+      const y=pT+ch-ch*Math.min(e,axisMaxEtr)/axisMaxEtr;
+      sg===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+    etrPts.forEach((e,sg)=>{
+      const x=pL+Math.min((sg+1)*6, n)*bw - bw/2;
+      const y=pT+ch-ch*Math.min(e,axisMaxEtr)/axisMaxEtr;
+      ctx.beginPath(); ctx.arc(x,y,9,0,Math.PI*2);
+      ctx.fillStyle=ETR_LINE; ctx.fill();
+      ctx.strokeStyle='#040c14'; ctx.lineWidth=3; ctx.stroke();
+      // 資料標籤
+      ctx.fillStyle=ETR_LINE; ctx.font=`bold ${xFs}px sans-serif`; ctx.textAlign='center';
+      ctx.fillText(e.toFixed(0)+'%', x, y-18);
+    });
   }
 
   // X軸：每3h標「HH時」，換日處標「M/D」
@@ -2339,7 +2391,7 @@ function showChartTooltip(evt, canvasId){
   // 逐時視圖 tooltip（zoom組體圖有逐時資料時，座標按48根長條對位）
   if(isZoom && effectiveId==='cv-district-hyeto' && selected && (selected.qpf_1h||[]).length>=24){
     const arr=(selected[_hourlyField()]||selected.qpf_1h||[]).slice(0,48);
-    const pL=130, pR=40, cw=W-pL-pR, bw=cw/arr.length;
+    const pL=130, pR=130, cw=W-pL-pR, bw=cw/arr.length;  // 與 _drawHourlyChart 一致
     const hIdx=Math.floor((cx-pL)/bw);
     let tip2 = document.getElementById('chart-hover-tip');
     if(!tip2){

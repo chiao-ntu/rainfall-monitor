@@ -538,44 +538,60 @@ QPESUMS_HIST = "qpesums_history.json"
 QP_LON0, QP_LAT0, QP_D, QP_NX, QP_NY = 118.0, 20.0, 0.0125, 441, 561
 
 def fetch_qpesums_grid():
-    """抓 QPESUMS 1h 網格。回傳 values(list, len=NX*NY, None=無效) 或 None。"""
+    """二段式：fileapi 後設資料（GeoInfo+Resource.ProductURL）→ 下載實際網格檔。"""
+    global QP_LON0, QP_LAT0, QP_D, QP_NX, QP_NY
     if not CWA_API_KEY:
         return None
     try:
         r = requests.get(QPESUMS_URL, params={'Authorization': CWA_API_KEY,
                                               'downloadType':'WEB','format':'JSON'}, timeout=90)
         r.raise_for_status()
-        raw = r.json()
-        # 防禦性多路徑解析（CWA 網格產品結構變體）
-        content = None
-        try:
-            content = raw['cwaopendata']['dataset']['contents']['content']
-        except (KeyError, TypeError):
-            pass
-        if content is None:
-            try:
-                content = raw['records']['contents']['content']
-            except (KeyError, TypeError):
-                pass
-        if not content:
-            print(f"    QPESUMS 結構不符，頂層keys: {list(raw)[:5]}")
-            try:
-                ds = raw.get('cwaopendata', {}).get('dataset', {})
-                print(f"    dataset keys: {list(ds)[:8]}")
-            except Exception:
-                pass
+        ds = r.json().get('cwaopendata', {}).get('dataset', {})
+        geo = ds.get('GeoInfo', {}) or {}
+        res = ds.get('Resource', {}) or {}
+        def _num(d, *names):
+            for n in names:
+                v = d.get(n)
+                if v is not None:
+                    try: return float(v)
+                    except (ValueError, TypeError): pass
             return None
+        lon0 = _num(geo, 'BottomLeftLongitude', 'LowerLeftLongitude', 'MinLongitude')
+        lat0 = _num(geo, 'BottomLeftLatitude',  'LowerLeftLatitude',  'MinLatitude')
+        dres = _num(geo, 'GridResolution', 'Resolution', 'CellSize')
+        nx   = _num(geo, 'GridDimensionX', 'NumberOfColumns', 'Columns', 'Nx')
+        ny   = _num(geo, 'GridDimensionY', 'NumberOfRows', 'Rows', 'Ny')
+        if lon0 is not None: QP_LON0 = lon0
+        if lat0 is not None: QP_LAT0 = lat0
+        if dres is not None and dres > 0: QP_D = dres
+        if nx: QP_NX = int(nx)
+        if ny: QP_NY = int(ny)
+        if isinstance(res, list): res = res[0] if res else {}
+        url = res.get('ProductURL') if isinstance(res, dict) else (res if isinstance(res, str) else None)
+        if not url:
+            print("    QPESUMS 找不到 ProductURL")
+            return None
+        r2 = requests.get(url, timeout=120)
+        r2.raise_for_status()
+        data = r2.content
+        if data[:2] == b'PK':
+            import zipfile, io
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                text = z.read(z.namelist()[0]).decode('utf-8', errors='replace')
+        elif data[:2] == b'\x1f\x8b':
+            import gzip as _gz
+            text = _gz.decompress(data).decode('utf-8', errors='replace')
+        else:
+            text = data.decode('utf-8', errors='replace')
         vals = []
-        for tok in str(content).replace('\n', ',').split(','):
-            tok = tok.strip()
-            if not tok: continue
+        for tok in text.replace(',', ' ').split():
             try:
                 v = float(tok)
-                vals.append(None if v < 0 else v)   # -99/-999 無效值
             except ValueError:
                 continue
+            vals.append(None if v < 0 else v)
         print(f"    QPESUMS 網格：{len(vals)} 值（期望 {QP_NX*QP_NY}）")
-        if len(vals) < QP_NX*QP_NY*0.9:
+        if len(vals) < QP_NX*QP_NY*0.9 or len(vals) > QP_NX*QP_NY:
             return None
         return vals
     except Exception as e:
