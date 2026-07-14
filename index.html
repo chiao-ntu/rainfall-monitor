@@ -467,10 +467,19 @@ function showHyetograph(t, s, e){
     document.body.appendChild(pop);
   }
   const hasAlert = s.alert_val != null && s.alert_val > 0;
+  const sObs = s.daily_rain || [];
+  const hasStnObs = sObs.some(v=>v>0);
 
-  // 標題：站別資訊（警戒值、本站ETR2%現值）
-  let title = `${s.name}（警戒值 ${hasAlert ? s.alert_val+'mm' : '—'}）｜鄉鎮逐時 −48h~+72h`;
+  // 站別偽鄉鎮：ETR2 以「本站觀測+本站警戒值」計算（QPF沿用鄉鎮，無站級預報）
+  const pseudoT = Object.assign({}, t, {
+    alert_val: hasAlert ? s.alert_val : 0,
+    daily_rain: sObs.length ? sObs : (t.daily_rain||[]),
+  });
+
+  // 標題：站別資訊
+  let title = `${s.name}（警戒值 ${hasAlert ? s.alert_val+'mm' : '—'}）｜本站逐時 −48h~+72h`;
   if(s.etr2_pct != null) title += `｜本站ETR2% ${Math.round(s.etr2_pct*1000)/10}%`;
+  if(!hasStnObs) title += `｜未配對觀測，過去段以鄉鎮回算`;
   document.getElementById('station-pop-title').textContent = title;
 
   const cv = document.getElementById('station-pop-cv');
@@ -481,11 +490,26 @@ function showHyetograph(t, s, e){
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle='#060f18'; ctx.fillRect(0,0,W,H);
 
-  // 逐時資料（鄉鎮；與主圖同源）
+  // 逐時資料：未來=鄉鎮QPF（同主圖權威源）；過去段=本站日觀測×鄉鎮時序形狀（站別量級）
   const {vals, hFrom, nowIdx}=_hourlyBars(t);
+  if(hasStnObs){
+    const p48 = t.qpf_1h_p48 || [];
+    // p48[0..23]=前天、[24..47]=昨天；hFrom=nowH-48 → vals[i] 的 hAbs=hFrom+i，hAbs<0 屬過去
+    for(let i=0; i<nowIdx; i++){
+      const hAbs = hFrom + i;
+      if(hAbs >= 0) break;
+      const pIdx = 48 + hAbs;                       // p48 索引
+      const dayIdx = hAbs >= -24 ? 1 : 2;           // 昨天=1、前天=2
+      const dayStart = dayIdx===1 ? 24 : 0;
+      let dSum = 0;
+      for(let k=dayStart; k<dayStart+24; k++) dSum += p48[k]||0;
+      const w = dSum > 0.05 ? (p48[pIdx]||0)/dSum : 1/24;
+      vals[i] = Math.round((sObs[dayIdx]||0) * w * 100)/100;
+    }
+  }
   const n=vals.length, bw=cw/n;
   const axisMax=Math.max(ceilTo10(Math.max(...vals)),10);
-  const etr = hasAlert && t.alert_val>0 ? _etr2HourlySeries(t, hFrom, hFrom+n-1) : null;
+  const etr = hasAlert ? _etr2HourlySeries(pseudoT, hFrom, hFrom+n-1) : null;
   const axisMaxEtr=Math.max(ceilTo10(Math.max(...(etr||[10]),10)),10);
 
   // 左軸
@@ -1459,21 +1483,25 @@ function _hourlyField(){
 // 未來96h逐時（今天00起）：有逐時資料用之；無逐時模式（ecmwf/gfs/icon/cwa）
 // 以6h段均攤（v/6，圖上呈平頂——誠實近似並於軸標題標注）。偏差修正一致套用（cwa豁免）
 function _futuHourly(t){
-  const hf=_hourlyField();
-  let arr=t[hf];
-  if(!arr || arr.length<24){
-    const segs=getQpfArr(t, MODEL_FIELD[forecastModel]||'qpf_best');  // 已含偏差修正/cwa語義
-    arr=[];
-    for(let s=0;s<16;s++){ const v=(segs[s]||0)/6; for(let k=0;k<6;k++) arr.push(Math.round(v*100)/100); }
-    return arr;
+  // ★資料一致性核心：6h段值（getQpfArr）是全系統唯一權威——含CWA覆蓋、純CWA語義、
+  //   強弱降雨、偏差修正。逐時資料僅提供「段內分布形狀」，縮放至每6h段和==段值。
+  //   因此逐時圖、ETR2、警特報、風險、地圖、摘要全部同源，切模式必然一致。
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const segs = getQpfArr(t, qpfField);
+  const hf = _hourlyField();
+  const shape = (t[hf] && t[hf].length >= 24) ? t[hf] : (t.qpf_1h || []);
+  const out = [];
+  for(let s=0; s<16; s++){
+    const segV = segs[s] || 0;
+    const block = shape.slice(s*6, s*6+6);
+    const bSum = block.reduce((a,b)=>a+(b||0), 0);
+    for(let k=0; k<6; k++){
+      const w = bSum > 0.05 ? (block[k]||0)/bSum : 1/6;
+      out.push(Math.round(segV*w*100)/100);
+    }
   }
-  arr=arr.slice(0,96);
-  while(arr.length<96) arr.push(0);
-  if(_biasApplyOn && _biasFactor && forecastModel!=='cwa')
-    arr=arr.map(v=>v==null?0:Math.round(v*_biasFactor*10)/10);
-  return arr.map(v=>v==null?0:v);
+  return out;   // 96h；∑每6h == 地圖段值
 }
-
 // 120槽逐時長條（過去48h模式回算 + 未來72h）：回 {vals, hFrom, nowIdx}
 function _hourlyBars(t){
   const nowH=Math.max(0, Math.min(23, Math.floor((Date.now()-SEG_EPOCH().getTime())/3600e3)));
@@ -1627,27 +1655,26 @@ function _drawHourlyChart(t, canvasId, isZoom){
   // X軸：zoom每6h「HH時」+換日「M/D」；小圖每24h「M/D」
   const ep=SEG_EPOCH();
   ctx.font=`${xFs}px sans-serif`; ctx.textAlign='center';
-  const step=isZoom?6:24;
+  const step=isZoom?6:12;
+  let _lastDate=null;
   for(let i=0;i<n;i+=step){
     const hAbs=hFrom+i;
     const dt=new Date(ep.getTime()+hAbs*3600e3);
     const x=pL+i*bw+bw/2;
+    const dStr=`${dt.getMonth()+1}/${dt.getDate()}`;
     ctx.fillStyle='#5a88aa';
-    if(isZoom){
-      ctx.fillText(`${String(dt.getHours()).padStart(2,'0')}時`, x, pT+ch+38);
-      if(dt.getHours()===0||i===0){
-        ctx.fillStyle='#8ab8d8';
-        ctx.fillText(`${dt.getMonth()+1}/${dt.getDate()}`, x, pT+ch+38+xFs+8);
-      }
-    } else {
-      ctx.fillText(`${dt.getMonth()+1}/${dt.getDate()}`, x, pT+ch+xFs+8);
+    ctx.fillText(`${String(dt.getHours()).padStart(2,'0')}時`, x, pT+ch+(isZoom?38:xFs+6));
+    if(dStr!==_lastDate){   // 跨日或首格：第二行標日期
+      ctx.fillStyle='#8ab8d8';
+      ctx.fillText(dStr, x, pT+ch+(isZoom?38:xFs+6)+xFs+6);
+      _lastDate=dStr;
     }
   }
   // 軸標題（位置同前）
   const axTitleY=pT+ch+xLabelH+axTitleH*0.72;
   ctx.font=`${axFs}px sans-serif`;
   ctx.fillStyle='#9fc8e8'; ctx.textAlign='left';
-  const approxTag=_hourlyAvailable(t)?'':'（本模式為6h均攤）';
+  const approxTag=_hourlyAvailable(t)?'':'（段內分布為近似）';
   ctx.fillText(`左軸：時雨量(mm/h)${approxTag}　※過去48h為模式回算（暗色）`, pL, axTitleY);
   ctx.fillStyle='#e8e8e8'; ctx.textAlign='right';
   ctx.fillText('右軸：ETR2%（逐時）', pL+cw, axTitleY);
@@ -2989,18 +3016,45 @@ let _prevDisasterSet = null;  // 上次達標站點（偵測新增）
 let _disasterDetailOpen = null;  // 目前展開細節的站點 id
 
 function _disasterHits(){
-  // 回傳所有「任一時段達標」的站點與其達標資訊
+  // 量綱正確版：各門檻用對應統計量比對（舊版誤用視窗「累積」比 1h/3h 門檻造成假超標）
+  //   1h  → 視窗內最大時雨量（maxh_當前模式）
+  //   3h  → 視窗內最大3h估計（max(時雨量×2.2, 段值×0.6)，與警特報判準一致）
+  //   12h → 視窗內最大12h滑動（相鄰兩個6h段和）
+  // 過去視窗：僅有日累積觀測（無逐時分辨率）→ 只以日累積對照 12h 門檻並標注
   const hits = [];
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const maxhField = 'maxh_' + qpfField.replace('qpf_','');
+  const isPast = segTo < 0;
   DISASTER_ZONES.forEach(z=>{
     const t = TOWNSHIPS.find(x=>x.county===z.county && x.township===z.township);
     if(!t) return;
-    const rain = _summaryRain(t);
-    if(rain == null) return;
     const met = [];
-    if(z.t1h != null && rain >= z.t1h) met.push({win:'1h', thr:z.t1h});
-    if(z.t3h != null && rain >= z.t3h) met.push({win:'3h', thr:z.t3h});
-    if(z.t12h != null && rain >= z.t12h) met.push({win:'12h', thr:z.t12h});
-    if(met.length) hits.push({z, t, rain, met});
+    let dispRain = null;
+    if(isPast){
+      const dayIdx = Math.abs(Math.floor(segTo/4));
+      const d = (t.daily_rain||[])[dayIdx];
+      if(d == null) return;
+      dispRain = d;
+      if(z.t12h != null && d >= z.t12h) met.push({win:'12h†', thr:z.t12h, val:Math.round(d)});
+    } else {
+      const qa = getQpfArr(t, qpfField);
+      const mh = t[maxhField] || [];
+      const sf = Math.max(0,segFrom), st = Math.max(0,segTo);
+      let m1=0, m3=0, m12=0, tot=0;
+      for(let s=sf; s<=st; s++){
+        const seg = qa[s]||0, h1 = mh[s]||0;
+        m1 = Math.max(m1, h1);
+        m3 = Math.max(m3, Math.max(h1*2.2, seg*0.6));
+        tot += seg;
+      }
+      if(sf === st) m12 = qa[sf]||0;
+      else for(let s=sf; s<st; s++) m12 = Math.max(m12, (qa[s]||0)+(qa[s+1]||0));
+      dispRain = Math.round(tot*10)/10;
+      if(z.t1h  != null && m1  >= z.t1h ) met.push({win:'1h',  thr:z.t1h,  val:Math.round(m1)});
+      if(z.t3h  != null && m3  >= z.t3h ) met.push({win:'3h',  thr:z.t3h,  val:Math.round(m3)});
+      if(z.t12h != null && m12 >= z.t12h) met.push({win:'12h', thr:z.t12h, val:Math.round(m12)});
+    }
+    if(met.length) hits.push({z, t, rain:dispRain, met});
   });
   return hits;
 }
@@ -3022,18 +3076,22 @@ function updateDisasterPanel(){
   if(!hits.length){
     const srcTag0 = (segTo < 0) ? '觀測' : '預測';
     // 顯示目前最接近警戒的前3站，讓使用者確認系統運作中
+    const qpfF = MODEL_FIELD[forecastModel] || 'qpf_best';
+    const mhF = 'maxh_' + qpfF.replace('qpf_','');
     const near = DISASTER_ZONES.map(z=>{
       const t = TOWNSHIPS.find(x=>x.county===z.county && x.township===z.township);
       if(!t) return null;
-      const rain = _summaryRain(t);
-      if(rain == null) return null;
-      return {z, rain, ratio: z.t1h ? rain/z.t1h : 0};
+      const mh = t[mhF] || [];
+      let m1 = 0;
+      for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++) m1 = Math.max(m1, mh[s]||0);
+      if(!(m1 > 0)) return null;
+      return {z, rain: m1, ratio: z.t1h ? m1/z.t1h : 0};
     }).filter(Boolean).sort((a,b)=>b.ratio-a.ratio).slice(0,3);
     let eh = `<div style="color:#8a6a58;font-size:10px;padding:4px 0">目前無達警戒值站點（${srcTag0}）</div>`;
     if(near.length){
       eh += `<div style="color:#6a5040;font-size:8px;margin-top:2px">最接近警戒：</div>`;
       near.forEach(({z,rain})=>{
-        eh += `<div style="color:#8a6a58;font-size:9px;padding-left:4px">${z.county}${z.township} ${z.village} ${z.id}：${rain>=10?Math.round(rain):rain.toFixed(1)}mm / 1h警戒${z.t1h}mm</div>`;
+        eh += `<div style="color:#8a6a58;font-size:9px;padding-left:4px">${z.county}${z.township} ${z.village} ${z.id}：最大時雨量${rain>=10?Math.round(rain):rain.toFixed(1)}mm / 1h警戒${z.t1h}mm</div>`;
       });
     }
     body.innerHTML = eh;
@@ -3065,7 +3123,8 @@ function updateDisasterPanel(){
           onclick="focusTownship('${county}','${township}')">${township}</div>`;
         cMap[county][township].forEach(({z,rain,met})=>{
           const isNew = _prevDisasterSet && !_prevDisasterSet.has(z.id);
-          const metStr = met.map(m=>`${m.win}≥${m.thr}`).join('、');
+          const metStr = met.map(m=>`${m.win} ${m.val!=null?m.val+'mm':''}≥${m.thr}`).join('、') +
+            (met.some(m=>m.win==='12h†') ? '（†過去日以日累積對照，無逐時分辨率）' : '');
           const isOpen = _disasterDetailOpen === z.id;
           h += `<div style="padding:2px 4px 2px 14px;font-size:9px;border-bottom:1px dotted #2a1810
             ${isNew ? ';background:#3a1808;border-radius:3px;box-shadow:inset 0 0 0 1px #7a3a18' : ''}">
@@ -3502,7 +3561,8 @@ function _warnSummaryHtml(t){
     }
   }
   if(!parts.length) return '<span style="color:#5a7a9a">未達發布標準</span>';
-  return parts.join(' ');
+  return '<span style="color:#5a7a9a">全期預測：</span>' + parts.join(' ') +
+    '<span style="color:#4a6a8a;font-size:9px">（地圖依所選時間視窗著色，兩者範圍不同）</span>';
 }
 
 

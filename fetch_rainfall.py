@@ -110,53 +110,40 @@ def fetch_obs():
 
 def update_history(stations, now_tpe):
     """
-    日累積歷史（修正版：滾動24h窗 → 日曆日的正確映射）
-
-    時間窗語義（以清晨首次執行為基準，誤差=執行時刻對00時的平移）：
-      rain_24h（now-24h~now）   ≈ 昨天日曆日
-      rain_2d - rain_24h        ≈ 前天日曆日
-      rain_3d - rain_2d         ≈ 大前天日曆日
-
-    策略：
-      - 今天「首次執行」時：以上述差分一次寫定 昨天/前天/大前天，之後當日不再改動
-        （首次執行最接近日界，窗對齊最乾淨；愈晚的執行混入愈多今天的雨）
-      - history[today]：日內滾動估計 = max(0, r24h - 昨天日量×(24-h)/24)
-        （昨天殘餘以均勻分佈遞減；日內取max保持單調遞增）
+    日累積歷史 v3（權威來源版）
+      - 今天：直接使用 O-A0002 的 Now 欄位（本日00時起累積）——日曆日的權威觀測值，
+        不做任何滾動窗估計。
+      - 過去日：由「該日最後一次執行」寫入的 Now 值自然定版（23時值≈全日）。
+        跨日後**絕不覆寫**既有記錄；僅在完全缺值時（新站/斷檔/首次部署）
+        才以滾動差分補值：昨天≈rain_24h、前天≈rain_2d-rain_24h、大前天≈rain_3d-rain_2d。
     """
     today = now_tpe.strftime('%Y-%m-%d')
     y1 = (now_tpe-timedelta(days=1)).strftime('%Y-%m-%d')
     y2 = (now_tpe-timedelta(days=2)).strftime('%Y-%m-%d')
     y3 = (now_tpe-timedelta(days=3)).strftime('%Y-%m-%d')
-    hour_now = now_tpe.hour + now_tpe.minute/60.0
-    resid_frac = max(0.0, (24.0 - hour_now) / 24.0)   # 昨天雨在當前24h窗內的殘餘比例（均勻假設）
 
     history = json.load(open(HISTORY_FILE)) if os.path.exists(HISTORY_FILE) else {}
-    # 以「今天key是否已存在」判斷是否為今天首次執行（抽樣一站不可靠，逐站判斷）
     for sid,st in stations.items():
         if sid not in history: history[sid]={}
-        r24h = st.get('rain_24h', 0.0) or 0.0
-        r2d  = st.get('rain_2d',  0.0) or 0.0
-        r3d  = st.get('rain_3d',  0.0) or 0.0
         rec = history[sid]
+        r_now = st.get('rain_now', 0.0) or 0.0
+        r24h  = st.get('rain_24h', 0.0) or 0.0
+        r2d   = st.get('rain_2d',  0.0) or 0.0
+        r3d   = st.get('rain_3d',  0.0) or 0.0
 
-        if today not in rec:
-            # 今天首次執行：寫定過去三天（差分映射，最接近日界時窗最乾淨）
-            rec[y1] = round(r24h, 1)
-            rec[y2] = max(0.0, round(r2d - r24h, 1))
-            rec[y3] = max(0.0, round(r3d - r2d, 1))
-            rec[today] = 0.0
+        # 過去日：只補缺值，絕不覆寫（既有記錄是該日 Now 的日終值，為權威）
+        if y1 not in rec: rec[y1] = round(r24h, 1)
+        if y2 not in rec: rec[y2] = max(0.0, round(r2d - r24h, 1))
+        if y3 not in rec: rec[y3] = max(0.0, round(r3d - r2d, 1))
 
-        # 今天日內估計：滾動24h扣除昨天殘餘（均勻遞減假設）。
-        # 直接覆蓋不取max：愈接近日末，窗內昨天成分愈少、估計愈可靠，
-        # 早晨的高估（日界挪格誤差）會被傍晚的估計自然下修。
-        y1_val = rec.get(y1, 0.0)
-        rec[today] = max(0.0, round(r24h - y1_val * resid_frac, 1))
+        # 今天：本日00時起累積（權威值，直接覆蓋更新）
+        rec[today] = round(r_now, 1)
 
     cutoff = (now_tpe-timedelta(days=9)).strftime('%Y-%m-%d')
     for sid in history: history[sid]={d:v for d,v in history[sid].items() if d>cutoff}
     with open(HISTORY_FILE,'w',encoding='utf-8') as f:
         json.dump(history,f,ensure_ascii=False,separators=(',',':'))
-    print(f"  歷史更新：{len(history)} 站，今日={today}")
+    print(f"  歷史更新：{len(history)} 站，今日={today}（今日累積=Now權威值）")
     return history
 
 def calc_etr2(sid, history, now_tpe):
