@@ -512,7 +512,7 @@ def fetch_openmeteo_model(townships, model='best_match'):
         # 大豪雨: 24h≥350 或 3h≥200；超大豪雨: 24h≥500
         if model == 'best_match':
             pv = [v if v is not None else 0.0 for v in precip]
-            HOURLY_CACHE[key] = [round(v,1) for v in pv[:48]]  # 前48h逐時QPF（逐時化第一階段）
+            HOURLY_CACHE[key] = [round(v,1) for v in pv[:96]]  # 逐時QPF 96h（今天00起，覆蓋『現在+72h』全時段）
             warn_hourly = []
             r3 = 0.0; r24 = 0.0
             for h in range(len(pv)):

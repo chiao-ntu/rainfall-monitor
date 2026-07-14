@@ -799,63 +799,67 @@ function renderInterpolated(){
     const [lng,lat]=_featureCentroid(f);
     if(lat<lat0-0.1||lat>lat1+0.1||lng<lng0-0.1||lng>lng1+0.1) return;  // 金馬除外
     const hex=c.replace('#','');
-    pts.push([ (lng-lng0)/(lng1-lng0)*NX, (1-(_mercY(lat)-my0)/(my1-my0))*NY,
-               parseInt(hex.slice(0,2),16), parseInt(hex.slice(2,4),16), parseInt(hex.slice(4,6),16) ]);
+    const r=parseInt(hex.slice(0,2),16), g=parseInt(hex.slice(2,4),16), b=parseInt(hex.slice(4,6),16);
+    // 顏色→調色盤序數（級距值代理；自訂色取最近RGB的序數）——與index「數值→Barnes→色帶」同構
+    let lv=0, bd=1e18;
+    COLORS.forEach((co,ci)=>{
+      const h2=co.hex.replace('#','');
+      const dr=r-parseInt(h2.slice(0,2),16), dg=g-parseInt(h2.slice(2,4),16), db=b-parseInt(h2.slice(4,6),16);
+      const d=dr*dr+dg*dg+db*db;
+      if(d<bd){ bd=d; lv=ci; }
+    });
+    pts.push([ (lng-lng0)/(lng1-lng0)*NX, (1-(_mercY(lat)-my0)/(my1-my0))*NY, r, g, b, lv ]);
   });
   if(!pts.length){
     if(_interpOverlay){ map.removeLayer(_interpOverlay); _interpOverlay=null; }
     return;
   }
 
-  // 2. Barnes 兩遍客觀分析（RGB三通道；與 index 同參數 KAPPA=12/GAMMA=0.2，趨勢面一致）
+  // 2. Barnes 兩遍客觀分析（單通道：調色盤序數＝級距值代理；與 index「數值→Barnes→硬邊色帶」
+  //    完全同構、同參數 KAPPA=12/GAMMA=0.2——同一底圖渲染趨勢一致）
   const KAPPA=12, GAMMA=0.2;
   const CUT1=9.2*KAPPA, CUT2=9.2*KAPPA*GAMMA;
   const nP=pts.length;
-  function barnesRgb(px, py, kappa, cut, useResid, rR, rG, rB){
-    let nr=0,ng=0,nb=0,den=0,minD2=1e18,minK=0;
+  function barnesVal(px, py, kappa, cut, useResid, resid){
+    let num=0, den=0, minD2=1e18, minK=0;
     for(let k=0;k<nP;k++){
       const dx=px-pts[k][0], dy=py-pts[k][1];
       const d2=dx*dx+dy*dy;
       if(d2<minD2){ minD2=d2; minK=k; }
       if(d2>cut) continue;
       const w=Math.exp(-d2/kappa);
-      if(useResid){ nr+=w*rR[k]; ng+=w*rG[k]; nb+=w*rB[k]; }
-      else{ nr+=w*pts[k][2]; ng+=w*pts[k][3]; nb+=w*pts[k][4]; }
-      den+=w;
+      num += w * (useResid ? resid[k] : pts[k][5]);
+      den += w;
     }
-    if(den===0){
-      return useResid ? [0,0,0] : [pts[minK][2], pts[minK][3], pts[minK][4]];
-    }
-    return [nr/den, ng/den, nb/den];
+    if(den===0) return useResid ? 0 : pts[minK][5];
+    return num/den;
   }
   // 第一遍：著色點位置的分析值 → 殘差
-  const rR=new Float64Array(nP), rG=new Float64Array(nP), rB=new Float64Array(nP);
+  const resid=new Float64Array(nP);
   for(let k=0;k<nP;k++){
-    const f1=barnesRgb(pts[k][0], pts[k][1], KAPPA, CUT1, false);
-    rR[k]=pts[k][2]-f1[0]; rG[k]=pts[k][3]-f1[1]; rB[k]=pts[k][4]-f1[2];
+    resid[k]=pts[k][5]-barnesVal(pts[k][0], pts[k][1], KAPPA, CUT1, false);
   }
-  // 網格：第一遍 + 第二遍殘差修正
+  // 網格：第一遍 + 第二遍殘差修正 → 序數場 → 最近級距色（硬邊，同index色帶）
   const R=new Float32Array(NX*NY), G=new Float32Array(NX*NY), B=new Float32Array(NX*NY);
+  const palRgb=COLORS.map(co=>{
+    const h2=co.hex.replace('#','');
+    return [parseInt(h2.slice(0,2),16), parseInt(h2.slice(2,4),16), parseInt(h2.slice(4,6),16)];
+  });
   for(let gy=0; gy<NY; gy++){
     for(let gx=0; gx<NX; gx++){
       const px=gx+0.5, py=gy+0.5;
-      const f1=barnesRgb(px, py, KAPPA, CUT1, false);
-      const f2=barnesRgb(px, py, KAPPA*GAMMA, CUT2, true, rR, rG, rB);
+      const v1=barnesVal(px, py, KAPPA, CUT1, false);
+      const v2=barnesVal(px, py, KAPPA*GAMMA, CUT2, true, resid);
+      const lv=Math.max(0, Math.min(COLORS.length-1, Math.round(v1+v2)));
       const i=gy*NX+gx;
-      R[i]=Math.max(0,Math.min(255,f1[0]+f2[0]));
-      G[i]=Math.max(0,Math.min(255,f1[1]+f2[1]));
-      B[i]=Math.max(0,Math.min(255,f1[2]+f2[2]));
+      R[i]=palRgb[lv][0]; G[i]=palRgb[lv][1]; B[i]=palRgb[lv][2];
     }
   }
 
   // 3. 雙線性上採樣 + 量化到最近的使用中顏色
   //    （連續場→離散色階，色帶邊界成為平滑曲線；不量化=連續混色=模糊感）
-  const palette=[];
-  const seen={};
-  pts.forEach(p=>{
-    const key=p[2]+','+p[3]+','+p[4];
-    if(!seen[key]){ seen[key]=1; palette.push([p[2],p[3],p[4]]); }
-  });
+  // 量化調色盤=級距全色盤（網格已是級距色，邊界混色回拉到正確級距——同 index 硬邊色帶）
+  const palette=palRgb;
   const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
   const ctx=cv.getContext('2d');
   const img=ctx.createImageData(W,H), d=img.data;
