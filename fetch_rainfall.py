@@ -109,29 +109,48 @@ def fetch_obs():
     return stations
 
 def update_history(stations, now_tpe):
+    """
+    日累積歷史（修正版：滾動24h窗 → 日曆日的正確映射）
+
+    時間窗語義（以清晨首次執行為基準，誤差=執行時刻對00時的平移）：
+      rain_24h（now-24h~now）   ≈ 昨天日曆日
+      rain_2d - rain_24h        ≈ 前天日曆日
+      rain_3d - rain_2d         ≈ 大前天日曆日
+
+    策略：
+      - 今天「首次執行」時：以上述差分一次寫定 昨天/前天/大前天，之後當日不再改動
+        （首次執行最接近日界，窗對齊最乾淨；愈晚的執行混入愈多今天的雨）
+      - history[today]：日內滾動估計 = max(0, r24h - 昨天日量×(24-h)/24)
+        （昨天殘餘以均勻分佈遞減；日內取max保持單調遞增）
+    """
     today = now_tpe.strftime('%Y-%m-%d')
     y1 = (now_tpe-timedelta(days=1)).strftime('%Y-%m-%d')
     y2 = (now_tpe-timedelta(days=2)).strftime('%Y-%m-%d')
+    y3 = (now_tpe-timedelta(days=3)).strftime('%Y-%m-%d')
+    hour_now = now_tpe.hour + now_tpe.minute/60.0
+    resid_frac = max(0.0, (24.0 - hour_now) / 24.0)   # 昨天雨在當前24h窗內的殘餘比例（均勻假設）
+
     history = json.load(open(HISTORY_FILE)) if os.path.exists(HISTORY_FILE) else {}
+    # 以「今天key是否已存在」判斷是否為今天首次執行（抽樣一站不可靠，逐站判斷）
     for sid,st in stations.items():
         if sid not in history: history[sid]={}
         r24h = st.get('rain_24h', 0.0) or 0.0
         r2d  = st.get('rain_2d',  0.0) or 0.0
         r3d  = st.get('rain_3d',  0.0) or 0.0
+        rec = history[sid]
 
-        # 今天：記錄 rain_24h 作為參考值（前端改用QPF預測為主）
-        history[sid][today] = r24h
+        if today not in rec:
+            # 今天首次執行：寫定過去三天（差分映射，最接近日界時窗最乾淨）
+            rec[y1] = round(r24h, 1)
+            rec[y2] = max(0.0, round(r2d - r24h, 1))
+            rec[y3] = max(0.0, round(r3d - r2d, 1))
+            rec[today] = 0.0
 
-        # 昨天：rain_2d - rain_24h 是「昨天同時刻到今天同時刻之前的24h量」
-        # 比「完全沒記錄」要好；若歷史已有更好的值則保留歷史值
-        est_y1 = max(0.0, round(r2d - r24h, 1))
-        if y1 not in history[sid] or history[sid][y1] < est_y1:
-            history[sid][y1] = est_y1
-
-        # 前天：rain_3d - rain_2d 估算
-        est_y2 = max(0.0, round(r3d - r2d, 1))
-        if y2 not in history[sid] or history[sid][y2] < est_y2:
-            history[sid][y2] = est_y2
+        # 今天日內估計：滾動24h扣除昨天殘餘（均勻遞減假設）。
+        # 直接覆蓋不取max：愈接近日末，窗內昨天成分愈少、估計愈可靠，
+        # 早晨的高估（日界挪格誤差）會被傍晚的估計自然下修。
+        y1_val = rec.get(y1, 0.0)
+        rec[today] = max(0.0, round(r24h - y1_val * resid_frac, 1))
 
     cutoff = (now_tpe-timedelta(days=9)).strftime('%Y-%m-%d')
     for sid in history: history[sid]={d:v for d,v in history[sid].items() if d>cutoff}
@@ -146,11 +165,8 @@ def calc_etr2(sid, history, now_tpe):
     R0 = 當天(0-24h)累積雨量，R1 = 前一天(25-48h)，...R6 = 前6天
     """
     if sid not in history: return None
-    daily = history[sid]
-    etr2 = sum(
-        ETR2_WEIGHTS[i] * daily.get((now_tpe-timedelta(days=i)).strftime('%Y-%m-%d'), 0.0)
-        for i in range(7)
-    )
+    dvals = get_daily_rain_array(sid, history, now_tpe, days=7)   # 含今天去重疊
+    etr2 = sum(ETR2_WEIGHTS[i] * dvals[i] for i in range(7))
     return round(etr2, 1)
 
 def get_daily_rain_array(sid, history, now_tpe, days=8):
@@ -429,6 +445,7 @@ def get_pop_6h_series(township_name, pop3d, pop7d, base_time, num_segs=28):
 # 逐時警特報掃描結果快取（best_match）：key → warn_seg[60]
 WARN_SEG_CACHE = {}
 HOURLY_CACHE = {}    # key -> 前48h逐時QPF（best_match）
+PAST48_CACHE = {}    # key -> 過去48h逐時模式回算（前天+昨天，圖表歷史段用）
 
 def fetch_openmeteo_model(townships, model='best_match'):
     """
@@ -730,7 +747,7 @@ def fetch_model_yesterday(townships):
         'latitude':  ','.join(str(x) for x in lats),
         'longitude': ','.join(str(x) for x in lngs),
         'hourly':    'precipitation',
-        'past_days': 1,
+        'past_days': 2,
         'forecast_days': 1,
         'timezone':  'Asia/Taipei',
     }
@@ -748,12 +765,17 @@ def fetch_model_yesterday(townships):
     else:
         return {}
     out = {}
+    global PAST48_CACHE
+    PAST48_CACHE = {}
     data_list = raw if isinstance(raw, list) else [raw]
     for i, loc in enumerate(data_list):
         key = f"{lats[i]:.4f}_{lngs[i]:.4f}"
-        precip = loc.get('hourly', {}).get('precipitation', [])[:24]  # 昨日00-24
-        out[key] = round(sum(v for v in precip if v is not None), 1)
-    print(f"    {len(out)} 個點")
+        precip = loc.get('hourly', {}).get('precipitation', [])
+        # past_days=2：[0:24]=前天, [24:48]=昨天, [48:]=今天以後
+        p48 = [round(v,1) if v is not None else 0.0 for v in precip[:48]]
+        PAST48_CACHE[key] = p48
+        out[key] = round(sum(p48[24:48]), 1)   # 昨日24h（偏差比基準）
+    print(f"    {len(out)} 個點（含過去48h逐時回算）")
     return out
 
 
@@ -1030,6 +1052,7 @@ def main():
             'qpf_cwa':   qpf_cwa,
             'qpf_1h_cwa': [],  # CWA無逐時定量降水，維持空（前端逐時圖自動退回）
             'qpf_1h':    HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
+            'qpf_1h_p48': PAST48_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
             'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'hi'),
             'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'lo'),
             'warn_seg':  WARN_SEG_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
@@ -1126,6 +1149,7 @@ def main():
             'qpf_cwa':   [],
             'qpf_1h_cwa': [],
             'qpf_1h':    HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
+            'qpf_1h_p48': PAST48_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
             'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'hi'),
             'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'lo'),
             'maxh_best': get_ns_maxh('best_match'),  'maxh_ecmwf': get_ns_maxh('ecmwf_ifs025'),

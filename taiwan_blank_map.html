@@ -11,8 +11,6 @@
 body{font-family:sans-serif;background:#fff;display:flex;height:100vh;position:relative}
 #toolbar{width:178px;flex-shrink:0;background:#0d1a28;color:#dde8f2;display:flex;flex-direction:column;gap:3px;padding:10px;overflow-y:auto;border-right:1px solid #2a4a6a;transition:width 0.25s ease,padding 0.25s ease}
 #toolbar.collapsed{width:0;padding:0;overflow:hidden;border:none}
-#tb-toggle{background:none;border:none;color:#7bd0f0;cursor:pointer;font-size:13px;padding:0;line-height:1;flex-shrink:0}
-#tb-float-btn{display:none;position:absolute;top:10px;left:0;z-index:1000;background:#0d1a28;border:1px solid #2a4a6a;border-left:none;border-radius:0 4px 4px 0;padding:8px 4px;cursor:pointer;color:#7bd0f0;writing-mode:vertical-rl;font-size:11px;letter-spacing:1px}
 #toolbar h3{font-size:12px;color:#7bd0f0;border-bottom:1px solid #2a4a6a;padding-bottom:5px}
 #map{flex:1}
 .color-btn{padding:7px 8px;border:3px solid rgba(0,0,0,0.2);border-radius:5px;cursor:pointer;font-size:12px;font-weight:700;margin:2px 0;text-align:center;transition:all 0.1s;user-select:none}
@@ -22,11 +20,15 @@ body{font-family:sans-serif;background:#fff;display:flex;height:100vh;position:r
 .sect{font-size:10px;color:#7bd0f0;border-bottom:1px solid #1a3040;padding:2px 0;margin:5px 0 2px;font-weight:700}
 #level-select{width:100%;background:#1a2a3a;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px;padding:4px;font-size:11px}
 .interp-crisp{image-rendering:auto;}
-#roster{position:absolute;top:10px;right:10px;bottom:10px;width:240px;z-index:1000;
-  background:#0a1828ee;border:1px solid #2a4a6a;border-radius:6px;display:flex;flex-direction:column;
+#roster{width:240px;flex-shrink:0;height:100%;
+  background:#0a1828;border-left:1px solid #2a4a6a;display:flex;flex-direction:column;
   transition:width .2s}
-#roster.collapsed{width:26px;overflow:hidden}
+#roster.collapsed{width:0;overflow:hidden;border:none}
 #roster.collapsed #roster-body,#roster.collapsed #roster-title-text{display:none}
+.edge-strip{width:14px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  background:#12283a;color:#7bd0f0;cursor:pointer;font-size:10px;user-select:none;
+  border-left:1px solid #2a4a6a;border-right:1px solid #2a4a6a}
+.edge-strip:hover{background:#1a3a52}
 #roster-head{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
   border-bottom:1px solid #2a4a6a;color:#7bd0f0;font-size:12px;font-weight:700;flex-shrink:0}
 #roster-body{overflow-y:auto;flex:1;padding:4px 6px;font-size:11px}
@@ -36,12 +38,11 @@ body{font-family:sans-serif;background:#fff;display:flex;height:100vh;position:r
 .ros-chip{cursor:pointer;border:1px solid #2a4a6a;border-radius:3px;padding:1px 5px;
   color:#9ab8cc;font-size:10px;user-select:none}
 .ros-chip:hover{border-color:#7bd0f0}
-#roster-toggle{cursor:pointer;background:none;border:none;color:#7bd0f0;font-size:12px;padding:0}
 </style>
 </head>
 <body>
 <div id="toolbar">
-  <h3 style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#7bd0f0;border-bottom:1px solid #2a4a6a;padding-bottom:5px">🎨 繪圖地圖<button id="tb-toggle" onclick="toggleToolbar()" title="收合">◀</button></h3>
+  <h3 style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#7bd0f0;border-bottom:1px solid #2a4a6a;padding-bottom:5px">🎨 繪圖地圖</h3>
   <div class="sect">塗色層級</div>
   <select id="level-select" onchange="setLevel(this.value)">
     <optgroup label="── 大 ──"><option value="county">縣市</option></optgroup>
@@ -59,12 +60,12 @@ body{font-family:sans-serif;background:#fff;display:flex;height:100vh;position:r
   <input type="file" id="csv-import-input" accept=".csv" style="display:none" onchange="importCSV(this)">
   <div style="font-size:10px;color:#3a6080;margin-top:6px">已上色：<span id="cnt" style="color:#aaccee">0</span> 個</div>
 </div>
-<div id="tb-float-btn" onclick="toggleToolbar()">▶ 繪圖</div>
+<div id="tb-strip" class="edge-strip" onclick="toggleToolbar()" title="收合/展開工具列">◀</div>
 <div id="map"></div>
+<div id="ros-strip" class="edge-strip" onclick="toggleRosterPanel()" title="收合/展開分署清單">▶</div>
 <div id="roster">
   <div id="roster-head">
     <span id="roster-title-text">📋 分署清單（點鄉鎮塗色）</span>
-    <button id="roster-toggle" onclick="toggleRosterPanel()">▶</button>
   </div>
   <div id="roster-body"></div>
 </div>
@@ -521,9 +522,9 @@ function refreshRosterColors(){
 }
 
 function toggleRosterPanel(){
-  const r=document.getElementById('roster');
-  const collapsed = r.classList.toggle('collapsed');
-  document.getElementById('roster-toggle').textContent = collapsed ? '◀' : '▶';
+  const collapsed = document.getElementById('roster').classList.toggle('collapsed');
+  const st=document.getElementById('ros-strip');
+  if(st) st.textContent = collapsed ? '◀' : '▶';
 }
 
 let activeColor=null, fillData={}, history=[], paintMode='county';
@@ -691,12 +692,9 @@ function exportCSV(){
 let toolbarOpen=true;
 function toggleToolbar(){
   toolbarOpen=!toolbarOpen;
-  const tb=document.getElementById('toolbar');
-  const btn=document.getElementById('tb-toggle');
-  const fb=document.getElementById('tb-float-btn');
-  tb.classList.toggle('collapsed',!toolbarOpen);
-  if(btn) btn.textContent=toolbarOpen?'◀':'▶';
-  if(fb) fb.style.display=toolbarOpen?'none':'block';
+  document.getElementById('toolbar').classList.toggle('collapsed',!toolbarOpen);
+  const st=document.getElementById('tb-strip');
+  if(st) st.textContent=toolbarOpen?'◀':'▶';
 }
 buildTownLayer();
 buildRoster();
@@ -809,25 +807,44 @@ function renderInterpolated(){
     return;
   }
 
-  // 2. 小網格 RGB IDW（power 4，全域覆蓋，與 index 相同）
+  // 2. Barnes 兩遍客觀分析（RGB三通道；與 index 同參數 KAPPA=12/GAMMA=0.2，趨勢面一致）
+  const KAPPA=12, GAMMA=0.2;
+  const CUT1=9.2*KAPPA, CUT2=9.2*KAPPA*GAMMA;
+  const nP=pts.length;
+  function barnesRgb(px, py, kappa, cut, useResid, rR, rG, rB){
+    let nr=0,ng=0,nb=0,den=0,minD2=1e18,minK=0;
+    for(let k=0;k<nP;k++){
+      const dx=px-pts[k][0], dy=py-pts[k][1];
+      const d2=dx*dx+dy*dy;
+      if(d2<minD2){ minD2=d2; minK=k; }
+      if(d2>cut) continue;
+      const w=Math.exp(-d2/kappa);
+      if(useResid){ nr+=w*rR[k]; ng+=w*rG[k]; nb+=w*rB[k]; }
+      else{ nr+=w*pts[k][2]; ng+=w*pts[k][3]; nb+=w*pts[k][4]; }
+      den+=w;
+    }
+    if(den===0){
+      return useResid ? [0,0,0] : [pts[minK][2], pts[minK][3], pts[minK][4]];
+    }
+    return [nr/den, ng/den, nb/den];
+  }
+  // 第一遍：著色點位置的分析值 → 殘差
+  const rR=new Float64Array(nP), rG=new Float64Array(nP), rB=new Float64Array(nP);
+  for(let k=0;k<nP;k++){
+    const f1=barnesRgb(pts[k][0], pts[k][1], KAPPA, CUT1, false);
+    rR[k]=pts[k][2]-f1[0]; rG[k]=pts[k][3]-f1[1]; rB[k]=pts[k][4]-f1[2];
+  }
+  // 網格：第一遍 + 第二遍殘差修正
   const R=new Float32Array(NX*NY), G=new Float32Array(NX*NY), B=new Float32Array(NX*NY);
   for(let gy=0; gy<NY; gy++){
     for(let gx=0; gx<NX; gx++){
-      let nr=0,ng=0,nb=0,den=0,hit=-1,minD2=1e18,minK=0;
-      const KAPPA=12, CUT=9.2*KAPPA;   // 高斯核（與index的Barnes同尺度），截斷加速
-      for(let k=0;k<pts.length;k++){
-        const dx=gx+0.5-pts[k][0], dy=gy+0.5-pts[k][1];
-        const d2=dx*dx+dy*dy;
-        if(d2<minD2){ minD2=d2; minK=k; }
-        if(d2<0.25){ hit=k; break; }
-        if(d2>CUT) continue;
-        const w=Math.exp(-d2/KAPPA);
-        nr+=w*pts[k][2]; ng+=w*pts[k][3]; nb+=w*pts[k][4]; den+=w;
-      }
-      if(hit<0 && den===0){ hit=minK; }   // 截斷圈外退回最近著色點
+      const px=gx+0.5, py=gy+0.5;
+      const f1=barnesRgb(px, py, KAPPA, CUT1, false);
+      const f2=barnesRgb(px, py, KAPPA*GAMMA, CUT2, true, rR, rG, rB);
       const i=gy*NX+gx;
-      if(hit>=0){ R[i]=pts[hit][2]; G[i]=pts[hit][3]; B[i]=pts[hit][4]; }
-      else{ R[i]=nr/den; G[i]=ng/den; B[i]=nb/den; }
+      R[i]=Math.max(0,Math.min(255,f1[0]+f2[0]));
+      G[i]=Math.max(0,Math.min(255,f1[1]+f2[1]));
+      B[i]=Math.max(0,Math.min(255,f1[2]+f2[2]));
     }
   }
 

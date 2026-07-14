@@ -963,15 +963,19 @@ def main():
         maxh_icon  = get_max_hourly_model('icon_seamless')
 
         # 颱風期間：CWA 格點 QPF 優先覆蓋前8段（48h），其餘時段仍用 Open-Meteo
+        # 同時產出「純CWA」陣列（qpf_cwa：只含CWA的段，有多少算多少，其餘空）
+        qpf_cwa = []
         if is_typhoon and typhoon_segs:
             for idx in range(min(8, len(qpf_best))):
                 seg_pts = [(p[0],p[1],p[2]) for p in typhoon_segs[idx]["points"]] \
                           if idx < len(typhoon_segs) else []
-                if seg_pts:
-                    v = idw(lat, lng, seg_pts, idx)
-                    if v is not None:
-                        # CWA 為最高優先，所有模式統一覆蓋為 CWA 觀測值
-                        qpf_best[idx] = qpf_ecmwf[idx] = qpf_gfs[idx] = qpf_icon[idx] = v
+                v = idw(lat, lng, seg_pts, idx) if seg_pts else None
+                if v is not None:
+                    # CWA 為最高優先，所有模式統一覆蓋為 CWA 觀測值
+                    qpf_best[idx] = qpf_ecmwf[idx] = qpf_gfs[idx] = qpf_icon[idx] = v
+                    qpf_cwa.append(v)
+                else:
+                    qpf_cwa.append(0.0)
 
         # 預設用 best_match（CWA優先 > ECMWF > GFS=ICON 的綜合判斷已含在模式選擇邏輯中）
         qpf15d = qpf_best
@@ -1023,6 +1027,8 @@ def main():
             'bias_24h':  calc_bias_24h(obs.get('daily_rain', [0.0]*8), model_yday.get(f"{lat:.4f}_{lng:.4f}")),
             'qpesums_1h':  qpesums_at(qp_grid, lat, lng),
             'qpesums_24h': qp_24h.get(f"{county}{township}"),
+            'qpf_cwa':   qpf_cwa,
+            'qpf_1h_cwa': [],  # CWA無逐時定量降水，維持空（前端逐時圖自動退回）
             'qpf_1h':    HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
             'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'hi'),
             'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'lo'),
@@ -1117,6 +1123,8 @@ def main():
             'bias_24h':  None,
             'qpesums_1h':  qpesums_at(qp_grid, avg_lat, avg_lng),
             'qpesums_24h': qp_24h.get(f"{at['county']}{at['township']}"),
+            'qpf_cwa':   [],
+            'qpf_1h_cwa': [],
             'qpf_1h':    HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
             'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'hi'),
             'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'lo'),
