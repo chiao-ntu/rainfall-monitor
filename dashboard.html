@@ -77,11 +77,11 @@
 const PANELS = [
   { name: "定量降水",       url: "https://www.cwa.gov.tw/V8/C/P/QPF.html?active=1", bh: 1800, view: { fx: 0.4443, fy: 0.3232, ch: 507.8 } },
   { name: "紅外線雲圖",    url: "https://www.cwa.gov.tw/V8/C/W/OBS_Sat.html?Area=2", bh: 1800, view: { fx: 0.6452, fy: 0.4503, ch: 406.3 } },
-  { name: "雨量預報",       url: "https://watch.ncdr.nat.gov.tw/watch_page_nowcast_v2", bh: 1800, view: { fx: 0.3295, fy: 0.2132, ch: 406.3 } },
-  { name: "豪雨監測",       url: "https://watch.ncdr.nat.gov.tw/watch_page_rain_v3", bh: 1800, view: { fx: 0.3108, fy: 0.2131, ch: 634.8 } },
+  { name: "雨量預報",       url: "https://watch.ncdr.nat.gov.tw/watch_page_nowcast_v2", bh: 1800, view: { fx: 0.3295, fy: 0.2132, ch: 406.3 }, noRefresh: true },
+  { name: "豪雨監測",       url: "https://watch.ncdr.nat.gov.tw/watch_page_rain_v3", bh: 1800, view: { fx: 0.3108, fy: 0.2131, ch: 634.8 }, noRefresh: true },
   { name: "AI區域模式",     url: "https://watch.ncdr.nat.gov.tw/watch_page_corrdiff", bh: 1800, view: { fx: 0.3132, fy: 0.3326, ch: 325 } },
-  { name: "即時降雨預警", url: "https://watch.ncdr.nat.gov.tw/watch_nowcast", bh: 900, view: { fx: 0.5581, fy: 0.3881, ch: 634.8 } },
-  { name: "WISSDOM",            url: "https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan", bh: 1800, view: { fx: 0.7269, fy: 0.1876, ch: 507.9 } },
+  { name: "即時降雨預警", url: "https://watch.ncdr.nat.gov.tw/watch_nowcast", bh: 900, view: { fx: 0.5581, fy: 0.3881, ch: 634.8 }, noRefresh: true },
+  { name: "WISSDOM",            url: "https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan", bh: 1800, view: { fx: 0.7269, fy: 0.1876, ch: 507.9 }, noRefresh: true },
   { name: "颱風路徑",       url: "https://watch.ncdr.nat.gov.tw/watch_tracks_pro", bh: 900, view: { fx: 0.4912, fy: 0.498, ch: 507.9 } },
 ];
 
@@ -281,7 +281,7 @@ document.getElementById("btnExport").addEventListener("click", () => {
 const btnAuto = document.getElementById("btnAuto");
 let autoOn = store.get("dashv13.auto", true);
 let nextAt = Date.now() + REFRESH_MS;
-function refreshAll() { panels.forEach((P, i) => setTimeout(() => reload(P), i * 300)); }
+function refreshAll() { panels.forEach((P, i) => { if (P.cfg.noRefresh) return; setTimeout(() => reload(P), i * 300); }); }
 function fmt(ms) { const s = Math.max(0, Math.round(ms / 1000)); return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); }
 function paintAuto() {
   btnAuto.classList.toggle("on", autoOn);
