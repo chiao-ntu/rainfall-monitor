@@ -8,26 +8,20 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #0d1117;
     font-family: "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif; }
-
   #stage { width: 100vw; height: 100vh; padding: 8px; gap: 8px;
     display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(2, 1fr); }
-
   .panel { position: relative; background: #161b22; border: 1px solid #30363d;
     border-radius: 8px; overflow: hidden; box-shadow: 0 3px 12px rgba(0,0,0,.45); }
   .panel.maximized { position: fixed; inset: 8px; z-index: 1000; box-shadow: 0 0 0 2px #3b82f6, 0 12px 44px rgba(0,0,0,.7); }
-
   .fallback { position: absolute; inset: 0; z-index: 0; display: flex; align-items: center;
     justify-content: center; text-align: center; color: #6e7681; font-size: 12.5px; line-height: 1.7; padding: 0 18px; }
-
   .frame-wrap { position: absolute; inset: 0; overflow: hidden; z-index: 1; }
   .frame-wrap iframe { position: absolute; top: 0; left: 0; border: 0; background: #fff; }
-
   .overlay { position: absolute; inset: 0; z-index: 2; cursor: grab; }
   .overlay:active { cursor: grabbing; }
   body.ctrl .overlay { pointer-events: none; }
   .panel.maximized .overlay { display: none; }
   .panel.maximized .sb, .panel.maximized .zoomctl { display: none; }
-
   .sb { position: absolute; z-index: 3; background: rgba(110,118,129,.15); border-radius: 6px; opacity: 0; transition: opacity .2s; }
   .panel:hover .sb { opacity: 1; }
   .sb-v { top: 4px; right: 3px; width: 9px; bottom: 15px; }
@@ -37,34 +31,29 @@
   .sb-v .sb-thumb { left: 0; width: 100%; }
   .sb-h .sb-thumb { top: 0; height: 100%; }
   .sb.disabled { display: none; }
-
-  .label { position: absolute; top: 8px; left: 8px; z-index: 4;
-    background: rgba(13,17,23,.82); color: #58a6ff; font-size: 12px; font-weight: 600;
-    padding: 4px 9px; border-radius: 5px; border: 1px solid #30363d; text-decoration: none; cursor: alias;
-    user-select: none; display: inline-flex; align-items: center; gap: 5px; max-width: calc(100% - 90px);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .label { position: absolute; top: 8px; left: 8px; z-index: 4; background: rgba(13,17,23,.82); color: #58a6ff;
+    font-size: 12px; font-weight: 600; padding: 4px 9px; border-radius: 5px; border: 1px solid #30363d;
+    text-decoration: none; cursor: alias; user-select: none; display: inline-flex; align-items: center; gap: 5px;
+    max-width: calc(100% - 90px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .label:hover { color: #fff; background: #1f6feb; border-color: #1f6feb; }
   .label .arrow { opacity: .7; font-size: 11px; }
-
   .zoomctl { position: absolute; top: 8px; right: 8px; z-index: 4; display: none; align-items: center; gap: 2px;
     background: rgba(13,17,23,.82); border: 1px solid #30363d; border-radius: 5px; padding: 2px; }
   .panel:hover .zoomctl { display: flex; }
   .zoomctl button { width: 22px; height: 20px; background: transparent; color: #c9d1d9; border: 0; cursor: pointer; font-size: 14px; line-height: 1; border-radius: 3px; }
   .zoomctl button:hover { background: #1f6feb; color: #fff; }
   .zoomctl .pct { color: #8b949e; font-size: 11px; min-width: 34px; text-align: center; user-select: none; }
-
   .tools { position: absolute; top: 8px; right: 8px; z-index: 5; display: none; gap: 6px; }
   .panel.maximized .tools { display: flex; }
   .tools button { background: rgba(13,17,23,.85); color: #c9d1d9; border: 1px solid #30363d;
     border-radius: 5px; width: 32px; height: 28px; cursor: pointer; font-size: 14px; }
   .tools button:hover { background: #1f6feb; color: #fff; border-color: #1f6feb; }
-
   #dock { position: fixed; right: 12px; bottom: 12px; z-index: 1100; display: flex; gap: 8px;
     background: rgba(22,27,34,.92); border: 1px solid #30363d; border-radius: 8px; padding: 6px; }
   #dock button { background: transparent; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
-    padding: 6px 10px; font-size: 12px; cursor: pointer; }
+    padding: 6px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
   #dock button:hover { background: #1f6feb; color: #fff; border-color: #1f6feb; }
-
+  #dock button.on { border-color: #238636; color: #3fb950; }
   #hint { position: fixed; left: 12px; bottom: 12px; z-index: 1100; color: #6e7681; font-size: 11px; line-height: 1.6; user-select: none; pointer-events: none; }
   #ctrlBadge { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 1200;
     background: #1f6feb; color: #fff; font-size: 12px; padding: 5px 14px; border-radius: 20px; display: none; }
@@ -73,29 +62,33 @@
 </head>
 <body>
 <div id="stage"></div>
-
 <div id="ctrlBadge">直接操作網站中 — 放開 Ctrl 返回</div>
-<div id="dock"><button id="btnReset" title="清除所有縮放與位置">↺ 重置全部</button></div>
+<div id="dock">
+  <button id="btnAuto" title="每 10 分鐘自動重整全部">自動更新 10:00</button>
+  <button id="btnExport" title="把目前排版設為預設(可貼給我烘進檔案)">⤓ 匯出佈局</button>
+  <button id="btnReset" title="回到內建預設佈局">↺ 重置全部</button>
+</div>
 <div id="hint">
-  拖曳 = 移動畫面內容 · 滾輪/Shift+滾輪 = 上下/左右捲動 · +/− 或 Alt+滾輪 = 縮放 · 單擊 = 放大(Esc 還原) · 右鍵 = 重整 · 按住 Ctrl = 直接操作原網站
+  拖曳 = 移動內容 · 滾輪 = 上下捲動 · Shift+滾輪 = 左右 · +/− 或 Alt+滾輪 = 縮放 · 單擊 = 放大(Esc 還原) · 右鍵 = 重整 · 按住 Ctrl = 直接操作原網站
 </div>
 
 <script>
-/* ===== 8 格設定 ===== */
+/* view = 聚焦點 + 垂直框幅;bh = 該格網頁渲染的畫布高度(文件型可加大以容納整頁+更大拖動範圍) */
 const PANELS = [
-  { name: "定量降水",     url: "https://www.cwa.gov.tw/V8/C/P/QPF.html?active=1" },
-  { name: "紅外線雲圖",   url: "https://www.cwa.gov.tw/V8/C/W/OBS_Sat.html?Area=2" },
-  { name: "雨量預報",     url: "https://watch.ncdr.nat.gov.tw/watch_page_nowcast_v2" },
-  { name: "豪雨監測",     url: "https://watch.ncdr.nat.gov.tw/watch_page_rain_v3" },
-  { name: "AI區域模式",   url: "https://watch.ncdr.nat.gov.tw/watch_page_corrdiff" },
-  { name: "即時降雨預警", url: "https://watch.ncdr.nat.gov.tw/watch_nowcast" },
-  { name: "WISSDOM",      url: "https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan" },
-  { name: "颱風路徑",     url: "https://watch.ncdr.nat.gov.tw/watch_tracks_pro" },
+  { name: "定量降水",       url: "https://www.cwa.gov.tw/V8/C/P/QPF.html?active=1", bh: 1800, view: { fx: 0.4443, fy: 0.3232, ch: 507.8 } },
+  { name: "紅外線雲圖",    url: "https://www.cwa.gov.tw/V8/C/W/OBS_Sat.html?Area=2", bh: 1800, view: { fx: 0.6452, fy: 0.4503, ch: 406.3 } },
+  { name: "雨量預報",       url: "https://watch.ncdr.nat.gov.tw/watch_page_nowcast_v2", bh: 1800, view: { fx: 0.208, fy: 0.214, ch: 406.3 } },
+  { name: "豪雨監測",       url: "https://watch.ncdr.nat.gov.tw/watch_page_rain_v3", bh: 1800, view: { fx: 0.3108, fy: 0.2131, ch: 634.8 } },
+  { name: "AI區域模式",     url: "https://watch.ncdr.nat.gov.tw/watch_page_corrdiff", bh: 1800, view: { fx: 0.3132, fy: 0.3326, ch: 325 } },
+  { name: "即時降雨預警", url: "https://watch.ncdr.nat.gov.tw/watch_nowcast", bh: 900, view: { fx: 0.5531, fy: 0.3729, ch: 634.8 } },
+  { name: "WISSDOM",            url: "https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan", bh: 900, view: { fx: 0.3577, fy: 0.7178, ch: 507.9 } },
+  { name: "颱風路徑",       url: "https://watch.ncdr.nat.gov.tw/watch_tracks_pro", bh: 900, view: { fx: 0.4912, fy: 0.498, ch: 507.9 } },
 ];
 
-/* 每個網頁以固定桌面尺寸渲染,格子當觀景窗 → 一載入就能拖曳/捲動 */
-const BASE_W = 1366, BASE_H = 900;
-const ZMIN = 0.2, ZMAX = 5, WHEEL_PAN = 90, DRAG_THRESHOLD = 5, GAP = 8;
+const BASE_W = 1366;              // 畫布寬度(統一,維持各站版面不變)
+const ZMAX = 4, WHEEL_PAN = 90, DRAG_THRESHOLD = 5;
+const REFRESH_MS = 10 * 60 * 1000;
+const KEY = "dashv12.p";
 
 const stage = document.getElementById("stage");
 const panels = [];
@@ -105,6 +98,8 @@ const store = {
   del(k)    { try { localStorage.removeItem(k); } catch (e) {} },
 };
 const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+function validView(v) { return v && isFinite(v.fx) && isFinite(v.fy) && isFinite(v.ch) && v.ch > 0; }
+function coverZoom(P) { return Math.max(P.wrap.clientWidth / BASE_W, P.wrap.clientHeight / P.bh); }
 
 function build(cfg, i) {
   const el = document.createElement("div");
@@ -123,96 +118,96 @@ function build(cfg, i) {
     <div class="overlay"></div>`;
   stage.appendChild(el);
 
-  const saved = store.get("dash.p" + i, null);
   const P = {
-    i, cfg, el,
-    wrap: el.querySelector(".frame-wrap"),
-    iframe: el.querySelector("iframe"),
-    overlay: el.querySelector(".overlay"),
+    i, cfg, el, bh: cfg.bh || 900,
+    wrap: el.querySelector(".frame-wrap"), iframe: el.querySelector("iframe"), overlay: el.querySelector(".overlay"),
     vThumb: el.querySelector(".sb-v .sb-thumb"), hThumb: el.querySelector(".sb-h .sb-thumb"),
-    vBar: el.querySelector(".sb-v"), hBar: el.querySelector(".sb-h"),
-    pct: el.querySelector(".pct"),
-    tx: saved ? saved.tx : 0, ty: saved ? saved.ty : 0,
-    zoom: saved ? clamp(saved.zoom, ZMIN, ZMAX) : 1, max: false,
+    vBar: el.querySelector(".sb-v"), hBar: el.querySelector(".sb-h"), pct: el.querySelector(".pct"),
+    tx: 0, ty: 0, zoom: 1, max: false,
   };
   P.iframe.style.width = BASE_W + "px";
-  P.iframe.style.height = BASE_H + "px";
+  P.iframe.style.height = P.bh + "px";
   panels.push(P);
   wire(P);
-  if (!saved) centerP(P);   // 首次載入置中
-  apply(P);
+
+  let saved = store.get(KEY + i, null);
+  if (!validView(saved)) { saved = null; store.del(KEY + i); }
+  const v = saved || cfg.view || null;
+  if (validView(v)) applyView(P, v); else { centerP(P); apply(P); }
   return P;
+}
+
+function applyView(P, v) {
+  const W = P.wrap.clientWidth, H = P.wrap.clientHeight;
+  P.zoom = clamp(H / v.ch, coverZoom(P), ZMAX);
+  P.tx = W / 2 - (v.fx * BASE_W) * P.zoom;
+  P.ty = H / 2 - (v.fy * P.bh) * P.zoom;
+  apply(P);
 }
 
 function centerP(P) {
   const W = P.wrap.clientWidth, H = P.wrap.clientHeight;
+  P.zoom = clamp(P.zoom, coverZoom(P), ZMAX);
   P.tx = (W - BASE_W * P.zoom) / 2;
-  P.ty = (H - BASE_H * P.zoom) / 2;
+  P.ty = (H - P.bh * P.zoom) / 2;
 }
 
 function apply(P) {
   const W = P.wrap.clientWidth, H = P.wrap.clientHeight;
-  P.zoom = clamp(P.zoom, ZMIN, ZMAX);
-  const cw = BASE_W * P.zoom, ch = BASE_H * P.zoom;
+  P.zoom = clamp(P.zoom, coverZoom(P), ZMAX);
+  const cw = BASE_W * P.zoom, ch = P.bh * P.zoom;
   P.tx = cw <= W ? (W - cw) / 2 : clamp(P.tx, W - cw, 0);
   P.ty = ch <= H ? (H - ch) / 2 : clamp(P.ty, H - ch, 0);
   P.iframe.style.transformOrigin = "0 0";
   P.iframe.style.transform = `translate(${P.tx}px, ${P.ty}px) scale(${P.zoom})`;
   P.pct.textContent = Math.round(P.zoom * 100) + "%";
-
   const rangeY = Math.max(0, ch - H), trackV = P.vBar.clientHeight;
   if (rangeY < 1) P.vBar.classList.add("disabled");
   else { P.vBar.classList.remove("disabled");
     const th = Math.max(24, trackV * H / ch);
     P.vThumb.style.height = th + "px";
-    P.vThumb.style.top = (-P.ty / rangeY) * (trackV - th) + "px"; }
-
+    P.vThumb.style.top = clamp((-P.ty / rangeY) * (trackV - th), 0, trackV - th) + "px"; }
   const rangeX = Math.max(0, cw - W), trackH = P.hBar.clientWidth;
   if (rangeX < 1) P.hBar.classList.add("disabled");
   else { P.hBar.classList.remove("disabled");
     const tw = Math.max(24, trackH * W / cw);
     P.hThumb.style.width = tw + "px";
-    P.hThumb.style.left = (-P.tx / rangeX) * (trackH - tw) + "px"; }
+    P.hThumb.style.left = clamp((-P.tx / rangeX) * (trackH - tw), 0, trackH - tw) + "px"; }
+  store.set(KEY + P.i, viewOf(P));
+}
 
-  store.set("dash.p" + P.i, { tx: P.tx, ty: P.ty, zoom: P.zoom });
+function viewOf(P) {
+  const W = P.wrap.clientWidth, H = P.wrap.clientHeight;
+  const ccx = (W / 2 - P.tx) / P.zoom, ccy = (H / 2 - P.ty) / P.zoom;
+  return { fx: +(ccx / BASE_W).toFixed(4), fy: +(ccy / P.bh).toFixed(4), ch: +(H / P.zoom).toFixed(1) };
 }
 
 function zoomAt(P, newZoom, cx, cy) {
-  newZoom = clamp(newZoom, ZMIN, ZMAX);
+  newZoom = clamp(newZoom, coverZoom(P), ZMAX);
   const contentX = (cx - P.tx) / P.zoom, contentY = (cy - P.ty) / P.zoom;
-  P.zoom = newZoom;
-  P.tx = cx - contentX * newZoom;
-  P.ty = cy - contentY * newZoom;
-  apply(P);
+  P.zoom = newZoom; P.tx = cx - contentX * newZoom; P.ty = cy - contentY * newZoom; apply(P);
 }
 
 function wire(P) {
   P.el.querySelector(".label").addEventListener("mousedown", e => e.stopPropagation());
   P.el.querySelector(".z-in").addEventListener("click", e => { e.stopPropagation(); zoomAt(P, P.zoom * 1.25, P.wrap.clientWidth / 2, P.wrap.clientHeight / 2); });
   P.el.querySelector(".z-out").addEventListener("click", e => { e.stopPropagation(); zoomAt(P, P.zoom / 1.25, P.wrap.clientWidth / 2, P.wrap.clientHeight / 2); });
-  P.el.querySelector(".t-refresh").addEventListener("click", e => { e.stopPropagation(); P.iframe.src = P.iframe.src; });
+  P.el.querySelector(".t-refresh").addEventListener("click", e => { e.stopPropagation(); reload(P); });
   P.el.querySelector(".t-restore").addEventListener("click", e => { e.stopPropagation(); restore(P); });
-
   P.overlay.addEventListener("mousedown", e => {
     if (e.button !== 0 || e.ctrlKey) return;
     activeDrag = { P, sx: e.clientX, sy: e.clientY, startTx: P.tx, startTy: P.ty, moved: false };
     e.preventDefault();
   });
-
   P.overlay.addEventListener("wheel", e => {
     if (e.ctrlKey) return;
     e.preventDefault();
-    if (e.altKey) {
-      const r = P.wrap.getBoundingClientRect();
-      zoomAt(P, P.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX - r.left, e.clientY - r.top);
-    } else if (e.shiftKey) { P.tx += e.deltaY > 0 ? -WHEEL_PAN : WHEEL_PAN; apply(P); }
+    if (e.altKey) { const r = P.wrap.getBoundingClientRect(); zoomAt(P, P.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX - r.left, e.clientY - r.top); }
+    else if (e.shiftKey) { P.tx += e.deltaY > 0 ? -WHEEL_PAN : WHEEL_PAN; apply(P); }
     else { P.ty += e.deltaY > 0 ? -WHEEL_PAN : WHEEL_PAN; apply(P); }
   }, { passive: false });
-
-  P.overlay.addEventListener("contextmenu", e => { e.preventDefault(); P.iframe.src = P.iframe.src; });
-
-  dragThumb(P, P.vThumb, "v");
-  dragThumb(P, P.hThumb, "h");
+  P.overlay.addEventListener("contextmenu", e => { e.preventDefault(); reload(P); });
+  dragThumb(P, P.vThumb, "v"); dragThumb(P, P.hThumb, "h");
 }
 
 function dragThumb(P, thumb, axis) {
@@ -220,18 +215,11 @@ function dragThumb(P, thumb, axis) {
     e.stopPropagation(); e.preventDefault();
     const startPos = axis === "v" ? e.clientY : e.clientX;
     const startT = axis === "v" ? P.ty : P.tx;
-    const W = P.wrap.clientWidth, H = P.wrap.clientHeight;
-    const range = axis === "v" ? Math.max(0, BASE_H * P.zoom - H) : Math.max(0, BASE_W * P.zoom - W);
+    const range = axis === "v" ? Math.max(0, P.bh * P.zoom - P.wrap.clientHeight) : Math.max(0, BASE_W * P.zoom - P.wrap.clientWidth);
     const track = axis === "v" ? P.vBar.clientHeight - P.vThumb.clientHeight : P.hBar.clientWidth - P.hThumb.clientWidth;
-    const move = ev => {
-      const d = (axis === "v" ? ev.clientY : ev.clientX) - startPos;
-      const t = startT - (d / track) * range;
-      if (axis === "v") P.ty = t; else P.tx = t;
-      apply(P);
-    };
+    const move = ev => { const d = (axis === "v" ? ev.clientY : ev.clientX) - startPos; const t = startT - (d / track) * range; if (axis === "v") P.ty = t; else P.tx = t; apply(P); };
     const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
-    document.addEventListener("mousemove", move);
-    document.addEventListener("mouseup", up);
+    document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
   });
 }
 
@@ -249,19 +237,18 @@ document.addEventListener("mouseup", e => {
   activeDrag = null;
 });
 
+function reload(P) { P.iframe.src = P.iframe.src; }
+
 function maximize(P) {
   if (P.max) return;
   panels.forEach(o => o.max && restore(o));
-  P.max = true;
-  P.el.classList.add("maximized");
+  P.max = true; P.el.classList.add("maximized");
   P.iframe.style.width = "100%"; P.iframe.style.height = "100%"; P.iframe.style.transform = "none";
 }
 function restore(P) {
   if (!P.max) return;
-  P.max = false;
-  P.el.classList.remove("maximized");
-  P.iframe.style.width = BASE_W + "px"; P.iframe.style.height = BASE_H + "px";
-  apply(P);
+  P.max = false; P.el.classList.remove("maximized");
+  P.iframe.style.width = BASE_W + "px"; P.iframe.style.height = P.bh + "px"; apply(P);
 }
 
 addEventListener("keydown", e => {
@@ -271,13 +258,47 @@ addEventListener("keydown", e => {
 addEventListener("keyup", e => { if (e.key === "Control") document.body.classList.remove("ctrl"); });
 addEventListener("blur", () => document.body.classList.remove("ctrl"));
 addEventListener("wheel", e => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
+addEventListener("resize", () => panels.forEach(P => {
+  if (P.max) return;
+  let v = store.get(KEY + P.i, null);
+  if (!validView(v)) v = P.cfg.view;
+  if (validView(v)) applyView(P, v); else { centerP(P); apply(P); }
+}));
 
 document.getElementById("btnReset").addEventListener("click", () => {
-  panels.forEach(P => { store.del("dash.p" + P.i); if (P.max) restore(P); P.zoom = 1; centerP(P); apply(P); });
+  panels.forEach(P => {
+    store.del(KEY + P.i);
+    if (P.max) restore(P);
+    if (validView(P.cfg.view)) applyView(P, P.cfg.view); else { centerP(P); apply(P); }
+  });
 });
-addEventListener("resize", () => panels.forEach(P => !P.max && apply(P)));
+document.getElementById("btnExport").addEventListener("click", () => {
+  const json = JSON.stringify(panels.map(P => viewOf(P)));
+  try { navigator.clipboard.writeText(json); } catch (e) {}
+  window.prompt("已複製這段佈局(解析度無關),貼給 Claude 即可設為預設:", json);
+});
+
+const btnAuto = document.getElementById("btnAuto");
+let autoOn = store.get("dashv12.auto", true);
+let nextAt = Date.now() + REFRESH_MS;
+function refreshAll() { panels.forEach((P, i) => setTimeout(() => reload(P), i * 300)); }
+function fmt(ms) { const s = Math.max(0, Math.round(ms / 1000)); return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); }
+function paintAuto() {
+  btnAuto.classList.toggle("on", autoOn);
+  btnAuto.textContent = autoOn ? "自動更新 " + fmt(nextAt - Date.now()) : "自動更新(暫停)";
+}
+setInterval(() => {
+  if (autoOn && Date.now() >= nextAt) { refreshAll(); nextAt = Date.now() + REFRESH_MS; }
+  paintAuto();
+}, 1000);
+btnAuto.addEventListener("click", () => {
+  autoOn = !autoOn; store.set("dashv12.auto", autoOn);
+  if (autoOn) nextAt = Date.now() + REFRESH_MS;
+  paintAuto();
+});
 
 PANELS.forEach((cfg, i) => build(cfg, i));
+paintAuto();
 </script>
 </body>
 </html>
