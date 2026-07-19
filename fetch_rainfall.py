@@ -139,7 +139,7 @@ def update_history(stations, now_tpe):
         # 今天：本日00時起累積（權威值，直接覆蓋更新）
         rec[today] = round(r_now, 1)
 
-    cutoff = (now_tpe-timedelta(days=9)).strftime('%Y-%m-%d')
+    cutoff = (now_tpe-timedelta(days=16)).strftime('%Y-%m-%d')   # 保留16天：過去7日視圖的ETR2需回推7+7天雨齡尾巴
     for sid in history: history[sid]={d:v for d,v in history[sid].items() if d>cutoff}
     with open(HISTORY_FILE,'w',encoding='utf-8') as f:
         json.dump(history,f,ensure_ascii=False,separators=(',',':'))
@@ -156,10 +156,10 @@ def calc_etr2(sid, history, now_tpe):
     etr2 = sum(ETR2_WEIGHTS[i] * dvals[i] for i in range(7))
     return round(etr2, 1)
 
-def get_daily_rain_array(sid, history, now_tpe, days=8):
+def get_daily_rain_array(sid, history, now_tpe, days=15):
     """
     回傳過去 N 天的逐日觀測雨量陣列（給前端做未來ETR2%滾動計算用）
-    array[0] = 今天, array[1] = 昨天, ... array[7] = 7天前
+    array[0] = 今天, array[1] = 昨天, ...（預設15天：過去7日視圖的ETR2需用到13-14天前觀測）
     """
     if sid not in history: return [0.0]*days
     daily = history[sid]
@@ -185,7 +185,7 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
     if not obs_station_ids:
         return [{'name': st.get('name',''), 'alert_val': st.get('alert_val'),
                  'village': st.get('village',''), 'etr2': None, 'etr2_pct': None,
-                 'daily_rain': [0.0]*8} for st in excel_stations]
+                 'daily_rain': [0.0]*15} for st in excel_stations]
 
     def normalize(name):
         """去除常見後綴：機構代碼(s/w/S/W)、序號((1)/(2)/1/2)、空白"""
@@ -237,7 +237,7 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
 
         etr2_val = station_etr2.get(sid) if sid else None
         etr2_pct = round(etr2_val/alert_val, 4) if (etr2_val is not None and alert_val and alert_val > 0) else None
-        daily    = station_daily.get(sid, [0.0]*8) if sid else [0.0]*8
+        daily    = station_daily.get(sid, [0.0]*15) if sid else [0.0]*15
         enriched.append({
             'name':      name,
             'alert_val': st.get('alert_val'),
@@ -275,7 +275,7 @@ def agg_obs(stations, alert_table, history, now_tpe):
             town[key]={'county':st['county'],'township':st['township'],
                        'stations':[],'rain_24h':0.0,'rain_6h':0.0,
                        'rain_2d':0.0,'rain_3d':0.0,'etr2':None,
-                       'daily_rain':[0.0]*8, 'station_etr2':{}}
+                       'daily_rain':[0.0]*15, 'station_etr2':{}}
         td=town[key]; td['stations'].append(sid)
         # 雨量觀測：所有站都可以貢獻（用於顯示觀測雨量，不影響 ETR2 塗色）
         td['rain_24h']=max(td['rain_24h'],st['rain_24h'])
@@ -294,7 +294,7 @@ def agg_obs(stations, alert_table, history, now_tpe):
                 td['station_etr2'][sid] = ev
 
         # 逐日雨量：所有站都可以貢獻（供前端顯示用）
-        st_daily = get_daily_rain_array(sid, history, now_tpe, days=8)
+        st_daily = get_daily_rain_array(sid, history, now_tpe, days=15)
         td['daily_rain'] = [max(a,b) for a,b in zip(td['daily_rain'], st_daily)]
         if 'station_daily' not in td: td['station_daily'] = {}
         td['station_daily'][sid] = st_daily
@@ -812,6 +812,9 @@ def fetch_typhoon_qpf():
             if not dataset: continue
             ct = dataset[0].get("contents",{}).get("contentText","")
             if not ct: continue
+            # 擷取時間窗（供日曆段對齊；缺則前端/組裝端退回舊索引法）
+            dsi = dataset[0].get("datasetInfo", dataset[0].get("DatasetInfo", {})) or {}
+            st_str = dsi.get("startTime", dsi.get("StartTime", ""))
             pts = []
             for ri, row in enumerate(ct.strip().split("\n")):
                 lat_pt = 20.8 + ri * 0.045
@@ -820,7 +823,7 @@ def fetch_typhoon_qpf():
                     if 21.5<=lat_pt<=26.5 and 119<=lng_pt<=123:
                         try: pts.append((lat_pt, lng_pt, float(v)))
                         except: pass
-            typhoon_segs.append({"label":label,"points":pts})
+            typhoon_segs.append({"label":label,"points":pts,"start":st_str})
         except Exception as e:
             pass
     if len(typhoon_segs) >= 4:
@@ -829,6 +832,198 @@ def fetch_typhoon_qpf():
         print(f"  非颱風期間（{len(typhoon_segs)} 段）")
         typhoon_segs = []
     return typhoon_segs
+
+# ── CWA 常態性定量降水預報（48h逐6h，預報員修正版）──────────────────
+# 產品說明文件：https://www.cwa.gov.tw/Data/data_catalog/1-2-4.pdf
+#   平時每日4次（05:30/11:30/17:30/23:30 TST），劇烈天氣期間每3h加發
+#   csv：2.5km 格點，經緯 117.56~123.91 / 20.8~26.65，dlon 0.0245 / dlat 0.0226
+#        260x260=67600 值，排列由南至北、由西至東，座標為 TWD67
+#   檔名：[YYYY-MMDD-hhmm]._00[tau].QPF6h.csv（發布時間為 UTC，tau=預報時長）
+# 介接策略（來源探測；成功後記憶於 CWA_QPF_SRC_FILE，之後直取）：
+#   A. fileapi 指標檔 F-C0035-015/017/023/024（JSON 內含 uri → 下載 zip/csv）
+#   B. fileapi ZIP 掃描 F-C0035-013..030（找 zip 內 *QPF6h*.csv）
+FILEAPI = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi"
+CWA_QPF_SRC_FILE = "cwa_qpf_source.json"
+QPF_GRID = dict(lon0=117.56, lat0=20.8, dlon=0.0245, dlat=0.0226, nx=260, ny=260)
+# TWD67 → WGS84 近似位移（TWD67 經度較小約0.0083°、緯度較大約0.0019°；2.5km格點取最近點足夠）
+TWD67_DLON, TWD67_DLAT = 0.00834, -0.00186
+
+def _qpf_parse_csv_text(text):
+    """解析 2.5km QPF csv：跳過檔頭，收集所有數值；回傳 list（長度須=67600）或 None"""
+    n_need = QPF_GRID['nx'] * QPF_GRID['ny']
+    vals = []
+    for line in text.splitlines():
+        toks = line.replace(',', ' ').split()
+        row = []
+        ok = True
+        for tk in toks:
+            try: row.append(float(tk))
+            except ValueError: ok = False; break
+        if ok and row:
+            vals.extend(row)
+    if len(vals) < n_need:
+        return None
+    if len(vals) > n_need:
+        vals = vals[-n_need:]   # 檔頭若含數字，取尾端網格段
+    return [None if v < 0 else v for v in vals]
+
+def _qpf_grid_at(vals, lat, lng):
+    """town WGS84 座標 → TWD67 → 最近格點值（南→北、西→東 排列）"""
+    g = QPF_GRID
+    lon67 = lng - TWD67_DLON
+    lat67 = lat - TWD67_DLAT
+    ix = round((lon67 - g['lon0']) / g['dlon'])
+    iy = round((lat67 - g['lat0']) / g['dlat'])
+    if ix < 0 or ix >= g['nx'] or iy < 0 or iy >= g['ny']: return None
+    idx = iy * g['nx'] + ix
+    return vals[idx] if idx < len(vals) else None
+
+def _qpf_extract_zip(data, now_tpe):
+    """zip bytes → {start_tpe(datetime): vals}；只取 QPF6h 成員，時間窗由檔名推得"""
+    import zipfile, io, re as _re
+    out = {}
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+    except Exception:
+        return out
+    for name in z.namelist():
+        m = _re.search(r'(\d{4})-(\d{2})(\d{2})-(\d{2})(\d{2})\._0*(\d+)\.QPF6h\.csv$', name)
+        if not m: continue
+        yy, mo, dd, hh, mi, tau = map(int, m.groups())
+        issue_utc = datetime(yy, mo, dd, hh, mi, tzinfo=timezone.utc)
+        end_tpe   = issue_utc + timedelta(hours=8) + timedelta(hours=tau)
+        # 發布時刻為 X:30（05:30/11:30/17:30/23:30 TST），tau 自發布起算，
+        # 實際預報窗對齊 6h 日曆邊界（首段=發布+30分起）→ 就近吸附（容差90分）
+        end_naive = end_tpe.replace(tzinfo=None)
+        day0 = end_naive.replace(hour=0, minute=0, second=0, microsecond=0)
+        off  = (end_naive - day0).total_seconds()
+        snap = round(off / 21600) * 21600
+        if abs(off - snap) <= 5400:
+            end_tpe = day0 + timedelta(seconds=snap)
+            end_tpe = end_tpe.replace(tzinfo=timezone.utc)  # 佔位tz，稍後去除
+        start_tpe = end_tpe - timedelta(hours=6)
+        try:
+            text = z.read(name).decode('utf-8', errors='replace')
+        except Exception:
+            continue
+        vals = _qpf_parse_csv_text(text)
+        if vals:
+            out[start_tpe.replace(tzinfo=None)] = vals
+    return out
+
+def _walk_uris(obj, acc):
+    if isinstance(obj, dict):
+        for v in obj.values(): _walk_uris(v, acc)
+    elif isinstance(obj, list):
+        for v in obj: _walk_uris(v, acc)
+    elif isinstance(obj, str) and obj.startswith('http'):
+        acc.append(obj)
+
+def fetch_cwa_routine_qpf(now_tpe):
+    """常態 48h 逐6h QPF。成功回傳 {'issue':str, 'segs':{start_tpe: vals}}；失敗回 None"""
+    if not CWA_API_KEY: return None
+    print("抓取 CWA 常態 QPF（48h逐6h，預報員修正版）...")
+    # 已知來源優先
+    known = None
+    if os.path.exists(CWA_QPF_SRC_FILE):
+        try:
+            with open(CWA_QPF_SRC_FILE, encoding='utf-8') as f: known = json.load(f)
+        except Exception: known = None
+    pointer_ids = ['F-C0035-015', 'F-C0035-017', 'F-C0035-023', 'F-C0035-024']
+    zip_ids     = [f'F-C0035-{i:03d}' for i in range(13, 31)]
+    plan = []
+    if known: plan.append((known.get('kind'), known.get('id')))
+    plan += [('pointer', i) for i in pointer_ids] + [('zip', i) for i in zip_ids]
+    tried = set()
+    for kind, did in plan:
+        if not did or (kind, did) in tried: continue
+        tried.add((kind, did))
+        try:
+            if kind == 'pointer':
+                r = requests.get(f"{FILEAPI}/{did}", params={'Authorization': CWA_API_KEY,
+                                 'downloadType': 'WEB', 'format': 'JSON'}, timeout=30)
+                if r.status_code != 200:
+                    print(f"    {did} JSON：HTTP {r.status_code}"); continue
+                try:
+                    doc = json.loads(r.content.decode('utf-8', errors='replace'))
+                except Exception:
+                    print(f"    {did} JSON：非JSON內容（{r.content[:60]!r}）"); continue
+                uris = []; _walk_uris(doc, uris)
+                cand = [u for u in uris if '.zip' in u.lower() or 'csv' in u.lower()]
+                if not cand:
+                    png = [u for u in uris if '.png' in u.lower()]
+                    print(f"    {did}：無 zip/csv 連結（{'僅圖檔' if png else '無連結'}），uris={len(uris)}")
+                    continue
+                for u in cand[:3]:
+                    print(f"    {did} → 下載 {u[:90]}")
+                    r2 = requests.get(u, timeout=120)
+                    if r2.status_code != 200: continue
+                    segs = _qpf_extract_zip(r2.content, now_tpe)
+                    if not segs and 'csv' in u.lower():
+                        vals = _qpf_parse_csv_text(r2.content.decode('utf-8', errors='replace'))
+                        # 單一csv缺時間窗資訊，僅在檔名可解析時使用（_qpf_extract_zip已涵蓋）
+                        if vals: print(f"      單檔csv可解析但無時間窗資訊，略過")
+                    if len(segs) >= 4:
+                        with open(CWA_QPF_SRC_FILE, 'w', encoding='utf-8') as f:
+                            json.dump({'kind': kind, 'id': did, 'uri_sample': u[:120]}, f)
+                        print(f"    ✓ 常態QPF：{len(segs)} 段（來源 {did}）")
+                        return {'issue': did, 'segs': segs}
+            else:  # zip 直接探測
+                r = requests.get(f"{FILEAPI}/{did}", params={'Authorization': CWA_API_KEY,
+                                 'downloadType': 'WEB', 'format': 'ZIP'}, timeout=60)
+                if r.status_code != 200 or len(r.content) < 2000: continue
+                if r.content[:2] != b'PK': continue
+                segs = _qpf_extract_zip(r.content, now_tpe)
+                print(f"    {did} ZIP：{len(segs)} 段 QPF6h")
+                if len(segs) >= 4:
+                    with open(CWA_QPF_SRC_FILE, 'w', encoding='utf-8') as f:
+                        json.dump({'kind': kind, 'id': did}, f)
+                    print(f"    ✓ 常態QPF：{len(segs)} 段（來源 {did} ZIP）")
+                    return {'issue': did, 'segs': segs}
+        except Exception as e:
+            print(f"    {did} 例外：{e}")
+    print("    常態QPF：所有來源探測未果（請將以上log貼給開發者比對dataid）")
+    return None
+
+# ── 官方警特報（W-C0033-001 各縣市現行天氣警特報）───────────────────
+WARN_PHEN_LEVEL = {'大雨': 1, '豪雨': 2, '大豪雨': 3, '超大豪雨': 4}
+
+def fetch_official_warnings():
+    """回傳 {'fetched':iso, 'counties':{縣市:{'level':1-4,'phenomena':str,'start':..,'end':..}},
+             'others':{縣市:[非降雨類特報名]}}；失敗回 None"""
+    if not CWA_API_KEY: return None
+    try:
+        r = requests.get(f"{BASE_URL}/W-C0033-001",
+                         params={'Authorization': CWA_API_KEY, 'format': 'JSON'}, timeout=20)
+        r.raise_for_status()
+        raw = r.json()
+        locs = raw.get('records', {}).get('location', [])
+        counties, others = {}, {}
+        for loc in locs:
+            name = loc.get('locationName', '')
+            hz = loc.get('hazardConditions', {}) or {}
+            hazards = hz.get('hazards', [])
+            if isinstance(hazards, dict):  # 有些版本包一層 {'hazard':[...]}
+                hazards = hazards.get('hazard', [])
+            for h in hazards or []:
+                info = h.get('info', {}) or {}
+                phen = info.get('phenomena', '') or ''
+                vt = h.get('validTime', {}) or {}
+                lv = WARN_PHEN_LEVEL.get(phen)
+                if lv:
+                    cur = counties.get(name)
+                    if not cur or lv > cur['level']:
+                        counties[name] = {'level': lv, 'phenomena': phen,
+                                          'start': vt.get('startTime', ''), 'end': vt.get('endTime', '')}
+                elif phen:
+                    others.setdefault(name, [])
+                    if phen not in others[name]: others[name].append(phen)
+        print(f"  官方警特報：{len(counties)} 縣市有豪大雨特報、{len(others)} 縣市有其他特報")
+        return {'fetched': (datetime.now(timezone.utc)+timedelta(hours=8)).strftime('%Y-%m-%dT%H:%M'),
+                'counties': counties, 'others': others}
+    except Exception as e:
+        print(f"  官方警特報抓取失敗：{e}")
+        return None
 
 # ── IDW 空間插值 ──────────────────────────────────
 def idw(lat, lng, pts, seg=None):
@@ -925,6 +1120,25 @@ def main():
     typhoon_segs = fetch_typhoon_qpf() if CWA_API_KEY else []
     is_typhoon   = len(typhoon_segs) >= 4
 
+    # 常態 CWA QPF（非颱風期間的官方預報員修正值；治本預測偏差）
+    routine_qpf = None
+    if not is_typhoon and CWA_API_KEY:
+        try: routine_qpf = fetch_cwa_routine_qpf(now_tpe)
+        except Exception as e: print(f"  常態QPF例外：{e}")
+    # 對齊日曆6h段：idx = (start − 今天00時TST)/6h（qpf_15d[0]=今天00-06 鐵律）
+    _today00 = now_tpe.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    routine_seg_map = {}
+    if routine_qpf:
+        for _st, _vals in routine_qpf['segs'].items():
+            _sec = (_st - _today00).total_seconds()
+            _idx = int(_sec // 21600)
+            if 0 <= _idx < 60 and _sec % 21600 == 0:
+                routine_seg_map[_idx] = _vals
+        print(f"  常態QPF對齊段索引：{sorted(routine_seg_map)}")
+
+    # 官方現行警特報（與系統預估對照，落差可視化）
+    official_warn = fetch_official_warnings() if CWA_API_KEY else None
+
     # Open-Meteo（四個模式）
     om_all, om_max_hourly_all = fetch_openmeteo(static_list)
     om = om_all.get('ecmwf_ifs025', {})  # 預設用 ECMWF IFS，對台灣地形雨準確度較高
@@ -994,20 +1208,40 @@ def main():
         maxh_gfs   = get_max_hourly_model('gfs_seamless')
         maxh_icon  = get_max_hourly_model('icon_seamless')
 
-        # 颱風期間：CWA 格點 QPF 優先覆蓋前8段（48h），其餘時段仍用 Open-Meteo
-        # 同時產出「純CWA」陣列（qpf_cwa：只含CWA的段，有多少算多少，其餘空）
-        qpf_cwa = []
+        # CWA 官方 QPF 覆蓋（颱風 F-C0041 / 常態 48h 逐6h）：
+        #   以「日曆段索引」對齊後覆蓋所有模式（CWA 為最高優先），
+        #   qpf_cwa 為與 qpf_15d 同索引的稀疏陣列（未覆蓋段=null，絕不補值）
+        _cwa_by_idx = {}   # idx -> value
         if is_typhoon and typhoon_segs:
-            for idx in range(min(8, len(qpf_best))):
-                seg_pts = [(p[0],p[1],p[2]) for p in typhoon_segs[idx]["points"]] \
-                          if idx < len(typhoon_segs) else []
-                v = idw(lat, lng, seg_pts, idx) if seg_pts else None
-                if v is not None:
-                    # CWA 為最高優先，所有模式統一覆蓋為 CWA 觀測值
-                    qpf_best[idx] = qpf_ecmwf[idx] = qpf_gfs[idx] = qpf_icon[idx] = v
-                    qpf_cwa.append(v)
-                else:
-                    qpf_cwa.append(0.0)
+            _cur_seg = now_tpe.hour // 6
+            for _i, _seg in enumerate(typhoon_segs):
+                # 優先用 StartTime 對齊；缺則退回「現在起第 i 段」舊索引法
+                _idx = None
+                _sts = _seg.get("start") or ""
+                if _sts:
+                    try:
+                        _sd = datetime.fromisoformat(_sts.replace('Z','')).replace(tzinfo=None)
+                        _s2 = (_sd - _today00).total_seconds()
+                        if _s2 % 21600 == 0: _idx = int(_s2 // 21600)
+                    except Exception: _idx = None
+                if _idx is None: _idx = _cur_seg + _i
+                if not (0 <= _idx < len(qpf_best)): continue
+                _pts = [(p[0],p[1],p[2]) for p in _seg["points"]]
+                _v = idw(lat, lng, _pts, _idx) if _pts else None
+                if _v is not None: _cwa_by_idx[_idx] = _v
+        elif routine_seg_map:
+            for _idx, _vals in routine_seg_map.items():
+                if not (0 <= _idx < len(qpf_best)): continue
+                _v = _qpf_grid_at(_vals, lat, lng)
+                if _v is not None: _cwa_by_idx[_idx] = round(float(_v), 1)
+        qpf_cwa = []
+        if _cwa_by_idx:
+            _max_idx = max(_cwa_by_idx)
+            qpf_cwa = [None] * (_max_idx + 1)
+            for _idx, _v in _cwa_by_idx.items():
+                qpf_cwa[_idx] = _v
+                # 官方值最高優先：覆蓋所有模式（僅未來段；過去段前端一律以觀測為準）
+                qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = qpf_icon[_idx] = _v
 
         # 預設用 best_match（CWA優先 > ECMWF > GFS=ICON 的綜合判斷已含在模式選擇邏輯中）
         qpf15d = qpf_best
@@ -1056,7 +1290,7 @@ def main():
             'qpf_lo':    apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'lo')[0],
             'maxh_hi':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'hi')[1],
             'maxh_lo':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'lo')[1],
-            'bias_24h':  calc_bias_24h(obs.get('daily_rain', [0.0]*8), model_yday.get(f"{lat:.4f}_{lng:.4f}")),
+            'bias_24h':  calc_bias_24h(obs.get('daily_rain', [0.0]*15), model_yday.get(f"{lat:.4f}_{lng:.4f}")),
             'qpesums_1h':  qpesums_at(qp_grid, lat, lng),
             'qpesums_24h': qp_24h.get(f"{county}{township}"),
             'qpf_cwa':   qpf_cwa,
@@ -1073,7 +1307,7 @@ def main():
             'maxh_icon':  maxh_icon,
             'obs_6h':[0.0]*8,
             'stations':  enrich_stations_with_etr2(info.get('stations', []), obs, stations, alert_v),
-            'daily_rain': obs.get('daily_rain', [0.0]*8),  # 過去8天逐日雨量，供前端滾動計算未來ETR2%
+            'daily_rain': obs.get('daily_rain', [0.0]*15),  # 過去15天逐日雨量（過去7日視圖ETR2需回推14天）
         })
 
     # 加入「全台所有行政區」中尚未處理的：用 all_townships.json 為基準
@@ -1168,14 +1402,17 @@ def main():
             'maxh_gfs':  get_ns_maxh('gfs_seamless'), 'maxh_icon': get_ns_maxh('icon_seamless'),
             'warn_seg':  WARN_SEG_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
             'stations':  station_list,
-            'daily_rain': obs.get('daily_rain', [0.0]*8),
+            'daily_rain': obs.get('daily_rain', [0.0]*15),
         })
 
     output={
         'base_time':base_time_str,
         'generated_at':now_tpe.strftime('%Y-%m-%dT%H:%M:%S'),
         'source':'CWA_OBS+POP' if stations else 'DEMO',
-        'cwa_qpf_active': is_typhoon,  # True=前48h已覆蓋CWA F-C0041 QPF（颱風警報期間）
+        'cwa_qpf_active': bool(is_typhoon or routine_seg_map),  # True=前48h已覆蓋CWA官方QPF
+        'cwa_qpf_mode': 'typhoon' if is_typhoon else ('routine' if routine_seg_map else None),
+        'cwa_qpf_segs': sorted(routine_seg_map.keys()) if routine_seg_map else [],
+        'official_warn': official_warn,  # 官方現行警特報（W-C0033-001，縣市級）
         'township_count':len(out_towns),
         'townships':out_towns,
     }

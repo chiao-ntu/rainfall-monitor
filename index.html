@@ -611,12 +611,13 @@ const MODEL_NOTE = {
   icon:  'DWD ICON · 時效 7 天',
   hi:    'CWA+ECMWF × 系集前25%放大倍率（前48h，縣級）',
   lo:    'CWA+ECMWF × 系集後25%縮小倍率（前48h，縣級）',
-  cwa:   '純CWA定量降水（F-C0041，僅颱風警報期間發布）',
+  cwa:   '純CWA官方定量降水預報（颱風期間F-C0041；平時48h逐6h常態版，每日4次預報員修正）',
 };
 let selected = null;
 let townLayer = null, countyLayer = null;
 let _blurOn = false;  // 渲染（邊界漸層）開關
 let _cwaQpfActive = false;  // 前48h是否為CWA QPF覆蓋
+let OFFICIAL_WARN = null;   // 官方現行警特報（W-C0033-001，縣市級；後端每6h更新）
 
 // 右側欄收合/展開
 let sidebarOpen = true;
@@ -685,6 +686,52 @@ function _panelSeg(){
 }
 
 let _prevEtrSet = null;  // 上次警戒清單（偵測新增項目）
+function _etrHistPeaks(){
+  // 近7日 ETR2 峰值備查：過去達標為既定事實，即使現已折減仍留存可查。
+  // 需 daily_rain 回推14天（後端已延長至15天；歷史檔補滿前，較早日期會偏低——誠實限制）
+  const key = forecastModel + '|' + (_biasApplyOn ? _biasFactor : 0) + '|' + (window._dataGenAt || '');
+  if(window._etrHistCache && window._etrHistCache.key === key) return window._etrHistCache.rows;
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const nowSeg = Math.max(0, Math.min(3, Math.floor((Date.now()-SEG_EPOCH().getTime())/216e5)));
+  const rows = [];
+  TOWNSHIPS.forEach(t=>{
+    if(!t.alert_val || t.alert_val <= 0) return;
+    let peak = -1, peakSeg = 0;
+    for(let s=-28; s<=nowSeg; s++){          // 過去7天各6h段＋今天已過段
+      const p = calcEtr2AtSeg(t, s, qpfField) / t.alert_val * 100;
+      if(p > peak){ peak = p; peakSeg = s; }
+    }
+    if(peak >= 70) rows.push({county:t.county, township:t.township,
+                              pct:Math.round(peak), seg:peakSeg});
+  });
+  rows.sort((a,b)=>b.pct-a.pct);
+  window._etrHistCache = {key, rows};
+  return rows;
+}
+
+function _etrHistHtml(curSet){
+  const rows = _etrHistPeaks().filter(x=>!curSet.has(x.county+'|'+x.township));
+  if(!rows.length) return '';
+  const shown = rows.slice(0, 30);
+  let h = `<div style="margin-top:6px"><div style="color:#cc8844;font-size:10px;font-weight:700;
+    padding:3px 2px;border-bottom:1px solid #cc884455;background:#0d1f30"
+    title="過去7天內ETR2%峰值曾達70%、目前已折減至標準以下的鄉鎮（備查留存）。峰值時間為6h段解析。">近7日曾達70%（備查）</div>`;
+  shown.forEach(({county,township,pct,seg})=>{
+    const dt = segTime(seg);
+    const col = etrColor(pct);
+    h += `<div style="display:flex;justify-content:space-between;align-items:center;padding:1px 2px 1px 6px;font-size:10px">
+      <span style="cursor:pointer;text-decoration:underline dotted;color:#8ab8d8"
+        onclick="focusTownship('${county}','${township}')">${county} ${township}</span>
+      <span><span style="color:${col};font-weight:700">${pct}%</span>
+      <span style="color:#5a7a9a;font-size:9px">（${dt.getMonth()+1}/${dt.getDate()}）</span></span>
+    </div>`;
+  });
+  if(rows.length > shown.length)
+    h += `<div style="color:#4a6a8a;font-size:9px;padding:2px 6px">…共 ${rows.length} 處，其餘略</div>`;
+  h += '</div>';
+  return h;
+}
+
 function updateEtrAlertPanel(){
   const body = document.getElementById('etr-panel-body');
   if(!body) return;
@@ -711,7 +758,8 @@ function updateEtrAlertPanel(){
   Object.values(byDistrict).forEach(cMap=>Object.entries(cMap).forEach(([c,items])=>items.forEach(x=>curSet.add(c+'|'+x.township))));
 
   if(!Object.keys(byDistrict).length){
-    body.innerHTML = '<div style="color:#3a6080;font-size:10px;padding:4px 0">目前無達70%以上</div>';
+    body.innerHTML = '<div style="color:#3a6080;font-size:10px;padding:4px 0">目前無達70%以上</div>'
+      + _etrHistHtml(curSet);
     _prevEtrSet = curSet;
     return;
   }
@@ -745,7 +793,7 @@ function updateEtrAlertPanel(){
     });
     h += '</div>';
   });
-  body.innerHTML = h;
+  body.innerHTML = h + _etrHistHtml(curSet);
   _prevEtrSet = curSet;
 }
 function toggleSidebar(){
@@ -1256,10 +1304,18 @@ function renderLayer(){
   });
   townLayer.addTo(map);
 
-  // 縣市邊界（黑色 1px）
+  // 縣市邊界（黑色 1px；警特報模式下有官方特報之縣市改以官方級別色粗虛線框示，
+  // 供「系統預估（面）vs 官方發布（框）」直接對照）
   countyLayer = L.layerGroup();
   COUNTY_GEO.features.forEach(feat=>{
-    const opts={color:'#000000',weight:1,fill:false,opacity:0.7,interactive:false};
+    let opts={color:'#000000',weight:1,fill:false,opacity:0.7,interactive:false};
+    if(mode==='warn' && OFFICIAL_WARN && OFFICIAL_WARN.counties){
+      const w = OFFICIAL_WARN.counties[feat.properties.COUNTYNAME];
+      if(w && w.level > 0){
+        opts = {color: WARN_COLORS[w.level] || '#FFFF00', weight: 3, fill: false,
+                opacity: 0.95, dashArray: '7 5', interactive: false};
+      }
+    }
     const g = feat.geometry;
     if(g.type==='Polygon'){
       L.polygon(g.coordinates.map(toLL),opts).addTo(countyLayer);
@@ -1901,7 +1957,12 @@ function renderLegend(){
         <div style="width:14px;height:10px;border-radius:1px;background:${s.color};
           border:1px solid rgba(0,0,0,.25);flex-shrink:0"></div>
         <span style="color:#111;font-size:10px;font-weight:600">${rangeLabel(sc,i)}</span>
-      </div>`).join('');
+      </div>`).join('')
+      + (mode==='warn' && OFFICIAL_WARN && Object.keys(OFFICIAL_WARN.counties||{}).length
+         ? `<div style="margin-top:3px;padding-top:3px;border-top:1px dashed #999;color:#333;font-size:9px">
+              <span style="display:inline-block;width:14px;border-top:2px dashed #cc8800;vertical-align:middle"></span>
+              縣市虛線框＝官方現行特報</div>`
+         : '');
   }
 }
 
@@ -1936,11 +1997,16 @@ async function tryLoadLive(){
       });
     }
 
-    // CWA QPF 資料來源標示（颱風警報期間前48h為CWA F-C0041覆蓋）
+    // CWA QPF 資料來源標示（颱風 F-C0041 / 常態 48h逐6h 官方QPF覆蓋）
     _cwaQpfActive = !!d.cwa_qpf_active;
+    OFFICIAL_WARN = d.official_warn || null;   // 官方現行警特報（W-C0033-001，縣市級）
+    window._dataGenAt = d.generated_at || '';  // 供各面板快取鍵使用
     const sysNote = document.getElementById('sys-note');   // 獨立元素：不被切換模式洗掉
     if(sysNote && _cwaQpfActive){
-      sysNote.innerHTML = '<span style="color:#ffcc44;font-weight:700">⚡前48h已採用CWA定量降水預報（F-C0041）</span>';
+      const _cm = d.cwa_qpf_mode || 'typhoon';
+      sysNote.innerHTML = _cm === 'routine'
+        ? '<span style="color:#ffcc44;font-weight:700">⚡前48h已採用CWA官方定量降水預報（常態版，每日4次預報員修正）</span>'
+        : '<span style="color:#ffcc44;font-weight:700">⚡前48h已採用CWA定量降水預報（F-C0041颱風）</span>';
     }
 
     // 動態偏差比顯示（昨日觀測/昨日模式，顯示層：僅供人工判讀，不影響任何計算）
@@ -2405,6 +2471,30 @@ function updateDistrictSummary(){
     });
     h += '</tbody></table></div>';
   });
+
+  // ── 官方現行特報（CWA W-C0033-001，縣市級；與上方系統預估對照）──
+  if(OFFICIAL_WARN){
+    const cts = Object.entries(OFFICIAL_WARN.counties || {});
+    h += `<div style="margin:4px 0 6px">
+      <div style="color:#ffcc44;font-size:10px;font-weight:700;padding:3px 2px;
+        border-bottom:1px solid #ffcc4455;background:#0d1f30"
+        title="氣象署現行發布中的豪大雨特報（縣市級，每次資料更新時擷取）。與上方「警特報預估」對照：官方為預報員綜合研判之預警，本系統為QPF逐時判讀之估計。">官方現行特報（${OFFICIAL_WARN.fetched||''} 擷取）</div>`;
+    if(cts.length){
+      cts.sort((a,b)=>b[1].level-a[1].level).forEach(([cty,w])=>{
+        h += `<div style="display:flex;justify-content:space-between;padding:1px 4px;font-size:10px">
+          <span style="color:#8ab8d8">${cty}</span>
+          <span style="color:${WARN_COLORS[w.level]||'#ffcc44'};font-weight:700">${w.phenomena}</span></div>`;
+      });
+    } else {
+      h += `<div style="color:#3a6080;font-size:10px;padding:2px 4px">目前無豪大雨特報</div>`;
+    }
+    const oth = Object.entries(OFFICIAL_WARN.others || {});
+    if(oth.length){
+      h += `<div style="color:#5a7a9a;font-size:9px;padding:2px 4px">其他特報：`+
+        oth.map(([c,ps])=>`${c}(${ps.join('、')})`).join('、') + `</div>`;
+    }
+    h += '</div>';
+  }
 
   body.innerHTML = h;
 }
@@ -3531,18 +3621,27 @@ function _warnLevelAt(t, seg){
   // 24h/3h 滾動可跨越「現在」（未來初段自動計入已下的觀測雨）
   const arr = _warnHourlySeries(t);
   const h0 = seg*6, h1 = seg*6+6;
+  const nowH = Math.max(0, Math.min(23, Math.floor((Date.now()-SEG_EPOCH().getTime())/3600e3)));
+  const nowI = nowH + 48;
   let lv = 0;
   for(let h=h0; h<h1; h++){
     const i = h + 48;
     if(i < 0 || i >= 144) continue;
     const r1 = arr[i];
-    let r3 = 0;  for(let k=Math.max(0,i-2);  k<=i; k++) r3  += arr[k];
-    let r24 = 0; for(let k=Math.max(0,i-23); k<=i; k++) r24 += arr[k];
+    let r3 = 0, r3f = 0;
+    for(let k=Math.max(0,i-2);  k<=i; k++){ r3  += arr[k]; if(k >= nowI) r3f  += arr[k]; }
+    let r24 = 0, r24f = 0;
+    for(let k=Math.max(0,i-23); k<=i; k++){ r24 += arr[k]; if(k >= nowI) r24f += arr[k]; }
+    // 官方警特報為「預警」語義：對未來時刻，持續型門檻（24h/3h累積）須有
+    // 後續實際降雨支撐（雨已下完且未來無雨 → 不對未來段掛警；過去段為既定事實不受限）
+    const isFut  = i >= nowI;
+    const okD24  = !isFut || r24f >= 10;   // 未來部分至少10mm（持續事件）
+    const okD3   = !isFut || r3f  >= 5;
     let L = 0;
-    if(r24 >= 500) L = 4;
-    else if(r24 >= 350 || r3 >= 200) L = 3;
-    else if(r24 >= 200 || r3 >= 100) L = 2;
-    else if(r24 >= 80  || r1 >= 40)  L = 1;
+    if(r24 >= 500 && okD24) L = 4;
+    else if((r24 >= 350 && okD24) || (r3 >= 200 && okD3)) L = 3;
+    else if((r24 >= 200 && okD24) || (r3 >= 100 && okD3)) L = 2;
+    else if((r24 >= 80  && okD24) || r1 >= 40)  L = 1;
     if(L > lv){ lv = L; if(lv === 4) break; }
   }
   return lv;
