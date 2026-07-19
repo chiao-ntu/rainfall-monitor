@@ -477,7 +477,7 @@ function showHyetograph(t, s, e){
   });
 
   // 標題：站別資訊
-  let title = `${s.name}（警戒值 ${hasAlert ? s.alert_val+'mm' : '—'}）｜本站逐時 −48h~+72h`;
+  let title = `${s.name}（警戒值 ${hasAlert ? s.alert_val+'mm' : '—'}）｜過去：本站觀測｜未來：鄉鎮QPF（無站級預報）`;
   if(s.etr2_pct != null) title += `｜本站ETR2% ${Math.round(s.etr2_pct*1000)/10}%`;
   if(!hasStnObs) title += `｜未配對觀測，過去段以鄉鎮回算`;
   document.getElementById('station-pop-title').textContent = title;
@@ -1054,7 +1054,7 @@ function getAccum(t){
   // ── 警特報模式：時間視窗內最高警特報級（0-4）──
   if(mode==='warn'){
     let lv = 0;
-    for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
+    for(let s=segFrom; s<=segTo; s++){   // 過去視窗（負段）同樣判讀——過去超標一樣呈現
       lv = Math.max(lv, _warnLevelAt(t, s));
       if(lv >= 4) break;
     }
@@ -1079,13 +1079,15 @@ function getAccum(t){
 
   // ── 今天（00:00到24:00的整日）──
   if(key_is_today_window(segFrom, segTo)){
-    // 模式感知：以當前模式的今日4段QPF加總（強弱降雨/各模式在今天視窗也生效）；
-    // 該模式無資料時退回 daily_qpf[0]
+    // 今天＝「已實現觀測 + 現在以後的QPF」（純QPF會漏掉已下的雨導致嚴重偏少）
     const qpfArr = getQpfArr(t, qpfField);
-    const segSum = Math.round((qpfArr.slice(0,4).reduce((a,b)=>a+(b||0),0))*10)/10;
+    const nowH = Math.max(0, Math.min(23, Math.floor((Date.now()-SEG_EPOCH().getTime())/3600e3)));
+    const fu = _futuHourly(t);
+    let rest = 0;
+    for(let h=nowH+1; h<24; h++) rest += fu[h]||0;   // 現在整點已計入觀測（Now累積）
+    const obsToday = (t.daily_rain && t.daily_rain[0]!=null) ? t.daily_rain[0] : 0;
     const totalRain = (forecastModel==='cwa' && qpfArr.length===0) ? null   // 純CWA無資料就是無資料
-      : (qpfArr.length >= 4) ? segSum
-      : ((t.daily_qpf && t.daily_qpf[0] != null) ? t.daily_qpf[0] : segSum);
+      : Math.round((obsToday + rest)*10)/10;
     let etrPct = null;
     if(hasEtr){
       const etr2 = calcEtr2AtSeg(t, 3, qpfField);
@@ -1519,20 +1521,36 @@ function _hourlyBars(t){
   const nowH=Math.max(0, Math.min(23, Math.floor((Date.now()-SEG_EPOCH().getTime())/3600e3)));
   const obs=(t.obs_1h_p48||[]);
   const futu=_futuHourly(t);
-  const hFrom=nowH-48, vals=[];
+  const hFrom=nowH-48, vals=[], estMask=[];
   let pastObsN=0;
+  // 缺逐時觀測的小時：以「該日官方日觀測 × 模式時序形狀」分配補齊（總量=官方觀測，
+  // 僅時間分布為近似——不是模式雨量本身），estMask 標記供繪圖以更暗色呈現
+  const p48 = t.qpf_1h_p48 || [];
+  const dayShapeSum = [0,0,0];   // 今天/昨天/前天 形狀和（僅缺觀測槽計入）
+  const dayObsCovered = [0,0,0]; // 已由逐時觀測覆蓋的量（避免與分配雙算）
+  for(let h=hFrom; h<nowH; h++){
+    const oi = 48 + (h - nowH);
+    const di = h>=0 ? 0 : (h>=-24 ? 1 : 2);
+    if(oi>=0 && oi<48 && obs[oi]!=null) dayObsCovered[di] += obs[oi];
+    else dayShapeSum[di] += (p48[Math.max(0,oi)]||0) + 0.02;   // +0.02 避免全0形狀
+  }
   for(let h=hFrom; h<nowH+72; h++){
     if(h < nowH){
-      // 「過去」＝現在以前的所有小時（含今天00時~現在），一律官方觀測
-      // obs[47]=上一完整小時；索引錨定「現在」：oi = 48+(h-nowH)
       const oi = 48 + (h - nowH);
-      const v = obs[oi];
-      if(v!=null){ vals.push(v); pastObsN++; }
-      else vals.push(null);
+      const di = h>=0 ? 0 : (h>=-24 ? 1 : 2);
+      const v = (oi>=0 && oi<48) ? obs[oi] : null;
+      if(v!=null){ vals.push(v); estMask.push(false); pastObsN++; }
+      else{
+        const dayObs = ((t.daily_rain||[])[di]||0);
+        const remain = Math.max(0, dayObs - dayObsCovered[di]);
+        const w = dayShapeSum[di] > 0 ? ((p48[Math.max(0,oi)]||0)+0.02)/dayShapeSum[di] : 0;
+        vals.push(Math.round(remain*w*100)/100);
+        estMask.push(true);
+      }
     }
-    else vals.push(futu[h]||0);
+    else{ vals.push(futu[h]||0); estMask.push(false); }
   }
-  return {vals, hFrom, nowIdx:48, nowH, pastObsN};
+  return {vals, hFrom, nowIdx:48, nowH, pastObsN, estMask};
 }
 
 // 逐時 ETR2 序列（hFrom..hTo，h=距今天00的小時數，可負）——前綴和優化+觀測錨定+權重連續內插
@@ -1633,11 +1651,12 @@ function _drawHourlyChart(t, canvasId, isZoom){
   }
 
   // 長條（過去=暗色；≥40mm/h 紅框警示，zoom才有數值標籤）
+  const _em=(_hourlyBars(t).estMask)||[];
   for(let h=0;h<n;h++){
-    if(vals[h]==null){ continue; }   // 過去段觀測缺值：空白（不以模式值充當）
+    if(vals[h]==null){ continue; }
     const v=vals[h]||0;
     const x=pL+h*bw, bh=ch*v/axisMax;
-    ctx.globalAlpha = h<nowIdx ? 0.45 : 1.0;
+    ctx.globalAlpha = h<nowIdx ? (_em[h] ? 0.26 : 0.5) : 1.0;   // 分配槽更暗
     ctx.fillStyle = districtColor;
     ctx.fillRect(x+bw*0.12, pT+ch-bh, bw*0.76, bh);
     if(v>=40 && isZoom){
@@ -1695,7 +1714,9 @@ function _drawHourlyChart(t, canvasId, isZoom){
   ctx.fillStyle='#9fc8e8'; ctx.textAlign='left';
   const approxTag=_hourlyAvailable(t)?'':'（段內分布為近似）';
   const _bObj=_hourlyBars(t);
-  const pastTag=_bObj.pastObsN>0?'※過去48h為QPESUMS官方觀測（暗色）':'※過去48h觀測資料累積中（空白）';
+  const pastTag=_bObj.pastObsN>=40?'※過去48h為QPESUMS官方觀測（暗色）'
+    :_bObj.pastObsN>0?'※過去48h：QPESUMS觀測＋缺時段以日觀測分配（最暗）'
+    :'※過去48h以官方日觀測分配呈現（逐時觀測累積中）';
   ctx.fillText(`左軸：時雨量(mm/h)${approxTag}　${pastTag}`, pL, axTitleY);
   ctx.fillStyle='#e8e8e8'; ctx.textAlign='right';
   ctx.fillText('右軸：ETR2%（逐時）', pL+cw, axTitleY);
@@ -1926,9 +1947,10 @@ async function tryLoadLive(){
     if(d.bias_24h_median != null && sysNote){
       const b = d.bias_24h_median;
       _biasFactor = Math.max(0.5, Math.min(3, b));   // 限幅供修正套用
-      const col = b >= 2 ? '#ff6644' : b >= 1.3 ? '#ffcc44' : b <= 0.7 ? '#66bbff' : '#88aa88';
-      const tag = b >= 1.3 ? '模式低估中' : b <= 0.7 ? '模式高估中' : '模式大致準確';
-      sysNote.innerHTML += `${sysNote.innerHTML?' · ':''}<span style="color:${col}" title="昨日觀測雨量÷昨日模式雨量（僅統計模式昨日≥10mm的 ${d.bias_24h_n} 個鄉鎮）。">24h偏差比 ${b}×（${tag}，n=${d.bias_24h_n}）</span>`+
+      const col = b >= 1.5 ? '#ff6644' : b >= 1.1 ? '#ffcc44' : b <= 0.67 ? '#66bbff' : b <= 0.9 ? '#88ccee' : '#88aa88';
+      const tag = b >= 1.5 ? `模式明顯低估（觀測≈模式×${b}）` : b >= 1.1 ? '模式偏低'
+                : b <= 0.67 ? '模式明顯高估' : b <= 0.9 ? '模式偏高' : '模式大致準確';
+      sysNote.innerHTML += `${sysNote.innerHTML?' · ':''}<span style="color:${col}" title="昨日觀測雨量÷昨日模式雨量（僅統計模式昨日≥10mm的 ${d.bias_24h_n} 個鄉鎮）。分母為模式回算、分子為觀測歷史記錄——若歷史正在重建（obs_history剛清除），此值可能失真，僅供人工判讀。">24h偏差比 ${b}×（${tag}，n=${d.bias_24h_n}）</span>`+
         `<button id="bias-apply-btn" class="b" onclick="toggleBiasApply()" style="margin-left:6px;font-size:10px;padding:1px 6px" `+
         `title="開啟後所有預測值（地圖/圖表/ETR2/風險/左右狀態列）×${_biasFactor}（限幅0.5~3）。純CWA模式不受影響。可隨時關閉還原。">⚙套用修正 ×${_biasFactor}</button>`;
     }
@@ -2396,10 +2418,14 @@ function _summaryRain(t){
     return (v!=null) ? v : null;
   }
   if(key_is_today_window(segFrom, segTo)){
+    // 與 getAccum 同公式：已實現觀測 + 現在後QPF
     const qa = getQpfArr(t, qpfField);
-    if(qa.length >= 4) return Math.round(qa.slice(0,4).reduce((a,b)=>a+(b||0),0)*10)/10;
-    if(forecastModel==='cwa') return null;   // 純CWA：無資料不補值
-    return (t.daily_qpf && t.daily_qpf[0]!=null) ? t.daily_qpf[0] : null;
+    if(forecastModel==='cwa' && qa.length===0) return null;   // 純CWA：無資料不補值
+    const nowH = Math.max(0, Math.min(23, Math.floor((Date.now()-SEG_EPOCH().getTime())/3600e3)));
+    const fu = _futuHourly(t);
+    let rest = 0;
+    for(let h=nowH+1; h<24; h++) rest += fu[h]||0;
+    return Math.round((((t.daily_rain||[])[0]||0) + rest)*10)/10;
   }
   const qa = getQpfArr(t, qpfField);
   let tot=0;
@@ -2699,7 +2725,7 @@ function _drawDistrictHourlyChart(cv, isZoom){
   const axTitleY=pT+ch+xLabelH+axTitleH*0.72;
   ctx.font=`${axFs}px sans-serif`;
   ctx.fillStyle='#9fc8e8'; ctx.textAlign='left';
-  ctx.fillText('左軸：時雨量(mm/h，署內鄉鎮最大)　※過去48h為QPESUMS官方觀測（暗色）', pL, axTitleY);
+  ctx.fillText('左軸：時雨量(mm/h，署內鄉鎮最大)　※過去48h為官方觀測（QPESUMS逐時/日觀測分配，暗色）', pL, axTitleY);
   ctx.fillStyle='#e8e8e8'; ctx.textAlign='right';
   ctx.fillText('右軸：ETR2%（逐時，署內最大）', pL+cw, axTitleY);
 
@@ -3461,28 +3487,65 @@ const WARN_COLORS = ['', '#FFFF00', '#FF8C00', '#FF0000', '#CC00CB'];
 
 // 該6h段的預估警特報級別（0-4）
 // 優先用後端逐時精確掃描（warn_seg），無則以6h資料估計
-function _warnLevelAt(t, seg){
-  if(seg < 0) return 0;
-  // 後端精確（逐時滾動 1h/3h/24h）— 僅 best_match 資料
-  if(forecastModel === 'best' && Array.isArray(t.warn_seg) && t.warn_seg.length > seg){
-    return t.warn_seg[seg] || 0;
+function _warnHourlySeries(t){
+  // 警特報統一逐時序列 hAbs∈[-48,96)（144槽）：過去=官方觀測（QPESUMS逐時；
+  // 缺逐時觀測時以該日官方日觀測均攤——總量守恆），未來=_futuHourly（權威段值分配）
+  const ck = forecastModel + '|' + (_biasApplyOn ? _biasFactor : 0);
+  if(t._whCache && t._whKey === ck) return t._whCache;
+  const nowH = Math.max(0, Math.min(23, Math.floor((Date.now()-SEG_EPOCH().getTime())/3600e3)));
+  const obs = t.obs_1h_p48 || [];
+  const arr = new Array(144).fill(0);
+  for(let h=-48; h<nowH; h++){
+    const oi = 48 + (h - nowH);
+    let v = (oi>=0 && oi<48 && obs[oi]!=null) ? obs[oi] : null;
+    if(v == null){
+      const dayIdx = h>=0 ? 0 : (h>=-24 ? 1 : 2);
+      v = ((t.daily_rain||[])[dayIdx]||0) / 24;
+    }
+    arr[h+48] = v;
   }
-  // 6h 估計 fallback：
-  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
-  const qa = getQpfArr(t, qpfField);
-  const maxhField = 'maxh_' + qpfField.replace('qpf_','');
-  const mh = (t[maxhField]||[])[seg] || 0;
-  // 24h 滾動（4個6h段，6h對齊，精確）
-  let r24 = 0;
-  for(let s=Math.max(0,seg-3); s<=seg; s++) r24 += qa[s]||0;
-  // 3h 估計：max(最大時雨量×2.2, 該段總量×0.6)
-  const est3h = Math.max(mh*2.2, (qa[seg]||0)*0.6);
-  const r1 = mh;
-  if(r24 >= 500) return 4;
-  if(r24 >= 350 || est3h >= 200) return 3;
-  if(r24 >= 200 || est3h >= 100) return 2;
-  if(r24 >= 100 || r1 >= 40) return 1;
-  return 0;
+  const fu = _futuHourly(t);
+  for(let h=Math.max(0,nowH); h<96; h++) arr[h+48] = fu[h]||0;
+  // 日總量校核：QPESUMS逐時和若嚴重低於官方日觀測（<50%，對位/品質異常），
+  // 該日改以日觀測均攤——警特報判讀以官方日觀測為底線，寧保守不漏報
+  const _days=[[0, 0, nowH], [1, -24, 0], [2, -48, -24]];
+  for(const [di, h0, h1] of _days){
+    const dayObs = ((t.daily_rain||[])[di]||0);
+    const nh = h1 - h0;
+    if(dayObs < 1 || nh <= 0) continue;
+    let s = 0; for(let h=h0; h<h1; h++) s += arr[h+48];
+    if(s < dayObs*0.5){
+      for(let h=h0; h<h1; h++) arr[h+48] = dayObs/nh;
+    }
+  }
+  t._whCache = arr; t._whKey = ck;
+  return arr;
+}
+
+function _warnLevelAt(t, seg){
+  // CWA 現行警特報標準（用戶指定，逐時滾動精確判讀，過去/未來一致）：
+  //   大雨    80mm/24h 或 40mm/1h
+  //   豪雨   200mm/24h 或 100mm/3h
+  //   大豪雨 350mm/24h 或 200mm/3h
+  //   超大豪雨 500mm/24h
+  // 24h/3h 滾動可跨越「現在」（未來初段自動計入已下的觀測雨）
+  const arr = _warnHourlySeries(t);
+  const h0 = seg*6, h1 = seg*6+6;
+  let lv = 0;
+  for(let h=h0; h<h1; h++){
+    const i = h + 48;
+    if(i < 0 || i >= 144) continue;
+    const r1 = arr[i];
+    let r3 = 0;  for(let k=Math.max(0,i-2);  k<=i; k++) r3  += arr[k];
+    let r24 = 0; for(let k=Math.max(0,i-23); k<=i; k++) r24 += arr[k];
+    let L = 0;
+    if(r24 >= 500) L = 4;
+    else if(r24 >= 350 || r3 >= 200) L = 3;
+    else if(r24 >= 200 || r3 >= 100) L = 2;
+    else if(r24 >= 80  || r1 >= 40)  L = 1;
+    if(L > lv){ lv = L; if(lv === 4) break; }
+  }
+  return lv;
 }
 
 // 從 seg 起未來24h（4個6h段）內的最高警特報級
