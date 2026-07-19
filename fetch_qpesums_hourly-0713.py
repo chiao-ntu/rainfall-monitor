@@ -16,7 +16,7 @@ HIST_FILE    = "qpesums_history.json"
 TOWNS_FILE   = "all_townships.json"
 # 網格參數（與 fetch_rainfall.py 保持一致）
 QP_LON0, QP_LAT0, QP_D, QP_NX, QP_NY = 118.0, 20.0, 0.0125, 441, 561
-KEEP_HOURS   = 50   # 保留50小時（過去48h逐時觀測+24h合成餘裕）
+KEEP_HOURS   = 30   # 保留30小時（24h合成留餘裕）
 
 
 def fetch_grid():

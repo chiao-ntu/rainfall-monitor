@@ -473,7 +473,7 @@ function showHyetograph(t, s, e){
   // 站別偽鄉鎮：ETR2 以「本站觀測+本站警戒值」計算（QPF沿用鄉鎮，無站級預報）
   const pseudoT = Object.assign({}, t, {
     alert_val: hasAlert ? s.alert_val : 0,
-    daily_rain: sObs.length ? sObs : (t.daily_rain||[]),
+    daily_rain: hasStnObs ? sObs : (t.daily_rain||[]),   // 有站觀測才用；全0視為未配對→退鄉鎮
   });
 
   // 標題：站別資訊
@@ -493,22 +493,27 @@ function showHyetograph(t, s, e){
   // 逐時資料：未來=鄉鎮QPF（同主圖權威源）；過去段=本站日觀測×鄉鎮時序形狀（站別量級）
   const {vals, hFrom, nowIdx}=_hourlyBars(t);
   if(hasStnObs){
-    const p48 = t.qpf_1h_p48 || [];
-    // p48[0..23]=前天、[24..47]=昨天；hFrom=nowH-48 → vals[i] 的 hAbs=hFrom+i，hAbs<0 屬過去
+    // 形狀源：官方觀測（obs_1h_p48）優先；量級=本站日觀測。缺形狀時該槽空白
+    const shp = (t.obs_1h_p48 && t.obs_1h_p48.some(v=>v!=null)) ? t.obs_1h_p48 : null;
     for(let i=0; i<nowIdx; i++){
       const hAbs = hFrom + i;
-      if(hAbs >= 0) break;
-      const pIdx = 48 + hAbs;                       // p48 索引
-      const dayIdx = hAbs >= -24 ? 1 : 2;           // 昨天=1、前天=2
-      const dayStart = dayIdx===1 ? 24 : 0;
-      let dSum = 0;
-      for(let k=dayStart; k<dayStart+24; k++) dSum += p48[k]||0;
-      const w = dSum > 0.05 ? (p48[pIdx]||0)/dSum : 1/24;
+      if(!shp){ vals[i]=null; continue; }
+      const dayIdx = hAbs >= 0 ? 0 : (hAbs >= -24 ? 1 : 2);   // 今天/昨天/前天
+      // 該日曆日在觀測序列內的槽範圍
+      let dSum = 0, cnt = 0;
+      for(let k=0; k<nowIdx; k++){
+        const kAbs = hFrom + k;
+        const kd = kAbs >= 0 ? 0 : (kAbs >= -24 ? 1 : 2);
+        if(kd !== dayIdx) continue;
+        if(shp[k]!=null){ dSum += shp[k]; cnt++; }
+      }
+      if(shp[i]==null){ vals[i]=null; continue; }
+      const w = dSum > 0.05 ? shp[i]/dSum : (cnt>0 ? 1/cnt : 0);
       vals[i] = Math.round((sObs[dayIdx]||0) * w * 100)/100;
     }
   }
   const n=vals.length, bw=cw/n;
-  const axisMax=Math.max(ceilTo10(Math.max(...vals)),10);
+  const axisMax=Math.max(ceilTo10(Math.max(...vals.map(v=>v||0))),10);
   const etr = hasAlert ? _etr2HourlySeries(pseudoT, hFrom, hFrom+n-1) : null;
   const axisMaxEtr=Math.max(ceilTo10(Math.max(...(etr||[10]),10)),10);
 
@@ -531,6 +536,7 @@ function showHyetograph(t, s, e){
   // 逐時長條（過去暗色，分署色）
   const dColor=getDistrictColor(t.county);
   for(let h=0;h<n;h++){
+    if(vals[h]==null) continue;   // 觀測缺值：空白
     const v=vals[h]||0;
     if(v<=0) continue;
     ctx.globalAlpha = h<nowIdx ? 0.45 : 1.0;
@@ -1227,7 +1233,7 @@ function renderLayer(){
         let rainLabel;
         if(winKey === 'today'){
           // 今天：只顯示全天累積雨量（00-24時QPF）、ETR2%、風險指標
-          const dayRain = (t.daily_qpf && t.daily_qpf[0]!=null) ? t.daily_qpf[0] : null;
+          const dayRain = totalRain;   // 與地圖著色同一權威值（getAccum，模式感知）
           tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
             `全天累積雨量：${dayRain!=null?dayRain+' mm':'—'}<br>`+
             `ETR2%：${etrStr}<br>`+
@@ -1434,8 +1440,13 @@ function _townChartData(t, type, qpfField){
   if(type==='daily'){
     const nDays=16;
     const rain=[], etr=[], labels=[];
+    const _qa = getQpfArr(t, qpfField);
     for(let d=0;d<nDays;d++){
-      rain.push((t.daily_qpf||[])[d]||0);
+      // 模式感知日和（4段/日）；資料尾端超出段陣列時退 daily_qpf（舊資料相容）
+      const _ds = _qa.slice(d*4, d*4+4);
+      const _dv = _ds.length===4 ? Math.round(_ds.reduce((a,b)=>a+(b||0),0)*10)/10
+                                 : ((t.daily_qpf||[])[d]||0);
+      rain.push(_dv);
       let e=0;
       if(t.alert_val>0){
         const v=calcEtr2AtSeg(t, d*4+3, qpfField);
@@ -1502,17 +1513,26 @@ function _futuHourly(t){
   }
   return out;   // 96h；∑每6h == 地圖段值
 }
-// 120槽逐時長條（過去48h模式回算 + 未來72h）：回 {vals, hFrom, nowIdx}
+// 120槽逐時長條（過去48h＝CWA官方QPESUMS觀測 + 未來72h QPF）：回 {vals, hFrom, nowIdx, pastObsN}
+// ★過去是既定事實，只用官方觀測（obs_1h_p48）；缺值以 null 空白呈現，絕不以模式回算充當觀測
 function _hourlyBars(t){
   const nowH=Math.max(0, Math.min(23, Math.floor((Date.now()-SEG_EPOCH().getTime())/3600e3)));
-  const past=(t.qpf_1h_p48||[]);
+  const obs=(t.obs_1h_p48||[]);
   const futu=_futuHourly(t);
   const hFrom=nowH-48, vals=[];
+  let pastObsN=0;
   for(let h=hFrom; h<nowH+72; h++){
-    if(h<0) vals.push(past.length ? (past[48+h]||0) : 0);
+    if(h < nowH){
+      // 「過去」＝現在以前的所有小時（含今天00時~現在），一律官方觀測
+      // obs[47]=上一完整小時；索引錨定「現在」：oi = 48+(h-nowH)
+      const oi = 48 + (h - nowH);
+      const v = obs[oi];
+      if(v!=null){ vals.push(v); pastObsN++; }
+      else vals.push(null);
+    }
     else vals.push(futu[h]||0);
   }
-  return {vals, hFrom, nowIdx:48, nowH};
+  return {vals, hFrom, nowIdx:48, nowH, pastObsN};
 }
 
 // 逐時 ETR2 序列（hFrom..hTo，h=距今天00的小時數，可負）——前綴和優化+觀測錨定+權重連續內插
@@ -1584,7 +1604,7 @@ function _drawHourlyChart(t, canvasId, isZoom){
   const pB=xLabelH+axTitleH+(isZoom?30:8);
   const cw=W-pL-pR, ch=H-pT-pB;
   const bw=cw/n;
-  const axisMax=Math.max(ceilTo10(Math.max(...vals, 1)), 10);
+  const axisMax=Math.max(ceilTo10(Math.max(...vals.map(v=>v||0), 1)), 10);
   const districtColor=getDistrictColor(t.county);
 
   // 逐時 ETR2%（全程 120 點）
@@ -1614,6 +1634,7 @@ function _drawHourlyChart(t, canvasId, isZoom){
 
   // 長條（過去=暗色；≥40mm/h 紅框警示，zoom才有數值標籤）
   for(let h=0;h<n;h++){
+    if(vals[h]==null){ continue; }   // 過去段觀測缺值：空白（不以模式值充當）
     const v=vals[h]||0;
     const x=pL+h*bw, bh=ch*v/axisMax;
     ctx.globalAlpha = h<nowIdx ? 0.45 : 1.0;
@@ -1656,18 +1677,16 @@ function _drawHourlyChart(t, canvasId, isZoom){
   const ep=SEG_EPOCH();
   ctx.font=`${xFs}px sans-serif`; ctx.textAlign='center';
   const step=isZoom?6:12;
-  let _lastDate=null;
-  for(let i=0;i<n;i+=step){
-    const hAbs=hFrom+i;
-    const dt=new Date(ep.getTime()+hAbs*3600e3);
+  for(let i=0;i<n;i++){
+    const dt=new Date(ep.getTime()+(hFrom+i)*3600e3);
+    const hh=dt.getHours();
+    if(hh%step!==0 && i!==0) continue;   // 標籤對齊整點；00時必有日期
     const x=pL+i*bw+bw/2;
-    const dStr=`${dt.getMonth()+1}/${dt.getDate()}`;
     ctx.fillStyle='#5a88aa';
-    ctx.fillText(`${String(dt.getHours()).padStart(2,'0')}時`, x, pT+ch+(isZoom?38:xFs+6));
-    if(dStr!==_lastDate){   // 跨日或首格：第二行標日期
+    ctx.fillText(`${String(hh).padStart(2,'0')}時`, x, pT+ch+(isZoom?38:xFs+6));
+    if(hh===0 || i===0){
       ctx.fillStyle='#8ab8d8';
-      ctx.fillText(dStr, x, pT+ch+(isZoom?38:xFs+6)+xFs+6);
-      _lastDate=dStr;
+      ctx.fillText(`${dt.getMonth()+1}/${dt.getDate()}`, x, pT+ch+(isZoom?38:xFs+6)+xFs+6);
     }
   }
   // 軸標題（位置同前）
@@ -1675,7 +1694,9 @@ function _drawHourlyChart(t, canvasId, isZoom){
   ctx.font=`${axFs}px sans-serif`;
   ctx.fillStyle='#9fc8e8'; ctx.textAlign='left';
   const approxTag=_hourlyAvailable(t)?'':'（段內分布為近似）';
-  ctx.fillText(`左軸：時雨量(mm/h)${approxTag}　※過去48h為模式回算（暗色）`, pL, axTitleY);
+  const _bObj=_hourlyBars(t);
+  const pastTag=_bObj.pastObsN>0?'※過去48h為QPESUMS官方觀測（暗色）':'※過去48h觀測資料累積中（空白）';
+  ctx.fillText(`左軸：時雨量(mm/h)${approxTag}　${pastTag}`, pL, axTitleY);
   ctx.fillStyle='#e8e8e8'; ctx.textAlign='right';
   ctx.fillText('右軸：ETR2%（逐時）', pL+cw, axTitleY);
 
@@ -1812,12 +1833,14 @@ function drawDistrictHyetograph(t){
 }
 
 function drawSegs(t){
-  const segs = (t.qpf_15d||[]).slice(0,8);
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const segs = getQpfArr(t, qpfField).slice(0,8);   // 模式感知（與地圖/圖表同權威源）
   const maxV = Math.max(...segs, 1);
   const el = document.getElementById('seg-rows');
   if(!el) return;
   el.innerHTML = segs.map((v,i)=>{
-    const ep  = (t.seg_etr_pct||[])[i];
+    let ep = null;
+    if(t.alert_val>0){ ep = Math.round(calcEtr2AtSeg(t,i,qpfField)/t.alert_val*100); }
     const col = mode==='rain' ? rainColor(v) : (ep!=null ? etrColor(ep) : '#ccddee');
     const bw  = Math.round(v/maxV*100);
     const t0  = segTime(i);
@@ -2402,7 +2425,9 @@ function _calcDistrictDaily(qpfField){
     for(let d=0;d<nDays;d++){
       let mxR=0,mxE=0;
       TOWNSHIPS.filter(t=>counties.includes(t.county)).forEach(t=>{
-        mxR=Math.max(mxR,(t.daily_qpf||[])[d]||0);
+        const _ds=getQpfArr(t,qpfField).slice(d*4,d*4+4);
+        const _dv=_ds.length===4?_ds.reduce((a,b)=>a+(b||0),0):((t.daily_qpf||[])[d]||0);
+        mxR=Math.max(mxR,Math.round(_dv*10)/10);
         if(t.alert_val>0){const e=calcEtr2AtSeg(t,d===0?3:d*4+3,qpfField);mxE=Math.max(mxE,Math.round(e/t.alert_val*100));}
       });
       rr.push(mxR);er.push(mxE);gMR=Math.max(gMR,mxR);gME=Math.max(gME,mxE);
@@ -2657,26 +2682,24 @@ function _drawDistrictHourlyChart(cv, isZoom){
   // X軸
   const ep=SEG_EPOCH();
   ctx.font=`${xFs}px sans-serif`; ctx.textAlign='center';
-  const step=isZoom?6:24;
-  for(let i=0;i<n;i+=step){
+  const step=isZoom?6:12;
+  for(let i=0;i<n;i++){
     const dt=new Date(ep.getTime()+(hFrom+i)*3600e3);
+    const hh=dt.getHours();
+    if(hh%step!==0 && i!==0) continue;   // 標籤對齊整點；00時必有日期
     const x=pL+i*grpW+grpW/2;
     ctx.fillStyle='#5a88aa';
-    if(isZoom){
-      ctx.fillText(`${String(dt.getHours()).padStart(2,'0')}時`, x, pT+ch+38);
-      if(dt.getHours()===0||i===0){
-        ctx.fillStyle='#8ab8d8';
-        ctx.fillText(`${dt.getMonth()+1}/${dt.getDate()}`, x, pT+ch+38+xFs+8);
-      }
-    } else {
-      ctx.fillText(`${dt.getMonth()+1}/${dt.getDate()}`, x, pT+ch+xFs+8);
+    ctx.fillText(`${String(hh).padStart(2,'0')}時`, x, pT+ch+(isZoom?38:xFs+6));
+    if(hh===0 || i===0){
+      ctx.fillStyle='#8ab8d8';
+      ctx.fillText(`${dt.getMonth()+1}/${dt.getDate()}`, x, pT+ch+(isZoom?38:xFs+6)+xFs+6);
     }
   }
   // 軸標題
   const axTitleY=pT+ch+xLabelH+axTitleH*0.72;
   ctx.font=`${axFs}px sans-serif`;
   ctx.fillStyle='#9fc8e8'; ctx.textAlign='left';
-  ctx.fillText('左軸：時雨量(mm/h，署內鄉鎮最大)　※過去48h為模式回算（暗色）', pL, axTitleY);
+  ctx.fillText('左軸：時雨量(mm/h，署內鄉鎮最大)　※過去48h為QPESUMS官方觀測（暗色）', pL, axTitleY);
   ctx.fillStyle='#e8e8e8'; ctx.textAlign='right';
   ctx.fillText('右軸：ETR2%（逐時，署內最大）', pL+cw, axTitleY);
 
@@ -2773,6 +2796,7 @@ function showChartTooltip(evt, canvasId){
     const arr=_b.vals, _hF=_b.hFrom, _nP=_b.nowIdx;
     const pL=170, pR=160, cw=W-pL-pR, bw=cw/arr.length;  // 與 _drawHourlyChart(zoom) 一致
     const hIdx=Math.floor((cx-pL)/bw);
+    if(arr[hIdx]===null){ tip.style.display='none'; return; }   // 觀測缺值槽不顯示
     let tip2 = document.getElementById('chart-hover-tip');
     if(!tip2){
       tip2 = document.createElement('div');

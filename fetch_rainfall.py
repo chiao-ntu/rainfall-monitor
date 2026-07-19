@@ -630,6 +630,27 @@ def load_qpesums_history():
     return out
 
 
+def load_qpesums_p48():
+    """QPESUMS 逐時觀測 → 每鄉鎮過去48h逐時序列（[0]=48小時前，[47]=上一完整小時；缺值None）。
+    官方觀測資料（O-A0038-001雷達整合網格），供前端逐時圖過去段——絕不以模式回算充當觀測。"""
+    if not os.path.exists(QPESUMS_HIST):
+        return {}
+    try:
+        with open(QPESUMS_HIST, encoding='utf-8') as f:
+            hist = json.load(f)
+    except Exception:
+        return {}
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    # 槽 i 對應的小時鍵：now-48+i（取整小時；最後一槽=上一完整小時）
+    keys = [(now - timedelta(hours=48-i)).strftime('%Y-%m-%dT%H') for i in range(48)]
+    out = {}
+    for tkey, hours in hist.items():
+        arr = [hours.get(k) for k in keys]
+        if any(v is not None for v in arr):
+            out[tkey] = [None if v is None else round(v,1) for v in arr]
+    return out
+
+
 # ── 系集強弱降雨比值（縣級） ──────────────────────
 ENSEMBLE_API = "https://ensemble-api.open-meteo.com/v1/ensemble"
 
@@ -912,7 +933,9 @@ def main():
     print("抓取 QPESUMS 網格觀測...")
     qp_grid = fetch_qpesums_grid()
     qp_24h  = load_qpesums_history()
+    qp_p48  = load_qpesums_p48()
     if qp_24h: print(f"    QPESUMS 24h 歷史：{len(qp_24h)} 個鄉鎮")
+    if qp_p48: print(f"    QPESUMS 逐時觀測 p48：{len(qp_p48)} 個鄉鎮")
 
     # 系集強弱降雨比值（縣級）+ 昨日模式偏差比
     time.sleep(2)
@@ -1040,6 +1063,7 @@ def main():
             'qpf_1h_cwa': [],  # CWA無逐時定量降水，維持空（前端逐時圖自動退回）
             'qpf_1h':    HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
             'qpf_1h_p48': PAST48_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
+            'obs_1h_p48': qp_p48.get(f"{county}{township}", []),   # 官方QPESUMS逐時觀測（過去48h）
             'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'hi'),
             'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'lo'),
             'warn_seg':  WARN_SEG_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
@@ -1137,6 +1161,7 @@ def main():
             'qpf_1h_cwa': [],
             'qpf_1h':    HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
             'qpf_1h_p48': PAST48_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
+            'obs_1h_p48': qp_p48.get(f"{at['county']}{at['township']}", []),
             'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'hi'),
             'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'lo'),
             'maxh_best': get_ns_maxh('best_match'),  'maxh_ecmwf': get_ns_maxh('ecmwf_ifs025'),
