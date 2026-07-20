@@ -58,6 +58,28 @@ def fetch_grid():
     if ny: QP_NY = int(ny)
     print(f"網格參數: lon0={QP_LON0} lat0={QP_LAT0} d={QP_D} {QP_NX}x{QP_NY}")
 
+    # ── 修復 v6.1：優先嘗試「內嵌網格」（同 fetch_rainfall.py，7/20 ProductURL 事件）──
+    def _longest_str(o, best=''):
+        if isinstance(o, dict):
+            for v in o.values(): best = _longest_str(v, best)
+        elif isinstance(o, list):
+            for v in o: best = _longest_str(v, best)
+        elif isinstance(o, str) and len(o) > len(best):
+            best = o
+        return best
+    blob = _longest_str(ds)
+    if blob and len(blob) > 100000:
+        vals = []
+        for tok in blob.replace(',', ' ').split():
+            try: v = float(tok)
+            except ValueError: continue
+            vals.append(None if v < 0 else v)
+        print(f"內嵌網格：{len(vals)} 值（期望 {QP_NX*QP_NY}）")
+        if QP_NX*QP_NY*0.9 <= len(vals) <= QP_NX*QP_NY:
+            return vals
+        if len(vals) > QP_NX*QP_NY:
+            return vals[-QP_NX*QP_NY:]
+
     # ProductURL（可能是 dict / list / 直接字串）
     if isinstance(res, list):
         res = res[0] if res else {}

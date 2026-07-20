@@ -2002,6 +2002,7 @@ async function tryLoadLive(){
     OFFICIAL_WARN = d.official_warn || null;   // 官方現行警特報（W-C0033-001，縣市級）
     window._dataGenAt = d.generated_at || '';  // 供各面板快取鍵使用
     const sysNote = document.getElementById('sys-note');   // 獨立元素：不被切換模式洗掉
+    if(sysNote) sysNote.innerHTML = '';   // 每次載入重建（避免自動更新時重複追加）
     if(sysNote && _cwaQpfActive){
       const _cm = d.cwa_qpf_mode || 'typhoon';
       sysNote.innerHTML = _cm === 'routine'
@@ -3619,6 +3620,32 @@ function _warnLevelAt(t, seg){
   //   大豪雨 350mm/24h 或 200mm/3h
   //   超大豪雨 500mm/24h
   // 24h/3h 滾動可跨越「現在」（未來初段自動計入已下的觀測雨）
+  // ── 範圍延伸：逐時序列僅覆蓋 -48h~+96h（seg -8..15），視窗外改用段值/日值判讀 ──
+  // 遠未來（>96h）：6h段值權威 + maxh 時雨量（量綱同 _disasterHits：3h≈max(mh×2.2, 段×0.6)）
+  if(seg >= 16){
+    const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+    const qa = getQpfArr(t, qpfField);
+    const maxhArr = t['maxh_' + qpfField.replace('qpf_','')] || [];
+    let r24 = 0;                                  // 含該段的所有 4 段滾動窗取最大
+    for(let s0 = seg-3; s0 <= seg; s0++){
+      let s = 0;
+      for(let k = Math.max(0,s0); k < s0+4 && k < qa.length; k++) s += qa[k] || 0;
+      if(s > r24) r24 = s;
+    }
+    const mh = maxhArr[seg] || 0;
+    const r3 = Math.max(mh*2.2, (qa[seg]||0)*0.6);
+    if(r24 >= 500) return 4;
+    if(r24 >= 350 || r3 >= 200) return 3;
+    if(r24 >= 200 || r3 >= 100) return 2;
+    if(r24 >= 80  || mh >= 40)  return 1;
+    return 0;
+  }
+  // 遠過去（<-48h）：僅有官方日觀測 → 只判 24h 門檻（時雨量/3h無資料，寧缺勿估）
+  if(seg < -8){
+    const dayIdx = Math.ceil(Math.abs(seg)/4);   // seg -9..-12→day2 … -25..-28→day7
+    const d = ((t.daily_rain||[])[dayIdx]) || 0;
+    return d >= 500 ? 4 : d >= 350 ? 3 : d >= 200 ? 2 : d >= 80 ? 1 : 0;
+  }
   const arr = _warnHourlySeries(t);
   const h0 = seg*6, h1 = seg*6+6;
   const nowH = Math.max(0, Math.min(23, Math.floor((Date.now()-SEG_EPOCH().getTime())/3600e3)));

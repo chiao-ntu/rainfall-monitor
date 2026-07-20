@@ -572,12 +572,40 @@ def fetch_qpesums_grid():
         if ny: QP_NY = int(ny)
         if isinstance(res, list): res = res[0] if res else {}
         url = res.get('ProductURL') if isinstance(res, dict) else (res if isinstance(res, str) else None)
+
+        # ── 修復 v6.1：優先嘗試「內嵌網格」──
+        # 有版本的 O-A0038-001 直接把網格放在 dataset 內（Contents/Content/ContentText），
+        # ProductURL 反而指向非網格內容（7/20 事件：下載後僅解析出52值）。
+        # 策略：遞迴找出 dataset 中最長字串，若數值token數達標即為網格。
+        def _longest_str(o, best=''):
+            if isinstance(o, dict):
+                for v in o.values(): best = _longest_str(v, best)
+            elif isinstance(o, list):
+                for v in o: best = _longest_str(v, best)
+            elif isinstance(o, str) and len(o) > len(best):
+                best = o
+            return best
+        blob = _longest_str(ds)
+        if blob and len(blob) > 100000:
+            vals = []
+            for tok in blob.replace(',', ' ').split():
+                try: v = float(tok)
+                except ValueError: continue
+                vals.append(None if v < 0 else v)
+            print(f"    QPESUMS 內嵌網格：{len(vals)} 值（期望 {QP_NX*QP_NY}）")
+            if QP_NX*QP_NY*0.9 <= len(vals) <= QP_NX*QP_NY:
+                return vals
+            if len(vals) > QP_NX*QP_NY:
+                print(f"    內嵌值多於網格數，取尾端網格段")
+                return vals[-QP_NX*QP_NY:]
         if not url:
-            print("    QPESUMS 找不到 ProductURL")
+            print("    QPESUMS 找不到 ProductURL 且無內嵌網格")
             return None
+        print(f"    QPESUMS ProductURL：{str(url)[:100]}")
         r2 = requests.get(url, timeout=120)
         r2.raise_for_status()
         data = r2.content
+        print(f"    下載：{len(data)} bytes，Content-Type={r2.headers.get('Content-Type','?')[:40]}，開頭={data[:60]!r}")
         if data[:2] == b'PK':
             import zipfile, io
             with zipfile.ZipFile(io.BytesIO(data)) as z:
@@ -920,70 +948,158 @@ def _walk_uris(obj, acc):
         acc.append(obj)
 
 def fetch_cwa_routine_qpf(now_tpe):
-    """常態 48h 逐6h QPF。成功回傳 {'issue':str, 'segs':{start_tpe: vals}}；失敗回 None"""
+    """常態 48h 逐6h QPF。成功回傳 {'issue':str, 'segs':{start_tpe: vals}}；失敗回 None
+    v6.1 探測策略（依 7/20 首跑 log 修訂：F-C0035-015/017/023/024 指標檔僅含 PNG uri）：
+      A. 已知來源（cwa_qpf_source.json）直取
+      B. 廣域指標檔掃描 F-C0035-001..030 + F-C0041-001..016（fileapi JSON→列出全部 uri，
+         下載任何 zip 檢視成員名單、csv 逐一嘗試）——一次跑完即可確定 dataid 版圖
+      C. 全部僅圖檔時：下載 QPF PNG 存 qpf_sample.png（log 尺寸），供像素校正；
+         校正參數 QPF_PNG_CALIB 填入後改走色塊判讀（decode_qpf_png）
+    """
     if not CWA_API_KEY: return None
     print("抓取 CWA 常態 QPF（48h逐6h，預報員修正版）...")
-    # 已知來源優先
     known = None
     if os.path.exists(CWA_QPF_SRC_FILE):
         try:
             with open(CWA_QPF_SRC_FILE, encoding='utf-8') as f: known = json.load(f)
         except Exception: known = None
-    pointer_ids = ['F-C0035-015', 'F-C0035-017', 'F-C0035-023', 'F-C0035-024']
-    zip_ids     = [f'F-C0035-{i:03d}' for i in range(13, 31)]
-    plan = []
-    if known: plan.append((known.get('kind'), known.get('id')))
-    plan += [('pointer', i) for i in pointer_ids] + [('zip', i) for i in zip_ids]
-    tried = set()
-    for kind, did in plan:
-        if not did or (kind, did) in tried: continue
-        tried.add((kind, did))
+
+    def _try_zip_bytes(data, did, note=''):
+        segs = _qpf_extract_zip(data, now_tpe)
+        if len(segs) >= 4:
+            with open(CWA_QPF_SRC_FILE, 'w', encoding='utf-8') as f:
+                json.dump({'kind': 'zip', 'id': did, 'note': note[:120]}, f)
+            print(f"    ✓ 常態QPF：{len(segs)} 段（來源 {did} {note[:60]}）")
+            return {'issue': did, 'segs': segs}
+        return None
+
+    scan_ids = ([known['id']] if known and known.get('id') else []) \
+             + [f'F-C0035-{i:03d}' for i in range(1, 31)] \
+             + [f'F-C0041-{i:03d}' for i in range(1, 17)]
+    seen, png_uris = set(), []
+    for did in scan_ids:
+        if did in seen: continue
+        seen.add(did)
         try:
-            if kind == 'pointer':
-                r = requests.get(f"{FILEAPI}/{did}", params={'Authorization': CWA_API_KEY,
-                                 'downloadType': 'WEB', 'format': 'JSON'}, timeout=30)
-                if r.status_code != 200:
-                    print(f"    {did} JSON：HTTP {r.status_code}"); continue
+            r = requests.get(f"{FILEAPI}/{did}", params={'Authorization': CWA_API_KEY,
+                             'downloadType': 'WEB', 'format': 'JSON'}, timeout=20)
+            if r.status_code != 200:
+                continue   # 不存在的 dataid 靜默跳過（避免log爆量）
+            body = r.content
+            if body[:2] == b'PK':          # 直接就是 zip
+                got = _try_zip_bytes(body, did, 'fileapi直出zip')
+                if got: return got
+                import zipfile as _zf, io as _io
                 try:
-                    doc = json.loads(r.content.decode('utf-8', errors='replace'))
-                except Exception:
-                    print(f"    {did} JSON：非JSON內容（{r.content[:60]!r}）"); continue
-                uris = []; _walk_uris(doc, uris)
-                cand = [u for u in uris if '.zip' in u.lower() or 'csv' in u.lower()]
-                if not cand:
-                    png = [u for u in uris if '.png' in u.lower()]
-                    print(f"    {did}：無 zip/csv 連結（{'僅圖檔' if png else '無連結'}），uris={len(uris)}")
-                    continue
-                for u in cand[:3]:
-                    print(f"    {did} → 下載 {u[:90]}")
+                    names = _zf.ZipFile(_io.BytesIO(body)).namelist()[:5]
+                    print(f"    {did}=zip 成員：{names}")
+                except Exception: pass
+                continue
+            try:
+                doc = json.loads(body.decode('utf-8', errors='replace'))
+            except Exception:
+                print(f"    {did}：非JSON（{body[:50]!r}）"); continue
+            uris = []; _walk_uris(doc, uris)
+            if not uris: continue
+            # 完整列出 uri（探測版圖的關鍵情報）
+            for u in uris[:4]:
+                print(f"    {did} uri: {u[:110]}")
+            for u in uris:
+                ul = u.lower()
+                if '.zip' in ul or ('csv' in ul and '.png' not in ul):
                     r2 = requests.get(u, timeout=120)
                     if r2.status_code != 200: continue
-                    segs = _qpf_extract_zip(r2.content, now_tpe)
-                    if not segs and 'csv' in u.lower():
-                        vals = _qpf_parse_csv_text(r2.content.decode('utf-8', errors='replace'))
-                        # 單一csv缺時間窗資訊，僅在檔名可解析時使用（_qpf_extract_zip已涵蓋）
-                        if vals: print(f"      單檔csv可解析但無時間窗資訊，略過")
-                    if len(segs) >= 4:
-                        with open(CWA_QPF_SRC_FILE, 'w', encoding='utf-8') as f:
-                            json.dump({'kind': kind, 'id': did, 'uri_sample': u[:120]}, f)
-                        print(f"    ✓ 常態QPF：{len(segs)} 段（來源 {did}）")
-                        return {'issue': did, 'segs': segs}
-            else:  # zip 直接探測
-                r = requests.get(f"{FILEAPI}/{did}", params={'Authorization': CWA_API_KEY,
-                                 'downloadType': 'WEB', 'format': 'ZIP'}, timeout=60)
-                if r.status_code != 200 or len(r.content) < 2000: continue
-                if r.content[:2] != b'PK': continue
-                segs = _qpf_extract_zip(r.content, now_tpe)
-                print(f"    {did} ZIP：{len(segs)} 段 QPF6h")
-                if len(segs) >= 4:
-                    with open(CWA_QPF_SRC_FILE, 'w', encoding='utf-8') as f:
-                        json.dump({'kind': kind, 'id': did}, f)
-                    print(f"    ✓ 常態QPF：{len(segs)} 段（來源 {did} ZIP）")
-                    return {'issue': did, 'segs': segs}
+                    if r2.content[:2] == b'PK':
+                        got = _try_zip_bytes(r2.content, did, u.rsplit('/',1)[-1])
+                        if got: return got
+                        import zipfile as _zf, io as _io
+                        try:
+                            names = _zf.ZipFile(_io.BytesIO(r2.content)).namelist()[:6]
+                            print(f"      zip 成員（非QPF6h）：{names}")
+                        except Exception: pass
+                elif '.png' in ul:
+                    png_uris.append((did, u))
         except Exception as e:
             print(f"    {did} 例外：{e}")
-    print("    常態QPF：所有來源探測未果（請將以上log貼給開發者比對dataid）")
+
+    # ── C. 僅圖檔 → 色塊判讀路徑 ──
+    if png_uris:
+        did, u = png_uris[0]
+        try:
+            r = requests.get(u, timeout=60)
+            if r.status_code == 200 and r.content[:8] == b'\x89PNG\r\n\x1a\n':
+                with open('qpf_sample.png', 'wb') as f: f.write(r.content)
+                import struct
+                w, h = struct.unpack('>II', r.content[16:24])   # IHDR
+                print(f"    已存 qpf_sample.png（{w}x{h}，{len(r.content)//1024}KB，來源 {did}）")
+                if QPF_PNG_CALIB:
+                    segs = decode_qpf_png(r.content, did, now_tpe)
+                    if segs and len(segs) >= 1:
+                        print(f"    ✓ 常態QPF（PNG色塊判讀）：{len(segs)} 段")
+                        return {'issue': did + ':png', 'segs': segs}
+                else:
+                    print(f"    QPF_PNG_CALIB 未設定——請將 qpf_sample.png 交給開發者做像素校正後啟用色塊判讀")
+        except Exception as e:
+            print(f"    PNG 取樣失敗：{e}")
+    print("    常態QPF：格點資料探測未果（以上 uri 清單請貼給開發者）")
     return None
+
+# ── QPF PNG 色塊判讀（校正後啟用）─────────────────────────────────
+# 校正參數：由 qpf_sample.png 人工比對兩個已知經緯的像素點求仿射轉換。
+# 格式：{'px0':像素x, 'py0':像素y, 'lon0':經度, 'lat0':緯度, 'dppx':度/像素x, 'dppy':度/像素y(向下為負),
+#        'window_hours':12, 'bands':[(R,G,B,代表值mm), ...]}
+# bands 依樣張圖例逐格取色填入（代表值取級距下界，保守），tol 為色距容忍。
+QPF_PNG_CALIB = None
+
+def decode_qpf_png(png_bytes, did, now_tpe):
+    """PNG 色塊 → 各鄉鎮 QPF 值。需 Pillow（workflow 加 pip install pillow）。
+    回傳 {start_tpe: '__png_town_map__'} 形式？——否：回傳與網格路徑同構，
+    以「虛擬網格」包裝：直接產出 town 座標查值函式無法塞回既有管線，
+    故此處輸出 260x260 虛擬網格（逐格反查像素）以沿用 _qpf_grid_at。"""
+    c = QPF_PNG_CALIB
+    if not c: return None
+    try:
+        from PIL import Image
+        import io as _io
+    except ImportError:
+        print("    需要 Pillow：請在 workflow 安裝 pip install pillow")
+        return None
+    img = Image.open(_io.BytesIO(png_bytes)).convert('RGB')
+    W, H = img.size
+    px = img.load()
+    g = QPF_GRID
+    bands = c.get('bands') or []
+    tol = c.get('tol', 30)
+    vals = [None] * (g['nx'] * g['ny'])
+    for iy in range(g['ny']):
+        lat67 = g['lat0'] + iy * g['dlat']
+        lat = lat67 + TWD67_DLAT   # TWD67→WGS84 反轉換（與 _qpf_grid_at 的正轉換互逆）
+        for ix in range(g['nx']):
+            lon67 = g['lon0'] + ix * g['dlon']
+            lon = lon67 + TWD67_DLON
+            x = int(round(c['px0'] + (lon - c['lon0']) / c['dppx']))
+            y = int(round(c['py0'] + (lat - c['lat0']) / c['dppy']))
+            if x < 0 or x >= W or y < 0 or y >= H: continue
+            rgb = px[x, y]
+            best, bd = None, tol * tol * 3 + 1
+            for (br, bg2, bb, bv) in bands:
+                d = (rgb[0]-br)**2 + (rgb[1]-bg2)**2 + (rgb[2]-bb)**2
+                if d < bd: bd, best = d, bv
+            if best is not None and bd <= tol * tol * 3:
+                vals[iy * g['nx'] + ix] = float(best)
+    # 時間窗：PNG 為 12h 產品（0-12h 起）；以「發布批次」推定，
+    # 均分為兩個 6h 段（12h 值 ÷2）——色塊判讀本質為近似，log 明示
+    wh = int(c.get('window_hours', 12))
+    base = now_tpe.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+    base = base + timedelta(hours=(6 - base.hour % 6) % 6)   # 下一個 6h 邊界
+    segs = {}
+    n_seg = max(1, wh // 6)
+    half = [None if v is None else round(v / n_seg, 1) for v in vals]
+    for k in range(n_seg):
+        segs[base + timedelta(hours=6 * k)] = half
+    print(f"    PNG判讀：{sum(1 for v in vals if v is not None)}/{len(vals)} 格有值，{n_seg} 段（12h均分近似）")
+    return segs
+
 
 # ── 官方警特報（W-C0033-001 各縣市現行天氣警特報）───────────────────
 WARN_PHEN_LEVEL = {'大雨': 1, '豪雨': 2, '大豪雨': 3, '超大豪雨': 4}
