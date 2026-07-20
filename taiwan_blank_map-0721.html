@@ -14,37 +14,6 @@ body{font-family:sans-serif;background:#fff;display:flex;height:100vh;position:r
 #toolbar h3{font-size:12px;color:#7bd0f0;border-bottom:1px solid #2a4a6a;padding-bottom:5px}
 #map{flex:1}
 .color-btn{padding:7px 8px;border:3px solid rgba(0,0,0,0.2);border-radius:5px;cursor:pointer;font-size:12px;font-weight:700;margin:2px 0;text-align:center;transition:all 0.1s;user-select:none}
-#cal-panel{width:300px;flex-shrink:0;height:100%;background:#0a1828;border-left:1px solid #2a4a6a;
-  display:flex;flex-direction:column;transition:width .2s}
-#cal-panel.collapsed{width:0;overflow:hidden;border-left:none}
-#cal-head{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;
-  font-size:12px;color:#7bd0f0;font-weight:700;border-bottom:1px solid #2a4a6a;flex-shrink:0}
-#cal-close{cursor:pointer;color:#e88;font-size:14px;padding:0 4px}
-#cal-close:hover{color:#f66}
-#cal-body{flex:1;overflow-y:auto;padding:10px;font-size:11px;color:#cde}
-.cal-sect{color:#e8b878;font-weight:700;border-top:1px solid #2a4a6a;margin:8px 0 4px;padding-top:6px;font-size:11px}
-.cal-hint{color:#7a92a8;font-size:10px;margin-bottom:5px;line-height:1.4}
-.cape-btn{width:100%;padding:6px 8px;border:3px solid rgba(0,0,0,0.2);border-radius:5px;cursor:pointer;
-  font-size:11px;font-weight:700;margin:3px 0;text-align:left;background:#12283a;color:#9ab8cc;
-  transition:all 0.1s;user-select:none;display:flex;justify-content:space-between;align-items:center}
-.cape-btn:hover:not(.done):not(.active){transform:translateY(-1px);border-color:#7bd0f0;color:#cde}
-.cape-btn.active{border-color:#fff!important;outline:2px solid #fff;background:#1a3a4a;color:#fff;
-  transform:translateY(1px);box-shadow:inset 0 2px 5px rgba(0,0,0,0.5)}
-.cape-btn.done{background:#173a2a;border-color:#5a9a6a;color:#8ed8a0}
-.cape-btn .cape-st{font-size:14px}
-.cal-btn{width:100%;padding:7px;border:3px solid;border-radius:5px;cursor:pointer;font-size:11px;
-  font-weight:700;background:#12283a;text-align:center;margin:3px 0;transition:all 0.1s;user-select:none}
-.cal-btn:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.25)}
-.cal-btn:active:not(:disabled){transform:translateY(1px);box-shadow:inset 0 2px 5px rgba(0,0,0,0.5)}
-.cal-btn:disabled{opacity:0.4;cursor:not-allowed}
-.cal-btn.on{border-color:#fff!important;outline:2px solid #fff}
-#imgcv-wrap{position:relative;width:100%;height:230px;background:#071018;border:1px solid #2a4a6a;
-  border-radius:4px;overflow:hidden;cursor:grab;margin-bottom:4px}
-#imgcv-wrap.grabbing{cursor:grabbing}
-#imgcv-wrap.picking{cursor:crosshair}
-#imgcv{position:absolute;transform-origin:0 0;image-rendering:pixelated;top:0;left:0}
-.cal-sw{display:flex;align-items:center;gap:5px;margin:2px 0}
-.cal-sw select{flex:1;background:#0d1f30;color:#cde;border:1px solid #2a4a6a;font-size:10px;padding:1px}
 .color-btn.active{transform:translateY(2px);box-shadow:inset 0 3px 7px rgba(0,0,0,0.55);border-color:#fff!important;outline:2px solid #fff}
 .color-btn:hover:not(.active){transform:translateY(-1px);box-shadow:0 2px 5px rgba(0,0,0,0.3)}
 .action-btn{width:100%;padding:5px;border:1px solid;border-radius:4px;cursor:pointer;font-size:11px;background:none;text-align:center;margin-top:2px;color:inherit}
@@ -89,20 +58,13 @@ body{font-family:sans-serif;background:#fff;display:flex;height:100vh;position:r
   <button class="action-btn" style="border-color:#446;color:#8ae" onclick="document.getElementById('csv-import-input').click()">⬆ 匯入 CSV</button>
   <button class="action-btn" id="blur-btn" style="border-color:#3a7a8a;color:#7ad8e8" onclick="toggleBlurRender()">✨ 渲染</button>
   <input type="file" id="csv-import-input" accept=".csv" style="display:none" onchange="importCSV(this)">
-  <button class="action-btn" style="border-color:#7a5a3a;color:#e8b878" onclick="document.getElementById('img-import-input').click()" title="匯入定量降雨圖/郵票圖等PNG，四點校正後自動判讀色塊為鄉鎮著色">🖼 匯入圖檔判讀</button>
+  <button class="action-btn" style="border-color:#7a5a3a;color:#e8b878" onclick="document.getElementById('img-import-input').click()" title="匯入定量降雨圖/郵票圖等PNG，兩點校正後自動判讀色塊為鄉鎮著色">🖼 匯入圖檔判讀</button>
   <input type="file" id="img-import-input" accept="image/png,image/jpeg,image/gif" style="display:none" onchange="importImage(this)">
+  <button class="action-btn" id="img-ov-btn" style="border-color:#5a5a3a;color:#c8c878;display:none" onclick="toggleImgOverlay()">🗺 底圖疊合</button>
   <div style="font-size:10px;color:#3a6080;margin-top:6px">已上色：<span id="cnt" style="color:#aaccee">0</span> 個</div>
 </div>
 <div id="tb-strip" class="edge-strip" onclick="toggleToolbar()" title="收合/展開工具列">◀</div>
 <div id="map"></div>
-<div id="cal-strip" class="edge-strip" onclick="toggleCalPanel()" title="收合/展開圖檔校正面板" style="display:none">◀</div>
-<div id="cal-panel" style="display:none">
-  <div id="cal-head">
-    <span>🖼 圖檔判讀校正</span>
-    <span id="cal-close" onclick="closeImgCalib()" title="關閉並移除匯入圖檔">✕</span>
-  </div>
-  <div id="cal-body"></div>
-</div>
 <div id="ros-strip" class="edge-strip" onclick="toggleRosterPanel()" title="收合/展開分署清單">▶</div>
 <div id="roster">
   <div id="roster-head">
@@ -974,18 +936,25 @@ function toggleBlurRender(){
 }
 
 // ════════════════════════════════════════════════════════════════
-//  匯入圖檔判讀 v2：PNG（定量降水預報/郵票圖等）→ 四點海岬校正（單應性，
-//  修正氣象署底圖的透視/投影變形）→ 各鄉鎮取樣色塊多數決 → 統一七色階著色。
-//  面板停靠右側、可長條收合、可重複套用/疊合；圖檔可拖曳、置中縮放。
+//  匯入圖檔判讀：PNG（定量降雨圖/郵票圖等）→ 兩點地標校正 → 色彩對照
+//  → 各鄉鎮取樣（質心+4輔助點多數決）→ 以統一七色階著色
+//  設計原則：不內建任何來源色表（各產品色階不一），由使用者對照指定；
+//  校正採軸對齊仿射（小範圍等經緯圖適用）；可疊合底圖目視驗證校正。
 // ════════════════════════════════════════════════════════════════
-// 台灣本島四極點（權威經緯度，寫死；圖檔判讀專用校正錨）
-const CAPES = [
-  {id:'N', name:'富貴角（極北）', lat:25.2977, lng:121.5366},
-  {id:'E', name:'三貂角（極東）', lat:25.0074, lng:122.0017},
-  {id:'S', name:'鵝鑾鼻（極南）', lat:21.8968, lng:120.8585},
-  {id:'W', name:'國聖燈塔（極西）', lat:23.1008, lng:120.0358},
+const IMG_LANDMARKS = [
+  {name:'富貴角（最北）',    lat:25.2977, lng:121.5366},
+  {name:'三貂角（最東）',    lat:25.0076, lng:122.0018},
+  {name:'鵝鑾鼻（最南）',    lat:21.9019, lng:120.8535},
+  {name:'臺北車站',          lat:25.0478, lng:121.5170},
+  {name:'臺中車站',          lat:24.1372, lng:120.6866},
+  {name:'高雄車站',          lat:22.6394, lng:120.3025},
+  {name:'花蓮車站',          lat:23.9933, lng:121.6011},
+  {name:'臺東車站',          lat:22.7933, lng:121.1230},
+  {name:'澎湖馬公',          lat:23.5654, lng:119.5664},
+  {name:'自訂（手動輸入）',  lat:null,   lng:null},
 ];
-let IMG = null;   // {img,W,H,px,zoom,ox,oy,pick,caps:{N:{x,y}...},H3,swatches}
+let IMG = null;   // {img,W,H,px,p1,p2,calib,swatches,armed,zoom}
+let _imgOverlay = null, _imgOverlayOn = false, _imgOverlayUrl = null, _imgOverlayBounds = null;
 
 function importImage(input){
   const file = input.files && input.files[0];
@@ -1002,333 +971,259 @@ function importImage(input){
     let px;
     try{ px = ctx.getImageData(0,0,cv.width,cv.height).data; }
     catch(e){ alert('無法讀取像素（'+e+'）'); return; }
-    IMG = {img, W:cv.width, H:cv.height, px, zoom:1, ox:0, oy:0, pick:null,
-           caps:{}, H3:null, swatches:_imgSwatches(px, cv.width, cv.height)};
-    _openCalPanel();
+    IMG = {img, W:cv.width, H:cv.height, px, p1:null, p2:null, calib:null,
+           swatches:_imgExtractSwatches(px, cv.width, cv.height), armed:0, zoom:1};
+    _imgOpenModal();
   };
   img.onerror = ()=>{ URL.revokeObjectURL(url); alert('圖檔載入失敗'); };
   img.src = url;
 }
 
-function _imgSwatches(px, W, H){
+function _imgExtractSwatches(px, W, H){
+  // 量化取主色（每通道8階），排除近白/近黑/低飽和灰（多為底圖/框線/文字）
   const cnt = {};
-  const stride = Math.max(1, Math.round(Math.sqrt(W*H/400000)));
-  for(let y=0; y<H; y+=stride) for(let x=0; x<W; x+=stride){
-    const i=(y*W+x)*4, a=px[i+3]; if(a<128) continue;
-    const r=px[i], g=px[i+1], b=px[i+2];
-    const mx=Math.max(r,g,b), mn=Math.min(r,g,b);
-    if(mx>235 && mn>225) continue;      // 近白（底圖）
-    if(mx<28) continue;                  // 近黑（框線/文字）
-    if(mx-mn<22) continue;               // 低飽和灰
-    const q=((r>>5)<<6)|((g>>5)<<3)|(b>>5);
-    (cnt[q]=cnt[q]||{n:0,r:0,g:0,b:0}); const c=cnt[q]; c.n++; c.r+=r; c.g+=g; c.b+=b;
+  const stride = Math.max(1, Math.round(Math.sqrt(W*H/400000)));  // 取樣上限約40萬點
+  for(let y=0; y<H; y+=stride){
+    for(let x=0; x<W; x+=stride){
+      const i = (y*W+x)*4;
+      const a = px[i+3]; if(a < 128) continue;
+      const r = px[i], g = px[i+1], b = px[i+2];
+      const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
+      if(mx > 235 && mn > 225) continue;          // 近白（底）
+      if(mx < 28) continue;                        // 近黑（框線/文字）
+      if(mx - mn < 22) continue;                   // 低飽和灰
+      const q = ((r>>5)<<6) | ((g>>5)<<3) | (b>>5);
+      if(!cnt[q]) cnt[q] = {n:0, r:0, g:0, b:0};
+      const c = cnt[q]; c.n++; c.r+=r; c.g+=g; c.b+=b;
+    }
   }
-  return Object.values(cnt).sort((a,b)=>b.n-a.n).slice(0,16).filter(c=>c.n>=30).map(c=>{
-    const r=Math.round(c.r/c.n), g=Math.round(c.g/c.n), b=Math.round(c.b/c.n);
-    return {r,g,b,n:c.n, hex:'#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join(''),
-            assign:_imgGuess(r,g,b)};
-  });
+  const list = Object.values(cnt).sort((a,b)=>b.n-a.n).slice(0, 14)
+    .filter(c=>c.n >= 30)
+    .map(c=>{
+      const r=Math.round(c.r/c.n), g=Math.round(c.g/c.n), b=Math.round(c.b/c.n);
+      return {r, g, b, n:c.n,
+        hex:'#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join(''),
+        assign:_imgGuess(r,g,b)};
+    });
+  return list;
 }
 function _imgGuess(r,g,b){
+  // 預設猜測：最近統一色階（使用者可改/設忽略）
   let best='', bd=Infinity;
   COLORS.forEach(c=>{
     const cr=parseInt(c.hex.slice(1,3),16), cg=parseInt(c.hex.slice(3,5),16), cb=parseInt(c.hex.slice(5,7),16);
-    const d=(r-cr)**2+(g-cg)**2+(b-cb)**2;
+    const d=(r-cr)*(r-cr)+(g-cg)*(g-cg)+(b-cb)*(b-cb);
     if(d<bd){ bd=d; best=c.hex; }
   });
-  return bd<=150*150*3 ? best : '';
+  return bd <= 150*150*3 ? best : '';
 }
 
-// ── 面板 ──────────────────────────────────────────────
-function _openCalPanel(){
-  document.getElementById('cal-strip').style.display='';
-  const panel=document.getElementById('cal-panel');
-  panel.style.display=''; panel.classList.remove('collapsed');
-  document.getElementById('cal-strip').textContent='▶';
-  _renderCalBody();
-  requestAnimationFrame(()=>{ _fitImgView(); _drawImgCanvas(); });
-}
-function toggleCalPanel(){
-  const panel=document.getElementById('cal-panel');
-  const collapsed=panel.classList.toggle('collapsed');
-  document.getElementById('cal-strip').textContent = collapsed ? '◀' : '▶';
-  if(!collapsed) requestAnimationFrame(()=>{ _drawImgCanvas(); });
-}
-function closeImgCalib(){
-  if(_imgOverlay){ map.removeLayer(_imgOverlay); _imgOverlay=null; }
-  _imgOverlayOn=false;
-  IMG=null;
-  document.getElementById('cal-panel').style.display='none';
-  document.getElementById('cal-strip').style.display='none';
-}
-function _renderCalBody(){
-  const capeBtns = CAPES.map(c=>{
-    const done = IMG.caps[c.id];
-    return `<div class="cape-btn ${done?'done':''}" id="cape-${c.id}" onclick="_pickCape('${c.id}')">
-      <span>${c.name}</span>
-      <span class="cape-st">${done?'✓':'◎'}</span></div>`;
-  }).join('');
-  const nDone = Object.keys(IMG.caps).length;
+function _imgOpenModal(){
+  let m = document.getElementById('img-modal');
+  if(m) m.remove();
+  m = document.createElement('div');
+  m.id = 'img-modal';
+  m.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(4,10,18,.92);display:flex;font-family:inherit';
+  const lmOpts = IMG_LANDMARKS.map((l,i)=>`<option value="${i}">${l.name}</option>`).join('');
   const swHtml = IMG.swatches.length ? IMG.swatches.map((s,i)=>`
-    <div class="cal-sw">
+    <div style="display:flex;align-items:center;gap:5px;margin:2px 0">
       <div style="width:20px;height:14px;background:${s.hex};border:1px solid #555;flex-shrink:0" title="${s.hex}（${s.n}點）"></div>
-      <select onchange="IMG.swatches[${i}].assign=this.value">
+      <select onchange="IMG.swatches[${i}].assign=this.value" style="flex:1;background:#0d1f30;color:#cde;border:1px solid #2a4a6a;font-size:10px">
         <option value="">— 忽略 —</option>
         ${COLORS.map(c=>`<option value="${c.hex}" ${s.assign===c.hex?'selected':''}>${c.label}</option>`).join('')}
-      </select></div>`).join('') : '<div style="color:#a66;font-size:10px">未偵測到彩色色塊</div>';
-  document.getElementById('cal-body').innerHTML = `
-    <div id="imgcv-wrap">
-      <canvas id="imgcv"></canvas>
+      </select>
+    </div>`).join('') : '<div style="color:#a66;font-size:10px">未偵測到彩色色塊</div>';
+  m.innerHTML = `
+    <div style="flex:1;overflow:auto;position:relative;background:#111" id="img-cv-wrap">
+      <canvas id="img-cv" style="cursor:crosshair;image-rendering:pixelated"></canvas>
     </div>
-    <div style="display:flex;gap:4px;margin-bottom:4px">
-      <button class="cal-btn" style="border-color:#556;color:#aac;flex:1" onclick="_imgZoom(1/1.3)">－</button>
-      <button class="cal-btn" style="border-color:#556;color:#aac;flex:1" onclick="_imgFit()">符合</button>
-      <button class="cal-btn" style="border-color:#556;color:#aac;flex:1" onclick="_imgZoom(1.3)">＋</button>
-    </div>
-    <div class="cal-hint">拖曳可平移、按鈕縮放（以中心為準）。定位時點海岬按鈕後，在圖上點該海岬尖端。</div>
-
-    <div class="cal-sect">① 四點海岬校正　<span style="color:#8ab8d8;font-weight:400">(${nDone}/4)</span></div>
-    <div class="cal-hint">點按鈕啟用 → 在左圖點該海岬最尖端。四點齊全後自動以單應性校正（修正底圖變形）。</div>
-    ${capeBtns}
-
-    <div class="cal-sect">② 色彩對照</div>
-    <div class="cal-hint">左為圖中主色，右選對應級距。各產品色階不同，預設為就近猜測，<b style="color:#e8b878">務必核對圖例</b>。白色＝無資料，勿對應。</div>
-    ${swHtml}
-
-    <div class="cal-sect">③ 執行（可重複）</div>
-    <button class="cal-btn" id="cal-apply" style="border-color:#464;color:#8e8" ${IMG.H3?'':'disabled'} onclick="_imgApply()">🎨 套用著色</button>
-    <button class="cal-btn" id="cal-ov" style="border-color:#5a5a3a;color:#c8c878" ${IMG.H3?'':'disabled'} onclick="_toggleOverlayFromPanel()">🗺 底圖疊合驗證</button>
-    <div id="cal-msg" style="font-size:10px;color:#8ab8d8;margin-top:5px;min-height:14px"></div>`;
-  _bindImgCanvasEvents();
+    <div style="width:290px;background:#0a1826;border-left:1px solid #2a4a6a;padding:10px;overflow-y:auto;font-size:11px;color:#cde">
+      <div style="font-size:13px;color:#7bd0f0;font-weight:700;margin-bottom:6px">🖼 圖檔判讀（${IMG.W}×${IMG.H}）</div>
+      <div style="margin-bottom:4px">縮放：
+        <button class="action-btn" style="display:inline;width:auto;padding:1px 8px" onclick="_imgZoom(0.5)">−</button>
+        <button class="action-btn" style="display:inline;width:auto;padding:1px 8px" onclick="_imgZoom(2)">＋</button>
+        <span id="img-zoom-lb">100%</span>
+      </div>
+      <div style="border-top:1px solid #2a4a6a;margin:6px 0;padding-top:6px;color:#e8b878;font-weight:700">① 兩點地標校正</div>
+      <div style="color:#7a92a8;font-size:10px;margin-bottom:4px">選地標→按「設定點」→在左圖點該地標位置。兩點盡量對角拉開（如富貴角+鵝鑾鼻）。</div>
+      <select id="img-lm" style="width:100%;background:#0d1f30;color:#cde;border:1px solid #2a4a6a" onchange="_imgLmChange()">${lmOpts}</select>
+      <div id="img-lm-custom" style="display:none;margin-top:3px">
+        緯 <input id="img-lm-lat" type="number" step="0.0001" style="width:70px;background:#0d1f30;color:#cde;border:1px solid #2a4a6a">
+        經 <input id="img-lm-lng" type="number" step="0.0001" style="width:70px;background:#0d1f30;color:#cde;border:1px solid #2a4a6a">
+      </div>
+      <div style="display:flex;gap:4px;margin-top:4px">
+        <button class="action-btn" style="flex:1" onclick="_imgArm(1)">設定點1</button>
+        <button class="action-btn" style="flex:1" onclick="_imgArm(2)">設定點2</button>
+      </div>
+      <div id="img-cal-st" style="font-size:10px;color:#7a92a8;margin-top:3px">點1：未設　點2：未設</div>
+      <div style="border-top:1px solid #2a4a6a;margin:6px 0;padding-top:6px;color:#e8b878;font-weight:700">② 色彩對照</div>
+      <div style="color:#7a92a8;font-size:10px;margin-bottom:4px">左為圖中主色，右選對應級距（不同產品色階不同，預設為就近猜測，請核對）。</div>
+      ${swHtml}
+      <div style="border-top:1px solid #2a4a6a;margin:6px 0;padding-top:6px;color:#e8b878;font-weight:700">③ 執行</div>
+      <button class="action-btn" style="border-color:#464;color:#8e8" onclick="_imgApply()">🎨 套用著色（校正後）</button>
+      <button class="action-btn" style="border-color:#5a5a3a;color:#c8c878" onclick="_imgShowOverlay()">🗺 疊合底圖驗證校正</button>
+      <button class="action-btn" style="border-color:#644;color:#e88" onclick="document.getElementById('img-modal').remove()">✕ 關閉</button>
+      <div id="img-msg" style="font-size:10px;color:#8ab8d8;margin-top:4px"></div>
+    </div>`;
+  document.body.appendChild(m);
+  const cv = document.getElementById('img-cv');
+  cv.width = IMG.W; cv.height = IMG.H;
+  _imgRedraw();
+  cv.addEventListener('click', _imgCanvasClick);
 }
-
-// ── 畫布：繪製、縮放置中、拖曳、點選 ────────────────────
-function _fitImgView(){ _imgFit(); }
-function _imgFit(){
-  const wrap=document.getElementById('imgcv-wrap'); if(!wrap||!IMG) return;
-  const ww=wrap.clientWidth, wh=wrap.clientHeight;
-  const z=Math.min(ww/IMG.W, wh/IMG.H);
-  IMG.zoom=z;
-  IMG.ox=(ww-IMG.W*z)/2; IMG.oy=(wh-IMG.H*z)/2;
-  _drawImgCanvas();
+function _imgLmChange(){
+  const i = +document.getElementById('img-lm').value;
+  document.getElementById('img-lm-custom').style.display =
+    IMG_LANDMARKS[i].lat == null ? 'block' : 'none';
 }
 function _imgZoom(f){
-  const wrap=document.getElementById('imgcv-wrap'); if(!wrap||!IMG) return;
-  const ww=wrap.clientWidth, wh=wrap.clientHeight;
-  const cx=ww/2, cy=wh/2;                      // 以視窗中心為縮放基準（避免跑遠）
-  const imx=(cx-IMG.ox)/IMG.zoom, imy=(cy-IMG.oy)/IMG.zoom;
-  IMG.zoom=Math.max(0.05, Math.min(20, IMG.zoom*f));
-  IMG.ox=cx-imx*IMG.zoom; IMG.oy=cy-imy*IMG.zoom;
-  _drawImgCanvas();
+  IMG.zoom = Math.max(0.25, Math.min(6, IMG.zoom*f));
+  document.getElementById('img-cv').style.width = (IMG.W*IMG.zoom)+'px';
+  document.getElementById('img-zoom-lb').textContent = Math.round(IMG.zoom*100)+'%';
 }
-function _drawImgCanvas(){
-  const cv=document.getElementById('imgcv'), wrap=document.getElementById('imgcv-wrap');
-  if(!cv||!wrap||!IMG) return;
-  const ww=wrap.clientWidth, wh=wrap.clientHeight;
-  cv.width=ww; cv.height=wh;
-  const ctx=cv.getContext('2d');
-  ctx.imageSmoothingEnabled=false;
-  ctx.clearRect(0,0,ww,wh);
-  ctx.save();
-  ctx.setTransform(IMG.zoom,0,0,IMG.zoom,IMG.ox,IMG.oy);
-  ctx.drawImage(IMG.img,0,0);
-  ctx.restore();
-  // 已定位的海岬標記
-  CAPES.forEach(c=>{
-    const p=IMG.caps[c.id]; if(!p) return;
-    const sx=IMG.ox+p.x*IMG.zoom, sy=IMG.oy+p.y*IMG.zoom;
-    ctx.strokeStyle='#ff3b3b'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.moveTo(sx-8,sy); ctx.lineTo(sx+8,sy);
-    ctx.moveTo(sx,sy-8); ctx.lineTo(sx,sy+8); ctx.stroke();
-    ctx.beginPath(); ctx.arc(sx,sy,5,0,6.3); ctx.stroke();
-    ctx.fillStyle='#ff3b3b'; ctx.font='bold 11px sans-serif';
-    ctx.fillText(c.id, sx+7, sy-7);
-  });
+function _imgArm(n){
+  IMG.armed = n;
+  document.getElementById('img-msg').textContent = '請在左圖點選地標位置（點'+n+'）';
 }
-let _imgDrag=null;
-function _bindImgCanvasEvents(){
-  const wrap=document.getElementById('imgcv-wrap'); if(!wrap) return;
-  wrap.onmousedown=(e)=>{
-    if(IMG.pick){ return; }               // 點選模式不拖曳
-    _imgDrag={sx:e.clientX, sy:e.clientY, ox:IMG.ox, oy:IMG.oy};
-    wrap.classList.add('grabbing');
-  };
-  window.addEventListener('mousemove', _imgDragMove);
-  window.addEventListener('mouseup', _imgDragEnd);
-  wrap.onclick=(e)=>{
-    if(!IMG.pick) return;
-    const rect=wrap.getBoundingClientRect();
-    const sx=e.clientX-rect.left, sy=e.clientY-rect.top;
-    const imx=(sx-IMG.ox)/IMG.zoom, imy=(sy-IMG.oy)/IMG.zoom;
-    if(imx<0||imx>=IMG.W||imy<0||imy>=IMG.H){ return; }
-    IMG.caps[IMG.pick]={x:imx, y:imy};
-    const id=IMG.pick; IMG.pick=null;
-    wrap.classList.remove('picking');
-    _solveHomography();
-    _renderCalBody();
-    requestAnimationFrame(_drawImgCanvas);
-  };
-  wrap.onwheel=(e)=>{ e.preventDefault(); _imgZoomAt(e); };
-}
-function _imgZoomAt(e){
-  const wrap=document.getElementById('imgcv-wrap');
-  const rect=wrap.getBoundingClientRect();
-  const sx=e.clientX-rect.left, sy=e.clientY-rect.top;
-  const imx=(sx-IMG.ox)/IMG.zoom, imy=(sy-IMG.oy)/IMG.zoom;
-  const f=e.deltaY<0?1.2:1/1.2;
-  IMG.zoom=Math.max(0.05,Math.min(20,IMG.zoom*f));
-  IMG.ox=sx-imx*IMG.zoom; IMG.oy=sy-imy*IMG.zoom;
-  _drawImgCanvas();
-}
-function _imgDragMove(e){
-  if(!_imgDrag||!IMG) return;
-  IMG.ox=_imgDrag.ox+(e.clientX-_imgDrag.sx);
-  IMG.oy=_imgDrag.oy+(e.clientY-_imgDrag.sy);
-  _drawImgCanvas();
-}
-function _imgDragEnd(){
-  _imgDrag=null;
-  const wrap=document.getElementById('imgcv-wrap');
-  if(wrap) wrap.classList.remove('grabbing');
-}
-function _pickCape(id){
-  if(!IMG) return;
-  IMG.pick=(IMG.pick===id)?null:id;
-  const wrap=document.getElementById('imgcv-wrap');
-  CAPES.forEach(c=>{
-    const b=document.getElementById('cape-'+c.id);
-    if(b) b.classList.toggle('active', IMG.pick===c.id && !IMG.caps[c.id] || IMG.pick===c.id);
-  });
-  if(wrap) wrap.classList.toggle('picking', !!IMG.pick);
-  const msg=document.getElementById('cal-msg');
-  if(msg) msg.textContent = IMG.pick ? `請在左圖點「${CAPES.find(c=>c.id===IMG.pick).name}」的尖端` : '';
-}
-
-// ── 單應性（4點 DLT）──────────────────────────────────
-function _solveHomography(){
-  const ids=Object.keys(IMG.caps);
-  if(ids.length<4){ IMG.H3=null; return; }
-  // 建 8×9 矩陣，解最小奇異向量（無外部函式庫，手寫 SVD 太重 → 用正規方程 + 高斯消去）
-  // 令 h33=1，解 8 未知：[lon lat 1 0 0 0 -x*lon -x*lat]·h = x ; 同理 y
-  const A=[], bb=[];
-  CAPES.forEach(c=>{
-    const p=IMG.caps[c.id]; if(!p) return;
-    A.push([c.lng,c.lat,1,0,0,0,-p.x*c.lng,-p.x*c.lat]); bb.push(p.x);
-    A.push([0,0,0,c.lng,c.lat,1,-p.y*c.lng,-p.y*c.lat]); bb.push(p.y);
-  });
-  const h=_solve8(A,bb);
-  if(!h){ IMG.H3=null; return; }
-  IMG.H3=[[h[0],h[1],h[2]],[h[3],h[4],h[5]],[h[6],h[7],1]];
-}
-function _solve8(A,b){
-  // 高斯消去解 8×8（A 為 8×8，b 為 8）
-  const n=8, M=A.map((row,i)=>row.concat([b[i]]));
-  for(let col=0;col<n;col++){
-    let piv=col;
-    for(let r=col+1;r<n;r++) if(Math.abs(M[r][col])>Math.abs(M[piv][col])) piv=r;
-    if(Math.abs(M[piv][col])<1e-12) return null;
-    [M[col],M[piv]]=[M[piv],M[col]];
-    for(let r=0;r<n;r++){
-      if(r===col) continue;
-      const f=M[r][col]/M[col][col];
-      for(let k=col;k<=n;k++) M[r][k]-=f*M[col][k];
-    }
+function _imgCanvasClick(ev){
+  if(!IMG || !IMG.armed) return;
+  const cv = ev.target, rect = cv.getBoundingClientRect();
+  const x = (ev.clientX-rect.left) * IMG.W / rect.width;
+  const y = (ev.clientY-rect.top)  * IMG.H / rect.height;
+  const li = +document.getElementById('img-lm').value;
+  let lat = IMG_LANDMARKS[li].lat, lng = IMG_LANDMARKS[li].lng;
+  if(lat == null){
+    lat = parseFloat(document.getElementById('img-lm-lat').value);
+    lng = parseFloat(document.getElementById('img-lm-lng').value);
+    if(!isFinite(lat) || !isFinite(lng)){ alert('請輸入自訂經緯度'); return; }
   }
-  const out=new Array(n);
-  for(let i=0;i<n;i++) out[i]=M[i][n]/M[i][i];   // 已消成對角，直接回代
-  return out;
+  IMG['p'+IMG.armed] = {x, y, lat, lng, name:IMG_LANDMARKS[li].name};
+  IMG.armed = 0;
+  _imgCalib();
+  _imgRedraw();
 }
-function _ll2px(lng,lat){
-  const H=IMG.H3;
-  const w=H[2][0]*lng+H[2][1]*lat+H[2][2];
-  return [(H[0][0]*lng+H[0][1]*lat+H[0][2])/w, (H[1][0]*lng+H[1][1]*lat+H[1][2])/w];
+function _imgCalib(){
+  const st = document.getElementById('img-cal-st');
+  const f = p => p ? `(${Math.round(p.x)},${Math.round(p.y)})` : '未設';
+  IMG.calib = null;
+  if(IMG.p1 && IMG.p2){
+    const dx = IMG.p2.x-IMG.p1.x, dy = IMG.p2.y-IMG.p1.y;
+    if(Math.abs(dx) < 25 || Math.abs(dy) < 25){
+      st.innerHTML = `點1：${f(IMG.p1)}　點2：${f(IMG.p2)}　<span style="color:#f88">兩點需對角拉開（x/y各≥25px）</span>`;
+      return;
+    }
+    IMG.calib = {x1:IMG.p1.x, y1:IMG.p1.y, lon1:IMG.p1.lng, lat1:IMG.p1.lat,
+                 dppx:(IMG.p2.lng-IMG.p1.lng)/dx, dppy:(IMG.p2.lat-IMG.p1.lat)/dy};
+    st.innerHTML = `點1：${f(IMG.p1)}　點2：${f(IMG.p2)}　<span style="color:#8e8">✓ 校正完成</span>`;
+  } else {
+    st.textContent = `點1：${f(IMG.p1)}　點2：${f(IMG.p2)}`;
+  }
 }
-function _sampleAt(x,y,mapped){
-  x=Math.round(x); y=Math.round(y);
-  if(x<0||x>=IMG.W||y<0||y>=IMG.H) return null;
-  const i=(y*IMG.W+x)*4;
-  if(IMG.px[i+3]<128) return null;
+function _imgRedraw(){
+  const cv = document.getElementById('img-cv');
+  if(!cv) return;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0,0,IMG.W,IMG.H);
+  ctx.drawImage(IMG.img,0,0);
+  [IMG.p1, IMG.p2].forEach((p,i)=>{
+    if(!p) return;
+    ctx.strokeStyle = i ? '#ff4444' : '#44aaff';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(p.x-9,p.y); ctx.lineTo(p.x+9,p.y);
+    ctx.moveTo(p.x,p.y-9); ctx.lineTo(p.x,p.y+9); ctx.stroke();
+    ctx.beginPath(); ctx.arc(p.x,p.y,6,0,6.3); ctx.stroke();
+  });
+  _imgZoom(1);
+}
+function _imgLL2px(lng, lat){
+  const c = IMG.calib;
+  return [c.x1 + (lng-c.lon1)/c.dppx, c.y1 + (lat-c.lat1)/c.dppy];
+}
+function _imgSampleAt(x, y, mapped){
+  x = Math.round(x); y = Math.round(y);
+  if(x<0 || x>=IMG.W || y<0 || y>=IMG.H) return null;
+  const i = (y*IMG.W+x)*4;
+  if(IMG.px[i+3] < 128) return null;
   const r=IMG.px[i], g=IMG.px[i+1], b=IMG.px[i+2];
   let best=null, bd=45*45*3;
-  mapped.forEach(s=>{ const d=(r-s.r)**2+(g-s.g)**2+(b-s.b)**2; if(d<bd){ bd=d; best=s.assign; } });
+  mapped.forEach(s=>{
+    const d=(r-s.r)*(r-s.r)+(g-s.g)*(g-s.g)+(b-s.b)*(b-s.b);
+    if(d<bd){ bd=d; best=s.assign; }
+  });
   return best;
 }
-
-// ── 套用著色（可重複）─────────────────────────────────
 function _imgApply(){
-  if(!IMG||!IMG.H3){ alert('請先完成四點校正'); return; }
-  const mapped=IMG.swatches.filter(s=>s.assign);
+  if(!IMG || !IMG.calib){ alert('請先完成兩點校正'); return; }
+  const mapped = IMG.swatches.filter(s=>s.assign);
   if(!mapped.length){ alert('請至少指定一個色彩對照'); return; }
-  let painted=0;
+  let painted = 0;
   TOWN_GEO.features.forEach(f=>{
-    const p=f.properties, county=p.COUNTYNAME||'', town=p.TOWNNAME||'';
-    if(!county||!town) return;
-    const g=f.geometry;
-    const ring=g.type==='Polygon'?g.coordinates[0]:g.coordinates[0][0];
-    let sx=0,sy=0,minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9;
+    const p = f.properties, county = p.COUNTYNAME||'', town = p.TOWNNAME||'';
+    if(!county || !town) return;
+    // 取樣點：質心 + 朝外框四角 35% 的 4 個輔助點 → 多數決
+    const g = f.geometry;
+    const ring = g.type==='Polygon' ? g.coordinates[0] : g.coordinates[0][0];
+    let sx=0, sy=0, minx=1e9, maxx=-1e9, miny=1e9, maxy=-1e9;
     ring.forEach(c=>{ sx+=c[0]; sy+=c[1];
       if(c[0]<minx)minx=c[0]; if(c[0]>maxx)maxx=c[0];
       if(c[1]<miny)miny=c[1]; if(c[1]>maxy)maxy=c[1]; });
     const clng=sx/ring.length, clat=sy/ring.length;
     const ox=(maxx-minx)*0.175, oy=(maxy-miny)*0.175;
-    const votes={};
-    [[clng,clat],[clng-ox,clat-oy],[clng+ox,clat-oy],[clng-ox,clat+oy],[clng+ox,clat+oy]].forEach(([lg,lt])=>{
-      const [x,y]=_ll2px(lg,lt);
-      const col=_sampleAt(x,y,mapped);
-      if(col) votes[col]=(votes[col]||0)+1;
-    });
-    let best=null,bn=0;
+    const votes = {};
+    [[clng,clat],[clng-ox,clat-oy],[clng+ox,clat-oy],[clng-ox,clat+oy],[clng+ox,clat+oy]]
+      .forEach(([lg,lt])=>{
+        const [x,y] = _imgLL2px(lg, lt);
+        const col = _imgSampleAt(x, y, mapped);
+        if(col) votes[col] = (votes[col]||0)+1;
+      });
+    let best=null, bn=0;
     Object.entries(votes).forEach(([c,n])=>{ if(n>bn){ bn=n; best=c; } });
-    if(!best||bn<2) return;
-    const key='T:'+county+':'+town;
+    if(!best || bn < 2) return;    // 有效票<2 視為無資料，不著色
+    const key = 'T:'+county+':'+town;
     history.push({key, prev:fillData[key]||null});
-    fillData[key]=best; painted++;
+    fillData[key] = best;
+    painted++;
   });
-  lastKeyType='T';
-  refreshStyles(); refreshRosterColors();
-  document.getElementById('cnt').textContent=Object.keys(fillData).length;
+  lastKeyType = 'T';
+  refreshStyles();
+  refreshRosterColors();
+  document.getElementById('cnt').textContent = Object.keys(fillData).length;
   if(_blurOn){ try{ renderInterpolated(); }catch(e){} }
-  const msg=document.getElementById('cal-msg');
-  if(msg) msg.textContent=`✓ 已著色 ${painted} 個鄉鎮（可撤銷；有效取樣<2 者留白）`;
+  document.getElementById('img-msg').textContent =
+    `✓ 已著色 ${painted} 個鄉鎮（可撤銷；有效取樣<2 的鄉鎮保留空白）`;
 }
-
-// ── 底圖疊合驗證（可重複開關）─────────────────────────
-let _imgOverlay=null, _imgOverlayOn=false;
-function _toggleOverlayFromPanel(){
-  if(!IMG||!IMG.H3){ alert('請先完成四點校正'); return; }
-  _imgOverlayOn=!_imgOverlayOn;
-  const btn=document.getElementById('cal-ov');
+function _imgShowOverlay(){
+  if(!IMG || !IMG.calib){ alert('請先完成兩點校正'); return; }
+  const c = IMG.calib;
+  const lonW = c.lon1 + (0-c.x1)*c.dppx,      lonE = c.lon1 + (IMG.W-c.x1)*c.dppx;
+  const latT = c.lat1 + (0-c.y1)*c.dppy,      latB = c.lat1 + (IMG.H-c.y1)*c.dppy;
+  _imgOverlayBounds = [[Math.min(latT,latB), Math.min(lonW,lonE)],
+                       [Math.max(latT,latB), Math.max(lonW,lonE)]];
+  const cv = document.createElement('canvas');
+  cv.width = IMG.W; cv.height = IMG.H;
+  cv.getContext('2d').drawImage(IMG.img,0,0);
+  _imgOverlayUrl = cv.toDataURL();
+  if(_imgOverlay){ map.removeLayer(_imgOverlay); _imgOverlay=null; }
+  _imgOverlay = L.imageOverlay(_imgOverlayUrl, _imgOverlayBounds,
+    {opacity:0.55, interactive:false}).addTo(map);
+  _imgOverlayOn = true;
+  const b = document.getElementById('img-ov-btn');
+  if(b){ b.style.display=''; b.style.background='#3a3a1a'; }
+  document.getElementById('img-modal').remove();
+  map.fitBounds(_imgOverlayBounds);
+}
+function toggleImgOverlay(){
+  if(!_imgOverlayUrl) return;
+  _imgOverlayOn = !_imgOverlayOn;
   if(_imgOverlayOn){
-    // 以四角經緯反算包絡；單應性非軸對齊，用 Leaflet imageOverlay 需矩形 bounds，
-    // 故改用四角 distort 近似：取 bounds 外接矩形 + 半透明（校正驗證足夠）
-    const corners=[[0,0],[IMG.W,0],[IMG.W,IMG.H],[0,IMG.H]];
-    // 反解像素→經緯：解 H^-1
-    const inv=_inv3(IMG.H3);
-    const lls=corners.map(([px,py])=>{
-      const w=inv[2][0]*px+inv[2][1]*py+inv[2][2];
-      return [(inv[1][0]*px+inv[1][1]*py+inv[1][2])/w, (inv[0][0]*px+inv[0][1]*py+inv[0][2])/w]; // [lat,lng]
-    });
-    let lats=lls.map(l=>l[0]), lngs=lls.map(l=>l[1]);
-    const bounds=[[Math.min(...lats),Math.min(...lngs)],[Math.max(...lats),Math.max(...lngs)]];
-    const cv=document.createElement('canvas'); cv.width=IMG.W; cv.height=IMG.H;
-    cv.getContext('2d').drawImage(IMG.img,0,0);
-    if(_imgOverlay){ map.removeLayer(_imgOverlay); }
-    _imgOverlay=L.imageOverlay(cv.toDataURL(), bounds, {opacity:0.5, interactive:false}).addTo(map);
-    map.fitBounds(bounds);
-    if(btn) btn.classList.add('on');
-  } else {
-    if(_imgOverlay){ map.removeLayer(_imgOverlay); _imgOverlay=null; }
-    if(btn) btn.classList.remove('on');
+    _imgOverlay = L.imageOverlay(_imgOverlayUrl, _imgOverlayBounds,
+      {opacity:0.55, interactive:false}).addTo(map);
+  } else if(_imgOverlay){
+    map.removeLayer(_imgOverlay); _imgOverlay = null;
   }
+  const b = document.getElementById('img-ov-btn');
+  if(b) b.style.background = _imgOverlayOn ? '#3a3a1a' : '';
 }
-function _inv3(m){
-  const a=m[0][0],b=m[0][1],c=m[0][2],d=m[1][0],e=m[1][1],f=m[1][2],g=m[2][0],h=m[2][1],i=m[2][2];
-  const A=e*i-f*h, B=-(d*i-f*g), C=d*h-e*g, D=-(b*i-c*h), E=a*i-c*g, F=-(a*h-b*g),
-        G=b*f-c*e, Hh=-(a*f-c*d), I=a*e-b*d;
-  const det=a*A+b*B+c*C;
-  return [[A/det,D/det,G/det],[B/det,E/det,Hh/det],[C/det,F/det,I/det]];
-}
-
 
 </script>
 </body>
