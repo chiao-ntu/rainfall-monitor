@@ -3135,39 +3135,6 @@ function renderDisasterLayer(){
   L.geoJSON(geo, { style:()=>({
       color:'#ffffff', weight:1, fill:false, opacity:0.9, interactive:false, lineJoin:'round'
     })}).addTo(disasterLayer);
-
-  // (4) 每個高風險鄉鎮中心放一個警示標記（zoom out 也能辨識，不受色塊干擾）
-  feats.forEach(f=>{
-    const c = _featCentroid(f);
-    if(!c) return;
-    const p=f.properties||{};
-    const nm=(p.COUNTYNAME||p.county||'')+(p.TOWNNAME||p.township||'');
-    const icon = L.divIcon({
-      className:'disaster-badge',
-      html:'<div style="width:18px;height:18px;line-height:18px;text-align:center;'
-          +'font-size:12px;font-weight:900;color:#1a1a1a;background:#ffe600;'
-          +'border:2px solid #1a1a1a;border-radius:50%;box-shadow:0 0 3px rgba(0,0,0,.6)">▲</div>',
-      iconSize:[18,18], iconAnchor:[9,9]
-    });
-    L.marker([c[1],c[0]], {icon, interactive:false, keyboard:false,
-      title:nm+'（二次災害高風險）'}).addTo(disasterLayer);
-  });
-}
-
-// 多邊形/多重多邊形質心（取最大環的頂點平均，足夠標記定位用）
-function _featCentroid(f){
-  const g=f.geometry; if(!g) return null;
-  let rings=[];
-  if(g.type==='Polygon') rings=[g.coordinates[0]];
-  else if(g.type==='MultiPolygon') rings=g.coordinates.map(poly=>poly[0]);
-  else return null;
-  // 取頂點數最多的環（通常是主體）
-  let best=null,bestN=-1;
-  for(const r of rings){ if(r && r.length>bestN){ bestN=r.length; best=r; } }
-  if(!best) return null;
-  let sx=0,sy=0;
-  for(const pt of best){ sx+=pt[0]; sy+=pt[1]; }
-  return [sx/best.length, sy/best.length];
 }
 
 let _prevDisasterSet = null;  // 上次達標站點（偵測新增）
