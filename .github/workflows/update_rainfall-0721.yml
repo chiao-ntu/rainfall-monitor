@@ -31,10 +31,8 @@ jobs:
           python-version: '3.12'
 
       # 3. 安裝套件
-      #    pillow + numpy 為 CWA 定量降水預報圖（PNG）色塊判讀所需
-      #    （單應性座標轉換用 numpy，讀取像素用 Pillow）。缺任一者 PNG 判讀會被跳過。
       - name: Install dependencies
-        run: pip install requests pillow numpy
+        run: pip install requests
 
       # 4. 執行抓取腳本（API Key 從 Secrets 注入）
       - name: Run fetch_rainfall.py
