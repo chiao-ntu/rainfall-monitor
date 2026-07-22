@@ -3118,22 +3118,21 @@ function renderDisasterLayer(){
   });
   disasterLayer = L.layerGroup().addTo(map);
 
-  // 高辨識度雙線描邊（casing）：
-  //   底層＝粗的深色casing（在任何底色上都能拉出輪廓對比），
-  //   上層＝亮黃實線（不用虛線，避免與各圖層紅/紫色塊混淆），
-  //   再疊一條細白內線 → 三明治式描邊，任何底圖都清楚。
+  // 高辨識度描邊（不透明，避免透出底下縣市界造成雜亂）：
+  //   底層＝深色 casing（3px）拉出輪廓，
+  //   上層＝白色實線（1px）＋白內線（1px）→ 深底白線的清楚雙線。
   const geo = { type:'FeatureCollection', features: feats };
   // (1) 深色 casing 底
   L.geoJSON(geo, { style:()=>({
-      color:'#1a1a1a', weight:6, fill:false, opacity:0.85, interactive:false, lineJoin:'round'
+      color:'#1a1a1a', weight:3, fill:false, opacity:1, interactive:false, lineJoin:'round'
     })}).addTo(disasterLayer);
-  // (2) 亮黃主線（實線，高明度，對紅/紫/藍色塊都突出）
+  // (2) 白色實線
   L.geoJSON(geo, { style:()=>({
-      color:'#ffe600', weight:3, fill:false, opacity:1, interactive:false, lineJoin:'round'
+      color:'#ffffff', weight:1, fill:false, opacity:1, interactive:false, lineJoin:'round'
     })}).addTo(disasterLayer);
-  // (3) 細白內線（增強在深色/紫色塊上的對比）
+  // (3) 白內線
   L.geoJSON(geo, { style:()=>({
-      color:'#ffffff', weight:1, fill:false, opacity:0.9, interactive:false, lineJoin:'round'
+      color:'#ffffff', weight:1, fill:false, opacity:1, interactive:false, lineJoin:'round'
     })}).addTo(disasterLayer);
 }
 
