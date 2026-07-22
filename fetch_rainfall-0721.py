@@ -1108,18 +1108,41 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns):
     bands = QPF_PNG_BANDS
     tol2 = QPF_PNG_TOL * QPF_PNG_TOL * 3
 
-    def sample(lon, lat):
-        x, y = _png_ll2px(H3, lon, lat)
-        xi, yi = int(round(x)), int(round(y))
+    def classify_px(xi, yi):
+        """單像素→級距值；純色才回值，等值線/文字/過渡回 None，白底回 0.0"""
         if xi < 0 or xi >= W or yi < 0 or yi >= H: return None
         r, g, b = int(arr[yi,xi,0]), int(arr[yi,xi,1]), int(arr[yi,xi,2])
         mx, mn = max(r,g,b), min(r,g,b)
-        if mx > 235 and mn > 225: return 0.0      # 白底＝無雨（<0.5）
+        if mx > 235 and mn > 225: return 0.0          # 白底＝無雨
+        if mx < 55: return None                        # 黑等值線/邊界
+        if (mx-mn) < 22 and 55 <= mx < 230: return None  # 低飽和灰（文字/格線）
         best, bd = None, tol2 + 1
         for (br,bg,bb,bv) in bands:
             d = (r-br)**2 + (g-bg)**2 + (b-bb)**2
             if d < bd: bd, best = d, bv
-        return best if bd <= tol2 else None
+        return best if bd <= tol2 else None            # 非純色（過渡）→ 丟棄
+
+    # 鄉鎮取樣密度：以像素空間半徑 R 內的密集網格取直方圖。
+    # R 依緯度換算（1鄉鎮尺度約 0.03~0.08°，取影像上約 8~14px 半徑掃描）。
+    def town_hist(lon, lat):
+        cx, cy = _png_ll2px(H3, lon, lat)
+        R = 11                       # 像素半徑（涵蓋鄉鎮質心鄰域，避開跨鄉鎮太遠）
+        step = 2
+        votes = {}
+        for dy in range(-R, R+1, step):
+            for dx in range(-R, R+1, step):
+                if dx*dx + dy*dy > R*R: continue      # 圓形鄰域
+                v = classify_px(int(round(cx))+dx, int(round(cy))+dy)
+                if v is not None: votes[v] = votes.get(v, 0) + 1
+        return votes
+
+    def aggregate(votes, hi_frac=0.22):
+        """眾數為主；比眾數高且佔比≥hi_frac 的最高級距優先（防漏報，保守）"""
+        if not votes: return None
+        tot = sum(votes.values())
+        mode = max(votes.items(), key=lambda kv: (kv[1], kv[0]))[0]
+        hi = [v for v, c in votes.items() if v > mode and c/tot >= hi_frac]
+        return max(hi) if hi else mode
 
     town_vals = {}
     n_hit = 0
@@ -1127,16 +1150,11 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns):
         lat, lng = t.get('lat'), t.get('lng')
         if not lat: continue
         key = f"{t['county']}{t['township']}"
-        # 質心 + 十字四點（±0.02°）多數決，抑制邊界與等值線雜訊
-        votes = {}
-        for dlo, dla in [(0,0),(-0.02,0),(0.02,0),(0,-0.02),(0,0.02)]:
-            v = sample(lng+dlo, lat+dla)
-            if v is not None: votes[v] = votes.get(v,0)+1
-        if not votes: continue
-        val = max(votes.items(), key=lambda kv: kv[1])[0]
+        val = aggregate(town_hist(lng, lat))
+        if val is None: continue
         town_vals[key] = val
         if val > 0: n_hit += 1
-    print(f"    PNG判讀（單應性）：{n_hit}/{len(towns)} 鄉鎮有雨值")
+    print(f"    PNG判讀（單應性+密集鄰域）：{n_hit}/{len(towns)} 鄉鎮有雨值")
 
     # 12h 有效時段 → 均分兩個 6h 段（近似）。時間窗由檔名 tau 決定較準；
     # 若無檔名資訊，退回「下一個 6h 邊界起」。
@@ -1408,9 +1426,15 @@ def main():
         if _cwa_by_idx:
             _max_idx = max(_cwa_by_idx)
             qpf_cwa = [None] * (_max_idx + 1)
+            # PNG 判讀為「級距近似」→ 與模式互相參照取高值（防漏報，用戶指定）：
+            #   官方級距floor 不會抹掉模式的較高峰值；模式低估則被官方floor拉起。
+            # 颱風/格點為「精確值」→ 官方最高優先，直接覆蓋。
+            _png_cross = routine_is_png
             for _idx, _v in _cwa_by_idx.items():
+                if _png_cross:
+                    _v = max(_v, qpf_best[_idx] or 0, qpf_ecmwf[_idx] or 0)
                 qpf_cwa[_idx] = _v
-                # 官方值最高優先：覆蓋所有模式（僅未來段；過去段前端一律以觀測為準）
+                # （僅未來段；過去段前端一律以觀測為準）
                 qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = qpf_icon[_idx] = _v
 
         # 預設用 best_match（CWA優先 > ECMWF > GFS=ICON 的綜合判斷已含在模式選擇邏輯中）
@@ -1580,7 +1604,7 @@ def main():
         'generated_at':now_tpe.strftime('%Y-%m-%dT%H:%M:%S'),
         'source':'CWA_OBS+POP' if stations else 'DEMO',
         'cwa_qpf_active': bool(is_typhoon or routine_seg_map),  # True=前48h已覆蓋CWA官方QPF
-        'cwa_qpf_mode': 'typhoon' if is_typhoon else ('routine' if routine_seg_map else None),
+        'cwa_qpf_mode': 'typhoon' if is_typhoon else (('routine_png' if routine_is_png else 'routine') if routine_seg_map else None),
         'cwa_qpf_segs': sorted(routine_seg_map.keys()) if routine_seg_map else [],
         'official_warn': official_warn,  # 官方現行警特報（W-C0033-001，縣市級）
         'township_count':len(out_towns),

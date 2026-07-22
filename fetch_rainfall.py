@@ -1024,24 +1024,51 @@ def fetch_cwa_routine_qpf(now_tpe):
             print(f"    {did} 例外：{e}")
 
     # ── C. 僅圖檔 → 色塊判讀路徑 ──
+    #   收集所有 PNG 候選，優先定量降水預報主圖；下載 ref-size 者逐一判讀，
+    #   依各自時間窗（檔名 _HH_HH）合併成連續 6h 段序列（覆蓋越多窗越好）。
     if png_uris:
-        did, u = png_uris[0]
-        try:
-            r = requests.get(u, timeout=60)
-            if r.status_code == 200 and r.content[:8] == b'\x89PNG\r\n\x1a\n':
-                with open('qpf_sample.png', 'wb') as f: f.write(r.content)
-                import struct
-                w, h = struct.unpack('>II', r.content[16:24])   # IHDR
-                print(f"    已存 qpf_sample.png（{w}x{h}，{len(r.content)//1024}KB，來源 {did}）")
-                segs = decode_qpf_png(r.content, did, now_tpe, towns)
-                if segs and len(segs) >= 1:
-                    n_any = sum(1 for sv in segs.values() for v in sv.values() if v)
-                    print(f"    ✓ 常態QPF（PNG單應性判讀）：{len(segs)} 段（近似，僅級距）")
-                    with open(CWA_QPF_SRC_FILE, 'w', encoding='utf-8') as f:
-                        json.dump({'kind': 'png', 'id': did}, f)
-                    return {'issue': did + ':png', 'segs': segs, 'png': True}
-        except Exception as e:
-            print(f"    PNG 取樣失敗：{e}")
+        import struct
+        def _png_score(u):
+            ul = u.lower(); s = 0
+            if 'chfcstprecip' in ul: s += 10
+            if 'qpf' in ul: s += 6
+            if 'precip' in ul: s += 3
+            if 'thumb' in ul or 'small' in ul or 'icon' in ul: s -= 8
+            return -s
+        png_uris.sort(key=lambda du: _png_score(du[1]))
+        merged = {}          # start_tpe -> {town_key: val}
+        used_src = []
+        _saved_sample = False
+        for did, u in png_uris[:16]:
+            try:
+                r = requests.get(u, timeout=60)
+                if r.status_code != 200 or r.content[:8] != b'\x89PNG\r\n\x1a\n':
+                    continue
+                w, h = struct.unpack('>II', r.content[16:24])
+                fn = u.rsplit('/',1)[-1]
+                print(f"    PNG候選 {did}：{w}×{h}（{len(r.content)//1024}KB）{fn[:50]}")
+                if not _saved_sample:
+                    with open('qpf_sample.png', 'wb') as f: f.write(r.content)
+                    _saved_sample = True
+                if (w, h) != QPF_PNG_REF_SIZE:
+                    continue
+                segs = decode_qpf_png(r.content, did, now_tpe, towns, fname=fn)
+                if segs:
+                    for st, tv in segs.items():
+                        if st not in merged:      # 先到先得（同窗不重複；不同窗互補）
+                            merged[st] = tv
+                    used_src.append(f"{did}:{fn[:24]}")
+            except Exception as e:
+                print(f"    PNG候選 {did} 失敗：{e}")
+        if merged:
+            print(f"    ✓ 常態QPF（PNG單應性判讀）：合併 {len(merged)} 段"
+                  f"（近似，僅級距；來源 {len(used_src)} 張圖）")
+            with open(CWA_QPF_SRC_FILE, 'w', encoding='utf-8') as f:
+                json.dump({'kind': 'png', 'sources': used_src}, f, ensure_ascii=False)
+            return {'issue': 'png:' + ','.join(used_src)[:80], 'segs': merged, 'png': True}
+        if _saved_sample:
+            print(f"    有PNG但無 {QPF_PNG_REF_SIZE[0]}×{QPF_PNG_REF_SIZE[1]} 主圖——已存 qpf_sample.png，"
+                  f"若為改版式請提供以重新定位四海岬")
     print("    常態QPF：格點資料探測未果（以上 uri 清單請貼給開發者）")
     return None
 
@@ -1086,7 +1113,7 @@ def _png_ll2px(H3, lon, lat):
     return ((H3[0][0]*lon+H3[0][1]*lat+H3[0][2])/w,
             (H3[1][0]*lon+H3[1][1]*lat+H3[1][2])/w)
 
-def decode_qpf_png(png_bytes, did, now_tpe, towns):
+def decode_qpf_png(png_bytes, did, now_tpe, towns, fname=''):
     """CWA 定量降水預報 PNG → 各鄉鎮 QPF 值（單應性 + 質心多點取樣多數決）。
     需 Pillow。回傳 {start_tpe: {town_key: val}}（鄉鎮字典，非網格）；失敗回 None。
     ⚠色塊判讀為近似（僅級距、無精確值），12h 圖均分兩個 6h 段。"""
@@ -1156,11 +1183,41 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns):
         if val > 0: n_hit += 1
     print(f"    PNG判讀（單應性+密集鄰域）：{n_hit}/{len(towns)} 鄉鎮有雨值")
 
-    # 12h 有效時段 → 均分兩個 6h 段（近似）。時間窗由檔名 tau 決定較準；
-    # 若無檔名資訊，退回「下一個 6h 邊界起」。
+    # 時間窗：檔名如 ...Precip_12_24 表示「發布起 +12h~+24h」（12h窗）。
+    #   解析 _HH_HH → 相對發布時刻的起訖小時；發布時刻取最近的 CWA 發布班次
+    #   （05:30/11:30/17:30/23:30 TST）。無法解析則退回「下一個6h邊界起、12h窗」。
+    import re as _re
+    m = _re.search(r'_(\d{1,3})_(\d{1,3})(?:\.png)?$', fname or '')
+    win_h = QPF_PNG_WINDOW_HOURS
+    if m:
+        h0, h1 = int(m.group(1)), int(m.group(2))
+        if h1 > h0 and (h1 - h0) in (6, 12, 24):
+            win_h = h1 - h0
+            # 發布班次：取今日最近且 ≤ now 的 05:30/11:30/17:30/23:30
+            _cands = []
+            for _dh in (-1, 0):
+                _d = now_tpe.replace(minute=30, second=0, microsecond=0, tzinfo=None) + timedelta(days=_dh)
+                for _hh in (5, 11, 17, 23):
+                    _cands.append(_d.replace(hour=_hh))
+            _issue = max([c for c in _cands if c <= now_tpe.replace(tzinfo=None)], default=None)
+            if _issue is not None:
+                _win_start = _issue + timedelta(hours=h0)
+                # 吸附 6h 日曆邊界（發布在 :30，+偶數h 仍偏移30分）
+                _day0 = _win_start.replace(hour=0, minute=0, second=0, microsecond=0)
+                _off = (_win_start - _day0).total_seconds()
+                _snap = round(_off / 21600) * 21600
+                base = _day0 + timedelta(seconds=_snap)
+                n_seg = max(1, win_h // 6)
+                seg_vals = {k: (None if v is None else round(v/n_seg, 1)) for k,v in town_vals.items()}
+                segs = {}
+                for k in range(n_seg):
+                    segs[base + timedelta(hours=6*k)] = seg_vals
+                print(f"    時間窗（檔名 {h0}-{h1}h）：{base.strftime('%m/%d %H:%M')} 起 {n_seg} 段")
+                return segs
+    # 退回：下一個 6h 邊界起、12h 窗
     base = now_tpe.replace(minute=0, second=0, microsecond=0, tzinfo=None)
     base = base + timedelta(hours=(6 - base.hour % 6) % 6)
-    n_seg = max(1, QPF_PNG_WINDOW_HOURS // 6)
+    n_seg = max(1, win_h // 6)
     seg_vals = {k: (None if v is None else round(v/n_seg, 1)) for k,v in town_vals.items()}
     segs = {}
     for k in range(n_seg):
@@ -1302,9 +1359,11 @@ def main():
     typhoon_segs = fetch_typhoon_qpf() if CWA_API_KEY else []
     is_typhoon   = len(typhoon_segs) >= 4
 
-    # 常態 CWA QPF（非颱風期間的官方預報員修正值；治本預測偏差）
+    # 常態 CWA QPF（官方預報員修正值；治本預測偏差）——任何時候都跑，
+    # 讓「CWA 模式」隨時有官方定量降水判讀可看（颱風期另有 F-C0041 精確格點，
+    # 兩者段索引不重疊時互補；重疊段以颱風精確值優先，見組裝端）。
     routine_qpf = None
-    if not is_typhoon and CWA_API_KEY:
+    if CWA_API_KEY:
         try: routine_qpf = fetch_cwa_routine_qpf(now_tpe)
         except Exception as e: print(f"  常態QPF例外：{e}")
     # 對齊日曆6h段：idx = (start − 今天00時TST)/6h（qpf_15d[0]=今天00-06 鐵律）
@@ -1392,14 +1451,25 @@ def main():
         maxh_gfs   = get_max_hourly_model('gfs_seamless')
         maxh_icon  = get_max_hourly_model('icon_seamless')
 
-        # CWA 官方 QPF 覆蓋（颱風 F-C0041 / 常態 48h 逐6h）：
-        #   以「日曆段索引」對齊後覆蓋所有模式（CWA 為最高優先），
-        #   qpf_cwa 為與 qpf_15d 同索引的稀疏陣列（未覆蓋段=null，絕不補值）
-        _cwa_by_idx = {}   # idx -> value
+        # CWA 官方 QPF 覆蓋（颱風 F-C0041 精確格點 ＋ 常態 48h 逐6h／PNG判讀）：
+        #   兩來源皆可能存在——颱風精確值在重疊段優先；其餘段由常態值填補。
+        #   qpf_cwa 為與 qpf_15d 同索引的稀疏陣列（未覆蓋段=null，絕不補值）。
+        #   _cwa_png_idx 記錄哪些段為「PNG級距近似」→ 這些段與模式取高值防漏報。
+        _cwa_by_idx = {}     # idx -> value
+        _cwa_png_idx = set() # 屬於 PNG 近似判讀的段索引
+        # (1) 常態 QPF（先填；颱風精確值稍後覆蓋重疊段）
+        if routine_seg_map:
+            _tkey = f"{county}{township}"
+            for _idx, _vals in routine_seg_map.items():
+                if not (0 <= _idx < len(qpf_best)): continue
+                _v = _vals.get(_tkey) if routine_is_png else _qpf_grid_at(_vals, lat, lng)
+                if _v is not None:
+                    _cwa_by_idx[_idx] = round(float(_v), 1)
+                    if routine_is_png: _cwa_png_idx.add(_idx)
+        # (2) 颱風 F-C0041 精確格點（覆蓋重疊段，移出 png 近似集）
         if is_typhoon and typhoon_segs:
             _cur_seg = now_tpe.hour // 6
             for _i, _seg in enumerate(typhoon_segs):
-                # 優先用 StartTime 對齊；缺則退回「現在起第 i 段」舊索引法
                 _idx = None
                 _sts = _seg.get("start") or ""
                 if _sts:
@@ -1412,26 +1482,18 @@ def main():
                 if not (0 <= _idx < len(qpf_best)): continue
                 _pts = [(p[0],p[1],p[2]) for p in _seg["points"]]
                 _v = idw(lat, lng, _pts, _idx) if _pts else None
-                if _v is not None: _cwa_by_idx[_idx] = _v
-        elif routine_seg_map:
-            _tkey = f"{county}{township}"   # PNG 路徑用鄉鎮鍵
-            for _idx, _vals in routine_seg_map.items():
-                if not (0 <= _idx < len(qpf_best)): continue
-                if routine_is_png:
-                    _v = _vals.get(_tkey)   # 鄉鎮字典
-                else:
-                    _v = _qpf_grid_at(_vals, lat, lng)   # 網格
-                if _v is not None: _cwa_by_idx[_idx] = round(float(_v), 1)
+                if _v is not None:
+                    _cwa_by_idx[_idx] = _v
+                    _cwa_png_idx.discard(_idx)   # 精確值：不走近似取高值
         qpf_cwa = []
         if _cwa_by_idx:
             _max_idx = max(_cwa_by_idx)
             qpf_cwa = [None] * (_max_idx + 1)
-            # PNG 判讀為「級距近似」→ 與模式互相參照取高值（防漏報，用戶指定）：
-            #   官方級距floor 不會抹掉模式的較高峰值；模式低估則被官方floor拉起。
-            # 颱風/格點為「精確值」→ 官方最高優先，直接覆蓋。
-            _png_cross = routine_is_png
             for _idx, _v in _cwa_by_idx.items():
-                if _png_cross:
+                # PNG 近似段：與模式互相參照取高值（防漏報，用戶指定）——
+                #   官方級距floor 不抹掉模式較高峰值；模式低估則被 floor 拉起。
+                # 精確段（颱風/格點）：官方最高優先，直接覆蓋。
+                if _idx in _cwa_png_idx:
                     _v = max(_v, qpf_best[_idx] or 0, qpf_ecmwf[_idx] or 0)
                 qpf_cwa[_idx] = _v
                 # （僅未來段；過去段前端一律以觀測為準）
@@ -1604,7 +1666,12 @@ def main():
         'generated_at':now_tpe.strftime('%Y-%m-%dT%H:%M:%S'),
         'source':'CWA_OBS+POP' if stations else 'DEMO',
         'cwa_qpf_active': bool(is_typhoon or routine_seg_map),  # True=前48h已覆蓋CWA官方QPF
-        'cwa_qpf_mode': 'typhoon' if is_typhoon else (('routine_png' if routine_is_png else 'routine') if routine_seg_map else None),
+        # 模式：typhoon(精確格點) / typhoon+routine_png(颱風段精確+其餘段圖判讀) /
+        #       routine(格點) / routine_png(全圖判讀近似)
+        'cwa_qpf_mode': (
+            ('typhoon+routine_png' if (routine_seg_map and routine_is_png) else 'typhoon')
+            if is_typhoon else
+            ('routine_png' if routine_is_png else 'routine') if routine_seg_map else None),
         'cwa_qpf_segs': sorted(routine_seg_map.keys()) if routine_seg_map else [],
         'official_warn': official_warn,  # 官方現行警特報（W-C0033-001，縣市級）
         'township_count':len(out_towns),

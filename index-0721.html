@@ -1990,9 +1990,12 @@ async function tryLoadLive(){
     if(sysNote) sysNote.innerHTML = '';   // 每次載入重建（避免自動更新時重複追加）
     if(sysNote && _cwaQpfActive){
       const _cm = d.cwa_qpf_mode || 'typhoon';
-      sysNote.innerHTML = _cm === 'routine'
-        ? '<span style="color:#ffcc44;font-weight:700">⚡前48h已採用CWA官方定量降水預報（常態版，每日4次預報員修正）</span>'
-        : '<span style="color:#ffcc44;font-weight:700">⚡前48h已採用CWA定量降水預報（F-C0041颱風）</span>';
+      const _msg = _cm === 'routine'
+        ? '⚡前48h已採用CWA官方定量降水預報（常態版，每日4次預報員修正）'
+        : _cm === 'routine_png'
+        ? '⚡前48h已參照CWA定量降水預報圖（色塊判讀，級距近似；與模式取高值防漏報）'
+        : '⚡前48h已採用CWA定量降水預報（F-C0041颱風）';
+      sysNote.innerHTML = '<span style="color:#ffcc44;font-weight:700">'+_msg+'</span>';
     }
 
     // 動態偏差比顯示（昨日觀測/昨日模式，顯示層：僅供人工判讀，不影響任何計算）
