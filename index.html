@@ -1260,7 +1260,7 @@ function renderLayer(){
       if(mode==='warn'){
         const lv = totalRain || 0;
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
-          `警特報預估：${lv>0?`<span style="color:${WARN_COLORS[lv]};font-weight:700">${WARN_NAMES[lv]}</span>`:'未達標準'}<br>`+
+          `本視窗警特報：${lv>0?`<span style="color:${WARN_COLORS[lv]};font-weight:700">${WARN_NAMES[lv]}</span>`:'未達標準'}<br>`+
           `<span style="font-size:10px">${_warnSummaryHtml(t)}</span>`;
       } else if(mode==='etr'){
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>ETR2%：${etrStr}<br>風險指標：${_windowRisk(t)}`;
@@ -2386,10 +2386,11 @@ function updateDistrictSummary(){
       // 風險指標 / 警特報（常駐計算，摘要四表齊全）
       const r = calcRiskIndicator(t, Math.max(0, segTo));
       if(r && r.R > maxRisk){ maxRisk=r.R; maxRiskT=t; }
-      let lv=0;
-      for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
-        lv=Math.max(lv,_warnLevelAt(t,s)); if(lv>=4)break;
-      }
+      // 警特報側欄：以「全期預測最高級」為準（與地圖popup全期預測一致，
+      //   側欄是「哪些鄉鎮有警特報」的總覽，不隨所選時間視窗縮放）
+      const fs = _warnFirstSegs(t);
+      let lv = 0;
+      for(let k=4; k>=1; k--){ if(fs[k]!==null){ lv=k; break; } }
       if(lv > maxWarn){ maxWarn=lv; maxWarnT=t; }
     });
     return {district, maxRain, maxRainT, maxEtr, maxEtrT, maxRisk, maxRiskT, maxWarn, maxWarnT};
@@ -3110,17 +3111,63 @@ function renderDisasterLayer(){
   if(disasterLayer){ map.removeLayer(disasterLayer); disasterLayer=null; }
   if(!showDisaster || !TOWN_GEO) return;
   const zoneKeys = new Set(DISASTER_ZONES.map(z=>z.county+'|'+z.township));
-  disasterLayer = L.geoJSON(TOWN_GEO, {
-    filter: f=>{
-      const p=f.properties||{};
-      const key=(p.COUNTYNAME||p.county||'')+'|'+(p.TOWNNAME||p.township||'');
-      return zoneKeys.has(key);
-    },
-    style: ()=>({
-      color:'#ff2200', weight:2.5, dashArray:'6,4',
-      fill:false, opacity:0.9, interactive:false
-    })
-  }).addTo(map);
+  const feats = (TOWN_GEO.features||[]).filter(f=>{
+    const p=f.properties||{};
+    const key=(p.COUNTYNAME||p.county||'')+'|'+(p.TOWNNAME||p.township||'');
+    return zoneKeys.has(key);
+  });
+  disasterLayer = L.layerGroup().addTo(map);
+
+  // 高辨識度雙線描邊（casing）：
+  //   底層＝粗的深色casing（在任何底色上都能拉出輪廓對比），
+  //   上層＝亮黃實線（不用虛線，避免與各圖層紅/紫色塊混淆），
+  //   再疊一條細白內線 → 三明治式描邊，任何底圖都清楚。
+  const geo = { type:'FeatureCollection', features: feats };
+  // (1) 深色 casing 底
+  L.geoJSON(geo, { style:()=>({
+      color:'#1a1a1a', weight:6, fill:false, opacity:0.85, interactive:false, lineJoin:'round'
+    })}).addTo(disasterLayer);
+  // (2) 亮黃主線（實線，高明度，對紅/紫/藍色塊都突出）
+  L.geoJSON(geo, { style:()=>({
+      color:'#ffe600', weight:3, fill:false, opacity:1, interactive:false, lineJoin:'round'
+    })}).addTo(disasterLayer);
+  // (3) 細白內線（增強在深色/紫色塊上的對比）
+  L.geoJSON(geo, { style:()=>({
+      color:'#ffffff', weight:1, fill:false, opacity:0.9, interactive:false, lineJoin:'round'
+    })}).addTo(disasterLayer);
+
+  // (4) 每個高風險鄉鎮中心放一個警示標記（zoom out 也能辨識，不受色塊干擾）
+  feats.forEach(f=>{
+    const c = _featCentroid(f);
+    if(!c) return;
+    const p=f.properties||{};
+    const nm=(p.COUNTYNAME||p.county||'')+(p.TOWNNAME||p.township||'');
+    const icon = L.divIcon({
+      className:'disaster-badge',
+      html:'<div style="width:18px;height:18px;line-height:18px;text-align:center;'
+          +'font-size:12px;font-weight:900;color:#1a1a1a;background:#ffe600;'
+          +'border:2px solid #1a1a1a;border-radius:50%;box-shadow:0 0 3px rgba(0,0,0,.6)">▲</div>',
+      iconSize:[18,18], iconAnchor:[9,9]
+    });
+    L.marker([c[1],c[0]], {icon, interactive:false, keyboard:false,
+      title:nm+'（二次災害高風險）'}).addTo(disasterLayer);
+  });
+}
+
+// 多邊形/多重多邊形質心（取最大環的頂點平均，足夠標記定位用）
+function _featCentroid(f){
+  const g=f.geometry; if(!g) return null;
+  let rings=[];
+  if(g.type==='Polygon') rings=[g.coordinates[0]];
+  else if(g.type==='MultiPolygon') rings=g.coordinates.map(poly=>poly[0]);
+  else return null;
+  // 取頂點數最多的環（通常是主體）
+  let best=null,bestN=-1;
+  for(const r of rings){ if(r && r.length>bestN){ bestN=r.length; best=r; } }
+  if(!best) return null;
+  let sx=0,sy=0;
+  for(const pt of best){ sx+=pt[0]; sy+=pt[1]; }
+  return [sx/best.length, sy/best.length];
 }
 
 let _prevDisasterSet = null;  // 上次達標站點（偵測新增）
@@ -3654,7 +3701,7 @@ function _warnNext24h(t, seg){
 // 全預測期第一次達各警特報級的 seg（顯示「何時會發」）
 function _warnFirstSegs(t){
   const first = {1:null, 2:null, 3:null, 4:null};
-  for(let s=0; s<60; s++){
+  for(let s=0; s<64; s++){
     const lv = _warnLevelAt(t, s);
     for(let k=1; k<=lv; k++) if(first[k]===null) first[k]=s;
     if(first[4]!==null) break;

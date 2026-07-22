@@ -454,7 +454,7 @@ def fetch_openmeteo_model(townships, model='best_match'):
         'latitude':       ','.join(str(x) for x in lats),
         'longitude':      ','.join(str(x) for x in lngs),
         'hourly':         'precipitation',
-        'forecast_days':  15,
+        'forecast_days':  16,
         'timezone':       'Asia/Taipei',
     }
     if model != 'best_match':
@@ -491,8 +491,8 @@ def fetch_openmeteo_model(townships, model='best_match'):
             chunk = [v for v in precip[j:j+6] if v is not None]
             segs_6h.append(round(sum(chunk), 1))
             max_hourly_6h.append(round(max(chunk), 1) if chunk else 0.0)
-        result[key] = segs_6h[:60]
-        result_max_hourly[key] = max_hourly_6h[:60]
+        result[key] = segs_6h[:64]
+        result_max_hourly[key] = max_hourly_6h[:64]
 
         # 逐時掃描 CWA 警特報條件（僅 best_match，供前端精確標示）
         # 大雨: 24h≥100 或 1h≥40；豪雨: 24h≥200 或 3h≥100
@@ -514,7 +514,7 @@ def fetch_openmeteo_model(townships, model='best_match'):
                 warn_hourly.append(lv)
             warn_seg = [max(warn_hourly[j:j+6]) if warn_hourly[j:j+6] else 0
                         for j in range(0, len(warn_hourly), 6)]
-            WARN_SEG_CACHE[key] = warn_seg[:60]
+            WARN_SEG_CACHE[key] = warn_seg[:64]
     n = len(next(iter(result.values()),[]))
     print(f"    {len(result)} 個點，各 {n} 個6h時段")
     return result, result_max_hourly
@@ -1431,13 +1431,13 @@ def main():
                 import random; random.seed(int(alert_v+lat*100+hash(model_key)%100))
                 base = alert_v/20*random.uniform(0.3,1.2)
                 segs = [round(max(0,base*math.exp(-i//4*0.06)*random.uniform(0.4,1.8)),1)
-                        for i in range(60)]
-            return segs[:60]
+                        for i in range(64)]
+            return segs[:64]
 
         def get_max_hourly_model(model_key):
             """取特定模式的60個6h段內最大單一小時雨量（供強度分級用）"""
             arr = om_max_hourly_all.get(model_key, {}).get(om_key, [])
-            return arr[:60] if arr else [0.0]*60
+            return arr[:64] if arr else [0.0]*64
 
         # 各模式的完整15天QPF（依優先序：CWA > ECMWF > GFS/ICON）
         qpf_best  = get_qpf_model('best_match')
@@ -1607,10 +1607,10 @@ def main():
 
         def get_ns_qpf(model_key):
             segs = non_static_om.get(model_key, {}).get(om_key, [])
-            return segs[:60] if segs else [0.0]*60
+            return segs[:64] if segs else [0.0]*64
         def get_ns_maxh(model_key):
             arr = non_static_maxh.get(model_key, {}).get(om_key, [])
-            return arr[:60] if arr else [0.0]*60
+            return arr[:64] if arr else [0.0]*64
 
         qpf_best_ns  = get_ns_qpf('best_match')
         qpf_ecmwf_ns = get_ns_qpf('ecmwf_ifs025')
