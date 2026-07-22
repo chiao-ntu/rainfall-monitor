@@ -1243,43 +1243,82 @@ function _ll2px(lng,lat){
   const w=H[2][0]*lng+H[2][1]*lat+H[2][2];
   return [(H[0][0]*lng+H[0][1]*lat+H[0][2])/w, (H[1][0]*lng+H[1][1]*lat+H[1][2])/w];
 }
+const COLOR_RANK = {};   // hex → 級距序（低→高），供防漏報比較
+COLORS.forEach((c,i)=>{ COLOR_RANK[c.hex]=i; });
+
 function _sampleAt(x,y,mapped){
   x=Math.round(x); y=Math.round(y);
   if(x<0||x>=IMG.W||y<0||y>=IMG.H) return null;
   const i=(y*IMG.W+x)*4;
   if(IMG.px[i+3]<128) return null;
   const r=IMG.px[i], g=IMG.px[i+1], b=IMG.px[i+2];
-  let best=null, bd=45*45*3;
+  const mx=Math.max(r,g,b), mn=Math.min(r,g,b);
+  if(mx<55) return null;                       // 黑等值線/邊界
+  if((mx-mn)<22 && mx>=55 && mx<230) return null; // 低飽和灰（文字/格線）
+  let best=null, bd=38*38*3;                    // 純色容差收緊（排除反鋸齒過渡）
   mapped.forEach(s=>{ const d=(r-s.r)**2+(g-s.g)**2+(b-s.b)**2; if(d<bd){ bd=d; best=s.assign; } });
-  return best;
+  return best;                                  // 非純色（過渡像素）→ null
 }
 
 // ── 套用著色（可重複）─────────────────────────────────
+// 點是否在多邊形內（射線法，經緯空間）
+function _ptInRing(lon,lat,ring){
+  let inside=false, n=ring.length, j=n-1;
+  for(let i=0;i<n;i++){
+    const xi=ring[i][0], yi=ring[i][1], xj=ring[j][0], yj=ring[j][1];
+    if(((yi>lat)!==(yj>lat)) && (lon < (xj-xi)*(lat-yi)/(yj-yi+1e-12)+xi)) inside=!inside;
+    j=i;
+  }
+  return inside;
+}
+function _ringsOf(f){
+  const g=f.geometry;
+  if(g.type==='Polygon') return [g.coordinates[0]];
+  return g.coordinates.map(poly=>poly[0]);   // MultiPolygon：各部件外環
+}
 function _imgApply(){
   if(!IMG||!IMG.H3){ alert('請先完成四點校正'); return; }
   const mapped=IMG.swatches.filter(s=>s.assign);
   if(!mapped.length){ alert('請至少指定一個色彩對照'); return; }
-  let painted=0;
+  let painted=0, thin=0;
   TOWN_GEO.features.forEach(f=>{
     const p=f.properties, county=p.COUNTYNAME||'', town=p.TOWNNAME||'';
     if(!county||!town) return;
-    const g=f.geometry;
-    const ring=g.type==='Polygon'?g.coordinates[0]:g.coordinates[0][0];
-    let sx=0,sy=0,minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9;
-    ring.forEach(c=>{ sx+=c[0]; sy+=c[1];
+    const rings=_ringsOf(f);
+    // 多邊形 bbox
+    let minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9;
+    rings.forEach(r=>r.forEach(c=>{
       if(c[0]<minx)minx=c[0]; if(c[0]>maxx)maxx=c[0];
-      if(c[1]<miny)miny=c[1]; if(c[1]>maxy)maxy=c[1]; });
-    const clng=sx/ring.length, clat=sy/ring.length;
-    const ox=(maxx-minx)*0.175, oy=(maxy-miny)*0.175;
+      if(c[1]<miny)miny=c[1]; if(c[1]>maxy)maxy=c[1];
+    }));
+    // 密集網格：多邊形內約 N×N 取樣（隨鄉鎮大小自適應，上限避免超大鄉鎮過慢）
+    const span=Math.max(maxx-minx, maxy-miny);
+    const N=Math.max(8, Math.min(26, Math.round(span/0.006)));  // 約每0.006°一點
     const votes={};
-    [[clng,clat],[clng-ox,clat-oy],[clng+ox,clat-oy],[clng-ox,clat+oy],[clng+ox,clat+oy]].forEach(([lg,lt])=>{
-      const [x,y]=_ll2px(lg,lt);
-      const col=_sampleAt(x,y,mapped);
-      if(col) votes[col]=(votes[col]||0)+1;
+    let inCount=0;
+    for(let iy=0; iy<N; iy++){
+      const lat=miny+(maxy-miny)*(iy+0.5)/N;
+      for(let ix=0; ix<N; ix++){
+        const lon=minx+(maxx-minx)*(ix+0.5)/N;
+        if(!rings.some(r=>_ptInRing(lon,lat,r))) continue;
+        inCount++;
+        const [x,y]=_ll2px(lon,lat);
+        const col=_sampleAt(x,y,mapped);
+        if(col) votes[col]=(votes[col]||0)+1;
+      }
+    }
+    const tot=Object.values(votes).reduce((a,b)=>a+b,0);
+    if(tot<3){ thin++; return; }          // 有效純色樣本太少 → 留白（不猜）
+    // 眾數為主
+    let mode=null,bn=0;
+    Object.entries(votes).forEach(([c,n])=>{ if(n>bn){ bn=n; mode=c; } });
+    // 防漏報：比眾數「級距更高」且佔比≥22% 的最高色 優先
+    const modeRank=COLOR_RANK[mode]??-1;
+    let best=mode, bestRank=modeRank;
+    Object.entries(votes).forEach(([c,n])=>{
+      const rk=COLOR_RANK[c]??-1;
+      if(rk>modeRank && n/tot>=0.22 && rk>bestRank){ best=c; bestRank=rk; }
     });
-    let best=null,bn=0;
-    Object.entries(votes).forEach(([c,n])=>{ if(n>bn){ bn=n; best=c; } });
-    if(!best||bn<2) return;
     const key='T:'+county+':'+town;
     history.push({key, prev:fillData[key]||null});
     fillData[key]=best; painted++;
@@ -1289,7 +1328,7 @@ function _imgApply(){
   document.getElementById('cnt').textContent=Object.keys(fillData).length;
   if(_blurOn){ try{ renderInterpolated(); }catch(e){} }
   const msg=document.getElementById('cal-msg');
-  if(msg) msg.textContent=`✓ 已著色 ${painted} 個鄉鎮（可撤銷；有效取樣<2 者留白）`;
+  if(msg) msg.textContent=`✓ 已著色 ${painted} 個鄉鎮（多邊形密集取樣；${thin} 個純色樣本不足留白，可撤銷）`;
 }
 
 // ── 底圖疊合驗證（可重複開關）─────────────────────────

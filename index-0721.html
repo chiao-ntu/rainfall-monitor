@@ -617,7 +617,6 @@ let selected = null;
 let townLayer = null, countyLayer = null;
 let _blurOn = false;  // 渲染（邊界漸層）開關
 let _cwaQpfActive = false;  // 前48h是否為CWA QPF覆蓋
-let OFFICIAL_WARN = null;   // 官方現行警特報（W-C0033-001，縣市級；後端每6h更新）
 
 // 右側欄收合/展開
 let sidebarOpen = true;
@@ -1304,18 +1303,10 @@ function renderLayer(){
   });
   townLayer.addTo(map);
 
-  // 縣市邊界（黑色 1px；警特報模式下有官方特報之縣市改以官方級別色粗虛線框示，
-  // 供「系統預估（面）vs 官方發布（框）」直接對照）
+  // 縣市邊界（黑色 1px）
   countyLayer = L.layerGroup();
   COUNTY_GEO.features.forEach(feat=>{
-    let opts={color:'#000000',weight:1,fill:false,opacity:0.7,interactive:false};
-    if(mode==='warn' && OFFICIAL_WARN && OFFICIAL_WARN.counties){
-      const w = OFFICIAL_WARN.counties[feat.properties.COUNTYNAME];
-      if(w && w.level > 0){
-        opts = {color: WARN_COLORS[w.level] || '#FFFF00', weight: 3, fill: false,
-                opacity: 0.95, dashArray: '7 5', interactive: false};
-      }
-    }
+    const opts={color:'#000000',weight:1,fill:false,opacity:0.7,interactive:false};
     const g = feat.geometry;
     if(g.type==='Polygon'){
       L.polygon(g.coordinates.map(toLL),opts).addTo(countyLayer);
@@ -1957,12 +1948,7 @@ function renderLegend(){
         <div style="width:14px;height:10px;border-radius:1px;background:${s.color};
           border:1px solid rgba(0,0,0,.25);flex-shrink:0"></div>
         <span style="color:#111;font-size:10px;font-weight:600">${rangeLabel(sc,i)}</span>
-      </div>`).join('')
-      + (mode==='warn' && OFFICIAL_WARN && Object.keys(OFFICIAL_WARN.counties||{}).length
-         ? `<div style="margin-top:3px;padding-top:3px;border-top:1px dashed #999;color:#333;font-size:9px">
-              <span style="display:inline-block;width:14px;border-top:2px dashed #cc8800;vertical-align:middle"></span>
-              縣市虛線框＝官方現行特報</div>`
-         : '');
+      </div>`).join('');
   }
 }
 
@@ -1999,7 +1985,6 @@ async function tryLoadLive(){
 
     // CWA QPF 資料來源標示（颱風 F-C0041 / 常態 48h逐6h 官方QPF覆蓋）
     _cwaQpfActive = !!d.cwa_qpf_active;
-    OFFICIAL_WARN = d.official_warn || null;   // 官方現行警特報（W-C0033-001，縣市級）
     window._dataGenAt = d.generated_at || '';  // 供各面板快取鍵使用
     const sysNote = document.getElementById('sys-note');   // 獨立元素：不被切換模式洗掉
     if(sysNote) sysNote.innerHTML = '';   // 每次載入重建（避免自動更新時重複追加）
@@ -2473,31 +2458,7 @@ function updateDistrictSummary(){
     h += '</tbody></table></div>';
   });
 
-  // ── 官方現行特報（CWA W-C0033-001，縣市級；與上方系統預估對照）──
-  if(OFFICIAL_WARN){
-    const cts = Object.entries(OFFICIAL_WARN.counties || {});
-    h += `<div style="margin:4px 0 6px">
-      <div style="color:#ffcc44;font-size:10px;font-weight:700;padding:3px 2px;
-        border-bottom:1px solid #ffcc4455;background:#0d1f30"
-        title="氣象署現行發布中的豪大雨特報（縣市級，每次資料更新時擷取）。與上方「警特報預估」對照：官方為預報員綜合研判之預警，本系統為QPF逐時判讀之估計。">官方現行特報（${OFFICIAL_WARN.fetched||''} 擷取）</div>`;
-    if(cts.length){
-      cts.sort((a,b)=>b[1].level-a[1].level).forEach(([cty,w])=>{
-        h += `<div style="display:flex;justify-content:space-between;padding:1px 4px;font-size:10px">
-          <span style="color:#8ab8d8">${cty}</span>
-          <span style="color:${WARN_COLORS[w.level]||'#ffcc44'};font-weight:700">${w.phenomena}</span></div>`;
-      });
-    } else {
-      h += `<div style="color:#3a6080;font-size:10px;padding:2px 4px">目前無豪大雨特報</div>`;
-    }
-    const oth = Object.entries(OFFICIAL_WARN.others || {});
-    if(oth.length){
-      h += `<div style="color:#5a7a9a;font-size:9px;padding:2px 4px">其他特報：`+
-        oth.map(([c,ps])=>`${c}(${ps.join('、')})`).join('、') + `</div>`;
-    }
-    h += '</div>';
-  }
-
-  body.innerHTML = h;
+body.innerHTML = h;
 }
 
 // 摘要用：當前時段的累積雨量（不受 mode 影響，永遠回傳雨量）

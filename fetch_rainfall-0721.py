@@ -953,10 +953,11 @@ def fetch_cwa_routine_qpf(now_tpe):
       A. 已知來源（cwa_qpf_source.json）直取
       B. 廣域指標檔掃描 F-C0035-001..030 + F-C0041-001..016（fileapi JSON→列出全部 uri，
          下載任何 zip 檢視成員名單、csv 逐一嘗試）——一次跑完即可確定 dataid 版圖
-      C. 全部僅圖檔時：下載 QPF PNG 存 qpf_sample.png（log 尺寸），供像素校正；
-         校正參數 QPF_PNG_CALIB 填入後改走色塊判讀（decode_qpf_png）
+      C. 全部僅圖檔時：下載 QPF PNG 存 qpf_sample.png，以內建四海岬單應性校正判讀
+         （decode_qpf_png，樣張色表已內建）
     """
     if not CWA_API_KEY: return None
+    towns = load_all_townships()   # PNG 判讀路徑需要鄉鎮座標
     print("抓取 CWA 常態 QPF（48h逐6h，預報員修正版）...")
     known = None
     if os.path.exists(CWA_QPF_SRC_FILE):
@@ -1032,74 +1033,121 @@ def fetch_cwa_routine_qpf(now_tpe):
                 import struct
                 w, h = struct.unpack('>II', r.content[16:24])   # IHDR
                 print(f"    已存 qpf_sample.png（{w}x{h}，{len(r.content)//1024}KB，來源 {did}）")
-                if QPF_PNG_CALIB:
-                    segs = decode_qpf_png(r.content, did, now_tpe)
-                    if segs and len(segs) >= 1:
-                        print(f"    ✓ 常態QPF（PNG色塊判讀）：{len(segs)} 段")
-                        return {'issue': did + ':png', 'segs': segs}
-                else:
-                    print(f"    QPF_PNG_CALIB 未設定——請將 qpf_sample.png 交給開發者做像素校正後啟用色塊判讀")
+                segs = decode_qpf_png(r.content, did, now_tpe, towns)
+                if segs and len(segs) >= 1:
+                    n_any = sum(1 for sv in segs.values() for v in sv.values() if v)
+                    print(f"    ✓ 常態QPF（PNG單應性判讀）：{len(segs)} 段（近似，僅級距）")
+                    with open(CWA_QPF_SRC_FILE, 'w', encoding='utf-8') as f:
+                        json.dump({'kind': 'png', 'id': did}, f)
+                    return {'issue': did + ':png', 'segs': segs, 'png': True}
         except Exception as e:
             print(f"    PNG 取樣失敗：{e}")
     print("    常態QPF：格點資料探測未果（以上 uri 清單請貼給開發者）")
     return None
 
-# ── QPF PNG 色塊判讀（校正後啟用）─────────────────────────────────
-# 校正參數：由 qpf_sample.png 人工比對兩個已知經緯的像素點求仿射轉換。
-# 格式：{'px0':像素x, 'py0':像素y, 'lon0':經度, 'lat0':緯度, 'dppx':度/像素x, 'dppy':度/像素y(向下為負),
-#        'window_hours':12, 'bands':[(R,G,B,代表值mm), ...]}
-# bands 依樣張圖例逐格取色填入（代表值取級距下界，保守），tol 為色距容忍。
-QPF_PNG_CALIB = None
+# ── QPF PNG 色塊判讀（單應性校正，樣張已內建 F-C0035 定量降水預報 II 色表）──
+# 校正基準：2026/07/20 樣張 QPF_ChFcstPrecip_12_24.png（1245×1500）四海岬像素定位，
+#   單應性（透視變形已修正，非軸對齊——實測仿射殘差達27px、單應性收斂至0）。
+#   H3 由 CAPES 四點解得；不同尺寸/版式的圖需重新定位（見 QPF_PNG_H3 尺寸檢查）。
+# 色表：右側圖例17級實測色（級距下界為代表值，保守）。
+CAPES_PX = {  # 樣張像素座標（1245×1500）
+    'N': (933, 202),  'E': (1102, 306),  'S': (687, 1423),  'W': (380, 860),
+}
+CAPES_LL = {
+    'N': (121.5366, 25.2977),  'E': (122.0017, 25.0074),
+    'S': (120.8585, 21.8968),  'W': (120.0358, 23.1008),
+}
+QPF_PNG_REF_SIZE = (1245, 1500)
+# 17級色表 (R,G,B,代表值mm)：<0.5 不著色；級距用「下界」代表（≥110→110、90-110→90…）
+QPF_PNG_BANDS = [
+    (253,201,255, 300), (251,0,255, 200), (201,0,204, 150), (150,0,153, 130),
+    (153,0,0, 110),     (204,0,0, 90),    (255,0,0, 70),     (255,149,0, 50),
+    (255,200,0, 40),    (255,251,3, 30),  (57,255,3, 20),    (5,153,2, 15),
+    (3,99,255, 10),     (5,155,255, 5),   (3,200,255, 2),    (156,252,255, 1),
+    (194,194,194, 0.5),
+]
+QPF_PNG_TOL = 42          # 色距容忍（√(42²×3)≈73）
+QPF_PNG_WINDOW_HOURS = 12 # 定量降水預報(II) 為 12h 有效時段
 
-def decode_qpf_png(png_bytes, did, now_tpe):
-    """PNG 色塊 → 各鄉鎮 QPF 值。需 Pillow（workflow 加 pip install pillow）。
-    回傳 {start_tpe: '__png_town_map__'} 形式？——否：回傳與網格路徑同構，
-    以「虛擬網格」包裝：直接產出 town 座標查值函式無法塞回既有管線，
-    故此處輸出 260x260 虛擬網格（逐格反查像素）以沿用 _qpf_grid_at。"""
-    c = QPF_PNG_CALIB
-    if not c: return None
+def _png_solve_homography(px_map, ll_map):
+    """四點 DLT 解 lon/lat→pixel 單應性（回 3×3 list）"""
+    import numpy as _np
+    A = []
+    for k in ['N','E','S','W']:
+        x, y = px_map[k]; lon, lat = ll_map[k]
+        A.append([lon,lat,1,0,0,0,-x*lon,-x*lat,-x])
+        A.append([0,0,0,lon,lat,1,-y*lon,-y*lat,-y])
+    _, _, vt = _np.linalg.svd(_np.array(A))
+    h = vt[-1].reshape(3,3)
+    return (h / h[2,2]).tolist()
+
+def _png_ll2px(H3, lon, lat):
+    w = H3[2][0]*lon + H3[2][1]*lat + H3[2][2]
+    return ((H3[0][0]*lon+H3[0][1]*lat+H3[0][2])/w,
+            (H3[1][0]*lon+H3[1][1]*lat+H3[1][2])/w)
+
+def decode_qpf_png(png_bytes, did, now_tpe, towns):
+    """CWA 定量降水預報 PNG → 各鄉鎮 QPF 值（單應性 + 質心多點取樣多數決）。
+    需 Pillow。回傳 {start_tpe: {town_key: val}}（鄉鎮字典，非網格）；失敗回 None。
+    ⚠色塊判讀為近似（僅級距、無精確值），12h 圖均分兩個 6h 段。"""
     try:
         from PIL import Image
-        import io as _io
+        import numpy as _np, io as _io
     except ImportError:
-        print("    需要 Pillow：請在 workflow 安裝 pip install pillow")
+        print("    需要 Pillow/numpy：workflow 請加 pip install pillow numpy")
         return None
     img = Image.open(_io.BytesIO(png_bytes)).convert('RGB')
     W, H = img.size
-    px = img.load()
-    g = QPF_GRID
-    bands = c.get('bands') or []
-    tol = c.get('tol', 30)
-    vals = [None] * (g['nx'] * g['ny'])
-    for iy in range(g['ny']):
-        lat67 = g['lat0'] + iy * g['dlat']
-        lat = lat67 + TWD67_DLAT   # TWD67→WGS84 反轉換（與 _qpf_grid_at 的正轉換互逆）
-        for ix in range(g['nx']):
-            lon67 = g['lon0'] + ix * g['dlon']
-            lon = lon67 + TWD67_DLON
-            x = int(round(c['px0'] + (lon - c['lon0']) / c['dppx']))
-            y = int(round(c['py0'] + (lat - c['lat0']) / c['dppy']))
-            if x < 0 or x >= W or y < 0 or y >= H: continue
-            rgb = px[x, y]
-            best, bd = None, tol * tol * 3 + 1
-            for (br, bg2, bb, bv) in bands:
-                d = (rgb[0]-br)**2 + (rgb[1]-bg2)**2 + (rgb[2]-bb)**2
-                if d < bd: bd, best = d, bv
-            if best is not None and bd <= tol * tol * 3:
-                vals[iy * g['nx'] + ix] = float(best)
-    # 時間窗：PNG 為 12h 產品（0-12h 起）；以「發布批次」推定，
-    # 均分為兩個 6h 段（12h 值 ÷2）——色塊判讀本質為近似，log 明示
-    wh = int(c.get('window_hours', 12))
-    base = now_tpe.replace(minute=0, second=0, microsecond=0, tzinfo=None)
-    base = base + timedelta(hours=(6 - base.hour % 6) % 6)   # 下一個 6h 邊界
-    segs = {}
-    n_seg = max(1, wh // 6)
-    half = [None if v is None else round(v / n_seg, 1) for v in vals]
-    for k in range(n_seg):
-        segs[base + timedelta(hours=6 * k)] = half
-    print(f"    PNG判讀：{sum(1 for v in vals if v is not None)}/{len(vals)} 格有值，{n_seg} 段（12h均分近似）")
-    return segs
+    arr = _np.asarray(img)
+    # 尺寸須與樣張一致才能套用內建像素座標（否則需重新定位）
+    if (W, H) != QPF_PNG_REF_SIZE:
+        print(f"    PNG尺寸 {W}×{H} ≠ 校正基準 {QPF_PNG_REF_SIZE}——無法套用內建四點，略過")
+        print(f"    （若為新版式，請提供新樣張重新定位四海岬像素）")
+        return None
+    H3 = _png_solve_homography(CAPES_PX, CAPES_LL)
+    bands = QPF_PNG_BANDS
+    tol2 = QPF_PNG_TOL * QPF_PNG_TOL * 3
 
+    def sample(lon, lat):
+        x, y = _png_ll2px(H3, lon, lat)
+        xi, yi = int(round(x)), int(round(y))
+        if xi < 0 or xi >= W or yi < 0 or yi >= H: return None
+        r, g, b = int(arr[yi,xi,0]), int(arr[yi,xi,1]), int(arr[yi,xi,2])
+        mx, mn = max(r,g,b), min(r,g,b)
+        if mx > 235 and mn > 225: return 0.0      # 白底＝無雨（<0.5）
+        best, bd = None, tol2 + 1
+        for (br,bg,bb,bv) in bands:
+            d = (r-br)**2 + (g-bg)**2 + (b-bb)**2
+            if d < bd: bd, best = d, bv
+        return best if bd <= tol2 else None
+
+    town_vals = {}
+    n_hit = 0
+    for t in towns:
+        lat, lng = t.get('lat'), t.get('lng')
+        if not lat: continue
+        key = f"{t['county']}{t['township']}"
+        # 質心 + 十字四點（±0.02°）多數決，抑制邊界與等值線雜訊
+        votes = {}
+        for dlo, dla in [(0,0),(-0.02,0),(0.02,0),(0,-0.02),(0,0.02)]:
+            v = sample(lng+dlo, lat+dla)
+            if v is not None: votes[v] = votes.get(v,0)+1
+        if not votes: continue
+        val = max(votes.items(), key=lambda kv: kv[1])[0]
+        town_vals[key] = val
+        if val > 0: n_hit += 1
+    print(f"    PNG判讀（單應性）：{n_hit}/{len(towns)} 鄉鎮有雨值")
+
+    # 12h 有效時段 → 均分兩個 6h 段（近似）。時間窗由檔名 tau 決定較準；
+    # 若無檔名資訊，退回「下一個 6h 邊界起」。
+    base = now_tpe.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+    base = base + timedelta(hours=(6 - base.hour % 6) % 6)
+    n_seg = max(1, QPF_PNG_WINDOW_HOURS // 6)
+    seg_vals = {k: (None if v is None else round(v/n_seg, 1)) for k,v in town_vals.items()}
+    segs = {}
+    for k in range(n_seg):
+        segs[base + timedelta(hours=6*k)] = seg_vals
+    return segs
 
 # ── 官方警特報（W-C0033-001 各縣市現行天氣警特報）───────────────────
 WARN_PHEN_LEVEL = {'大雨': 1, '豪雨': 2, '大豪雨': 3, '超大豪雨': 4}
@@ -1244,13 +1292,15 @@ def main():
     # 對齊日曆6h段：idx = (start − 今天00時TST)/6h（qpf_15d[0]=今天00-06 鐵律）
     _today00 = now_tpe.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     routine_seg_map = {}
+    routine_is_png = bool(routine_qpf and routine_qpf.get('png'))
     if routine_qpf:
         for _st, _vals in routine_qpf['segs'].items():
             _sec = (_st - _today00).total_seconds()
             _idx = int(_sec // 21600)
             if 0 <= _idx < 60 and _sec % 21600 == 0:
                 routine_seg_map[_idx] = _vals
-        print(f"  常態QPF對齊段索引：{sorted(routine_seg_map)}")
+        print(f"  常態QPF對齊段索引：{sorted(routine_seg_map)}"
+              f"{'（PNG鄉鎮字典，近似）' if routine_is_png else ''}")
 
     # 官方現行警特報（與系統預估對照，落差可視化）
     official_warn = fetch_official_warnings() if CWA_API_KEY else None
@@ -1346,9 +1396,13 @@ def main():
                 _v = idw(lat, lng, _pts, _idx) if _pts else None
                 if _v is not None: _cwa_by_idx[_idx] = _v
         elif routine_seg_map:
+            _tkey = f"{county}{township}"   # PNG 路徑用鄉鎮鍵
             for _idx, _vals in routine_seg_map.items():
                 if not (0 <= _idx < len(qpf_best)): continue
-                _v = _qpf_grid_at(_vals, lat, lng)
+                if routine_is_png:
+                    _v = _vals.get(_tkey)   # 鄉鎮字典
+                else:
+                    _v = _qpf_grid_at(_vals, lat, lng)   # 網格
                 if _v is not None: _cwa_by_idx[_idx] = round(float(_v), 1)
         qpf_cwa = []
         if _cwa_by_idx:
