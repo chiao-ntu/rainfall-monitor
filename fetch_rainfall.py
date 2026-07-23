@@ -429,7 +429,7 @@ def get_pop_6h_series(township_name, pop3d, pop7d, base_time, num_segs=28):
     return result
 
 # ── Open-Meteo ────────────────────────────────────
-# 逐時警特報掃描結果快取（best_match）：key → warn_seg[60]
+# 逐時警特報掃描結果快取：{model: {key: warn_seg[64]}}（每模式獨立，前端依所選模式取用）
 WARN_SEG_CACHE = {}
 HOURLY_CACHE = {}    # key -> 前48h逐時QPF（best_match）
 PAST48_CACHE = {}    # key -> 過去48h逐時模式回算（前天+昨天，圖表歷史段用）
@@ -494,27 +494,27 @@ def fetch_openmeteo_model(townships, model='best_match'):
         result[key] = segs_6h[:64]
         result_max_hourly[key] = max_hourly_6h[:64]
 
-        # 逐時掃描 CWA 警特報條件（僅 best_match，供前端精確標示）
+        # 逐時掃描 CWA 警特報條件（每個模式都算，供前端依所選模式顯示對應等級）
         # 大雨: 24h≥100 或 1h≥40；豪雨: 24h≥200 或 3h≥100
         # 大豪雨: 24h≥350 或 3h≥200；超大豪雨: 24h≥500
+        pv = [v if v is not None else 0.0 for v in precip]
         if model == 'best_match':
-            pv = [v if v is not None else 0.0 for v in precip]
-            HOURLY_CACHE[key] = [round(v,1) for v in pv[:96]]  # 逐時QPF 96h（今天00起，覆蓋『現在+72h』全時段）
-            warn_hourly = []
-            r3 = 0.0; r24 = 0.0
-            for h in range(len(pv)):
-                r3  += pv[h] - (pv[h-3]  if h >= 3  else 0.0)
-                r24 += pv[h] - (pv[h-24] if h >= 24 else 0.0)
-                r1 = pv[h]
-                if r24 >= 500:               lv = 4
-                elif r24 >= 350 or r3 >= 200: lv = 3
-                elif r24 >= 200 or r3 >= 100: lv = 2
-                elif r24 >= 100 or r1 >= 40:  lv = 1
-                else:                         lv = 0
-                warn_hourly.append(lv)
-            warn_seg = [max(warn_hourly[j:j+6]) if warn_hourly[j:j+6] else 0
-                        for j in range(0, len(warn_hourly), 6)]
-            WARN_SEG_CACHE[key] = warn_seg[:64]
+            HOURLY_CACHE[key] = [round(v,1) for v in pv[:96]]  # 逐時QPF 96h（今天00起）
+        warn_hourly = []
+        r3 = 0.0; r24 = 0.0
+        for h in range(len(pv)):
+            r3  += pv[h] - (pv[h-3]  if h >= 3  else 0.0)
+            r24 += pv[h] - (pv[h-24] if h >= 24 else 0.0)
+            r1 = pv[h]
+            if r24 >= 500:               lv = 4
+            elif r24 >= 350 or r3 >= 200: lv = 3
+            elif r24 >= 200 or r3 >= 100: lv = 2
+            elif r24 >= 100 or r1 >= 40:  lv = 1
+            else:                         lv = 0
+            warn_hourly.append(lv)
+        warn_seg = [max(warn_hourly[j:j+6]) if warn_hourly[j:j+6] else 0
+                    for j in range(0, len(warn_hourly), 6)]
+        WARN_SEG_CACHE.setdefault(model, {})[key] = warn_seg[:64]
     n = len(next(iter(result.values()),[]))
     print(f"    {len(result)} 個點，各 {n} 個6h時段")
     return result, result_max_hourly
@@ -681,6 +681,28 @@ def load_qpesums_p48():
 
 # ── 系集強弱降雨比值（縣級） ──────────────────────
 ENSEMBLE_API = "https://ensemble-api.open-meteo.com/v1/ensemble"
+
+def compute_warn_seg_from_hourly(hourly):
+    """從逐時降雨陣列算 CWA 警特報逐段等級（與各模式主掃描同標準）。
+    回傳 warn_seg[≤64]。供 hi/lo 等「由 best 逐時×比值」衍生的模式即時計算。"""
+    if not hourly:
+        return []
+    pv = [v if v is not None else 0.0 for v in hourly]
+    warn_hourly = []
+    r3 = 0.0; r24 = 0.0
+    for h in range(len(pv)):
+        r3  += pv[h] - (pv[h-3]  if h >= 3  else 0.0)
+        r24 += pv[h] - (pv[h-24] if h >= 24 else 0.0)
+        r1 = pv[h]
+        if r24 >= 500:               lv = 4
+        elif r24 >= 350 or r3 >= 200: lv = 3
+        elif r24 >= 200 or r3 >= 100: lv = 2
+        elif r24 >= 100 or r1 >= 40:  lv = 1
+        else:                         lv = 0
+        warn_hourly.append(lv)
+    return [max(warn_hourly[j:j+6]) if warn_hourly[j:j+6] else 0
+            for j in range(0, len(warn_hourly), 6)][:64]
+
 
 def fetch_ensemble_ratios(townships):
     """
@@ -1213,17 +1235,19 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns, fname=''):
                 _snap = round(_off / 21600) * 21600
                 base = _day0 + timedelta(seconds=_snap)
                 n_seg = max(1, win_h // 6)
-                seg_vals = {k: (None if v is None else round(v/n_seg, 1)) for k,v in town_vals.items()}
+                # 色階為「類別」而非可加量：12h 圖的色帶直接套用到每個 6h 子段
+                #   （不除以段數——除法會破壞色帶身分，害前端對不到官方色）
+                seg_vals = dict(town_vals)
                 segs = {}
                 for k in range(n_seg):
                     segs[base + timedelta(hours=6*k)] = seg_vals
-                print(f"    時間窗（檔名 {h0}-{h1}h）：{base.strftime('%m/%d %H:%M')} 起 {n_seg} 段")
+                print(f"    時間窗（檔名 {h0}-{h1}h）：{base.strftime('%m/%d %H:%M')} 起 {n_seg} 段（色階類別）")
                 return segs
-    # 退回：下一個 6h 邊界起、12h 窗
+    # 退回：下一個 6h 邊界起、12h 窗（色階為類別，直接套用不除段）
     base = now_tpe.replace(minute=0, second=0, microsecond=0, tzinfo=None)
     base = base + timedelta(hours=(6 - base.hour % 6) % 6)
     n_seg = max(1, win_h // 6)
-    seg_vals = {k: (None if v is None else round(v/n_seg, 1)) for k,v in town_vals.items()}
+    seg_vals = dict(town_vals)
     segs = {}
     for k in range(n_seg):
         segs[base + timedelta(hours=6*k)] = seg_vals
@@ -1456,22 +1480,30 @@ def main():
         maxh_gfs   = get_max_hourly_model('gfs_seamless')
         maxh_icon  = get_max_hourly_model('icon_seamless')
 
-        # CWA 官方 QPF 覆蓋（颱風 F-C0041 精確格點 ＋ 常態 48h 逐6h／PNG判讀）：
-        #   兩來源皆可能存在——颱風精確值在重疊段優先；其餘段由常態值填補。
-        #   qpf_cwa 為與 qpf_15d 同索引的稀疏陣列（未覆蓋段=null，絕不補值）。
-        #   _cwa_png_idx 記錄哪些段為「PNG級距近似」→ 這些段與模式取高值防漏報。
-        _cwa_by_idx = {}     # idx -> value
-        _cwa_png_idx = set() # 屬於 PNG 近似判讀的段索引
-        # (1) 常態 QPF（先填；颱風精確值稍後覆蓋重疊段）
-        if routine_seg_map:
+        # CWA 官方 QPF 覆蓋：
+        #   (A) 颱風 F-C0041＝精確格點數值 → 覆蓋各模式（真實數值，有意義）。
+        #   (B) 常態 PNG＝定量降水預報圖「色階類別」→ 僅供 CWA 模式著色，
+        #       絕不轉數字、絕不覆蓋任何模式（色塊判讀本質是類別，硬轉數字會失真，
+        #       且會污染 best/ecmwf/hi/lo——這正是先前數據異常的主因）。
+        #   qpf_cwa：CWA 模式著色用陣列（PNG 段=色階代表值；颱風段=精確值；未覆蓋=null）。
+        _cwa_by_idx = {}     # idx -> value（CWA模式著色用）
+        # (A) 常態 PNG 色階（僅存 qpf_cwa，不動任何模式）
+        if routine_seg_map and routine_is_png:
             _tkey = f"{county}{township}"
             for _idx, _vals in routine_seg_map.items():
                 if not (0 <= _idx < len(qpf_best)): continue
-                _v = _vals.get(_tkey) if routine_is_png else _qpf_grid_at(_vals, lat, lng)
+                _v = _vals.get(_tkey)
+                if _v is not None:
+                    _cwa_by_idx[_idx] = round(float(_v), 1)   # 色階代表值（僅著色）
+        elif routine_seg_map and not routine_is_png:
+            # 常態格點（非PNG，真實數值）→ 可覆蓋模式（與颱風同性質）
+            for _idx, _vals in routine_seg_map.items():
+                if not (0 <= _idx < len(qpf_best)): continue
+                _v = _qpf_grid_at(_vals, lat, lng)
                 if _v is not None:
                     _cwa_by_idx[_idx] = round(float(_v), 1)
-                    if routine_is_png: _cwa_png_idx.add(_idx)
-        # (2) 颱風 F-C0041 精確格點（覆蓋重疊段，移出 png 近似集）
+                    qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = qpf_icon[_idx] = _cwa_by_idx[_idx]
+        # (B) 颱風 F-C0041 精確格點（真實數值，覆蓋模式）
         if is_typhoon and typhoon_segs:
             _cur_seg = now_tpe.hour // 6
             for _i, _seg in enumerate(typhoon_segs):
@@ -1489,20 +1521,13 @@ def main():
                 _v = idw(lat, lng, _pts, _idx) if _pts else None
                 if _v is not None:
                     _cwa_by_idx[_idx] = _v
-                    _cwa_png_idx.discard(_idx)   # 精確值：不走近似取高值
+                    qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = qpf_icon[_idx] = _v
         qpf_cwa = []
         if _cwa_by_idx:
             _max_idx = max(_cwa_by_idx)
             qpf_cwa = [None] * (_max_idx + 1)
             for _idx, _v in _cwa_by_idx.items():
-                # PNG 近似段：與模式互相參照取高值（防漏報，用戶指定）——
-                #   官方級距floor 不抹掉模式較高峰值；模式低估則被 floor 拉起。
-                # 精確段（颱風/格點）：官方最高優先，直接覆蓋。
-                if _idx in _cwa_png_idx:
-                    _v = max(_v, qpf_best[_idx] or 0, qpf_ecmwf[_idx] or 0)
                 qpf_cwa[_idx] = _v
-                # （僅未來段；過去段前端一律以觀測為準）
-                qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = qpf_icon[_idx] = _v
 
         # 預設用 best_match（CWA優先 > ECMWF > GFS=ICON 的綜合判斷已含在模式選擇邏輯中）
         qpf15d = qpf_best
@@ -1561,7 +1586,13 @@ def main():
             'obs_1h_p48': qp_p48.get(f"{county}{township}", []),   # 官方QPESUMS逐時觀測（過去48h）
             'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'hi'),
             'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'lo'),
-            'warn_seg':  WARN_SEG_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
+            # 每模式獨立警特報（前端依所選模式取用；hi/lo 由 best 逐時×系集比值即時算）
+            'warn_seg':       WARN_SEG_CACHE.get('best_match', {}).get(f"{lat:.4f}_{lng:.4f}", []),
+            'warn_seg_ecmwf': WARN_SEG_CACHE.get('ecmwf_ifs025', {}).get(f"{lat:.4f}_{lng:.4f}", []),
+            'warn_seg_gfs':   WARN_SEG_CACHE.get('gfs_seamless', {}).get(f"{lat:.4f}_{lng:.4f}", []),
+            'warn_seg_icon':  WARN_SEG_CACHE.get('icon_seamless', {}).get(f"{lat:.4f}_{lng:.4f}", []),
+            'warn_seg_hi':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'hi')),
+            'warn_seg_lo':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'lo')),
             'maxh_best':  maxh_best,
             'maxh_ecmwf': maxh_ecmwf,
             'maxh_gfs':   maxh_gfs,
@@ -1661,7 +1692,12 @@ def main():
             'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'lo'),
             'maxh_best': get_ns_maxh('best_match'),  'maxh_ecmwf': get_ns_maxh('ecmwf_ifs025'),
             'maxh_gfs':  get_ns_maxh('gfs_seamless'), 'maxh_icon': get_ns_maxh('icon_seamless'),
-            'warn_seg':  WARN_SEG_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
+            'warn_seg':       WARN_SEG_CACHE.get('best_match', {}).get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
+            'warn_seg_ecmwf': WARN_SEG_CACHE.get('ecmwf_ifs025', {}).get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
+            'warn_seg_gfs':   WARN_SEG_CACHE.get('gfs_seamless', {}).get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
+            'warn_seg_icon':  WARN_SEG_CACHE.get('icon_seamless', {}).get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
+            'warn_seg_hi':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'hi')),
+            'warn_seg_lo':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'lo')),
             'stations':  station_list,
             'daily_rain': obs.get('daily_rain', [0.0]*15),
         })

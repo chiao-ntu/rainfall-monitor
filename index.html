@@ -937,6 +937,23 @@ const RISK_SCALE=[
   {max:1e9, color:'#CC00CB', label:'≥100 超高'},
 ];
 function rainColor(v){for(const s of RAIN_SCALE)if(v<s.max)return s.color;return'#FFACF9'}
+
+// CWA 定量降水預報官方色階（值→官方色；與後端 QPF_PNG_BANDS 對應）。
+//   CWA 模式為「色階類別」呈現：直接還原官方圖的色帶顏色，不顯示數字。
+//   下界代表：值 v 落在哪個色帶就用該色帶的官方色。
+const CWA_QPF_BANDS = [
+  {min:300, color:'#FDC9FF'}, {min:200, color:'#FB00FF'}, {min:150, color:'#C900CC'},
+  {min:130, color:'#960099'}, {min:110, color:'#990000'}, {min:90,  color:'#CC0000'},
+  {min:70,  color:'#FF0000'}, {min:50,  color:'#FF9500'}, {min:40,  color:'#FFC800'},
+  {min:30,  color:'#FFFB03'}, {min:20,  color:'#39FF03'}, {min:15,  color:'#059902'},
+  {min:10,  color:'#0363FF'}, {min:5,   color:'#059BFF'}, {min:2,   color:'#03C8FF'},
+  {min:1,   color:'#9CFCFF'}, {min:0.5, color:'#C2C2C2'},
+];
+function cwaBandColor(v){
+  if(v==null || v<0.5) return null;   // 未達最低色帶＝不著色（白）
+  for(const b of CWA_QPF_BANDS) if(v>=b.min) return b.color;
+  return null;
+}
 function etrColor(v) {for(const s of ETR_SCALE) if(v<s.max)return s.color;return'#CC00CB'}
 function riskColor(v){for(const s of RISK_SCALE)if(v<s.max)return s.color;return'#FF0000'}
 function wCls(v){return v>=100?'w4':v>=90?'w3':v>=70?'w2':v>=50?'w1':'ok'}
@@ -1209,6 +1226,19 @@ function renderLayer(){
     const isSel = selected && selected.county===p.COUNTYNAME && selected.township===p.TOWNNAME;
     let fillColor='#FFFFFF', fillOp=0.05;
     if(t){
+      // CWA 模式：色階類別呈現——直接用官方色帶著色，不轉數字、不做累積。
+      //   取所選時間視窗內最高色帶（防漏報），無覆蓋段＝不著色（白）。
+      if(forecastModel==='cwa'){
+        const ca = t.qpf_cwa || [];
+        let band = null;
+        for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
+          const v = ca[s];
+          if(v!=null && (band===null || v>band)) band = v;
+        }
+        const col = cwaBandColor(band);
+        if(col){ fillColor=col; fillOp=isSel?0.93:0.82; }
+        else   { fillColor='#FFFFFF'; fillOp=1.0; }   // 無CWA色塊＝白
+      } else {
       const acc = getAccum(t);
       const {totalRain, etrPct} = acc;
       if(totalRain === null || totalRain === undefined){
@@ -1227,6 +1257,7 @@ function renderLayer(){
       } else {
         fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#ccddee':etrColor(etrPct));
         fillOp    = isSel?0.93:0.78;
+      }
       }
     }
     // 非選取的鄉鎮邊框顏色設為與填色相同，視覺上消除縫隙
@@ -1260,7 +1291,26 @@ function renderLayer(){
       const etrStr  = etrPct    !== null ? etrPct.toFixed(0)+'%' : '—';
 
       let tooltipHtml;
-      if(mode==='warn'){
+      if(forecastModel==='cwa'){
+        // CWA 模式：呈現官方定量降水預報「色階類別」，不給數字。
+        const ca = t.qpf_cwa || [];
+        let band = null;
+        for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
+          const v = ca[s];
+          if(v!=null && (band===null || v>band)) band = v;
+        }
+        const col = cwaBandColor(band);
+        const label = (band==null || band<0.5) ? '無官方色塊'
+          : band>=200?'≥200mm' : band>=130?'130–200mm' : band>=110?'110–130mm'
+          : band>=90?'90–110mm' : band>=70?'70–90mm' : band>=50?'50–70mm'
+          : band>=40?'40–50mm' : band>=30?'30–40mm' : band>=20?'20–30mm'
+          : band>=15?'15–20mm' : band>=10?'10–15mm' : band>=5?'5–10mm'
+          : band>=2?'2–5mm' : band>=1?'1–2mm' : '<1mm';
+        tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
+          `CWA定量降水預報色階：`+
+          (col?`<span style="color:${col};font-weight:700;text-shadow:0 0 2px #000">${label}</span>`:'—')+
+          `<br><span style="font-size:9px;color:#88a">（官方圖判讀色階，非精確數值）</span>`;
+      } else if(mode==='warn'){
         const lv = totalRain || 0;
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
           `本視窗警特報：${lv>0?`<span style="color:${WARN_COLORS[lv]};font-weight:700">${WARN_NAMES[lv]}</span>`:'未達標準'}<br>`+
@@ -1944,6 +1994,25 @@ function renderLegend(){
   const cb = document.getElementById('colorbar');
   const cbTitle = document.getElementById('cb-title');
   const cbItems = document.getElementById('cb-items');
+  // CWA 模式：顯示官方定量降水預報色階圖例（色帶＋範圍，無累積數字語義）
+  if(forecastModel==='cwa' && (mode==='rain' || mode==='etr')){
+    if(cb && cbTitle && cbItems){
+      cbTitle.textContent = 'CWA定量降水預報色階';
+      const BAND_LEGEND = [
+        ['#FB00FF','≥200'],['#C900CC','150–200'],['#960099','130–150'],['#990000','110–130'],
+        ['#CC0000','90–110'],['#FF0000','70–90'],['#FF9500','50–70'],['#FFC800','40–50'],
+        ['#FFFB03','30–40'],['#39FF03','20–30'],['#059902','15–20'],['#0363FF','10–15'],
+        ['#059BFF','5–10'],['#03C8FF','2–5'],['#9CFCFF','1–2'],['#C2C2C2','<1'],
+      ];
+      cbItems.innerHTML = BAND_LEGEND.map(([c,l])=>`
+        <div style="display:flex;align-items:center;gap:5px;margin:2px 0">
+          <div style="width:14px;height:10px;border-radius:1px;background:${c};
+            border:1px solid rgba(0,0,0,.25);flex-shrink:0"></div>
+          <span style="color:#111;font-size:10px;font-weight:600">${l}</span>
+        </div>`).join('');
+    }
+    return;
+  }
   if(cb && cbTitle && cbItems){
     cbTitle.textContent = titleText;
     cbItems.innerHTML = sc.map((s,i)=>`
@@ -3582,13 +3651,25 @@ function _warnHourlySeries(t){
   return arr;
 }
 
+function _warnSegField(){
+  // 依所選模式取對應的後端警特報陣列（每模式獨立判讀）
+  if(forecastModel==='ecmwf') return 'warn_seg_ecmwf';
+  if(forecastModel==='gfs')   return 'warn_seg_gfs';
+  if(forecastModel==='icon')  return 'warn_seg_icon';
+  if(forecastModel==='hi')    return 'warn_seg_hi';
+  if(forecastModel==='lo')    return 'warn_seg_lo';
+  return 'warn_seg';   // best / cwa 用 best_match 掃描
+}
+
 function _warnLevelAt(t, seg){
-  // 優先採用後端逐時精確掃描的 warn_seg（權威值：後端以完整逐時 QPF 掃描
-  //   24h/3h/1h 滾動門檻算出，與官方警特報標準一致）。前端重算僅為後備，
-  //   兩者若分歧會造成「累積未達標卻顯示警報」的假陽性——故有 warn_seg 就以它為準。
-  if(seg >= 0 && Array.isArray(t.warn_seg) && seg < t.warn_seg.length){
-    const w = t.warn_seg[seg];
-    if(w != null) return w;
+  // 優先採用後端逐時精確掃描的警特報陣列（權威值，依所選模式取對應那份）。
+  //   前端重算僅為後備；兩者分歧會造成「累積未達標卻顯示警報」的假陽性。
+  if(seg >= 0){
+    const wf = _warnSegField();
+    const ws = t[wf];
+    if(Array.isArray(ws) && seg < ws.length && ws[seg] != null) return ws[seg];
+    // 該模式陣列缺（例如舊資料無 warn_seg_hi）→ 退回 best 的 warn_seg
+    if(Array.isArray(t.warn_seg) && seg < t.warn_seg.length && t.warn_seg[seg] != null) return t.warn_seg[seg];
   }
   // CWA 現行警特報標準（用戶指定，逐時滾動精確判讀，過去/未來一致）：
   //   大雨    80mm/24h 或 40mm/1h
