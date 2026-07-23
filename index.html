@@ -3583,6 +3583,13 @@ function _warnHourlySeries(t){
 }
 
 function _warnLevelAt(t, seg){
+  // 優先採用後端逐時精確掃描的 warn_seg（權威值：後端以完整逐時 QPF 掃描
+  //   24h/3h/1h 滾動門檻算出，與官方警特報標準一致）。前端重算僅為後備，
+  //   兩者若分歧會造成「累積未達標卻顯示警報」的假陽性——故有 warn_seg 就以它為準。
+  if(seg >= 0 && Array.isArray(t.warn_seg) && seg < t.warn_seg.length){
+    const w = t.warn_seg[seg];
+    if(w != null) return w;
+  }
   // CWA 現行警特報標準（用戶指定，逐時滾動精確判讀，過去/未來一致）：
   //   大雨    80mm/24h 或 40mm/1h
   //   豪雨   200mm/24h 或 100mm/3h

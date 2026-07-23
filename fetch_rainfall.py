@@ -684,11 +684,11 @@ ENSEMBLE_API = "https://ensemble-api.open-meteo.com/v1/ensemble"
 
 def fetch_ensemble_ratios(townships):
     """
-    以縣級代表點抓 ECMWF 系集（51成員），計算前48h各6h段的
+    以縣級代表點抓 ECMWF 系集（51成員），計算全預報期各6h段的
     強降雨放大倍率（前25%成員均值/中位數）與弱降雨縮小倍率（後25%/中位數）。
-    回傳 {county: {'hi':[8], 'lo':[8]}}；失敗回空dict（前端退回qpf_best）。
+    回傳 {county: {'hi':[N], 'lo':[N]}}；失敗回空dict（前端退回qpf_best）。
     """
-    print("抓取 ECMWF 系集（縣級代表點）...")
+    print("抓取 ECMWF 系集（縣級代表點，全期）...")
     # 縣級代表點：縣內鄉鎮座標平均
     county_pts = {}
     for t in townships:
@@ -704,7 +704,7 @@ def fetch_ensemble_ratios(townships):
         'longitude': ','.join(f"{x:.4f}" for x in lngs),
         'hourly':    'precipitation',
         'models':    'ecmwf_ifs025',
-        'forecast_days': 3,
+        'forecast_days': 15,   # ECMWF 系集支援 15 天（全期強/弱降雨情境）
         'timezone':  'Asia/Taipei',
     }
     for attempt in range(3):
@@ -733,8 +733,11 @@ def fetch_ensemble_ratios(townships):
                 members.append([x if x is not None else 0.0 for x in v])
         if len(members) < 10:
             continue
+        # 段數：以最短成員長度為準（15天=60段；不足則有多少算多少）
+        n_hours = min(len(m) for m in members)
+        n_seg = min(60, n_hours // 6)
         hi_arr, lo_arr = [], []
-        for sg in range(8):  # 前48h的8個6h段
+        for sg in range(n_seg):
             seg_sums = sorted(sum(m[sg*6:(sg+1)*6]) for m in members)
             n = len(seg_sums)
             q = max(1, n//4)
@@ -748,25 +751,27 @@ def fetch_ensemble_ratios(townships):
                 hi_arr.append(round(min(3.0, max(1.0, top_mean/med)), 2))
                 lo_arr.append(round(max(0.1, min(1.0, bot_mean/med)), 2))
         ratios[counties[i]] = {'hi': hi_arr, 'lo': lo_arr}
-    print(f"    系集比值：{len(ratios)} 縣市")
+    print(f"    系集比值：{len(ratios)} 縣市（各 {n_seg if ratios else 0} 段，全期）")
     return ratios
 
 
 def apply_hourly_ratio(hourly, county, ens_ratios, kind):
-    """逐時QPF × 縣級系集比值（比值以6h段為單位，套用至段內各小時）。"""
+    """逐時QPF × 縣級系集比值（比值以6h段為單位，套用至段內各小時；全期）。"""
     r = ens_ratios.get(county, {}).get(kind)
     if not r or not hourly:
         return list(hourly)
-    return [round(v * r[min(h//6, 7)], 1) for h, v in enumerate(hourly)]
+    nseg = len(r)
+    return [round(v * r[min(h//6, nseg-1)], 1) for h, v in enumerate(hourly)]
 
 
 def apply_ensemble_ratio(qpf, maxh, county, ens_ratios, kind):
-    """qpf_best × 縣級系集比值（前8段），8段之後維持原值。回傳新陣列。"""
+    """qpf_best × 縣級系集比值（全期各段）。超出比值長度的段維持原值。回傳新陣列。"""
     r = ens_ratios.get(county, {}).get(kind)
     if not r:
         return list(qpf), list(maxh)
-    q2 = [round(v*r[i], 1) if i < 8 and v else v for i, v in enumerate(qpf)]
-    m2 = [round(v*r[i], 1) if i < 8 and v else v for i, v in enumerate(maxh)]
+    nseg = len(r)
+    q2 = [round(v*r[i], 1) if i < nseg and v else v for i, v in enumerate(qpf)]
+    m2 = [round(v*r[i], 1) if i < nseg and v else v for i, v in enumerate(maxh)]
     return q2, m2
 
 
