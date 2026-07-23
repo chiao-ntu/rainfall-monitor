@@ -43,11 +43,38 @@ jobs:
         run: python fetch_rainfall.py
 
       # 5. 把 data.json、obs_history.json、archive/ 快照推回 GitHub
+      #    這些是「機器每次全量重算」的產物檔：遇到與遠端衝突時，
+      #    我方剛算出的就是最新版 → 一律以我方為準（-X ours），並重試數次
+      #    以吸收與 QPESUMS workflow 同時 push 的競態。絕不留在 detached HEAD。
       - name: Commit and push data
         run: |
+          set -e
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          BRANCH="${{ github.ref_name }}"
+
           git add data.json obs_history.json archive/
-          git diff --staged --quiet || git commit -m "自動更新：$(TZ='Asia/Taipei' date '+%Y-%m-%d %H:%M') TST [skip ci]"
-          git pull --rebase origin ${{ github.ref_name }} || true
-          git push
+          if git diff --staged --quiet; then
+            echo "無變更，跳過"
+            exit 0
+          fi
+          git commit -m "自動更新：$(TZ='Asia/Taipei' date '+%Y-%m-%d %H:%M') TST [skip ci]"
+
+          # 最多重試 5 次：每次先把遠端拉進來（衝突以我方產物為準），再 push
+          for i in 1 2 3 4 5; do
+            if git push origin HEAD:"$BRANCH"; then
+              echo "push 成功（第 $i 次嘗試）"
+              exit 0
+            fi
+            echo "push 失敗，拉遠端後以我方資料為準重試（第 $i 次）..."
+            git fetch origin "$BRANCH"
+            # -X ours：合併衝突時保留我方（剛算出的最新資料）。
+            # rebase 失敗則 abort 改用 merge，確保不卡在 detached HEAD。
+            if ! git rebase -X ours "origin/$BRANCH"; then
+              git rebase --abort || true
+              git merge -X ours --no-edit "origin/$BRANCH" || true
+            fi
+          done
+
+          echo "重試 5 次仍失敗" >&2
+          exit 1
