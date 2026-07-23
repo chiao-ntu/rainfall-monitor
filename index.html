@@ -1099,12 +1099,14 @@ function getAccum(t){
   }
 
   // ── 警特報模式：時間視窗內最高警特報級（0-4）──
+  // ── 警特報模式：全期預測最高警特報級（0-4）──
+  //   警特報以「整個預報期內是否會發布、最高到哪一級」為判讀單位，
+  //   不隨所選時間視窗縮放（與地圖popup「全期預測」、右側欄一致）。
+  //   時間視窗滑桿對累積雨量/ETR/風險模式才有意義；警特報看的是「會不會掛、掛到哪級」。
   if(mode==='warn'){
+    const fs = _warnFirstSegs(t);
     let lv = 0;
-    for(let s=segFrom; s<=segTo; s++){   // 過去視窗（負段）同樣判讀——過去超標一樣呈現
-      lv = Math.max(lv, _warnLevelAt(t, s));
-      if(lv >= 4) break;
-    }
+    for(let k=4; k>=1; k--){ if(fs[k]!==null){ lv=k; break; } }
     return {totalRain: lv, etrPct: lv, isWarn: true};
   }
 
@@ -1260,7 +1262,7 @@ function renderLayer(){
       if(mode==='warn'){
         const lv = totalRain || 0;
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
-          `本視窗警特報：${lv>0?`<span style="color:${WARN_COLORS[lv]};font-weight:700">${WARN_NAMES[lv]}</span>`:'未達標準'}<br>`+
+          `警特報預估：${lv>0?`<span style="color:${WARN_COLORS[lv]};font-weight:700">${WARN_NAMES[lv]}</span>`:'未達標準'}<br>`+
           `<span style="font-size:10px">${_warnSummaryHtml(t)}</span>`;
       } else if(mode==='etr'){
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>ETR2%：${etrStr}<br>風險指標：${_windowRisk(t)}`;
@@ -3119,18 +3121,13 @@ function renderDisasterLayer(){
   disasterLayer = L.layerGroup().addTo(map);
 
   // 高辨識度描邊（不透明，避免透出底下縣市界造成雜亂）：
-  //   底層＝深色 casing（3px）拉出輪廓，
-  //   上層＝白色實線（1px）＋白內線（1px）→ 深底白線的清楚雙線。
+  //   底層＝深色 casing（1.5px）拉出輪廓 ＋ 白色實線（1px）→ 細版深底白線。
   const geo = { type:'FeatureCollection', features: feats };
   // (1) 深色 casing 底
   L.geoJSON(geo, { style:()=>({
-      color:'#1a1a1a', weight:3, fill:false, opacity:1, interactive:false, lineJoin:'round'
+      color:'#1a1a1a', weight:1.5, fill:false, opacity:1, interactive:false, lineJoin:'round'
     })}).addTo(disasterLayer);
   // (2) 白色實線
-  L.geoJSON(geo, { style:()=>({
-      color:'#ffffff', weight:1, fill:false, opacity:1, interactive:false, lineJoin:'round'
-    })}).addTo(disasterLayer);
-  // (3) 白內線
   L.geoJSON(geo, { style:()=>({
       color:'#ffffff', weight:1, fill:false, opacity:1, interactive:false, lineJoin:'round'
     })}).addTo(disasterLayer);
@@ -3758,7 +3755,7 @@ function _warnSummaryHtml(t){
   }
   if(!parts.length) return '<span style="color:#5a7a9a">未達發布標準</span>';
   return '<span style="color:#5a7a9a">全期預測：</span>' + parts.join(' ') +
-    '<span style="color:#4a6a8a;font-size:9px">（地圖依所選時間視窗著色，兩者範圍不同）</span>';
+    '<span style="color:#4a6a8a;font-size:9px">（全期預測：整個預報期內最高警特報級）</span>';
 }
 
 
