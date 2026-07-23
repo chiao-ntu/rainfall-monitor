@@ -3123,15 +3123,15 @@ function renderDisasterLayer(){
   disasterLayer = L.layerGroup().addTo(map);
 
   // 高辨識度描邊（不透明，避免透出底下縣市界造成雜亂）：
-  //   底層＝白色 casing（1.8px）拉出輪廓 ＋ 橘紅實線（0.8px，同左側清單標題色）。
+  //   底層＝黑色 casing（1.8px）拉出輪廓 ＋ 綠色實線（0.8px）。
   const geo = { type:'FeatureCollection', features: feats };
-  // (1) 白色 casing 底
+  // (1) 黑色 casing 底
   L.geoJSON(geo, { style:()=>({
-      color:'#ffffff', weight:1.8, fill:false, opacity:1, interactive:false, lineJoin:'round'
+      color:'#000000', weight:1.8, fill:false, opacity:1, interactive:false, lineJoin:'round'
     })}).addTo(disasterLayer);
-  // (2) 橘紅實線（#ff8855，同「二次災害高風險區」標題字色）
+  // (2) 綠色實線
   L.geoJSON(geo, { style:()=>({
-      color:'#ff8855', weight:0.8, fill:false, opacity:1, interactive:false, lineJoin:'round'
+      color:'#00FF00', weight:0.8, fill:false, opacity:1, interactive:false, lineJoin:'round'
     })}).addTo(disasterLayer);
 }
 
@@ -3641,16 +3641,26 @@ function _warnLevelAt(t, seg){
     for(let k=Math.max(0,i-2);  k<=i; k++){ r3  += arr[k]; if(k >= nowI) r3f  += arr[k]; }
     let r24 = 0, r24f = 0;
     for(let k=Math.max(0,i-23); k<=i; k++){ r24 += arr[k]; if(k >= nowI) r24f += arr[k]; }
+    // 前向累積（此刻起算，不含更早的前日雨）：用來防止「24h回看窗把前一天暴雨
+    //   拖進今天，害今天雖乾卻掛同樣警報」。未來段的警報須由「此刻往後的雨」支撐。
+    let r24_fwd = 0, r3_fwd = 0;
+    for(let k=i; k<Math.min(144,i+24); k++) r24_fwd += arr[k];
+    for(let k=i; k<Math.min(144,i+3);  k++) r3_fwd  += arr[k];
     // 官方警特報為「預警」語義：對未來時刻，持續型門檻（24h/3h累積）須有
     // 後續實際降雨支撐（雨已下完且未來無雨 → 不對未來段掛警；過去段為既定事實不受限）
     const isFut  = i >= nowI;
+    // 未來段防繼承前日雨：只要「此刻往後 24h」幾乎無雨（<15mm），就不讓回看窗
+    //   單憑前一天的雨把警報拖到這個乾燥的隔日段。這是低門檻閘，只擋全乾的繼承段，
+    //   不壓抑真正的暴雨日（暴雨日前向窗一定遠超 15mm）。
+    const fwdWet = !isFut || (r24_fwd >= 15);
+    const fwdWet3= !isFut || (r3_fwd  >= 8);
     const okD24  = !isFut || r24f >= 10;   // 未來部分至少10mm（持續事件）
     const okD3   = !isFut || r3f  >= 5;
     let L = 0;
-    if(r24 >= 500 && okD24) L = 4;
-    else if((r24 >= 350 && okD24) || (r3 >= 200 && okD3)) L = 3;
-    else if((r24 >= 200 && okD24) || (r3 >= 100 && okD3)) L = 2;
-    else if((r24 >= 80  && okD24) || r1 >= 40)  L = 1;
+    if(r24 >= 500 && okD24 && fwdWet) L = 4;
+    else if((r24 >= 350 && okD24 && fwdWet) || (r3 >= 200 && okD3 && fwdWet3)) L = 3;
+    else if((r24 >= 200 && okD24 && fwdWet) || (r3 >= 100 && okD3 && fwdWet3)) L = 2;
+    else if((r24 >= 80  && okD24 && fwdWet) || r1 >= 40)  L = 1;
     if(L > lv){ lv = L; if(lv === 4) break; }
   }
   return lv;
