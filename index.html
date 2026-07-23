@@ -1986,25 +1986,14 @@ async function tryLoadLive(){
       });
     }
 
-    // CWA QPF 資料來源標示（颱風 F-C0041 / 常態 48h逐6h 官方QPF覆蓋）
+    // CWA QPF 資料來源標示（供內部快取鍵/邏輯使用；不對使用者顯示採用了什麼）
     _cwaQpfActive = !!d.cwa_qpf_active;
     window._dataGenAt = d.generated_at || '';  // 供各面板快取鍵使用
     const sysNote = document.getElementById('sys-note');   // 獨立元素：不被切換模式洗掉
     if(sysNote) sysNote.innerHTML = '';   // 每次載入重建（避免自動更新時重複追加）
+    // 使用者只需知道「官方資料是否正常」：有CWA官方QPF覆蓋才亮一個極簡標記，否則不顯示。
     if(sysNote && _cwaQpfActive){
-      const _cm = d.cwa_qpf_mode || 'typhoon';
-      let _msg;
-      if(_cm === 'typhoon')
-        _msg = '⚡前48h已採用CWA定量降水預報（F-C0041颱風，精確格點）';
-      else if(_cm === 'typhoon+routine_png')
-        _msg = '⚡颱風段採CWA精確格點（F-C0041），其餘段參照定量降水預報圖（色塊判讀近似，取高值防漏報）';
-      else if(_cm === 'routine')
-        _msg = '⚡前48h已採用CWA官方定量降水預報（常態版，每日4次預報員修正）';
-      else if(_cm === 'routine_png')
-        _msg = '⚡前48h已參照CWA定量降水預報圖（色塊判讀，級距近似；與模式取高值防漏報）';
-      else
-        _msg = '⚡前48h已採用CWA定量降水預報';
-      sysNote.innerHTML = '<span style="color:#ffcc44;font-weight:700">'+_msg+'</span>';
+      sysNote.innerHTML = '<span style="color:#66bb88;font-size:9px" title="本次已成功取得CWA官方定量降水預報資料">● 官方資料正常</span>';
     }
 
     // 動態偏差比顯示（昨日觀測/昨日模式，顯示層：僅供人工判讀，不影響任何計算）
@@ -2014,7 +2003,7 @@ async function tryLoadLive(){
       const col = b >= 1.5 ? '#ff6644' : b >= 1.1 ? '#ffcc44' : b <= 0.67 ? '#66bbff' : b <= 0.9 ? '#88ccee' : '#88aa88';
       const tag = b >= 1.5 ? `模式明顯低估（觀測≈模式×${b}）` : b >= 1.1 ? '模式偏低'
                 : b <= 0.67 ? '模式明顯高估' : b <= 0.9 ? '模式偏高' : '模式大致準確';
-      sysNote.innerHTML += `${sysNote.innerHTML?' · ':''}<span style="color:${col}" title="昨日觀測雨量÷昨日模式雨量（僅統計模式昨日≥10mm的 ${d.bias_24h_n} 個鄉鎮）。分母為模式回算、分子為觀測歷史記錄——若歷史正在重建（obs_history剛清除），此值可能失真，僅供人工判讀。">24h偏差比 ${b}×（${tag}，n=${d.bias_24h_n}）</span>`+
+      sysNote.innerHTML += `${sysNote.innerHTML?' · ':''}<span style="color:${col};font-size:9px" title="昨日觀測雨量÷昨日模式雨量（僅統計模式昨日≥10mm的 ${d.bias_24h_n} 個鄉鎮）。分母為模式回算、分子為觀測歷史記錄——若歷史正在重建（obs_history剛清除），此值可能失真，僅供人工判讀。">24h偏差比 ${b}×（${tag}，n=${d.bias_24h_n}）</span>`+
         `<button id="bias-apply-btn" class="b" onclick="toggleBiasApply()" style="margin-left:6px;font-size:10px;padding:1px 6px" `+
         `title="開啟後所有預測值（地圖/圖表/ETR2/風險/左右狀態列）×${_biasFactor}（限幅0.5~3）。純CWA模式不受影響。可隨時關閉還原。">⚙套用修正 ×${_biasFactor}</button>`;
     }
@@ -2389,11 +2378,9 @@ function updateDistrictSummary(){
       // 風險指標 / 警特報（常駐計算，摘要四表齊全）
       const r = calcRiskIndicator(t, Math.max(0, segTo));
       if(r && r.R > maxRisk){ maxRisk=r.R; maxRiskT=t; }
-      // 警特報側欄：依所選時間視窗內最高級（與地圖一致，隨視窗重新評估）
-      let lv = 0;
-      for(let s=Math.max(-28,segFrom); s<=segTo; s++){
-        lv = Math.max(lv, _warnLevelAt(t, s));
-        if(lv >= 4) break;
+      let lv=0;
+      for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
+        lv=Math.max(lv,_warnLevelAt(t,s)); if(lv>=4)break;
       }
       if(lv > maxWarn){ maxWarn=lv; maxWarnT=t; }
     });
@@ -3123,15 +3110,15 @@ function renderDisasterLayer(){
   disasterLayer = L.layerGroup().addTo(map);
 
   // 高辨識度描邊（不透明，避免透出底下縣市界造成雜亂）：
-  //   底層＝黑色 casing（1.8px）拉出輪廓 ＋ 綠色實線（0.8px）。
+  //   底層＝黑色 casing（1.8px）拉出輪廓 ＋ 淺藍實線（0.8px）。
   const geo = { type:'FeatureCollection', features: feats };
   // (1) 黑色 casing 底
   L.geoJSON(geo, { style:()=>({
       color:'#000000', weight:1.8, fill:false, opacity:1, interactive:false, lineJoin:'round'
     })}).addTo(disasterLayer);
-  // (2) 綠色實線
+  // (2) 淺藍實線（#00FFFF）
   L.geoJSON(geo, { style:()=>({
-      color:'#00FF00', weight:0.8, fill:false, opacity:1, interactive:false, lineJoin:'round'
+      color:'#00FFFF', weight:0.8, fill:false, opacity:1, interactive:false, lineJoin:'round'
     })}).addTo(disasterLayer);
 }
 
@@ -3641,26 +3628,16 @@ function _warnLevelAt(t, seg){
     for(let k=Math.max(0,i-2);  k<=i; k++){ r3  += arr[k]; if(k >= nowI) r3f  += arr[k]; }
     let r24 = 0, r24f = 0;
     for(let k=Math.max(0,i-23); k<=i; k++){ r24 += arr[k]; if(k >= nowI) r24f += arr[k]; }
-    // 前向累積（此刻起算，不含更早的前日雨）：用來防止「24h回看窗把前一天暴雨
-    //   拖進今天，害今天雖乾卻掛同樣警報」。未來段的警報須由「此刻往後的雨」支撐。
-    let r24_fwd = 0, r3_fwd = 0;
-    for(let k=i; k<Math.min(144,i+24); k++) r24_fwd += arr[k];
-    for(let k=i; k<Math.min(144,i+3);  k++) r3_fwd  += arr[k];
     // 官方警特報為「預警」語義：對未來時刻，持續型門檻（24h/3h累積）須有
     // 後續實際降雨支撐（雨已下完且未來無雨 → 不對未來段掛警；過去段為既定事實不受限）
     const isFut  = i >= nowI;
-    // 未來段防繼承前日雨：只要「此刻往後 24h」幾乎無雨（<15mm），就不讓回看窗
-    //   單憑前一天的雨把警報拖到這個乾燥的隔日段。這是低門檻閘，只擋全乾的繼承段，
-    //   不壓抑真正的暴雨日（暴雨日前向窗一定遠超 15mm）。
-    const fwdWet = !isFut || (r24_fwd >= 15);
-    const fwdWet3= !isFut || (r3_fwd  >= 8);
     const okD24  = !isFut || r24f >= 10;   // 未來部分至少10mm（持續事件）
     const okD3   = !isFut || r3f  >= 5;
     let L = 0;
-    if(r24 >= 500 && okD24 && fwdWet) L = 4;
-    else if((r24 >= 350 && okD24 && fwdWet) || (r3 >= 200 && okD3 && fwdWet3)) L = 3;
-    else if((r24 >= 200 && okD24 && fwdWet) || (r3 >= 100 && okD3 && fwdWet3)) L = 2;
-    else if((r24 >= 80  && okD24 && fwdWet) || r1 >= 40)  L = 1;
+    if(r24 >= 500 && okD24) L = 4;
+    else if((r24 >= 350 && okD24) || (r3 >= 200 && okD3)) L = 3;
+    else if((r24 >= 200 && okD24) || (r3 >= 100 && okD3)) L = 2;
+    else if((r24 >= 80  && okD24) || r1 >= 40)  L = 1;
     if(L > lv){ lv = L; if(lv === 4) break; }
   }
   return lv;
