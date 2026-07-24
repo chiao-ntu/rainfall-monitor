@@ -1005,6 +1005,7 @@ def fetch_cwa_routine_qpf(now_tpe):
              + [f'F-C0035-{i:03d}' for i in range(1, 31)] \
              + [f'F-C0041-{i:03d}' for i in range(1, 17)]
     seen, png_uris = set(), []
+    _scan_ok, _scan_fail = 0, 0
     for did in scan_ids:
         if did in seen: continue
         seen.add(did)
@@ -1012,7 +1013,9 @@ def fetch_cwa_routine_qpf(now_tpe):
             r = requests.get(f"{FILEAPI}/{did}", params={'Authorization': CWA_API_KEY,
                              'downloadType': 'WEB', 'format': 'JSON'}, timeout=20)
             if r.status_code != 200:
+                _scan_fail += 1
                 continue   # 不存在的 dataid 靜默跳過（避免log爆量）
+            _scan_ok += 1
             body = r.content
             if body[:2] == b'PK':          # 直接就是 zip
                 got = _try_zip_bytes(body, did, 'fileapi直出zip')
@@ -1050,9 +1053,12 @@ def fetch_cwa_routine_qpf(now_tpe):
         except Exception as e:
             print(f"    {did} 例外：{e}")
 
+    print(f"    掃描 {len(seen)} 個 dataid：{_scan_ok} 個有回應、{_scan_fail} 個不存在/失敗")
     # ── C. 僅圖檔 → 色塊判讀路徑 ──
     #   收集所有 PNG 候選，優先定量降水預報主圖；下載 ref-size 者逐一判讀，
     #   依各自時間窗（檔名 _HH_HH）合併成連續 6h 段序列（覆蓋越多窗越好）。
+    print(f"    探測完成：共收集到 {len(png_uris)} 個 PNG uri"
+          + (f"（dataid：{sorted(set(d for d,_ in png_uris))[:10]}）" if png_uris else "（完全沒有 PNG——CWA此時段可能未發布定量降水預報圖，或探測範圍/API有問題）"))
     if png_uris:
         import struct
         def _png_score(u):
