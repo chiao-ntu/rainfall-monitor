@@ -186,7 +186,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
       <span style="display:inline-block;width:16px;height:12px;background:#FFFFFF;border:1px solid #3a5a7a;border-radius:2px;vertical-align:middle"></span> <span style="font-size:10px;color:#5a8aaa">&lt;</span>
       <input type="number" id="cs0" value="5" style="width:52px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
-      <span style="display:inline-block;width:16px;height:12px;background:#7DDDFF;border:1px solid #3a5a7a;border-radius:2px;vertical-align:middle"></span> <span style="font-size:10px;color:#5a8aaa">&lt;</span>
+      <span style="display:inline-block;width:16px;height:12px;background:#00FFFF;border:1px solid #3a5a7a;border-radius:2px;vertical-align:middle"></span> <span style="font-size:10px;color:#5a8aaa">&lt;</span>
       <input type="number" id="cs1" value="20" style="width:52px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
       <span style="display:inline-block;width:16px;height:12px;background:#00FF00;border:1px solid #3a5a7a;border-radius:2px;vertical-align:middle"></span> <span style="font-size:10px;color:#5a8aaa">&lt;</span>
       <input type="number" id="cs2" value="40" style="width:52px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
@@ -194,9 +194,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <input type="number" id="cs3" value="70" style="width:52px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
       <span style="display:inline-block;width:16px;height:12px;background:#FF0000;border:1px solid #3a5a7a;border-radius:2px;vertical-align:middle"></span> <span style="font-size:10px;color:#5a8aaa">&lt;</span>
       <input type="number" id="cs4" value="130" style="width:52px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
-      <span style="display:inline-block;width:16px;height:12px;background:#CC00CB;border:1px solid #3a5a7a;border-radius:2px;vertical-align:middle"></span> <span style="font-size:10px;color:#5a8aaa">&lt;</span>
+      <span style="display:inline-block;width:16px;height:12px;background:#FF00FF;border:1px solid #3a5a7a;border-radius:2px;vertical-align:middle"></span> <span style="font-size:10px;color:#5a8aaa">&lt;</span>
       <input type="number" id="cs5" value="250" style="width:52px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
-      <span style="display:inline-block;width:16px;height:12px;background:#FFACF9;border:1px solid #3a5a7a;border-radius:2px;vertical-align:middle"></span> <span style="font-size:10px;color:#5a8aaa">= 250+</span>
+      <span style="display:inline-block;width:16px;height:12px;background:#FFAAFF;border:1px solid #3a5a7a;border-radius:2px;vertical-align:middle"></span> <span style="font-size:10px;color:#5a8aaa">= 250+</span>
       <button class="b" onclick="applyCustomScale()" style="border-color:#2a7a4a;color:#5ad88a">套用</button>
       <button class="b" onclick="resetCustomScale()" style="border-color:#5a5a5a;color:#aaa">還原預設</button>
     </div>
@@ -895,12 +895,12 @@ const seaLayer = L.rectangle([[-90,-180],[90,180]], {
 // ════════════════════════════════════════════════
 const RAIN_SCALE=[
   {max:5,   color:'#FFFFFF',label:'< 5 mm'},
-  {max:20,  color:'#7DDDFF',label:'5–20 mm'},
+  {max:20,  color:'#00FFFF',label:'5–20 mm'},
   {max:40,  color:'#00FF00',label:'20–40 mm'},
   {max:70,  color:'#FFFF00',label:'40–70 mm'},
   {max:130, color:'#FF0000',label:'70–130 mm'},
-  {max:250, color:'#CC00CB',label:'130–250 mm'},
-  {max:1e9, color:'#FFACF9',label:'250+ mm'},
+  {max:250, color:'#FF00FF',label:'130–250 mm'},
+  {max:1e9, color:'#FFAAFF',label:'250+ mm'},
 ];
 // 未來6h段強度分級（依「該6h段內最大時雨量」判斷，非累積總量換算）
 // 標準：時雨量<40白；≥40黃(大雨)；≥100橘(豪雨)；≥200紅(大豪雨)；≥500紫(超大豪雨)
@@ -909,15 +909,15 @@ const INTENSITY_SCALE=[
   {max:100, color:'#FFFF00', label:'大雨'},
   {max:200, color:'#FF8800', label:'豪雨'},
   {max:500, color:'#FF0000', label:'大豪雨'},
-  {max:1e9, color:'#CC00CB', label:'超大豪雨'},
+  {max:1e9, color:'#FF00FF', label:'超大豪雨'},
 ];
-function intensityColor(v){for(const s of INTENSITY_SCALE)if(v<s.max)return s.color;return'#CC00CB'}
+function intensityColor(v){for(const s of INTENSITY_SCALE)if(v<s.max)return s.color;return'#FF00FF'}
 const ETR_SCALE=[
   {max:50,  color:'#FFFFFF',label:'< 50%'},
   {max:70,  color:'#00FF00',label:'50–70%'},
   {max:90,  color:'#FFFF00',label:'70–90%'},
   {max:100, color:'#FF0000',label:'90–100%'},
-  {max:1e9, color:'#CC00CB',label:'≥ 100%'},
+  {max:1e9, color:'#FF00FF',label:'≥ 100%'},
 ];
 // 複合風險色階
 // 警特報色階（無/大雨/豪雨/大豪雨/超大豪雨）
@@ -926,28 +926,28 @@ const WARN_MAP_SCALE=[
   {max:1.5, color:'#FFFF00', label:'大雨'},
   {max:2.5, color:'#FF8C00', label:'豪雨'},
   {max:3.5, color:'#FF0000', label:'大豪雨'},
-  {max:1e9, color:'#CC00CB', label:'超大豪雨'},
+  {max:1e9, color:'#FF00FF', label:'超大豪雨'},
 ];
-function warnMapColor(v){for(const s of WARN_MAP_SCALE)if(v<s.max)return s.color;return'#CC00CB'}
+function warnMapColor(v){for(const s of WARN_MAP_SCALE)if(v<s.max)return s.color;return'#FF00FF'}
 
 const RISK_SCALE=[
   {max:50,  color:'#FFFFFF', label:'< 50 未達標'},
   {max:70,  color:'#00FF00', label:'50–70 低'},
   {max:90,  color:'#FFFF00', label:'70–90 中'},
   {max:100, color:'#FF0000', label:'90–100 高'},
-  {max:1e9, color:'#CC00CB', label:'≥100 超高'},
+  {max:1e9, color:'#FF00FF', label:'≥100 超高'},
 ];
-function rainColor(v){for(const s of RAIN_SCALE)if(v<s.max)return s.color;return'#FFACF9'}
+function rainColor(v){for(const s of RAIN_SCALE)if(v<s.max)return s.color;return'#FFAAFF'}
 
 // CWA 定量降水預報官方色階（值→官方色；與後端 QPF_PNG_BANDS 對應）。
 //   CWA 模式為「色階類別」呈現：直接還原官方圖的色帶顏色，不顯示數字。
 //   下界代表：值 v 落在哪個色帶就用該色帶的官方色。
 const CWA_QPF_BANDS = [
-  {min:300, color:'#FDC9FF'}, {min:200, color:'#FB00FF'}, {min:150, color:'#C900CC'},
+  {min:300, color:'#FFAAFF'}, {min:200, color:'#FB00FF'}, {min:150, color:'#FF00FF'},
   {min:130, color:'#960099'}, {min:110, color:'#990000'}, {min:90,  color:'#CC0000'},
-  {min:70,  color:'#FF0000'}, {min:50,  color:'#FF9500'}, {min:40,  color:'#FFC800'},
-  {min:30,  color:'#FFFB03'}, {min:20,  color:'#39FF03'}, {min:15,  color:'#059902'},
-  {min:10,  color:'#0363FF'}, {min:5,   color:'#059BFF'}, {min:2,   color:'#03C8FF'},
+  {min:70,  color:'#FF0000'}, {min:50,  color:'#FF9500'}, {min:40,  color:'#FFFF00'},
+  {min:30,  color:'#FFFB03'}, {min:20,  color:'#00FF00'}, {min:15,  color:'#059902'},
+  {min:10,  color:'#0363FF'}, {min:5,   color:'#059BFF'}, {min:2,   color:'#00FFFF'},
   {min:1,   color:'#9CFCFF'}, {min:0.5, color:'#C2C2C2'},
 ];
 function cwaBandColor(v){
@@ -955,7 +955,7 @@ function cwaBandColor(v){
   for(const b of CWA_QPF_BANDS) if(v>=b.min) return b.color;
   return null;
 }
-function etrColor(v) {for(const s of ETR_SCALE) if(v<s.max)return s.color;return'#CC00CB'}
+function etrColor(v) {for(const s of ETR_SCALE) if(v<s.max)return s.color;return'#FF00FF'}
 function riskColor(v){for(const s of RISK_SCALE)if(v<s.max)return s.color;return'#FF0000'}
 function wCls(v){return v>=100?'w4':v>=90?'w3':v>=70?'w2':v>=50?'w1':'ok'}
 function riskCls(v){return v>=70?'w3':v>=40?'w1':'ok'}
@@ -2000,10 +2000,10 @@ function renderLegend(){
     if(cb && cbTitle && cbItems){
       cbTitle.textContent = 'CWA定量降水預報色階';
       const BAND_LEGEND = [
-        ['#FB00FF','≥200'],['#C900CC','150–200'],['#960099','130–150'],['#990000','110–130'],
-        ['#CC0000','90–110'],['#FF0000','70–90'],['#FF9500','50–70'],['#FFC800','40–50'],
-        ['#FFFB03','30–40'],['#39FF03','20–30'],['#059902','15–20'],['#0363FF','10–15'],
-        ['#059BFF','5–10'],['#03C8FF','2–5'],['#9CFCFF','1–2'],['#C2C2C2','<1'],
+        ['#FB00FF','≥200'],['#FF00FF','150–200'],['#960099','130–150'],['#990000','110–130'],
+        ['#CC0000','90–110'],['#FF0000','70–90'],['#FF9500','50–70'],['#FFFF00','40–50'],
+        ['#FFFB03','30–40'],['#00FF00','20–30'],['#059902','15–20'],['#0363FF','10–15'],
+        ['#059BFF','5–10'],['#00FFFF','2–5'],['#9CFCFF','1–2'],['#C2C2C2','<1'],
       ];
       cbItems.innerHTML = BAND_LEGEND.map(([c,l])=>`
         <div style="display:flex;align-items:center;gap:5px;margin:2px 0">
@@ -2979,7 +2979,7 @@ function showChartTooltip(evt, canvasId){
     document.body.appendChild(tip);
   }
 
-  const etrColorOf=(p)=>p>=100?'#CC00CB':p>=90?'#FF0000':p>=70?'#FFFF00':'#aaccee';
+  const etrColorOf=(p)=>p>=100?'#FF00FF':p>=90?'#FF0000':p>=70?'#FFFF00':'#aaccee';
 
   // ══ 鄉鎮逐日圖（cv）══
   if(effectiveId==='cv'){
@@ -3613,7 +3613,7 @@ function toggleLsbSection(name){
 //  大豪雨: 24h≥350 或 3h≥200｜超大豪雨: 24h≥500
 // ════════════════════════════════════════════════
 const WARN_NAMES  = ['', '大雨', '豪雨', '大豪雨', '超大豪雨'];
-const WARN_COLORS = ['', '#FFFF00', '#FF8C00', '#FF0000', '#CC00CB'];
+const WARN_COLORS = ['', '#FFFF00', '#FF8C00', '#FF0000', '#FF00FF'];
 
 // 該6h段的預估警特報級別（0-4）
 // 優先用後端逐時精確掃描（warn_seg），無則以6h資料估計
@@ -3801,7 +3801,7 @@ function calcRiskIndicator(t, seg){
 
   // 分級
   let level, name, color;
-  if(R >= 100){ level=4; name='超高'; color='#CC00CB'; }
+  if(R >= 100){ level=4; name='超高'; color='#FF00FF'; }
   else if(R >= 90){ level=3; name='高'; color='#FF0000'; }
   else if(R >= 70){ level=2; name='中'; color='#FFFF00'; }
   else if(R >= 50){ level=1; name='低'; color='#00FF00'; }
@@ -3850,12 +3850,12 @@ function _valueColorForMode(v){
 //   對應累積雨量門檻（與 RAIN_SCALE 的 max 一致，只換顏色）。
 const RAIN_SCALE_CWA = [
   {max:5,   color:'#FFFFFF'},  // <5 白
-  {max:20,  color:'#03C8FF'},  // 5–20 淺藍（官方 2/5/10mm 藍系代表）
-  {max:40,  color:'#39FF03'},  // 20–40 綠
-  {max:70,  color:'#FFC800'},  // 40–70 黃橘
+  {max:20,  color:'#00FFFF'},  // 5–20 淺藍（官方 2/5/10mm 藍系代表）
+  {max:40,  color:'#00FF00'},  // 20–40 綠
+  {max:70,  color:'#FFFF00'},  // 40–70 黃橘
   {max:130, color:'#FF0000'},  // 70–130 紅
-  {max:250, color:'#C900CC'},  // 130–250 紫
-  {max:1e9, color:'#FDC9FF'},  // 250+ 粉
+  {max:250, color:'#FF00FF'},  // 130–250 紫
+  {max:1e9, color:'#FFAAFF'},  // 250+ 粉
 ];
 
 // 當前模式的色帶RGB表（供內插渲染邊界混色）

@@ -489,12 +489,12 @@ function getTier(county, town){ return TOWN_TIER[county+','+town]||'平地'; }
 
 const COLORS = [
   {hex:'#ffffff',label:'5以下'},
-  {hex:'#7DDDFF',label:'5-20mm'},
+  {hex:'#00FFFF',label:'5-20mm'},
   {hex:'#00FF00',label:'20-40mm'},
   {hex:'#FFFF00',label:'40-70mm'},
   {hex:'#FF0000',label:'70-130mm'},
-  {hex:'#CC00CB',label:'130-250mm'},
-  {hex:'#FFACF9',label:'250以上'},
+  {hex:'#FF00FF',label:'130-250mm'},
+  {hex:'#FFAAFF',label:'250以上'},
 ];
 
 // 分署分類（右側清單用）
@@ -574,7 +574,7 @@ let lastKeyType='C';  // 初始跟 paintMode 同步（county → C）
 
 const pal=document.getElementById('palette');
 COLORS.forEach(c=>{
-  const isDark=!['#ffffff','#7DDDFF','#FFFF00','#FFACF9'].includes(c.hex);
+  const isDark=!['#ffffff','#00FFFF','#FFFF00','#FFAAFF'].includes(c.hex);
   const b=document.createElement('div');
   b.className='color-btn'; b.dataset.hex=c.hex;
   b.style.cssText='background:'+c.hex+';color:'+(isDark?'#fff':'#333')+';border-color:rgba(0,0,0,0.2)';
