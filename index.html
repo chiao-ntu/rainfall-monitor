@@ -878,6 +878,28 @@ const map = L.map('map', {
   center:[23.6, 121.0], zoom:7,
   preferCanvas:false, zoomControl:true
 });
+
+// 「回到台灣本島」按鈕：接在放大縮小控制下方，一鍵拉回全島視野
+//   （含外海海警範圍；避免不小心拖飛地圖後找不到）
+const TW_HOME = { center:[23.6, 121.0], zoom:7 };
+const HomeControl = L.Control.extend({
+  options:{ position:'topleft' },
+  onAdd:function(){
+    const c = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+    const a = L.DomUtil.create('a', '', c);
+    a.href = '#'; a.title = '回到台灣本島';
+    a.setAttribute('role','button'); a.setAttribute('aria-label','回到台灣本島');
+    a.innerHTML = '🏠';
+    a.style.cssText = 'font-size:15px;line-height:30px;text-align:center;text-decoration:none';
+    L.DomEvent.on(a, 'click', function(e){
+      L.DomEvent.stop(e);
+      map.setView(TW_HOME.center, TW_HOME.zoom);
+    });
+    L.DomEvent.disableClickPropagation(c);
+    return c;
+  }
+});
+map.addControl(new HomeControl());
 // 分層：seaPane(390) < townPane(395) < overlayPane(400: 縣界/災害框線)
 map.createPane('seaPane');
 map.getPane('seaPane').style.zIndex = 390;

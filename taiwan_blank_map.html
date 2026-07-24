@@ -588,6 +588,24 @@ COLORS.forEach(c=>{
 });
 
 const map=L.map('map',{zoomControl:true,attributionControl:false}).setView([23.8,121],7);
+
+// 「回到台灣本島」按鈕：接在放大縮小控制下方，一鍵拉回全島視野
+const TW_HOME={center:[23.8,121],zoom:7};
+const HomeControl=L.Control.extend({
+  options:{position:'topleft'},
+  onAdd:function(){
+    const c=L.DomUtil.create('div','leaflet-bar leaflet-control');
+    const a=L.DomUtil.create('a','',c);
+    a.href='#'; a.title='回到台灣本島';
+    a.setAttribute('role','button'); a.setAttribute('aria-label','回到台灣本島');
+    a.innerHTML='🏠';
+    a.style.cssText='font-size:15px;line-height:30px;text-align:center;text-decoration:none';
+    L.DomEvent.on(a,'click',function(e){ L.DomEvent.stop(e); map.setView(TW_HOME.center,TW_HOME.zoom); });
+    L.DomEvent.disableClickPropagation(c);
+    return c;
+  }
+});
+map.addControl(new HomeControl());
 // 分層：seaPane(390) < townPane(395) < overlayPane(400: 縣界)
 map.createPane('seaPane');  map.getPane('seaPane').style.zIndex=390;
 map.createPane('townPane'); map.getPane('townPane').style.zIndex=395;
