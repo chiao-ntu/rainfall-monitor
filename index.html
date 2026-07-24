@@ -121,6 +121,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <a href="https://tropic.ssec.wisc.edu/" target="_blank" class="ext-btn">CIMSS</a>
       <a href="https://www.easterlywave.com/typhoon/ensemble/" target="_blank" class="ext-btn">EasterlyWave</a>
       <a href="https://www.windy.com/?21.487,120.674,5" target="_blank" class="ext-btn">Windy</a>
+      <a href="https://zoom.earth/maps/precipitation/#view=23.4,121.68,5z/model=gfs" target="_blank" class="ext-btn">Google Earth</a>
     </div>
   </div>
 <div class="ctrl-row">
@@ -187,7 +188,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <input type="number" id="cs0" value="5" style="width:52px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
       <span style="display:inline-block;width:16px;height:12px;background:#7DDDFF;border:1px solid #3a5a7a;border-radius:2px;vertical-align:middle"></span> <span style="font-size:10px;color:#5a8aaa">&lt;</span>
       <input type="number" id="cs1" value="20" style="width:52px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
-      <span style="display:inline-block;width:16px;height:12px;background:#7ED957;border:1px solid #3a5a7a;border-radius:2px;vertical-align:middle"></span> <span style="font-size:10px;color:#5a8aaa">&lt;</span>
+      <span style="display:inline-block;width:16px;height:12px;background:#00FF00;border:1px solid #3a5a7a;border-radius:2px;vertical-align:middle"></span> <span style="font-size:10px;color:#5a8aaa">&lt;</span>
       <input type="number" id="cs2" value="40" style="width:52px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
       <span style="display:inline-block;width:16px;height:12px;background:#FFFF00;border:1px solid #3a5a7a;border-radius:2px;vertical-align:middle"></span> <span style="font-size:10px;color:#5a8aaa">&lt;</span>
       <input type="number" id="cs3" value="70" style="width:52px;font-size:11px;padding:2px 4px;background:#0d2035;color:#dde8f2;border:1px solid #2a4a6a;border-radius:3px">
@@ -895,7 +896,7 @@ const seaLayer = L.rectangle([[-90,-180],[90,180]], {
 const RAIN_SCALE=[
   {max:5,   color:'#FFFFFF',label:'< 5 mm'},
   {max:20,  color:'#7DDDFF',label:'5–20 mm'},
-  {max:40,  color:'#7ED957',label:'20–40 mm'},
+  {max:40,  color:'#00FF00',label:'20–40 mm'},
   {max:70,  color:'#FFFF00',label:'40–70 mm'},
   {max:130, color:'#FF0000',label:'70–130 mm'},
   {max:250, color:'#CC00CB',label:'130–250 mm'},
@@ -913,7 +914,7 @@ const INTENSITY_SCALE=[
 function intensityColor(v){for(const s of INTENSITY_SCALE)if(v<s.max)return s.color;return'#CC00CB'}
 const ETR_SCALE=[
   {max:50,  color:'#FFFFFF',label:'< 50%'},
-  {max:70,  color:'#7ED957',label:'50–70%'},
+  {max:70,  color:'#00FF00',label:'50–70%'},
   {max:90,  color:'#FFFF00',label:'70–90%'},
   {max:100, color:'#FF0000',label:'90–100%'},
   {max:1e9, color:'#CC00CB',label:'≥ 100%'},
@@ -931,7 +932,7 @@ function warnMapColor(v){for(const s of WARN_MAP_SCALE)if(v<s.max)return s.color
 
 const RISK_SCALE=[
   {max:50,  color:'#FFFFFF', label:'< 50 未達標'},
-  {max:70,  color:'#7ED957', label:'50–70 低'},
+  {max:70,  color:'#00FF00', label:'50–70 低'},
   {max:90,  color:'#FFFF00', label:'70–90 中'},
   {max:100, color:'#FF0000', label:'90–100 高'},
   {max:1e9, color:'#CC00CB', label:'≥100 超高'},
@@ -3803,7 +3804,7 @@ function calcRiskIndicator(t, seg){
   if(R >= 100){ level=4; name='超高'; color='#CC00CB'; }
   else if(R >= 90){ level=3; name='高'; color='#FF0000'; }
   else if(R >= 70){ level=2; name='中'; color='#FFFF00'; }
-  else if(R >= 50){ level=1; name='低'; color='#7ED957'; }
+  else if(R >= 50){ level=1; name='低'; color='#00FF00'; }
   else { level=0; name='未達標'; color='#8899aa'; }
 
   return {R, R_now, level, name, color, arrow, arrowColor, warnLv, E_now, E_proj};
@@ -3844,6 +3845,19 @@ function _valueColorForMode(v){
   return rainColor(v);
 }
 
+// CWA 官方定量降水色階（僅供「渲染」內插層用，讓渲染後的分布圖貼近氣象署官方配色）
+//   平常未渲染的鄉鎮色塊仍用 RAIN_SCALE（現行色階），只有按下渲染才切官方配色。
+//   對應累積雨量門檻（與 RAIN_SCALE 的 max 一致，只換顏色）。
+const RAIN_SCALE_CWA = [
+  {max:5,   color:'#FFFFFF'},  // <5 白
+  {max:20,  color:'#03C8FF'},  // 5–20 淺藍（官方 2/5/10mm 藍系代表）
+  {max:40,  color:'#39FF03'},  // 20–40 綠
+  {max:70,  color:'#FFC800'},  // 40–70 黃橘
+  {max:130, color:'#FF0000'},  // 70–130 紅
+  {max:250, color:'#C900CC'},  // 130–250 紫
+  {max:1e9, color:'#FDC9FF'},  // 250+ 粉
+];
+
 // 當前模式的色帶RGB表（供內插渲染邊界混色）
 function _modeBandsRgb(){
   const hex2rgb = c => [parseInt(c.slice(1,3),16), parseInt(c.slice(3,5),16), parseInt(c.slice(5,7),16)];
@@ -3851,7 +3865,7 @@ function _modeBandsRgb(){
   if(mode==='etr') sc = ETR_SCALE;
   else if(mode==='risk') sc = RISK_SCALE;
   else if(mode==='warn') sc = WARN_MAP_SCALE;
-  else sc = RAIN_SCALE;  // 自訂色階直接修改 RAIN_SCALE 本體，此處自動一致
+  else sc = RAIN_SCALE_CWA;  // 渲染時累積雨量用CWA官方配色（門檻同RAIN_SCALE，僅換色）
   return sc.map(s=>({max:s.max, rgb:hex2rgb(s.color)}));
 }
 
