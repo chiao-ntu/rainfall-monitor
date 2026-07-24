@@ -1063,6 +1063,14 @@ def fetch_cwa_routine_qpf(now_tpe):
             if 'thumb' in ul or 'small' in ul or 'icon' in ul: s -= 8
             return -s
         png_uris.sort(key=lambda du: _png_score(du[1]))
+        # 診斷：列出所有 PNG 候選及其檔名窗（讓 log 揭露 CWA 到底出了哪些時段的圖）
+        import re as _re2
+        print(f"    共 {len(png_uris)} 個 PNG 候選：")
+        for _did, _u in png_uris[:20]:
+            _fn = _u.rsplit('/',1)[-1]
+            _wm = _re2.search(r'_(\d{1,3})_(\d{1,3})(?:\.png)?$', _fn)
+            _win = f"{_wm.group(1)}-{_wm.group(2)}h" if _wm else "無窗標示"
+            print(f"      {_did}: {_fn[:46]} [{_win}]")
         merged = {}          # start_tpe -> {town_key: val}
         used_src = []
         _saved_sample = False
@@ -1210,7 +1218,7 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns, fname=''):
         if val > 0: n_hit += 1
     print(f"    PNG判讀（單應性+密集鄰域）：{n_hit}/{len(towns)} 鄉鎮有雨值")
 
-    # 時間窗：檔名如 ...Precip_12_24 表示「發布起 +12h~+24h」（12h窗）。
+    # 時間窗：檔名如 ...Precip_12_24 表示「發布起 +12h~+24h」。
     #   解析 _HH_HH → 相對發布時刻的起訖小時；發布時刻取最近的 CWA 發布班次
     #   （05:30/11:30/17:30/23:30 TST）。無法解析則退回「下一個6h邊界起、12h窗」。
     import re as _re
@@ -1218,7 +1226,8 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns, fname=''):
     win_h = QPF_PNG_WINDOW_HOURS
     if m:
         h0, h1 = int(m.group(1)), int(m.group(2))
-        if h1 > h0 and (h1 - h0) in (6, 12, 24):
+        # 接受 6~48h 的任何合理窗（6的倍數）；涵蓋 0_12 / 12_24 / 24_48 等各版式
+        if h1 > h0 and (h1 - h0) % 6 == 0 and (h1 - h0) <= 48 and h1 <= 72:
             win_h = h1 - h0
             # 發布班次：取今日最近且 ≤ now 的 05:30/11:30/17:30/23:30
             _cands = []
@@ -1235,14 +1244,17 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns, fname=''):
                 _snap = round(_off / 21600) * 21600
                 base = _day0 + timedelta(seconds=_snap)
                 n_seg = max(1, win_h // 6)
-                # 色階為「類別」而非可加量：12h 圖的色帶直接套用到每個 6h 子段
+                # 色階為「類別」而非可加量：色帶直接套用到窗內每個 6h 子段
                 #   （不除以段數——除法會破壞色帶身分，害前端對不到官方色）
                 seg_vals = dict(town_vals)
                 segs = {}
                 for k in range(n_seg):
                     segs[base + timedelta(hours=6*k)] = seg_vals
-                print(f"    時間窗（檔名 {h0}-{h1}h）：{base.strftime('%m/%d %H:%M')} 起 {n_seg} 段（色階類別）")
+                print(f"    時間窗（檔名 {h0}-{h1}h，{win_h}h窗）："
+                      f"{base.strftime('%m/%d %H:%M')} 起 {n_seg} 段（色階類別）")
                 return segs
+        else:
+            print(f"    檔名窗 {h0}-{h1}h 不合理（差={h1-h0}），退回預設窗")
     # 退回：下一個 6h 邊界起、12h 窗（色階為類別，直接套用不除段）
     base = now_tpe.replace(minute=0, second=0, microsecond=0, tzinfo=None)
     base = base + timedelta(hours=(6 - base.hour % 6) % 6)
