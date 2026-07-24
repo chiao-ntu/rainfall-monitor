@@ -224,7 +224,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <div id="lsb" style="width:230px;flex-shrink:0;display:flex;flex-direction:column;
     background:#091520;border-right:1px solid #1a3348;overflow:hidden;transition:width 0.25s ease">
     <!-- ETR2% 警戒區塊 -->
-    <div id="lsb-etr-sec" style="display:flex;flex-direction:column;flex:1 1 auto;min-height:60px;overflow:hidden">
+    <div id="lsb-etr-sec" style="display:flex;flex-direction:column;flex:1 1 0;min-height:0;overflow:hidden">
       <div onclick="toggleLsbSection('etr')" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
         border-bottom:1px solid #1a3348;background:#0a1828;flex-shrink:0;cursor:pointer">
         <span style="font-weight:700;color:#ffcc44;font-size:11px"><span id="lsb-etr-arrow">▾</span> ⚠ ETR2%警戒</span>
@@ -235,10 +235,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             style="font-size:9px;padding:1px 5px;background:#0d2035;color:#5ad88a;border:1px solid #2a5a4a;border-radius:3px;cursor:pointer">CSV</button>
         </span>
       </div>
-      <div id="etr-panel-body" style="padding:5px 7px;overflow-y:auto;flex:1;font-size:11px;color:#dde8f2"></div>
+      <div id="etr-panel-body" style="padding:5px 7px;overflow-y:auto;flex:1;min-height:0;font-size:11px;color:#dde8f2"></div>
     </div>
     <!-- 二次災害高風險區區塊 -->
-    <div id="lsb-dis-sec" style="display:flex;flex-direction:column;flex:1 1 auto;min-height:60px;border-top:2px solid #4a2a18;overflow:hidden">
+    <div id="lsb-dis-sec" style="display:flex;flex-direction:column;flex:1 1 0;min-height:0;border-top:2px solid #4a2a18;overflow:hidden">
       <div onclick="toggleLsbSection('disaster')" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
         border-bottom:1px solid #4a2a18;background:#2a140a;flex-shrink:0;cursor:pointer">
         <span style="font-weight:700;color:#ff8855;font-size:11px"><span id="lsb-disaster-arrow">▾</span> ● 二次災害高風險區</span>
@@ -249,7 +249,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             style="font-size:9px;padding:1px 5px;background:#2a1810;color:#8ad8a8;border:1px solid #3a5a3a;border-radius:3px;cursor:pointer">CSV</button>
         </span>
       </div>
-      <div id="disaster-panel-body" style="padding:5px 7px;overflow-y:auto;flex:1;font-size:11px;color:#f2e0d8;background:#150c07"></div>
+      <div id="disaster-panel-body" style="padding:5px 7px;overflow-y:auto;flex:1;min-height:0;font-size:11px;color:#f2e0d8;background:#150c07"></div>
     </div>
   </div>
   <!-- 左側欄收合按鈕（右緣、上下到底） -->
@@ -3601,8 +3601,10 @@ function toggleLsbSection(name){
   // 兩區都展開時按內容比例分配並各自捲動，收合任一區另一區立即接上不留空白
   const section = document.getElementById(name==='etr' ? 'lsb-etr-sec' : 'lsb-dis-sec');
   if(section){
-    section.style.flex      = _lsbSecOpen[name] ? '1 1 auto' : '0 0 auto';
-    section.style.minHeight = _lsbSecOpen[name] ? '60px' : '0';
+    // 展開＝flex:1 1 0 + min-height:0（讓內容超出時 body 自己捲動，不撐破容器）；
+    // 收合＝0 0 auto 只剩標題列。兩區展開時平均分配並各自捲動。
+    section.style.flex      = _lsbSecOpen[name] ? '1 1 0' : '0 0 auto';
+    section.style.minHeight = '0';
   }
 }
 
