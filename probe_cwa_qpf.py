@@ -120,25 +120,76 @@ for did in scan:
     except Exception:
         pass
 
+def find_times(obj):
+    """遞迴找 StartTime / EndTime / ValidTime / IssueTime 等時間欄位。"""
+    found = {}
+    def walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if isinstance(v, str) and any(t in k for t in
+                        ('StartTime','EndTime','ValidTime','IssueTime','ForecastTime')):
+                    found.setdefault(k, v)
+                else:
+                    walk(v)
+        elif isinstance(o, list):
+            for it in o:
+                walk(it)
+    walk(obj)
+    return found
+
 print(f"共找到 {len(png_all)} 個 PNG uri：")
 import re
+# ★關鍵升級：讀每張 PNG 的指標檔 JSON，抓 StartTime/EndTime → 定序四張圖的時段
 for did, u in png_all:
     fn = u.rsplit('/', 1)[-1]
     m = re.search(r'_(\d{1,3})_(\d{1,3})', fn)
     win = f"{m.group(1)}-{m.group(2)}h" if m else "無窗標示"
+    # 重新抓該 dataid 的指標檔 JSON，找時間欄位
+    times = {}
+    desc = ""
+    try:
+        rj = requests.get(f"{FILEAPI}/{did}",
+                          params={'Authorization': KEY, 'downloadType': 'WEB', 'format': 'JSON'},
+                          timeout=15)
+        if rj.status_code == 200 and rj.content[:1] in (b'{', b'['):
+            doc = json.loads(rj.content.decode('utf-8', 'replace'))
+            times = find_times(doc)
+            # 找 DatasetDescription
+            def find_desc(o):
+                if isinstance(o, dict):
+                    for k, v in o.items():
+                        if k == 'DatasetDescription' and isinstance(v, str):
+                            return v
+                        r = find_desc(v)
+                        if r: return r
+                elif isinstance(o, list):
+                    for it in o:
+                        r = find_desc(it)
+                        if r: return r
+                return None
+            desc = find_desc(doc) or ""
+    except Exception:
+        pass
     # 下載讀 IHDR 尺寸
+    size = "?"
     try:
         rr = requests.get(u, timeout=30)
         if rr.content[:8] == b'\x89PNG\r\n\x1a\n':
             w, h = struct.unpack('>II', rr.content[16:24])
-            print(f"  {did}: {fn[:50]}  [{win}]  {w}×{h}")
-        else:
-            print(f"  {did}: {fn[:50]}  [{win}]  (非PNG)")
-    except Exception as e:
-        print(f"  {did}: {fn[:50]}  [{win}]  下載失敗 {e}")
+            size = f"{w}×{h}"
+    except Exception:
+        pass
+    tstr = " | ".join(f"{k}={v}" for k, v in times.items()) if times else "（指標檔無時間欄位）"
+    print(f"\n  {did}: {fn[:40]}  [{win}]  {size}")
+    if desc:
+        print(f"    描述: {desc[:60]}")
+    print(f"    時段: {tstr}")
 
 print("\n" + "="*70)
 print("探測完成。請把以上完整輸出貼回對話。")
-print("重點看：A 有沒有 JSON/壓縮的網格數據、B 有沒有 datastore QPF、")
-print("        C 有沒有 6h/3h 的圖（檔名時段窗 + 尺寸）。")
+print("重點看：")
+print("  A: F-C0041 網格數據（颱風期間才有真實內容）")
+print("  B: datastore QPF")
+print("  C: ★四張 F-C0035 PNG 各自的『時段』(StartTime/EndTime) — ")
+print("     這決定 0-12/12-24/24-48h 的排序，用來拼完整 48h")
 print("="*70)
