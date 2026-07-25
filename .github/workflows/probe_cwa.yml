@@ -1,0 +1,26 @@
+name: 探測 CWA QPF 資料源
+
+# 只手動觸發：在 GitHub 網頁 Actions 分頁按「Run workflow」才會跑
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      # 跑探測腳本，log 會直接印在這個步驟的執行記錄裡
+      - name: Run probe_cwa_qpf.py
+        env:
+          CWA_API_KEY: ${{ secrets.CWA_API_KEY }}
+        run: python probe_cwa_qpf.py
