@@ -114,9 +114,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <a href="https://www.cwa.gov.tw/V8/C/P/Rainfall/Rainfall_QZJ.html" target="_blank" class="ext-btn">日累積雨量</a>
       <a href="https://mfcqpf.cwa.gov.tw/login/?next=/MFC/" target="_blank" class="ext-btn">郵票圖</a>
       <a href="https://npd.cwa.gov.tw/NPD/resident_product/weather_pattern?version=public" target="_blank" class="ext-btn">高空天氣圖</a>
-      <a href="https://watch.ncdr.nat.gov.tw/plotrainonline" target="_blank" class="ext-btn">雨量觀測累積</a>
-      <a href="https://watch.ncdr.nat.gov.tw/watch_swcb" target="_blank" class="ext-btn">颱風資訊</a>
-      <a href="https://watch.ncdr.nat.gov.tw/watch_tracks_pro" target="_blank" class="ext-btn">颱風路徑</a>
+      <a href="https://watch.ncdr.nat.gov.tw/plotrainonline" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">雨量觀測累積</a>
+      <a href="https://watch.ncdr.nat.gov.tw/watch_swcb" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">颱風資訊</a>
+      <a href="https://watch.ncdr.nat.gov.tw/watch_tracks_pro" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">颱風路徑</a>
       <a href="https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan" target="_blank" class="ext-btn">WISSDOM</a>
       <a href="https://fema.ardswc.gov.tw/Portal/Layout" target="_blank" class="ext-btn">FEMA</a>
       <a href="https://www.tropicaltidbits.com/analysis/models/?model=ecmwf&region=ea&pkg=mslp_pcpn" target="_blank" class="ext-btn">Tropical Tidbits</a>
@@ -127,18 +127,18 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     </div>
   </div>
 <div class="ctrl-row">
-    <span class="cl">圖層</span>
+    <span class="cl" style="color:#7ee8a8">圖層</span>
     <div class="bg">
-      <button class="b on" id="bRain"  onclick="setMode('rain')">累積雨量</button>
-      <button class="b"    id="bEtr"   onclick="setMode('etr')">ETR2%</button>
-      <button class="b"    id="bRisk"  onclick="setMode('risk')">風險指標</button>
-      <button class="b"    id="bWarn"  onclick="setMode('warn')">警特報</button>
+      <button class="b on" id="bRain"  onclick="setMode('rain')" style="border-color:#3a8a5a;color:#7ee8a8">累積雨量</button>
+      <button class="b"    id="bEtr"   onclick="setMode('etr')" style="border-color:#3a8a5a;color:#7ee8a8">ETR2%</button>
+      <button class="b"    id="bRisk"  onclick="setMode('risk')" style="border-color:#3a8a5a;color:#7ee8a8">風險指標</button>
+      <button class="b"    id="bWarn"  onclick="setMode('warn')" style="border-color:#3a8a5a;color:#7ee8a8">警特報</button>
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
         style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
     </div>
   </div>
   <div class="ctrl-row">
-    <span class="cl">過去7天</span>
+    <span class="cl" style="color:#7ee8a8">過去7天</span>
     <div class="bg" id="past-btns" style="flex:1;min-width:0"></div>
   </div>
   <div class="ctrl-row">
@@ -151,11 +151,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     </div>
   </div>
   <div class="ctrl-row">
-    <span class="cl" style="color:#c060e0">未來6h段</span>
+    <span class="cl" style="color:#7ee8a8">未來6h段</span>
     <div class="bg" id="future6h-btns" style="flex:1;min-width:0"></div>
   </div>
   <div class="ctrl-row">
-    <span class="cl" style="color:#c060e0">逐日</span>
+    <span class="cl" style="color:#7ee8a8">逐日</span>
     <div class="bg" id="day-btns" style="flex:1;min-width:0"></div>
   </div>
   <div class="ctrl-row">
@@ -215,7 +215,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <!-- 預報模式選擇列（未來時段才顯示） -->
   <div class="ctrl-row" id="model-row-wrap" style="display:none">
     <div class="bg" id="model-row">
-      <button class="b model-btn"    id="mCwa"   onclick="setModel('cwa')" style="color:#ffcc44">CWA</button>
+      <button class="b model-btn"    id="mCwa"   onclick="setModel('cwa')">CWA</button>
       <button class="b model-btn on" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
       <button class="b model-btn"    id="mEcmwf" onclick="setModel('ecmwf')">ECMWF</button>
       <button class="b model-btn"    id="mGfs"   onclick="setModel('gfs')">GFS</button>
@@ -2340,7 +2340,7 @@ function buildFuture6hBtns(){
   const curSeg = Math.floor(BASE_TIME.getHours() / 6);
   for(let n=1; n<=8; n++){
     const btn = document.createElement('button');
-    btn.className = 'b bfut';
+    btn.className = 'b';
     btn.id = 'bfut6_'+n;
     const t0 = segTime(curSeg + n - 1), t1 = segTime(curSeg + n);
     const h1 = t1.getHours()===0 ? 24 : t1.getHours();
@@ -2361,7 +2361,7 @@ function buildDayBtns(){
 
   // 第一個按鈕：今天（觀測至今+預測補滿24h）
   const btnToday = document.createElement('button');
-  btnToday.className = 'b bfut';
+  btnToday.className = 'b';
   btnToday.id = 'bToday';
   btnToday.textContent = `今天(${fmtDay(SEG_EPOCH())})`;
   btnToday.onclick = () => setWin('today');
@@ -2372,7 +2372,7 @@ function buildDayBtns(){
   for(let i=2;i<=16;i++){
     const dt=new Date(SEG_EPOCH().getTime()+(i-1)*86400000);
     const btn=document.createElement('button');
-    btn.className='b bfut';btn.id=`bday${i}`;btn.textContent=fmtDay(dt);
+    btn.className='b';btn.id=`bday${i}`;btn.textContent=fmtDay(dt);
     btn.onclick=(d=>()=>setWin('day'+d))(i);
     c.appendChild(btn);
     ALL_DYNAMIC_BTN_IDS.push('bday'+i);

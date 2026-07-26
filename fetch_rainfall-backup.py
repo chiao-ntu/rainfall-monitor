@@ -1160,6 +1160,7 @@ def fetch_cwa_routine_qpf(now_tpe):
             print(f"      {_did}: {_fn[:40]} [{_win}]")
         merged = {}          # start_tpe -> {town_key: val}
         used_src = []
+        _cwa_windows = []    # 每張圖的真實起訖時段（供前端按鈕標籤）
         _saved_sample = False
         for did, u, rdesc in png_uris[:16]:
             try:
@@ -1174,15 +1175,41 @@ def fetch_cwa_routine_qpf(now_tpe):
                     _saved_sample = True
                 if (w, h) != QPF_PNG_REF_SIZE:
                     continue
-                # 依 ResourceDesc 羅馬數字定序：(I)→段0-1 (II)→段2-3 (III)→段4-5 (IV)→段6-7
-                #   （定量降水預報圖逐12h＝2段/張，四張拼成 48h）
-                _roman = {'(I)':0, '(II)':2, '(III)':4, '(IV)':6}
-                _wseg = None
+                # 依 ResourceDesc 羅馬數字定序（逐12h）：(I)=第1個12h窗…(IV)=第4個
+                #   CWA定量降水預報發布班次：05/11/17/23時，圖涵蓋「發布時刻起」逐12h。
+                #   以發布時刻為錨（非今天00:00），每張圖固定12h，前端按鈕跟著真實時段走。
+                _roman = {'(I)':0, '(II)':1, '(III)':2, '(IV)':3}
+                _worder = None
                 for _rk, _rv in _roman.items():
                     if rdesc and _rk in rdesc:
-                        _wseg = _rv; break
+                        _worder = _rv; break
+                # 發布時刻：今日最近且 ≤ now 的 05/11/17/23 時
+                _issue = None
+                if _worder is not None:
+                    _cands = []
+                    for _dh in (-1, 0):
+                        _d = now_tpe.replace(minute=0, second=0, microsecond=0, tzinfo=None) + timedelta(days=_dh)
+                        for _hh in (5, 11, 17, 23):
+                            _cands.append(_d.replace(hour=_hh))
+                    _issue = max([c for c in _cands if c <= now_tpe.replace(tzinfo=None)], default=None)
+                # 該圖真實起訖（發布 + order*12h ~ +12h）
+                _win_start = _issue + timedelta(hours=12*_worder) if (_issue and _worder is not None) else None
+                # 轉段索引（今天00:00起算、吸附6h邊界）供內部陣列定位
+                _wseg = None
+                if _win_start is not None:
+                    _day0 = _win_start.replace(hour=0, minute=0, second=0, microsecond=0)
+                    _off = (_win_start - _day0).total_seconds()
+                    _wseg = int((_day0 - now_tpe.replace(hour=0,minute=0,second=0,microsecond=0,tzinfo=None)).total_seconds()//21600) \
+                            + round(_off/21600)
+                    if _wseg < 0: _wseg = None   # 落在過去則丟棄
                 segs = decode_qpf_png(r.content, did, now_tpe, towns, fname=fn,
                                       win_seg=_wseg, win_nseg=2)
+                if segs and _win_start is not None:
+                    _cwa_windows.append({
+                        'start': _win_start.strftime('%Y-%m-%dT%H:%M:%S'),
+                        'end': (_win_start + timedelta(hours=12)).strftime('%Y-%m-%dT%H:%M:%S'),
+                        'seg': _wseg, 'order': _worder,
+                    })
                 if segs:
                     for st, tv in segs.items():
                         if st not in merged:      # 先到先得（同窗不重複；不同窗互補）
@@ -1195,7 +1222,8 @@ def fetch_cwa_routine_qpf(now_tpe):
                   f"（近似，僅級距；來源 {len(used_src)} 張圖）")
             with open(CWA_QPF_SRC_FILE, 'w', encoding='utf-8') as f:
                 json.dump({'kind': 'png', 'sources': used_src}, f, ensure_ascii=False)
-            return {'issue': 'png:' + ','.join(used_src)[:80], 'segs': merged, 'png': True}
+            return {'issue': 'png:' + ','.join(used_src)[:80], 'segs': merged, 'png': True,
+                    'windows': sorted(_cwa_windows, key=lambda w: w['start'])}
         if _saved_sample:
             print(f"    有PNG但無 {QPF_PNG_REF_SIZE[0]}×{QPF_PNG_REF_SIZE[1]} 主圖——已存 qpf_sample.png，"
                   f"若為改版式請提供以重新定位四海岬")
@@ -1840,6 +1868,7 @@ def main():
             if is_typhoon else
             ('routine_png' if routine_is_png else 'routine') if routine_seg_map else None),
         'cwa_qpf_segs': sorted(routine_seg_map.keys()) if routine_seg_map else [],
+        'cwa_qpf_windows': (routine_qpf.get('windows') if routine_qpf else []) or [],
         'official_warn': official_warn,  # 官方現行警特報（W-C0033-001，縣市級）
         'township_count':len(out_towns),
         'townships':out_towns,

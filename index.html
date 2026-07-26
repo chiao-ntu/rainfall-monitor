@@ -26,8 +26,6 @@ body{font-family:'Microsoft JhengHei',sans-serif;background:#0c1822;color:#dde8f
 .b{padding:3px 9px;font-size:10px;border:1px solid #1e3a5a;background:#0d2035;color:#5a90b8;cursor:pointer;border-radius:3px;transition:all .12s;white-space:nowrap}
 .b:hover{background:#1a3a5a}
 .b.on{background:#14507a;border-color:#3a8acc;color:#6bc8e8;font-weight:700}
-.b.bfut{border-color:#8a3a9a;color:#c88ae8}
-.b.bfut.on{background:#4a1e5a;border-color:#c060e0;color:#e8b0f8;font-weight:700}
 .b.pbtn{border-color:#5a4010;color:#c08030}
 .b.pbtn.on{background:#3a2a0a;border-color:#aa6010;color:#f0a030}
 #cust-ctrl{display:none;flex-direction:column;gap:2px;padding:6px 14px 8px;width:100%;box-sizing:border-box}
@@ -142,12 +140,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div class="bg" id="past-btns" style="flex:1;min-width:0"></div>
   </div>
   <div class="ctrl-row">
-    <span class="cl" style="color:#c060e0">雷達1h</span>
+    <span class="cl" style="color:#7ee8a8">雷達1h</span>
     <div class="bg" id="radar-btns" style="flex:1;min-width:0">
-      <button class="b bfut" id="bRadar" onclick="setWin('radar')"
-        title="F-B0046 未來1小時雷達定量降雨預報（約1.4km格點，每10分鐘更新）">
-        未來1h雷達QPF</button>
-      <span id="radar-time" style="font-size:9px;color:#9a7ab0;margin-left:6px"></span>
+      <button class="b" id="bRadar" onclick="setWin('radar')">未來1h雷達QPF</button>
+      <span id="radar-time" style="font-size:9px;color:#7a98aa;margin-left:6px"></span>
     </div>
   </div>
   <div class="ctrl-row">
