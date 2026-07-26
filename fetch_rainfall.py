@@ -534,7 +534,74 @@ def fetch_openmeteo(townships):
     return all_results, all_max_hourly
 
 
-# ── QPESUMS 雷達整合網格觀測（O-A0038-001，~1.3km）──
+# ── F-B0046 未來1小時雷達定量降雨預報（~1.4km 格點，每10分鐘更新）──
+#   datastore 直接回內含格點數值的 JSON（不需二段式）。441×561 格點，
+#   左下角(117.975,19.975)起，先經向遞增再緯向遞增，單位mm，無效值-99。
+#   放在時間軸「過去觀測」與「未來6h段」之間，提供最近未來的高解析銜接。
+FB0046_URL = f"{BASE_URL}/F-B0046-001"
+
+def fetch_radar_qpf_1h(townships):
+    """抓 F-B0046 未來1h雷達QPF格點 → 取各鄉鎮最近格點值。
+    回傳 (town_vals: {county+township: mm}, datetime_str)；失敗回 ({}, '')。"""
+    print("抓取 F-B0046 未來1h雷達定量降雨預報...")
+    for attempt in range(3):
+        try:
+            r = requests.get(FB0046_URL, params={'Authorization': CWA_API_KEY,
+                             'format': 'JSON'}, timeout=60)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}"); 
+                if attempt < 2: time.sleep(3); continue
+                return {}, ''
+            doc = json.loads(r.content.decode('utf-8', 'replace'))
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return {}, ''
+            time.sleep(3)
+    else:
+        return {}, ''
+    # 解析格點
+    try:
+        # 相容大小寫（datastore 版多為小寫 dataset）
+        root = doc.get('cwaopendata', doc)
+        ds = root.get('dataset') or root.get('Dataset') or {}
+        info = ds.get('datasetInfo') or ds.get('DatasetInfo') or {}
+        ps = info.get('parameterSet') or info.get('ParameterSet') or {}
+        lon0 = float(ps.get('StartPointLongitude', 118.0))
+        lat0 = float(ps.get('StartPointLatitude', 20.0))
+        res  = float(ps.get('GridResolution', 0.0125))
+        nx   = int(ps.get('GridDimensionX', 441))
+        ny   = int(ps.get('GridDimensionY', 561))
+        dtstr = ps.get('DateTime', '')
+        conts = ds.get('contents') or ds.get('Contents') or {}
+        content = conts.get('content') or conts.get('Content') or ''
+        if isinstance(content, dict):
+            content = content.get('#text') or content.get('ContentText') or ''
+        import re as _re
+        nums = _re.findall(r'-?\d+\.?\d*[Ee][+-]?\d+', str(content))
+        vals = [float(x) for x in nums]
+        if len(vals) < nx*ny*0.5:
+            print(f"    格點數異常：{len(vals)}（期望 {nx*ny}）"); return {}, dtstr
+        # 實際左下角 = StartPoint - res/2（log 註明第一點為 117.975/19.975）
+        gl0 = lon0 - res/2
+        gb0 = lat0 - res/2
+        town_vals = {}
+        for t in townships:
+            lat = t.get('lat'); lng = t.get('lng')
+            if lat is None or lng is None: continue
+            gx = round((lng - gl0) / res)
+            gy = round((lat - gb0) / res)
+            if 0 <= gx < nx and 0 <= gy < ny:
+                v = vals[gy*nx + gx]
+                town_vals[f"{t['county']}{t['township']}"] = round(v, 1) if v >= 0 else None
+        n_rain = sum(1 for v in town_vals.values() if v and v > 0)
+        print(f"    雷達QPF：{len(town_vals)} 鄉鎮取值，{n_rain} 個有雨（時間 {dtstr}）")
+        return town_vals, dtstr
+    except Exception as e:
+        print(f"    解析失敗：{e}"); return {}, ''
+
+
+
 # O-A0038-001 是網格「檔案型」產品，走 fileapi 路徑（datastore 會 404）
 QPESUMS_URL  = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi/O-A0038-001"
 QPESUMS_HIST = "qpesums_history.json"
@@ -1476,6 +1543,9 @@ def main():
     if qp_24h: print(f"    QPESUMS 24h 歷史：{len(qp_24h)} 個鄉鎮")
     if qp_p48: print(f"    QPESUMS 逐時觀測 p48：{len(qp_p48)} 個鄉鎮")
 
+    # F-B0046 未來1h雷達QPF（高解析銜接，過去觀測與未來6h段之間）
+    radar_qpf, radar_dt = fetch_radar_qpf_1h(load_all_townships())
+
     # 系集強弱降雨比值（縣級）+ 昨日模式偏差比
     time.sleep(2)
     ens_ratios = fetch_ensemble_ratios(static_list)
@@ -1646,6 +1716,7 @@ def main():
             'warn_seg_icon':  WARN_SEG_CACHE.get('icon_seamless', {}).get(f"{lat:.4f}_{lng:.4f}", []),
             'warn_seg_hi':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'hi')),
             'warn_seg_lo':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'lo')),
+            'qpf_radar_1h': radar_qpf.get(f"{county}{township}"),   # F-B0046 未來1h雷達QPF(mm)
             'maxh_best':  maxh_best,
             'maxh_ecmwf': maxh_ecmwf,
             'maxh_gfs':   maxh_gfs,
@@ -1751,6 +1822,7 @@ def main():
             'warn_seg_icon':  WARN_SEG_CACHE.get('icon_seamless', {}).get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
             'warn_seg_hi':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'hi')),
             'warn_seg_lo':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'lo')),
+            'qpf_radar_1h': radar_qpf.get(f"{at['county']}{at['township']}"),   # F-B0046 未來1h雷達QPF(mm)
             'stations':  station_list,
             'daily_rain': obs.get('daily_rain', [0.0]*15),
         })
@@ -1760,6 +1832,7 @@ def main():
         'generated_at':now_tpe.strftime('%Y-%m-%dT%H:%M:%S'),
         'source':'CWA_OBS+POP' if stations else 'DEMO',
         'cwa_qpf_active': bool(is_typhoon or routine_seg_map),  # True=前48h已覆蓋CWA官方QPF
+        'radar_qpf_time': radar_dt,   # F-B0046 未來1h雷達QPF 發布時間（空=本次未取得）
         # 模式：typhoon(精確格點) / typhoon+routine_png(颱風段精確+其餘段圖判讀) /
         #       routine(格點) / routine_png(全圖判讀近似)
         'cwa_qpf_mode': (
