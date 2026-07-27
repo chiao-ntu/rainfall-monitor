@@ -98,6 +98,54 @@ for did in cands:
         print(f"  {did}: 例外 {e}")
 
 print("\n" + "="*70)
+print("C. 深入檢查 O-A0038-003 與 O-A0059-001（判斷是雨量還是溫度/回波）")
+print("="*70)
+for did in ["O-A0038-003", "O-A0059-001"]:
+    try:
+        r = requests.get(f"{FILEAPI}/{did}",
+                         params={'Authorization': KEY, 'downloadType':'WEB', 'format':'JSON'},
+                         timeout=40)
+        if r.status_code != 200:
+            print(f"  {did}: HTTP {r.status_code}"); continue
+        doc = json.loads(r.content.decode('utf-8','replace'))
+        print(f"\n  ── {did} ──")
+        # 印完整頂層結構
+        root = doc.get('cwaopendata', doc)
+        ds = root.get('dataset') or root.get('Dataset') or {}
+        # datasetInfo / parameterSet
+        info = ds.get('datasetInfo') or ds.get('DatasetInfo') or {}
+        print(f"    datasetInfo keys: {list(info.keys())}")
+        print(f"    描述: {info.get('datasetDescription') or info.get('DatasetDescription') or '(無)'}")
+        ps = info.get('parameterSet') or info.get('ParameterSet') or {}
+        if ps:
+            print(f"    parameterSet: {json.dumps(ps, ensure_ascii=False)[:300]}")
+        # GeoInfo（舊式）
+        geo = ds.get('GeoInfo') or {}
+        if geo:
+            print(f"    GeoInfo: {json.dumps(geo, ensure_ascii=False)[:300]}")
+        res = ds.get('Resource') or {}
+        if res:
+            print(f"    Resource: {json.dumps(res, ensure_ascii=False)[:200]}")
+        # 抓格點數值，看值域（判斷單位）
+        s = json.dumps(doc, ensure_ascii=False)
+        nums = [float(x) for x in re.findall(r'-?\d+\.?\d*[Ee][+-]?\d+', s)]
+        if not nums:
+            nums = [float(x) for x in re.findall(r'-?\d+\.\d+', s)][:5000]
+        if nums:
+            valid = [n for n in nums if n > -90]   # 排除 -99 無效值
+            if valid:
+                import statistics
+                print(f"    數值統計：共{len(nums)}個，有效{len(valid)}個")
+                print(f"      範圍 {min(valid):.1f} ~ {max(valid):.1f}，中位數 {statistics.median(valid):.1f}")
+                print(f"      判斷：", end='')
+                mx = max(valid)
+                if mx <= 45: print("值域像『溫度℃』(0~45)")
+                elif mx <= 75: print("值域像『雷達回波 dBZ』(0~75)")
+                else: print("值域較大，可能是『雨量 mm』或其他")
+    except Exception as e:
+        print(f"  {did}: 例外 {e}")
+
+print("\n" + "="*70)
 print("探測完成。重點看：")
 print("  哪個 dataid 的『描述』含『定量降水估計/觀測雨量』且『格點數值數 > 1000』")
 print("  → 那個才是正確的 QPESUMS 觀測雨量網格，用它取代 O-A0038-001")
