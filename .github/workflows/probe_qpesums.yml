@@ -1,0 +1,26 @@
+name: 探測 QPESUMS 觀測雨量網格
+
+# 只手動觸發：Actions 分頁按「Run workflow」才會跑
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      # 跑探測，log 直接印在這步驟的執行記錄裡
+      - name: Run probe_qpesums.py
+        env:
+          CWA_API_KEY: ${{ secrets.CWA_API_KEY }}
+        run: python probe_qpesums.py
