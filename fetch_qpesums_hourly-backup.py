@@ -5,13 +5,16 @@ QPESUMS 每小時累積腳本（輕量，供 GitHub Actions 每小時執行）
 抓 O-A0038-001 網格 1h 雨量 → 取各鄉鎮最近格點值 → 滾動寫入 qpesums_history.json
 主腳本 fetch_rainfall.py 每 6h 讀取此歷史合成 24h 累積，補強無測站鄉鎮觀測。
 """
-import os, json, requests
+import os, json, requests, time, re
 from datetime import datetime, timezone, timedelta
 
 CWA_API_KEY  = os.environ.get('CWA_API_KEY', '')
 BASE_URL     = "https://opendata.cwa.gov.tw/api/v1/rest/datastore"
 # 網格「檔案型」產品走 fileapi（datastore 會 404）
 QPESUMS_URL  = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi/O-A0038-001"
+# F-B0046 未來1h雷達QPF（每10分更新，走 fileapi）——併入本每小時腳本以提升即時性
+FB0046_URL   = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi/F-B0046-001"
+DATA_FILE    = "data.json"
 HIST_FILE    = "qpesums_history.json"
 TOWNS_FILE   = "all_townships.json"
 # 網格參數（與 fetch_rainfall.py 保持一致）
@@ -136,6 +139,87 @@ def grid_at(vals, lat, lng):
     return vals[idx] if idx < len(vals) else None
 
 
+def fetch_radar_qpf_1h(townships):
+    """抓 F-B0046 未來1h雷達QPF格點 → 取各鄉鎮最近格點值。
+    回傳 (town_vals: {county+township: mm}, datetime_str)；失敗回 ({}, '')。"""
+    print("抓取 F-B0046 未來1h雷達定量降雨預報...")
+    doc = None
+    for attempt in range(3):
+        try:
+            r = requests.get(FB0046_URL, params={'Authorization': CWA_API_KEY,
+                             'downloadType': 'WEB', 'format': 'JSON'}, timeout=60)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}")
+                if attempt < 2: time.sleep(3); continue
+                return {}, ''
+            doc = json.loads(r.content.decode('utf-8', 'replace'))
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return {}, ''
+            time.sleep(3)
+    if doc is None:
+        return {}, ''
+    try:
+        root = doc.get('cwaopendata', doc)
+        ds = root.get('dataset') or root.get('Dataset') or {}
+        info = ds.get('datasetInfo') or ds.get('DatasetInfo') or {}
+        ps = info.get('parameterSet') or info.get('ParameterSet') or {}
+        lon0 = float(ps.get('StartPointLongitude', 118.0))
+        lat0 = float(ps.get('StartPointLatitude', 20.0))
+        res  = float(ps.get('GridResolution', 0.0125))
+        nx   = int(ps.get('GridDimensionX', 441))
+        ny   = int(ps.get('GridDimensionY', 561))
+        dtstr = ps.get('DateTime', '')
+        conts = ds.get('contents') or ds.get('Contents') or {}
+        content = conts.get('content') or conts.get('Content') or ''
+        if isinstance(content, dict):
+            content = content.get('#text') or content.get('ContentText') or ''
+        nums = re.findall(r'-?\d+\.?\d*[Ee][+-]?\d+', str(content))
+        vals = [float(x) for x in nums]
+        if len(vals) < nx*ny*0.5:
+            print(f"    格點數異常：{len(vals)}（期望 {nx*ny}）"); return {}, dtstr
+        gl0 = lon0 - res/2
+        gb0 = lat0 - res/2
+        town_vals = {}
+        for t in townships:
+            lat = t.get('lat'); lng = t.get('lng')
+            if lat is None or lng is None: continue
+            gx = round((lng - gl0) / res)
+            gy = round((lat - gb0) / res)
+            if 0 <= gx < nx and 0 <= gy < ny:
+                v = vals[gy*nx + gx]
+                town_vals[f"{t['county']}{t['township']}"] = round(v, 1) if v >= 0 else None
+        n_rain = sum(1 for v in town_vals.values() if v and v > 0)
+        print(f"    雷達QPF：{len(town_vals)} 鄉鎮取值，{n_rain} 個有雨（時間 {dtstr}）")
+        return town_vals, dtstr
+    except Exception as e:
+        print(f"    解析失敗：{e}"); return {}, ''
+
+
+def patch_radar_into_data(radar_vals, radar_dt):
+    """只補寫 data.json 的雷達欄位（qpf_radar_1h / radar_qpf_time），其他欄位不動。
+    這樣雷達可隨每小時腳本更新，不必等 6h 的主腳本。"""
+    if not os.path.exists(DATA_FILE):
+        print(f"    找不到 {DATA_FILE}，跳過雷達補寫（主腳本尚未產生）")
+        return
+    try:
+        with open(DATA_FILE, encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"    讀取 {DATA_FILE} 失敗：{e}"); return
+    n = 0
+    for t in data.get('townships', []):
+        key = f"{t.get('county','')}{t.get('township','')}"
+        if key in radar_vals:
+            t['qpf_radar_1h'] = radar_vals[key]
+            n += 1
+    data['radar_qpf_time'] = radar_dt
+    with open(DATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
+    print(f"    已補寫 data.json：{n} 鄉鎮雷達值，時間 {radar_dt}")
+
+
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
     hour_key = now.strftime('%Y-%m-%dT%H')
@@ -151,38 +235,45 @@ def main():
     with open(TOWNS_FILE, encoding='utf-8') as f:
         towns = json.load(f)
 
+    # ── QPESUMS 觀測網格（失敗不影響雷達，兩者獨立資料源）──
     vals = fetch_grid()
     if not vals:
-        print("網格抓取失敗，本次不更新")
-        return
+        print("QPESUMS 網格抓取失敗，本次略過 QPESUMS 累積（不影響雷達）")
+    else:
+        hist = {}
+        if os.path.exists(HIST_FILE):
+            try:
+                with open(HIST_FILE, encoding='utf-8') as f:
+                    hist = json.load(f)
+            except Exception:
+                hist = {}
 
-    hist = {}
-    if os.path.exists(HIST_FILE):
-        try:
-            with open(HIST_FILE, encoding='utf-8') as f:
-                hist = json.load(f)
-        except Exception:
-            hist = {}
+        cutoff = (now - timedelta(hours=KEEP_HOURS)).strftime('%Y-%m-%dT%H')
+        n_hit = 0
+        for t in towns:
+            lat, lng = t.get('lat'), t.get('lng')
+            if not lat:
+                continue
+            key = f"{t['county']}{t['township']}"
+            v = grid_at(vals, lat, lng)
+            rec = hist.setdefault(key, {})
+            rec[hour_key] = v
+            # 滾動清理
+            for hk in [k for k in rec if k < cutoff]:
+                del rec[hk]
+            if v is not None:
+                n_hit += 1
 
-    cutoff = (now - timedelta(hours=KEEP_HOURS)).strftime('%Y-%m-%dT%H')
-    n_hit = 0
-    for t in towns:
-        lat, lng = t.get('lat'), t.get('lng')
-        if not lat:
-            continue
-        key = f"{t['county']}{t['township']}"
-        v = grid_at(vals, lat, lng)
-        rec = hist.setdefault(key, {})
-        rec[hour_key] = v
-        # 滾動清理
-        for hk in [k for k in rec if k < cutoff]:
-            del rec[hk]
-        if v is not None:
-            n_hit += 1
+        with open(HIST_FILE, 'w', encoding='utf-8') as f:
+            json.dump(hist, f, ensure_ascii=False, separators=(',', ':'))
+        print(f"完成：{n_hit}/{len(towns)} 鄉鎮有值 → {HIST_FILE}（{os.path.getsize(HIST_FILE)//1024}KB）")
 
-    with open(HIST_FILE, 'w', encoding='utf-8') as f:
-        json.dump(hist, f, ensure_ascii=False, separators=(',', ':'))
-    print(f"完成：{n_hit}/{len(towns)} 鄉鎮有值 → {HIST_FILE}（{os.path.getsize(HIST_FILE)//1024}KB）")
+    # ── F-B0046 未來1h雷達QPF：獨立抓取、補寫 data.json（不受 QPESUMS 成敗影響）──
+    radar_vals, radar_dt = fetch_radar_qpf_1h(towns)
+    if radar_vals:
+        patch_radar_into_data(radar_vals, radar_dt)
+    else:
+        print("    雷達QPF 本次未取得，data.json 雷達欄位維持原值")
 
 
 if __name__ == '__main__':

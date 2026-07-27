@@ -15,6 +15,7 @@ QPESUMS_URL  = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi/O-A0038-001"
 # F-B0046 未來1h雷達QPF（每10分更新，走 fileapi）——併入本每小時腳本以提升即時性
 FB0046_URL   = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi/F-B0046-001"
 DATA_FILE    = "data.json"
+RADAR_FILE   = "radar.json"   # 雷達獨立檔（避免與主腳本搶寫 data.json）
 HIST_FILE    = "qpesums_history.json"
 TOWNS_FILE   = "all_townships.json"
 # 網格參數（與 fetch_rainfall.py 保持一致）
@@ -198,26 +199,15 @@ def fetch_radar_qpf_1h(townships):
 
 
 def patch_radar_into_data(radar_vals, radar_dt):
-    """只補寫 data.json 的雷達欄位（qpf_radar_1h / radar_qpf_time），其他欄位不動。
-    這樣雷達可隨每小時腳本更新，不必等 6h 的主腳本。"""
-    if not os.path.exists(DATA_FILE):
-        print(f"    找不到 {DATA_FILE}，跳過雷達補寫（主腳本尚未產生）")
-        return
-    try:
-        with open(DATA_FILE, encoding='utf-8') as f:
-            data = json.load(f)
-    except Exception as e:
-        print(f"    讀取 {DATA_FILE} 失敗：{e}"); return
-    n = 0
-    for t in data.get('townships', []):
-        key = f"{t.get('county','')}{t.get('township','')}"
-        if key in radar_vals:
-            t['qpf_radar_1h'] = radar_vals[key]
-            n += 1
-    data['radar_qpf_time'] = radar_dt
-    with open(DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
-    print(f"    已補寫 data.json：{n} 鄉鎮雷達值，時間 {radar_dt}")
+    """寫獨立的 radar.json（只有本每小時腳本寫、主腳本不碰）。
+    前端載入時併入——兩個 workflow 各寫各檔，永不在 data.json 上撞車。"""
+    out = {
+        'radar_qpf_time': radar_dt,
+        'townships': radar_vals,   # {county+township: mm}
+    }
+    with open(RADAR_FILE, 'w', encoding='utf-8') as f:
+        json.dump(out, f, ensure_ascii=False, separators=(',', ':'))
+    print(f"    已寫 {RADAR_FILE}：{len(radar_vals)} 鄉鎮雷達值，時間 {radar_dt}")
 
 
 def main():
