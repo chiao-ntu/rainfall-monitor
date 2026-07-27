@@ -235,40 +235,40 @@ def main():
     with open(TOWNS_FILE, encoding='utf-8') as f:
         towns = json.load(f)
 
+    # ── QPESUMS 觀測網格（失敗不影響雷達，兩者獨立資料源）──
     vals = fetch_grid()
     if not vals:
-        print("網格抓取失敗，本次不更新")
-        return
+        print("QPESUMS 網格抓取失敗，本次略過 QPESUMS 累積（不影響雷達）")
+    else:
+        hist = {}
+        if os.path.exists(HIST_FILE):
+            try:
+                with open(HIST_FILE, encoding='utf-8') as f:
+                    hist = json.load(f)
+            except Exception:
+                hist = {}
 
-    hist = {}
-    if os.path.exists(HIST_FILE):
-        try:
-            with open(HIST_FILE, encoding='utf-8') as f:
-                hist = json.load(f)
-        except Exception:
-            hist = {}
+        cutoff = (now - timedelta(hours=KEEP_HOURS)).strftime('%Y-%m-%dT%H')
+        n_hit = 0
+        for t in towns:
+            lat, lng = t.get('lat'), t.get('lng')
+            if not lat:
+                continue
+            key = f"{t['county']}{t['township']}"
+            v = grid_at(vals, lat, lng)
+            rec = hist.setdefault(key, {})
+            rec[hour_key] = v
+            # 滾動清理
+            for hk in [k for k in rec if k < cutoff]:
+                del rec[hk]
+            if v is not None:
+                n_hit += 1
 
-    cutoff = (now - timedelta(hours=KEEP_HOURS)).strftime('%Y-%m-%dT%H')
-    n_hit = 0
-    for t in towns:
-        lat, lng = t.get('lat'), t.get('lng')
-        if not lat:
-            continue
-        key = f"{t['county']}{t['township']}"
-        v = grid_at(vals, lat, lng)
-        rec = hist.setdefault(key, {})
-        rec[hour_key] = v
-        # 滾動清理
-        for hk in [k for k in rec if k < cutoff]:
-            del rec[hk]
-        if v is not None:
-            n_hit += 1
+        with open(HIST_FILE, 'w', encoding='utf-8') as f:
+            json.dump(hist, f, ensure_ascii=False, separators=(',', ':'))
+        print(f"完成：{n_hit}/{len(towns)} 鄉鎮有值 → {HIST_FILE}（{os.path.getsize(HIST_FILE)//1024}KB）")
 
-    with open(HIST_FILE, 'w', encoding='utf-8') as f:
-        json.dump(hist, f, ensure_ascii=False, separators=(',', ':'))
-    print(f"完成：{n_hit}/{len(towns)} 鄉鎮有值 → {HIST_FILE}（{os.path.getsize(HIST_FILE)//1024}KB）")
-
-    # F-B0046 未來1h雷達QPF：抓取後補寫進 data.json（每小時刷新，比主腳本6h即時）
+    # ── F-B0046 未來1h雷達QPF：獨立抓取、補寫 data.json（不受 QPESUMS 成敗影響）──
     radar_vals, radar_dt = fetch_radar_qpf_1h(towns)
     if radar_vals:
         patch_radar_into_data(radar_vals, radar_dt)
