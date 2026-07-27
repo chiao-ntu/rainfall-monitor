@@ -220,7 +220,10 @@ def patch_radar_into_data(radar_vals, radar_dt):
     print(f"    已補寫 data.json：{n} 鄉鎮雷達值，時間 {radar_dt}")
 
 
-
+def main():
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    hour_key = now.strftime('%Y-%m-%dT%H')
+    print(f"QPESUMS 每小時累積  {now.strftime('%Y-%m-%d %H:%M')} TST")
 
     if not CWA_API_KEY:
         print("無 CWA_API_KEY，跳過")
