@@ -46,7 +46,7 @@ jobs:
           BRANCH="${{ github.ref_name }}"
 
           git add qpesums_history.json
-          [ -f data.json ] && git add data.json   # 雷達1h補寫（每小時刷新）
+          [ -f radar.json ] && git add radar.json   # 雷達1h獨立檔（每小時刷新）
           if git diff --staged --quiet; then
             echo "無變更，跳過"
             exit 0
