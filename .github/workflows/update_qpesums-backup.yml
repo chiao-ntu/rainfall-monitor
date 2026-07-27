@@ -46,12 +46,11 @@ jobs:
           BRANCH="${{ github.ref_name }}"
 
           git add qpesums_history.json
-          [ -f data.json ] && git add data.json   # 雷達1h補寫（每小時刷新）
           if git diff --staged --quiet; then
             echo "無變更，跳過"
             exit 0
           fi
-          git commit -m "QPESUMS+雷達：$(TZ='Asia/Taipei' date '+%Y-%m-%d %H:%M') TST [skip ci]"
+          git commit -m "QPESUMS：$(TZ='Asia/Taipei' date '+%Y-%m-%d %H:%M') TST [skip ci]"
 
           for i in 1 2 3 4 5; do
             if git push origin HEAD:"$BRANCH"; then
