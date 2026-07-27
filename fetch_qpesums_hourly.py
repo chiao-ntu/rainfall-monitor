@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-QPESUMS 每小時累積腳本（輕量，供 GitHub Actions 每小時執行）
-抓 O-A0038-001 網格 1h 雨量 → 取各鄉鎮最近格點值 → 滾動寫入 qpesums_history.json
-主腳本 fetch_rainfall.py 每 6h 讀取此歷史合成 24h 累積，補強無測站鄉鎮觀測。
+雷達1h QPF 每小時更新腳本（輕量，供 GitHub Actions 每小時執行）
+抓 F-B0046（未來1h雷達定量降雨預報，~1.4km格點）→ 取各鄉鎮最近格點值 → 寫 radar.json
+前端載入時併入。與主腳本 fetch_rainfall.py（6h）分寫不同檔，避免競態。
+（原 QPESUMS 觀測補值 O-A0038 已於 2026-07 停用：CWA 該 dataid 改回傳溫度圖，
+  opendata 未提供校正後 QPE 雨量網格；無測站鄉鎮改以雨量站聚合＋模式為準。）
 """
 import os, json, requests, time, re
 from datetime import datetime, timezone, timedelta
@@ -213,7 +215,7 @@ def patch_radar_into_data(radar_vals, radar_dt):
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
     hour_key = now.strftime('%Y-%m-%dT%H')
-    print(f"QPESUMS 每小時累積  {now.strftime('%Y-%m-%d %H:%M')} TST")
+    print(f"雷達1h QPF 每小時更新  {now.strftime('%Y-%m-%d %H:%M')} TST")
 
     if not CWA_API_KEY:
         print("無 CWA_API_KEY，跳過")
@@ -225,45 +227,16 @@ def main():
     with open(TOWNS_FILE, encoding='utf-8') as f:
         towns = json.load(f)
 
-    # ── QPESUMS 觀測網格（失敗不影響雷達，兩者獨立資料源）──
-    vals = fetch_grid()
-    if not vals:
-        print("QPESUMS 網格抓取失敗，本次略過 QPESUMS 累積（不影響雷達）")
-    else:
-        hist = {}
-        if os.path.exists(HIST_FILE):
-            try:
-                with open(HIST_FILE, encoding='utf-8') as f:
-                    hist = json.load(f)
-            except Exception:
-                hist = {}
-
-        cutoff = (now - timedelta(hours=KEEP_HOURS)).strftime('%Y-%m-%dT%H')
-        n_hit = 0
-        for t in towns:
-            lat, lng = t.get('lat'), t.get('lng')
-            if not lat:
-                continue
-            key = f"{t['county']}{t['township']}"
-            v = grid_at(vals, lat, lng)
-            rec = hist.setdefault(key, {})
-            rec[hour_key] = v
-            # 滾動清理
-            for hk in [k for k in rec if k < cutoff]:
-                del rec[hk]
-            if v is not None:
-                n_hit += 1
-
-        with open(HIST_FILE, 'w', encoding='utf-8') as f:
-            json.dump(hist, f, ensure_ascii=False, separators=(',', ':'))
-        print(f"完成：{n_hit}/{len(towns)} 鄉鎮有值 → {HIST_FILE}（{os.path.getsize(HIST_FILE)//1024}KB）")
-
-    # ── F-B0046 未來1h雷達QPF：獨立抓取、補寫 data.json（不受 QPESUMS 成敗影響）──
+    # ── F-B0046 未來1h雷達QPF（每10分更新）→ 寫獨立 radar.json ──
+    #   註：QPESUMS 觀測網格（O-A0038）已於 2026-07 停用——CWA 該 dataid 現回傳
+    #   溫度圖而非雨量網格，且 opendata 未提供校正後的 QPE 雨量文字網格
+    #   （O-A0059 僅未校正回波 dBZ，Z-R 換算誤差達2倍以上，不宜當補值）。
+    #   無測站鄉鎮改以雨量站聚合＋模式預測為準，不再嘗試 QPESUMS 補值。
     radar_vals, radar_dt = fetch_radar_qpf_1h(towns)
     if radar_vals:
         patch_radar_into_data(radar_vals, radar_dt)
     else:
-        print("    雷達QPF 本次未取得，data.json 雷達欄位維持原值")
+        print("    雷達QPF 本次未取得，radar.json 維持原值")
 
 
 if __name__ == '__main__':
