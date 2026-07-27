@@ -535,10 +535,9 @@ def fetch_openmeteo(townships):
 
 
 # ── F-B0046 未來1小時雷達定量降雨預報（~1.4km 格點，每10分鐘更新）──
-#   datastore 直接回內含格點數值的 JSON（不需二段式）。441×561 格點，
-#   左下角(117.975,19.975)起，先經向遞增再緯向遞增，單位mm，無效值-99。
-#   放在時間軸「過去觀測」與「未來6h段」之間，提供最近未來的高解析銜接。
-FB0046_URL = f"{BASE_URL}/F-B0046-001"
+#   走 fileapi（datastore 對此格點產品會 404，同 O-A0038/F-C0041）。
+#   fileapi 直接回內含格點數值的 JSON（頂層 cwaopendata），不需二段式。
+FB0046_URL = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi/F-B0046-001"
 
 def fetch_radar_qpf_1h(townships):
     """抓 F-B0046 未來1h雷達QPF格點 → 取各鄉鎮最近格點值。
@@ -547,7 +546,7 @@ def fetch_radar_qpf_1h(townships):
     for attempt in range(3):
         try:
             r = requests.get(FB0046_URL, params={'Authorization': CWA_API_KEY,
-                             'format': 'JSON'}, timeout=60)
+                             'downloadType': 'WEB', 'format': 'JSON'}, timeout=60)
             if r.status_code != 200:
                 print(f"    HTTP {r.status_code}"); 
                 if attempt < 2: time.sleep(3); continue
