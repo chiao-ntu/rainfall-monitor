@@ -37,21 +37,21 @@ jobs:
       - name: Commit and push
         run: |
           set -e
-          if [ ! -f qpesums_history.json ]; then
-            echo "本次未產生 qpesums_history.json（抓取失敗或無資料），跳過 commit"
+          if [ ! -f radar.json ]; then
+            echo "本次未產生 radar.json（雷達抓取失敗），跳過 commit"
             exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           BRANCH="${{ github.ref_name }}"
 
-          git add qpesums_history.json
-          [ -f radar.json ] && git add radar.json   # 雷達1h獨立檔（每小時刷新）
+          git add radar.json   # 雷達1h獨立檔（每小時刷新）
+          [ -f qpesums_history.json ] && git add qpesums_history.json  # 若存在也一併（相容舊資料）
           if git diff --staged --quiet; then
             echo "無變更，跳過"
             exit 0
           fi
-          git commit -m "QPESUMS+雷達：$(TZ='Asia/Taipei' date '+%Y-%m-%d %H:%M') TST [skip ci]"
+          git commit -m "雷達1h：$(TZ='Asia/Taipei' date '+%Y-%m-%d %H:%M') TST [skip ci]"
 
           for i in 1 2 3 4 5; do
             if git push origin HEAD:"$BRANCH"; then
