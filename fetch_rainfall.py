@@ -312,6 +312,9 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None):
                 stn_norm = reg.get('station_norm','') or stn.rstrip('sSWw').strip()
                 sid = name2sid.get(stn) or name2sid.get(stn_norm)
                 av = reg.get('alert', 0) or 0
+                if isinstance(av, str):   # 容錯：官方偶有 '#300(350)' 格式，取第一個數字
+                    import re as _re
+                    _m = _re.search(r'\d+', av); av = int(_m.group()) if _m else 0
                 ev = calc_etr2(sid, history, now_tpe) if sid else None
                 pct = round(ev/av, 4) if (ev is not None and av > 0) else None
                 region_detail.append({
