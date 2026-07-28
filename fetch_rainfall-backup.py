@@ -1571,23 +1571,9 @@ def main():
     if qp_p48: print(f"    QPESUMS 逐時觀測 p48：{len(qp_p48)} 個鄉鎮")
 
     # F-B0046 未來1h雷達QPF（高解析銜接，過去觀測與未來6h段之間）
-    # F-B0046 未來1h雷達QPF：改由每小時的 fetch_qpesums_hourly.py 抓取並補寫 data.json
-    #   （雷達每10分更新，放6h主腳本浪費即時性）。此處僅初始化欄位，實值由每小時腳本填。
-    #   讀現有 data.json 的雷達值沿用（若存在），避免主腳本覆寫掉每小時剛更新的值。
+    # F-B0046 未來1h雷達QPF：完全由每小時腳本寫入獨立的 radar.json，主腳本不碰。
+    #   前端載入時併入 radar.json——兩個 workflow 各寫各檔，永不在 data.json 上撞車。
     radar_qpf, radar_dt = {}, ''
-    try:
-        if os.path.exists('data.json'):
-            with open('data.json', encoding='utf-8') as _f:
-                _old = json.load(_f)
-            radar_dt = _old.get('radar_qpf_time', '') or ''
-            for _t in _old.get('townships', []):
-                _rv = _t.get('qpf_radar_1h')
-                if _rv is not None:
-                    radar_qpf[f"{_t.get('county','')}{_t.get('township','')}"] = _rv
-            if radar_qpf:
-                print(f"沿用現有 data.json 雷達值：{len(radar_qpf)} 鄉鎮（實際更新由每小時腳本負責）")
-    except Exception as _e:
-        print(f"讀取舊雷達值失敗（不影響）：{_e}")
 
     # 系集強弱降雨比值（縣級）+ 昨日模式偏差比
     time.sleep(2)
