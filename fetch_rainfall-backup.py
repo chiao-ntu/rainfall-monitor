@@ -11,6 +11,9 @@ from datetime import datetime, timezone, timedelta
 
 CWA_API_KEY  = os.environ.get("CWA_API_KEY", "")
 STATIC_FILE  = "etr2_static.json"
+SLOPE_WARN_FILE = "slope_warning_stations.json"  # 官方坡地警戒區→代表站+警戒值（改法B對齊）
+# 水保署土石流參考雨量站 API：直接回官方 ETR2(STRT)，涵蓋氣象署抓不到的自建站
+SWCB_RAIN_URL = "https://246.ardswc.gov.tw/webService/GetDebrisRainData.ashx"
 ALL_TOWNSHIPS_FILE = "all_townships.json"  # 全台368個行政區（含座標），不依賴是否有觀測站
 HISTORY_FILE = "obs_history.json"
 OUTPUT_FILE  = "data.json"
@@ -47,6 +50,63 @@ def load_static():
     table = {r['county']+r['township']: r for r in rows}
     print(f"靜態警戒值：{len(table)} 個鄉鎮")
     return table
+
+def fetch_swcb_etr2():
+    """抓水保署土石流參考雨量站 API → 各鄉鎮最高 ETR2%（官方同源、100%涵蓋159鄉鎮）。
+    STRT = 該站有效累積雨量(ETR2, mm)。回傳 {縣市+鄉鎮: {etr2,etr2_pct,station,alert,regions[]}}。
+    失敗回 {}（agg_obs 會退回改法B）。"""
+    def num(v):
+        try: return float(v)
+        except: return None
+    print("抓取水保署土石流參考雨量站 ETR2...")
+    for attempt in range(3):
+        try:
+            r = requests.get(SWCB_RAIN_URL, timeout=60)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}")
+                if attempt < 2: time.sleep(3); continue
+                return {}
+            data = json.loads(r.content.decode('utf-8', 'replace'))
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return {}
+            time.sleep(3)
+    else:
+        return {}
+    # 每鄉鎮：彙整所有潛勢溪流的代表站，取最高 ETR2%，並存明細
+    town = {}
+    for row in data:
+        key = (row.get('County','') or '') + (row.get('Town','') or '')
+        if not key: continue
+        av = num(row.get('AlertValue'))
+        td = town.setdefault(key, {'best_pct': None, 'best_etr2': None,
+                                   'station': None, 'alert': av, 'regions': []})
+        for nk, vk, ik in [('STName1','STRT1','STID1'), ('STName2','STRT2','STID2')]:
+            etr2 = num(row.get(vk)); nm = row.get(nk)
+            if etr2 is None or not nm: continue
+            pct = round(etr2/av, 4) if (av and av > 0) else None
+            td['regions'].append({'village': row.get('Vill',''), 'debris': row.get('DebrisNO',''),
+                                  'station': nm, 'alert': av, 'etr2': etr2, 'etr2_pct': pct})
+            if pct is not None and (td['best_pct'] is None or pct > td['best_pct']):
+                td['best_pct'] = pct; td['best_etr2'] = etr2
+                td['station'] = nm; td['alert'] = av
+    n = sum(1 for v in town.values() if v['best_pct'] is not None)
+    print(f"    水保署ETR2：{len(town)} 鄉鎮、{n} 個有 ETR2%（官方同源，取鎮內最高）")
+    return town
+
+
+def load_slope_warn():
+    """載入官方坡地警戒區明細（改法B：逐警戒區代表站+警戒值）。"""
+    if not os.path.exists(SLOPE_WARN_FILE):
+        print(f"警告：找不到 {SLOPE_WARN_FILE}，ETR2 聚合退回舊法（鎮內取最大）")
+        return None
+    with open(SLOPE_WARN_FILE, encoding='utf-8') as f:
+        d = json.load(f)
+    tw = d.get('townships', {})
+    n_reg = sum(len(v) for v in tw.values())
+    print(f"坡地警戒區明細：{len(tw)} 鄉鎮、{n_reg} 警戒區（官方代表站對齊）")
+    return tw
 
 def load_all_townships():
     """載入全台368個行政區的座標清單（不依賴是否有觀測站回報資料）"""
@@ -256,17 +316,14 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
         print(f"    [未匹配測站 {len(unmatched)}個]: {', '.join(unmatched[:8])}{'...' if len(unmatched)>8 else ''}")
     return enriched
 
-def agg_obs(stations, alert_table, history, now_tpe):
-    # 建立「有ETR2警戒值登記」的測站名稱集合（用於判斷哪些站可以參與ETR2計算）
-    # 邏輯：只有 etr2_static.json 裡明確登記的測站，才能影響 ETR2% 和地圖塗色
-    etr2_valid_station_names = set()
-    for info in alert_table.values():
-        for st in info.get('stations', []):
-            name = st.get('name', '').strip()
-            if name:
-                etr2_valid_station_names.add(name)
-                # 也加入正規化後的名稱（去除 s/w 後綴）
-                etr2_valid_station_names.add(name.rstrip('sSWw').strip())
+def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=None):
+    # 建立站名→sid 索引（供改法B用官方代表站名查即時ETR2）
+    name2sid = {}
+    for sid, st in stations.items():
+        nm = st.get('name','').strip()
+        if nm:
+            name2sid.setdefault(nm, sid)
+            name2sid.setdefault(nm.rstrip('sSWw').strip(), sid)  # 去後綴也建索引
 
     town={}
     for sid,st in stations.items():
@@ -277,32 +334,85 @@ def agg_obs(stations, alert_table, history, now_tpe):
                        'rain_2d':0.0,'rain_3d':0.0,'etr2':None,
                        'daily_rain':[0.0]*15, 'station_etr2':{}}
         td=town[key]; td['stations'].append(sid)
-        # 雨量觀測：所有站都可以貢獻（用於顯示觀測雨量，不影響 ETR2 塗色）
+        # 雨量觀測：所有站都可以貢獻（用於顯示觀測雨量）
         td['rain_24h']=max(td['rain_24h'],st['rain_24h'])
         td['rain_6h'] =max(td['rain_6h'], st['rain_6h'])
         td['rain_2d'] =max(td['rain_2d'], st['rain_2d'])
         td['rain_3d'] =max(td['rain_3d'], st['rain_3d'])
-
-        # ETR2 計算：只允許靜態表中有警戒值登記的測站參與
-        st_name = st.get('name','').strip()
-        is_etr2_valid = (st_name in etr2_valid_station_names or
-                         st_name.rstrip('sSWw').strip() in etr2_valid_station_names)
-        if is_etr2_valid:
-            ev=calc_etr2(sid,history,now_tpe)
-            if ev is not None:
-                td['etr2']=max(td['etr2'] or 0.0,ev)
-                td['station_etr2'][sid] = ev
-
-        # 逐日雨量：所有站都可以貢獻（供前端顯示用）
+        # 逐日雨量：所有站都可以貢獻（供前端顯示）
         st_daily = get_daily_rain_array(sid, history, now_tpe, days=15)
         td['daily_rain'] = [max(a,b) for a,b in zip(td['daily_rain'], st_daily)]
         if 'station_daily' not in td: td['station_daily'] = {}
         td['station_daily'][sid] = st_daily
 
-    for key,td in town.items():
-        ai=alert_table.get(key,{}); av=ai.get('alert_val',0)
-        td['etr2_pct']=round(td['etr2']/av,4) if td['etr2'] and av>0 else None
-    print(f"  鄉鎮聚合：{len(town)} 個有觀測的鄉鎮（ETR2有效站名：{len(etr2_valid_station_names)}個）")
+    # ── ETR2 計算（改法B：逐官方警戒區用指定代表站，鎮內取最高 ETR2%）──
+    if slope_warn:
+        n_aligned = 0; n_swcb = 0; n_fallback = 0
+        for key, td in town.items():
+            # ── 優先：水保署 API 的官方 ETR2（同源、零落差）──
+            sw = swcb_etr2.get(key) if swcb_etr2 else None
+            if sw and sw.get('best_pct') is not None:
+                td['etr2'] = sw['best_etr2']
+                td['etr2_pct'] = sw['best_pct']
+                td['etr2_src'] = 'swcb'   # 標示來源
+                td['slope_regions'] = [
+                    {'village': r.get('village',''), 'station': r.get('station',''),
+                     'alert': r.get('alert'), 'etr2': r.get('etr2'), 'etr2_pct': r.get('etr2_pct')}
+                    for r in sw.get('regions', [])
+                ]
+                n_aligned += 1; n_swcb += 1
+                continue
+            # ── 備援：改法B（氣象署雨量用官方指定站自算）──
+            regions = slope_warn.get(key)
+            if not regions:
+                td['etr2'] = None; td['etr2_pct'] = None
+                continue
+            best_pct = None; best_etr2 = None; region_detail = []
+            for reg in regions:
+                stn = reg.get('station','').strip()
+                stn_norm = reg.get('station_norm','') or stn.rstrip('sSWw').strip()
+                sid = name2sid.get(stn) or name2sid.get(stn_norm)
+                av = reg.get('alert', 0) or 0
+                if isinstance(av, str):   # 容錯：官方偶有 '#300(350)' 格式，取第一個數字
+                    import re as _re
+                    _m = _re.search(r'\d+', av); av = int(_m.group()) if _m else 0
+                ev = calc_etr2(sid, history, now_tpe) if sid else None
+                pct = round(ev/av, 4) if (ev is not None and av > 0) else None
+                region_detail.append({
+                    'village': reg.get('village',''),
+                    'station': stn, 'alert': av,
+                    'etr2': ev, 'etr2_pct': pct,
+                })
+                if pct is not None and (best_pct is None or pct > best_pct):
+                    best_pct = pct; best_etr2 = ev
+            td['etr2'] = best_etr2
+            td['etr2_pct'] = best_pct
+            td['etr2_src'] = 'cwa_fallback'
+            td['slope_regions'] = region_detail   # 點擊明細（選項2）
+            if best_pct is not None: n_aligned += 1; n_fallback += 1
+        print(f"  鄉鎮聚合（水保署API優先＋改法B備援）：{n_aligned} 個鄉鎮有 ETR2%"
+              f"（水保署 {n_swcb}、CWA備援 {n_fallback}）")
+    else:
+        # 退回舊法：鎮內所有登記站取最大（相容無對照表時）
+        etr2_valid = set()
+        for info in alert_table.values():
+            for st in info.get('stations', []):
+                nm = st.get('name','').strip()
+                if nm:
+                    etr2_valid.add(nm); etr2_valid.add(nm.rstrip('sSWw').strip())
+        for sid, st in stations.items():
+            key = st['county']+st['township']
+            if key not in town: continue
+            nm = st.get('name','').strip()
+            if nm in etr2_valid or nm.rstrip('sSWw').strip() in etr2_valid:
+                ev = calc_etr2(sid, history, now_tpe)
+                if ev is not None:
+                    town[key]['etr2'] = max(town[key]['etr2'] or 0.0, ev)
+                    town[key]['station_etr2'][sid] = ev
+        for key, td in town.items():
+            ai = alert_table.get(key, {}); av = ai.get('alert_val', 0)
+            td['etr2_pct'] = round(td['etr2']/av, 4) if td['etr2'] and av > 0 else None
+        print(f"  鄉鎮聚合（舊法退回）：{len(town)} 個鄉鎮")
     return town
 
 # ── PoP 各縣市鄉鎮端點 ───────────────────────────
@@ -1519,6 +1629,9 @@ def main():
     print('='*52)
 
     alert_table = load_static()
+    slope_warn = load_slope_warn()
+    swcb_etr2 = fetch_swcb_etr2()   # 水保署官方 ETR2（優先來源）
+    time.sleep(1)
     static_list = list(alert_table.values())
     counties_needed = set(t['county'] for t in static_list)
 
@@ -1526,7 +1639,7 @@ def main():
     stations = fetch_obs()
     history  = update_history(stations,now_tpe) if stations else \
                (json.load(open(HISTORY_FILE)) if os.path.exists(HISTORY_FILE) else {})
-    town_obs = agg_obs(stations,alert_table,history,now_tpe)
+    town_obs = agg_obs(stations,alert_table,history,now_tpe,slope_warn,swcb_etr2)
 
     # PoP
     pop3d, pop7d = fetch_all_pop(counties_needed)
