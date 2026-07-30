@@ -685,7 +685,7 @@ function toggleEtrCounty(county){
 
 function _panelSeg(){
   // 跟當前選取的時間視窗一致
-  if(winKey === 'today') return 3;
+  if(winKey === 'today') return _nowSeg();   // ETR2等當下量：今天＝現在（對齊官方）
   if(winKey.startsWith('past')){ const n=parseInt(winKey.slice(4)); return -(n*4+1); }
   if(winKey.startsWith('day')){ const n=parseInt(winKey.slice(3)); return (n-1)*4+3; }
   if(winKey.startsWith('fut6_')){ const n=parseInt(winKey.slice(5)); return Math.floor(BASE_TIME.getHours()/6)+(n-1); }
@@ -1085,8 +1085,12 @@ function _calcEtr2Raw(t, seg, qpfField){
         rainVal = Math.round(acc*10)/10;
       }
     } else if(day === 0){
-      // 完整的今天（seg在未來日時回顧）：00-24時QPF
-      rainVal = dailyQpf[0]||0;
+      // 完整的今天（seg在未來日時回顧）：已實現觀測 + 今日剩餘QPF
+      //   註：今天的雨多已落地為觀測，QPF陣列的已過時段為0；
+      //   若只取 dailyQpf[0] 會讓今日雨量在跨日後憑空消失，造成 ETR2 假性陡降。
+      let accToday = dailyObs[0] || 0;
+      for(let s = _nowSeg()+1; s <= 3; s++) accToday += qpfArr[s]||0;
+      rainVal = Math.round(accToday*10)/10;
     } else if(day < 0){
       // 過去：氣象署觀測，obsIdx=-day（昨天=1，前天=2...）
       const obsIdx = -day;
@@ -1112,30 +1116,24 @@ function _calcEtr2Raw(t, seg, qpfField){
   return etr2;
 }
 
-// ── ETR2 對外介面：以水保署官方值為錨點 + 方向A前瞻 ──
+// 現在所在的 6h 段（0~3，今日內）——ETR2 等「當下狀態」量的共用時間基準
+function _nowSeg(){
+  return Math.max(0, Math.min(3,
+    Math.floor((Date.now() - SEG_EPOCH().getTime()) / 216e5)));
+}
+
+// ── ETR2 對外介面：以水保署官方值為錨點，全時段依 ETR2 公式演變 ──
 //   錨點：t.etr2（水保署土石流參考雨量站官方 ETR2，mm）＝「現在」的權威值。
-//   過去段：_calcEtr2Raw × 校正比例（曲線形狀保留，於「現在」平滑接上官方值）。
-//   未來段：官方錨點 + 未來累積 QPF（方向A純累加，同官方「定量降水+ETR2」，不衰減）。
+//   做法：_calcEtr2Raw 已按官方公式計算（過去觀測、未來QPF、雨齡 0.7/日 折減），
+//         僅取「現在」的 raw 值與官方錨點求比例，整體校正 → 現在＝官方值，
+//         其餘時段仍依公式自然演變（未來有雨上升、無雨依 0.7/日 折減）。
 //   無官方錨點者（無警戒值鄉鎮）→ 退回原始算法，行為不變。
 function calcEtr2AtSeg(t, seg, qpfField){
   const raw = _calcEtr2Raw(t, seg, qpfField);
   const anchor = t.etr2;
   if(anchor === null || anchor === undefined || !isFinite(anchor)) return raw;
 
-  // 現在所在的 6h 段（0~3，今日內）
-  const nowSeg = Math.max(0, Math.min(3,
-    Math.floor((Date.now() - SEG_EPOCH().getTime()) / 216e5)));
-
-  if(seg > nowSeg){
-    // 未來段：方向A＝官方錨點 + 自下一段起累積 QPF
-    const qpfArr = getQpfArr(t, qpfField);
-    let acc = 0;
-    for(let s = nowSeg + 1; s <= seg; s++) acc += qpfArr[s] || 0;
-    return anchor + acc;
-  }
-
-  // 過去／當前段：以「現在」的 raw 值為基準做比例校正，使曲線連續
-  const rawNow = _calcEtr2Raw(t, nowSeg, qpfField);
+  const rawNow = _calcEtr2Raw(t, _nowSeg(), qpfField);
   if(!(rawNow > 0.5)) return raw;            // raw 近乎 0 時不校正（避免比例爆掉）
   let ratio = anchor / rawNow;
   if(!isFinite(ratio)) return raw;
@@ -1228,7 +1226,9 @@ function getAccum(t){
       : Math.round((obsToday + rest)*10)/10;
     let etrPct = null;
     if(hasEtr){
-      const etr2 = calcEtr2AtSeg(t, 3, qpfField);
+      // ETR2 是「當下狀態」而非期間累積：「今天」視窗顯示「現在」的 ETR2，
+      // 與官方警戒分析總表同一時間基準（未來演變請用未來6h段／逐日按鈕）。
+      const etr2 = calcEtr2AtSeg(t, _nowSeg(), qpfField);
       etrPct = Math.round(etr2/t.alert_val*1000)/10;
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
@@ -3116,7 +3116,7 @@ function showChartTooltip(evt, canvasId){
       // 今天：只顯示全天累積雨量、ETR2%、風險指標
       let ep=null;
       if(t.alert_val>0){
-        const e=calcEtr2AtSeg(t,3,qpfField);
+        const e=calcEtr2AtSeg(t,_nowSeg(),qpfField);
         ep=Math.round(e/t.alert_val*100);
       }
       lines+=`ETR2%：${ep!=null?`<span style="color:${etrColorOf(ep)};font-weight:700">${ep}%</span>`:'<span style="color:#5a7a9a">—</span>'}<br>`;
