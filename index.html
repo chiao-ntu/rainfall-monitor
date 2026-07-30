@@ -118,7 +118,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <a href="https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan" target="_blank" class="ext-btn">WISSDOM</a>
       <a href="https://fema.ardswc.gov.tw/Portal/Layout" target="_blank" class="ext-btn">FEMA</a>
       <a href="https://www.tropicaltidbits.com/analysis/models/?model=ecmwf&region=ea&pkg=mslp_pcpn" target="_blank" class="ext-btn">Tropical Tidbits</a>
-      <a href="https://www.weathernerds.org/models/fnv3.html?&inittype=zoom&initfield=SST_Anomaly_Surface&initcycle=determine&initfhour=240&initimdimx=1050&initimdimy=750&initrange=57.000000000000:95.000000000000:0:190.000000000000&initcx1=0&initcy1=0&initcx2=0&initcy2=0&initcross=False&initsound=False&initsoundx=1&initsoundy=1&initloop=False&initoverlay=False&initlstart=000&initlend=360&initlint=6&initol1=SST_Anomaly_Surface&initol2=null&initol3=null&initol4=null&initol5=null&initcities=Off&inithgwys=Off&inittracks=On&initlows=On&initlatlon=Off" target="_blank" class="ext-btn">Google FNV3</a>
+      <a href="https://www.weathernerds.org/models/fnv3.html?&inittype=zoom&initfield=SST_Anomaly_Surface&initcycle=determine&initfhour=240&initimdimx=1050&initimdimy=750&initrange=57.000000000000:95.000000000000:0:190.000000000000&initcx1=0&initcy1=0&initcx2=0&initcy2=0&initcross=False&initsound=False&initsoundx=1&initsoundy=1&initloop=False&initoverlay=False&initlstart=000&initlend=360&initlint=6&initol1=SST_Anomaly_Surface&initol2=null&initol3=null&initol4=null&initol5=null&initcities=Off&inithgwys=Off&inittracks=On&initlows=Off&initlatlon=Off" target="_blank" class="ext-btn">Google FNV3</a>
       <a href="https://tropic.ssec.wisc.edu/" target="_blank" class="ext-btn">CIMSS</a>
       <a href="https://www.easterlywave.com/typhoon/ensemble/" target="_blank" class="ext-btn">EasterlyWave</a>
       <a href="https://www.windy.com/?21.487,120.674,5" target="_blank" class="ext-btn">Windy</a>
@@ -1122,23 +1122,36 @@ function _nowSeg(){
     Math.floor((Date.now() - SEG_EPOCH().getTime()) / 216e5)));
 }
 
-// ── ETR2 對外介面：以水保署官方值為錨點，全時段依 ETR2 公式演變 ──
-//   錨點：t.etr2（水保署土石流參考雨量站官方 ETR2，mm）＝「現在」的權威值。
-//   做法：_calcEtr2Raw 已按官方公式計算（過去觀測、未來QPF、雨齡 0.7/日 折減），
-//         僅取「現在」的 raw 值與官方錨點求比例，整體校正 → 現在＝官方值，
-//         其餘時段仍依公式自然演變（未來有雨上升、無雨依 0.7/日 折減）。
+// ── ETR2 對外介面：以水保署官方值為錨點，依 ETR2 公式遞推 ──
+//   錨點：t.etr2（水保署官方 ETR2，mm）＝「現在」的權威值，直接採用。
+//   未來：E(s+1) = E(s) × 0.7^(1/4) + QPF(s+1)
+//         （官方公式日折減 0.7 換算為每 6h 折減；有雨上升、無雨依公式緩降）
+//   過去：raw + (錨點 − raw現在)  → 加法位移接上官方值（不用乘法，避免放大失真）
 //   無官方錨點者（無警戒值鄉鎮）→ 退回原始算法，行為不變。
+const ETR2_DECAY_6H = Math.pow(0.7, 1/4);   // ≈0.9147
 function calcEtr2AtSeg(t, seg, qpfField){
-  const raw = _calcEtr2Raw(t, seg, qpfField);
   const anchor = t.etr2;
-  if(anchor === null || anchor === undefined || !isFinite(anchor)) return raw;
+  if(anchor === null || anchor === undefined || !isFinite(anchor)){
+    return _calcEtr2Raw(t, seg, qpfField);
+  }
+  const ns = _nowSeg();
+  if(seg === ns) return anchor;                    // 現在＝官方值（完全對齊）
 
-  const rawNow = _calcEtr2Raw(t, _nowSeg(), qpfField);
-  if(!(rawNow > 0.5)) return raw;            // raw 近乎 0 時不校正（避免比例爆掉）
-  let ratio = anchor / rawNow;
-  if(!isFinite(ratio)) return raw;
-  ratio = Math.max(0.2, Math.min(5, ratio)); // 夾限，避免極端失真
-  return raw * ratio;
+  if(seg > ns){
+    // 未來：自官方錨點起，逐段「折減 + 加入該段QPF」
+    const qpfArr = getQpfArr(t, qpfField);
+    let e = anchor;
+    for(let s = ns + 1; s <= seg; s++){
+      e = e * ETR2_DECAY_6H + (qpfArr[s] || 0);
+    }
+    return e;
+  }
+
+  // 過去：加法位移（保留 raw 的歷史形狀，於「現在」平滑接上官方錨點）
+  const raw    = _calcEtr2Raw(t, seg, qpfField);
+  const rawNow = _calcEtr2Raw(t, ns, qpfField);
+  const off    = anchor - rawNow;
+  return Math.max(0, raw + off);
 }
 
 function getQpfSeg(t, seg, qpfField){
@@ -2688,7 +2701,7 @@ function _calcDistrictDaily(qpfField){
         const _ds=getQpfArr(t,qpfField).slice(d*4,d*4+4);
         const _dv=_ds.length===4?_ds.reduce((a,b)=>a+(b||0),0):((t.daily_qpf||[])[d]||0);
         mxR=Math.max(mxR,Math.round(_dv*10)/10);
-        if(t.alert_val>0){const e=calcEtr2AtSeg(t,d===0?3:d*4+3,qpfField);mxE=Math.max(mxE,Math.round(e/t.alert_val*100));}
+        if(t.alert_val>0){const e=calcEtr2AtSeg(t,d===0?_nowSeg():d*4+3,qpfField);mxE=Math.max(mxE,Math.round(e/t.alert_val*100));}
       });
       rr.push(mxR);er.push(mxE);gMR=Math.max(gMR,mxR);gME=Math.max(gME,mxE);
     }
@@ -3193,7 +3206,8 @@ function showChartTooltip(evt, canvasId){
     const dayIdx=Math.floor((cx-pL)/itemW);
     if(dayIdx<0||dayIdx>=nItems){ hideChartTooltip(); return; }
     const dt=new Date(SEG_EPOCH().getTime()+dayIdx*86400000);
-    const seg=dayIdx*4+3;
+    // 今天的 ETR2 取「現在」（當下狀態量，對齊官方）；未來日取當日最後一段
+    const seg=dayIdx===0?_nowSeg():dayIdx*4+3;
     let lines=`<b style="color:#d0e8ff">${fmtDay(dt)}（00-24時）</b><br>`+
       `<span style="color:#5a8aaa;font-size:9px">分署：日雨量 / ETR2% / 風險</span><br>`;
     DISTRICT_ORDER.forEach(district=>{
@@ -3201,7 +3215,10 @@ function showChartTooltip(evt, canvasId){
       let mxR=0,mxE=0,mxRisk=null;
       DISTRICT_COUNTIES[district].forEach(county=>{
         TOWNSHIPS.filter(t=>t.county===county).forEach(t=>{
-          mxR=Math.max(mxR,(t.daily_qpf||[])[dayIdx]||0);
+          // 依當前模式的 QPF 計算日雨量（與圖表一致；強降雨/弱降雨等模式才會跟著切換）
+          const _ds=getQpfArr(t,qpfField).slice(dayIdx*4,dayIdx*4+4);
+          const _dv=_ds.length===4?_ds.reduce((a,b)=>a+(b||0),0):((t.daily_qpf||[])[dayIdx]||0);
+          mxR=Math.max(mxR,Math.round(_dv*10)/10);
           if(t.alert_val>0){
             const e=calcEtr2AtSeg(t,seg,qpfField);
             mxE=Math.max(mxE,Math.round(e/t.alert_val*100));
