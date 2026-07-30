@@ -2108,11 +2108,28 @@ async function tryLoadLive(){
     // CWA QPF 資料來源標示（供內部快取鍵/邏輯使用；不對使用者顯示採用了什麼）
     _cwaQpfActive = !!d.cwa_qpf_active;
     window._dataGenAt = d.generated_at || '';  // 供各面板快取鍵使用
+
+    // ── 雷達1h QPF：獨立讀 radar.json（由每小時腳本寫，與 data.json 分離避免競態）──
+    let _radarDt = d.radar_qpf_time || '';
+    try{
+      const rr = await fetch('radar.json?t='+Date.now());
+      if(rr.ok){
+        const rd = await rr.json();
+        _radarDt = rd.radar_qpf_time || _radarDt;
+        const rmap = rd.townships || {};
+        let _nr = 0;
+        for(const key in rmap){
+          const t = TMAP[key];
+          if(t){ t.qpf_radar_1h = rmap[key]; _nr++; }
+        }
+        console.log('radar.json 載入：', _nr, '個鄉鎮雷達值，時間', _radarDt);
+      }
+    }catch(e){ console.warn('radar.json 載入失敗（不影響其他）：', e.message); }
+
     // 雷達1h QPF 發布時間顯示
     const _rt = document.getElementById('radar-time');
     if(_rt){
-      const rdt = d.radar_qpf_time || '';
-      _rt.textContent = rdt ? ('發布 '+rdt.replace('T',' ').slice(5,16)) : '（本次無資料）';
+      _rt.textContent = _radarDt ? ('發布 '+_radarDt.replace('T',' ').slice(5,16)) : '（本次無資料）';
     }
     const sysNote = document.getElementById('sys-note');   // 獨立元素：不被切換模式洗掉
     if(sysNote) sysNote.innerHTML = '';   // 每次載入重建（避免自動更新時重複追加）

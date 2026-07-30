@@ -1045,7 +1045,7 @@ function toggleBiasApply(){
 
 // 計算「以 seg 為基準時刻」的 ETR2（往前推7天，過去用觀測、未來用QPF）
 // seg: 6h段索引，0=現在這一段，正值=未來，負值=過去
-function calcEtr2AtSeg(t, seg, qpfField){
+function _calcEtr2Raw(t, seg, qpfField){
   const dailyObs = t.daily_rain || [];          // index 0=今天, 1=昨天...
   const qpfArr   = getQpfArr(t, qpfField);       // 60個6h段（日曆日對齊：[0]=今天00-06）
   // 逐日 QPF（每4段=1天，00-24時）
@@ -1111,6 +1111,38 @@ function calcEtr2AtSeg(t, seg, qpfField){
   }
   return etr2;
 }
+
+// ── ETR2 對外介面：以水保署官方值為錨點 + 方向A前瞻 ──
+//   錨點：t.etr2（水保署土石流參考雨量站官方 ETR2，mm）＝「現在」的權威值。
+//   過去段：_calcEtr2Raw × 校正比例（曲線形狀保留，於「現在」平滑接上官方值）。
+//   未來段：官方錨點 + 未來累積 QPF（方向A純累加，同官方「定量降水+ETR2」，不衰減）。
+//   無官方錨點者（無警戒值鄉鎮）→ 退回原始算法，行為不變。
+function calcEtr2AtSeg(t, seg, qpfField){
+  const raw = _calcEtr2Raw(t, seg, qpfField);
+  const anchor = t.etr2;
+  if(anchor === null || anchor === undefined || !isFinite(anchor)) return raw;
+
+  // 現在所在的 6h 段（0~3，今日內）
+  const nowSeg = Math.max(0, Math.min(3,
+    Math.floor((Date.now() - SEG_EPOCH().getTime()) / 216e5)));
+
+  if(seg > nowSeg){
+    // 未來段：方向A＝官方錨點 + 自下一段起累積 QPF
+    const qpfArr = getQpfArr(t, qpfField);
+    let acc = 0;
+    for(let s = nowSeg + 1; s <= seg; s++) acc += qpfArr[s] || 0;
+    return anchor + acc;
+  }
+
+  // 過去／當前段：以「現在」的 raw 值為基準做比例校正，使曲線連續
+  const rawNow = _calcEtr2Raw(t, nowSeg, qpfField);
+  if(!(rawNow > 0.5)) return raw;            // raw 近乎 0 時不校正（避免比例爆掉）
+  let ratio = anchor / rawNow;
+  if(!isFinite(ratio)) return raw;
+  ratio = Math.max(0.2, Math.min(5, ratio)); // 夾限，避免極端失真
+  return raw * ratio;
+}
+
 function getQpfSeg(t, seg, qpfField){
   const qpfArr = getQpfArr(t, qpfField);
   if(seg < 0) return null;  // 過去無QPF概念
