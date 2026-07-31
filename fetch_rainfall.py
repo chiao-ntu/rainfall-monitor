@@ -1651,6 +1651,19 @@ def main():
 
     alert_table = load_static()
     slope_warn = load_slope_warn()
+    # 讀上一輪 data.json 的官方 ETR2 → 供前端「這期 vs 前期」趨勢箭頭（同一資料源，可比）
+    prev_etr2 = {}
+    try:
+        if os.path.exists('data.json'):
+            with open('data.json', encoding='utf-8') as _f:
+                _old = json.load(_f)
+            for _t in _old.get('townships', []):
+                _e = _t.get('etr2')
+                if _e is not None:
+                    prev_etr2[f"{_t.get('county','')}{_t.get('township','')}"] = _e
+            print(f"  前期 ETR2（上一輪 data.json）：{len(prev_etr2)} 個鄉鎮")
+    except Exception as _e:
+        print(f"  讀取前期 ETR2 失敗（不影響）：{_e}")
     swcb_etr2 = fetch_swcb_etr2()   # 站名→官方ETR2 對照
     time.sleep(1)
     static_list = list(alert_table.values())
@@ -1697,8 +1710,10 @@ def main():
     om = om_all.get('ecmwf_ifs025', {})  # 預設用 ECMWF IFS，對台灣地形雨準確度較高
 
     # QPESUMS 網格觀測（1h 即時 + 24h 歷史合成）
-    print("抓取 QPESUMS 網格觀測...")
-    qp_grid = fetch_qpesums_grid()
+    # QPESUMS（O-A0038）已停用：CWA 該 dataid 現回傳溫度圖而非雨量網格。
+    #   無測站鄉鎮改以雨量站聚合＋模式為準，不再耗時下載無用影像。
+    print("QPESUMS 網格觀測：已停用（CWA 未提供雨量網格）")
+    qp_grid = {}
     qp_24h  = load_qpesums_history()
     qp_p48  = load_qpesums_p48()
     if qp_24h: print(f"    QPESUMS 24h 歷史：{len(qp_24h)} 個鄉鎮")
@@ -1733,6 +1748,7 @@ def main():
         etr2_pct    = obs.get('etr2_pct')   # 小數，0.48=48%
         etr2_src    = obs.get('etr2_src')          # 'swcb'/'mixed'/'cwa'
         etr2_alert  = obs.get('etr2_alert')        # 最高單元的官方警戒值（前端算%分母）
+        etr2_prev   = prev_etr2.get(key)           # 上一輪官方 ETR2（趨勢比較基準）
         slope_regions = obs.get('slope_regions')   # 各警戒區明細
         rain_24h    = obs.get('rain_24h')
         rain_6h     = obs.get('rain_6h')
@@ -1850,7 +1866,8 @@ def main():
             'rain_24h':rain_24h,'rain_6h':rain_6h,
             'rain_2d':rain_2d,'rain_3d':rain_3d,
             'etr2':etr2_val,'etr2_pct':etr2_pct,
-            'etr2_src':etr2_src,'etr2_alert':etr2_alert,'slope_regions':slope_regions,
+            'etr2_src':etr2_src,'etr2_alert':etr2_alert,'etr2_prev':etr2_prev,
+            'slope_regions':slope_regions,
             'qpf_15d':qpf15d,'daily_qpf':daily,
             'seg_etr_pct':seg_etr_pct,
             'qpf_24h':round(sum(qpf_best[:4]),1),

@@ -755,8 +755,14 @@ function updateEtrAlertPanel(){
     const etr2 = calcEtr2AtSeg(t, panelSeg, qpfField);
     const pct = Math.round(etr2 / _etrDen(t) * 100);
     if(pct < 70) return;
-    const prevE = calcEtr2AtSeg(t, panelSeg-1, qpfField);
-    const prevPct = Math.round(prevE / _etrDen(t) * 100);
+    // 趨勢基準：檢視「現在」時用【上一輪更新的官方 ETR2】（同一資料源可比，
+    //   避免當期用官方值、前期用氣象署推算值而方向矛盾）；檢視未來時段則比相鄰段。
+    let prevPct;
+    if(panelSeg === _nowSeg() && t.etr2_prev !== null && t.etr2_prev !== undefined){
+      prevPct = Math.round(t.etr2_prev / _etrDen(t) * 100);
+    } else {
+      prevPct = Math.round(calcEtr2AtSeg(t, panelSeg-1, qpfField) / _etrDen(t) * 100);
+    }
     const district = COUNTY_TO_DISTRICT[t.county] || '其他';
     if(!byDistrict[district]) byDistrict[district] = {};
     if(!byDistrict[district][t.county]) byDistrict[district][t.county] = [];
@@ -790,7 +796,7 @@ function updateEtrAlertPanel(){
         const col = etrColor(pct);
         const isNew = _prevEtrSet && !_prevEtrSet.has(county+'|'+township);
         // 趨勢基準＝前一個6h時段（這期 > 前期＝上升紅▲；< 前期＝下降綠▼）
-        const _tTip = `較前一時段 ${prevPct}% → ${pct}%`;
+        const _tTip = `較前期 ${prevPct}% → 本期 ${pct}%`;
         const arrow = pct > prevPct
           ? `<span style="color:#ff4433;font-weight:700" title="${_tTip}"> ▲</span>`
           : (pct < prevPct ? `<span style="color:#33cc66;font-weight:700" title="${_tTip}"> ▼</span>` : '');

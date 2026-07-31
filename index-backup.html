@@ -789,9 +789,11 @@ function updateEtrAlertPanel(){
       cMap[county].sort((a,b)=>b.pct-a.pct).forEach(({township,pct,prevPct})=>{
         const col = etrColor(pct);
         const isNew = _prevEtrSet && !_prevEtrSet.has(county+'|'+township);
+        // 趨勢基準＝前一個6h時段（這期 > 前期＝上升紅▲；< 前期＝下降綠▼）
+        const _tTip = `較前一時段 ${prevPct}% → ${pct}%`;
         const arrow = pct > prevPct
-          ? '<span style="color:#ff4433;font-weight:700"> ▲</span>'
-          : (pct < prevPct ? '<span style="color:#33cc66;font-weight:700"> ▼</span>' : '');
+          ? `<span style="color:#ff4433;font-weight:700" title="${_tTip}"> ▲</span>`
+          : (pct < prevPct ? `<span style="color:#33cc66;font-weight:700" title="${_tTip}"> ▼</span>` : '');
         h += `<div style="display:flex;justify-content:space-between;align-items:center;padding:1px 2px 1px 10px;font-size:10px
           ${isNew ? ';background:#3a2a08;border-radius:3px;box-shadow:inset 0 0 0 1px #7a5a18' : ''}">
           <span style="cursor:pointer;text-decoration:underline dotted;color:${col};font-weight:700"
@@ -3938,7 +3940,7 @@ function calcRiskIndicator(t, seg){
 
   // 分級
   let level, name, color;
-  if(R >= 100){ level=4; name='超高'; color='#FF00FF'; }
+  if(R >= 100){ level=4; name='極高'; color='#FF00FF'; }
   else if(R >= 90){ level=3; name='高'; color='#FF0000'; }
   else if(R >= 70){ level=2; name='中'; color='#FFFF00'; }
   else if(R >= 50){ level=1; name='低'; color='#00FF00'; }

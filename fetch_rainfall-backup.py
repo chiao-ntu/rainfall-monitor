@@ -1434,12 +1434,29 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns, fname='', win_seg=None, win_n
                 if v is not None: votes[v] = votes.get(v, 0) + 1
         return votes
 
-    def aggregate(votes, hi_frac=0.22):
-        """眾數為主；比眾數高且佔比≥hi_frac 的最高級距優先（防漏報，保守）"""
+    # 級距值由小到大（用於限制「跳級」幅度）
+    _BAND_VALS = sorted({bv for (_r, _g, _b, bv) in bands})
+
+    def aggregate(votes, hi_frac=0.35, hi_min=8):
+        """眾數為主；更高級距要「佔比足夠且票數足夠」才升級（防漏報但不誤報）。
+        兩道防線（對付白底/邊界反鋸齒誤配到淺色高級距，如 #FDC9FF≥300）：
+          ① 眾數為 0（幾乎無雨）→ 需極強證據（佔比≥0.55 且票數≥14）才升級
+          ② 一般情況 → 升級最多跨 2 個級距，避免少數雜訊像素把值拉到最高帶
+        """
         if not votes: return None
         tot = sum(votes.values())
         mode = max(votes.items(), key=lambda kv: (kv[1], kv[0]))[0]
-        hi = [v for v, c in votes.items() if v > mode and c/tot >= hi_frac]
+        if mode == 0.0:
+            cand = [v for v, c in votes.items()
+                    if v > 0 and c / tot >= 0.55 and c >= 14]
+            return max(cand) if cand else 0.0
+        try:
+            mi = _BAND_VALS.index(mode)
+        except ValueError:
+            mi = 0
+        max_val = _BAND_VALS[min(mi + 2, len(_BAND_VALS) - 1)]
+        hi = [v for v, c in votes.items()
+              if v > mode and v <= max_val and c / tot >= hi_frac and c >= hi_min]
         return max(hi) if hi else mode
 
     town_vals = {}
