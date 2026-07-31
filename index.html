@@ -706,7 +706,7 @@ function _etrHistPeaks(){
     if(!t.alert_val || t.alert_val <= 0) return;
     let peak = -1, peakSeg = 0;
     for(let s=-28; s<=nowSeg; s++){          // 過去7天各6h段＋今天已過段
-      const p = calcEtr2AtSeg(t, s, qpfField) / t.alert_val * 100;
+      const p = calcEtr2AtSeg(t, s, qpfField) / _etrDen(t) * 100;
       if(p > peak){ peak = p; peakSeg = s; }
     }
     if(peak >= 70) rows.push({county:t.county, township:t.township,
@@ -753,10 +753,10 @@ function updateEtrAlertPanel(){
   TOWNSHIPS.forEach(t=>{
     if(!t.alert_val || t.alert_val <= 0) return;
     const etr2 = calcEtr2AtSeg(t, panelSeg, qpfField);
-    const pct = Math.round(etr2 / t.alert_val * 100);
+    const pct = Math.round(etr2 / _etrDen(t) * 100);
     if(pct < 70) return;
     const prevE = calcEtr2AtSeg(t, panelSeg-1, qpfField);
-    const prevPct = Math.round(prevE / t.alert_val * 100);
+    const prevPct = Math.round(prevE / _etrDen(t) * 100);
     const district = COUNTY_TO_DISTRICT[t.county] || '其他';
     if(!byDistrict[district]) byDistrict[district] = {};
     if(!byDistrict[district][t.county]) byDistrict[district][t.county] = [];
@@ -1116,6 +1116,10 @@ function _calcEtr2Raw(t, seg, qpfField){
   return etr2;
 }
 
+// ETR2% 的分母：優先用「官方最高警戒單元的警戒值」（etr2_alert），
+//   與官方警戒分析總表同一基準；無則退回鄉鎮靜態警戒值。
+function _etrDen(t){ return (t && t.etr2_alert) ? t.etr2_alert : (t ? t.alert_val : 0); }
+
 // 現在所在的 6h 段（0~3，今日內）——ETR2 等「當下狀態」量的共用時間基準
 function _nowSeg(){
   return Math.max(0, Math.min(3,
@@ -1220,7 +1224,7 @@ function getAccum(t){
     let etrPct = null;
     if(hasEtr){
       const etr2 = calcEtr2AtSeg(t, segTo, qpfField);
-      etrPct = Math.round(etr2/t.alert_val*1000)/10;
+      etrPct = Math.round(etr2/_etrDen(t)*1000)/10;
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
     return {totalRain, etrPct};
@@ -1242,7 +1246,7 @@ function getAccum(t){
       // ETR2 是「當下狀態」而非期間累積：「今天」視窗顯示「現在」的 ETR2，
       // 與官方警戒分析總表同一時間基準（未來演變請用未來6h段／逐日按鈕）。
       const etr2 = calcEtr2AtSeg(t, _nowSeg(), qpfField);
-      etrPct = Math.round(etr2/t.alert_val*1000)/10;
+      etrPct = Math.round(etr2/_etrDen(t)*1000)/10;
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
     return {totalRain, etrPct};
@@ -1258,7 +1262,7 @@ function getAccum(t){
   let etrPct = null;
   if(hasEtr){
     const etr2 = calcEtr2AtSeg(t, st, qpfField);
-    etrPct = Math.round(etr2/t.alert_val*1000)/10;
+    etrPct = Math.round(etr2/_etrDen(t)*1000)/10;
   }
   if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
 
@@ -1647,7 +1651,7 @@ function _townChartData(t, type, qpfField){
       let e=0;
       if(t.alert_val>0){
         const v=calcEtr2AtSeg(t, d*4+3, qpfField);
-        e=Math.round(v/t.alert_val*100);
+        e=Math.round(v/_etrDen(t)*100);
       }
       etr.push(e);
       labels.push(fmtDay(new Date(SEG_EPOCH().getTime()+d*86400000)));
@@ -1661,7 +1665,7 @@ function _townChartData(t, type, qpfField){
       let e=0;
       if(t.alert_val>0){
         const v=calcEtr2AtSeg(t,-(di*4-3),qpfField);
-        e=Math.round(v/t.alert_val*100);
+        e=Math.round(v/_etrDen(t)*100);
       }
       etr.push(e);
     });
@@ -1671,7 +1675,7 @@ function _townChartData(t, type, qpfField){
       let e=0;
       if(t.alert_val>0){
         const v=calcEtr2AtSeg(t,s,qpfField);
-        e=Math.round(v/t.alert_val*100);
+        e=Math.round(v/_etrDen(t)*100);
       }
       etr.push(e);
       const d0=segTime(s), d1=segTime(s+1);
@@ -1786,7 +1790,7 @@ function _etr2HourlySeries(t, hFrom, hTo){
         w=(lo<=6?(W[lo]||0):0)*(1-fr)+((lo+1)<=6?(W[lo+1]||0):0)*fr; }
       e+=w*rv;
     }
-    out.push(Math.max(0, e/t.alert_val*100));
+    out.push(Math.max(0, e/_etrDen(t)*100));
   }
   return out;
 }
@@ -2056,7 +2060,7 @@ function drawSegs(t){
   if(!el) return;
   el.innerHTML = segs.map((v,i)=>{
     let ep = null;
-    if(t.alert_val>0){ ep = Math.round(calcEtr2AtSeg(t,i,qpfField)/t.alert_val*100); }
+    if(t.alert_val>0){ ep = Math.round(calcEtr2AtSeg(t,i,qpfField)/_etrDen(t)*100); }
     const col = mode==='rain' ? rainColor(v) : (ep!=null ? etrColor(ep) : '#ccddee');
     const bw  = Math.round(v/maxV*100);
     const t0  = segTime(i);
@@ -2076,10 +2080,13 @@ function renderLegend(){
 
   // 強度分級用描述性文字，不顯示數字範圍
   const INTENSITY_DESC = ['未達警戒', '大雨', '豪雨', '大豪雨', '超大豪雨'];
+  // 風險指標：以文字分級呈現（未達標/低/中/高/極高）
+  const RISK_DESC = ['未達標', '低', '中', '高', '極高'];
 
   function rangeLabel(scale, idx){
     if(isFuture6h) return INTENSITY_DESC[idx] || '';
     if(mode==='warn') return scale[idx].label || '';
+    if(mode==='risk') return RISK_DESC[idx] || '';
     const s = scale[idx];
     const prevMax = idx>0 ? scale[idx-1].max : 0;
     if(s.max >= 1e9) return `≥ ${prevMax}`;
@@ -2685,7 +2692,7 @@ function _summaryEtr(t){
   if(!t.alert_val || t.alert_val<=0) return null;
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
   const e = calcEtr2AtSeg(t, segTo, qpfField);
-  return Math.round(e/t.alert_val*100);
+  return Math.round(e/_etrDen(t)*100);
 }
 
 function _calcDistrictDaily(qpfField){
@@ -2701,7 +2708,7 @@ function _calcDistrictDaily(qpfField){
         const _ds=getQpfArr(t,qpfField).slice(d*4,d*4+4);
         const _dv=_ds.length===4?_ds.reduce((a,b)=>a+(b||0),0):((t.daily_qpf||[])[d]||0);
         mxR=Math.max(mxR,Math.round(_dv*10)/10);
-        if(t.alert_val>0){const e=calcEtr2AtSeg(t,d===0?_nowSeg():d*4+3,qpfField);mxE=Math.max(mxE,Math.round(e/t.alert_val*100));}
+        if(t.alert_val>0){const e=calcEtr2AtSeg(t,d===0?_nowSeg():d*4+3,qpfField);mxE=Math.max(mxE,Math.round(e/_etrDen(t)*100));}
       });
       rr.push(mxR);er.push(mxE);gMR=Math.max(gMR,mxR);gME=Math.max(gME,mxE);
     }
@@ -2721,7 +2728,7 @@ function _calcDistrictHyeto(qpfField){
       let mxR=0,mxE=0;
       TOWNSHIPS.filter(t=>counties.includes(t.county)).forEach(t=>{
         mxR=Math.max(mxR,getQpfArr(t,qpfField)[s]||0);
-        if(t.alert_val>0){const e=calcEtr2AtSeg(t,s,qpfField);mxE=Math.max(mxE,Math.round(e/t.alert_val*100));}
+        if(t.alert_val>0){const e=calcEtr2AtSeg(t,s,qpfField);mxE=Math.max(mxE,Math.round(e/_etrDen(t)*100));}
       });
       rr.push(mxR);er.push(mxE);gMR=Math.max(gMR,mxR);gME=Math.max(gME,mxE);
     }
@@ -3130,7 +3137,7 @@ function showChartTooltip(evt, canvasId){
       let ep=null;
       if(t.alert_val>0){
         const e=calcEtr2AtSeg(t,_nowSeg(),qpfField);
-        ep=Math.round(e/t.alert_val*100);
+        ep=Math.round(e/_etrDen(t)*100);
       }
       lines+=`ETR2%：${ep!=null?`<span style="color:${etrColorOf(ep)};font-weight:700">${ep}%</span>`:'<span style="color:#5a7a9a">—</span>'}<br>`;
       lines+=`風險指標：${riskIndicatorHtml(t,3)}<br>`;
@@ -3149,7 +3156,7 @@ function showChartTooltip(evt, canvasId){
       let ep=null, risk=null;
       if(t.alert_val>0){
         const e=calcEtr2AtSeg(t,seg,qpfField);
-        ep=Math.round(e/t.alert_val*100);
+        ep=Math.round(e/_etrDen(t)*100);
       }
       const rr=calcRiskIndicator(t,seg);
       risk=rr.R;
@@ -3185,7 +3192,7 @@ function showChartTooltip(evt, canvasId){
       let ep=null, risk=null;
       if(t.alert_val>0){
         const e=calcEtr2AtSeg(t,seg,qpfField);
-        ep=Math.round(e/t.alert_val*100);
+        ep=Math.round(e/_etrDen(t)*100);
       }
       const rr=calcRiskIndicator(t,seg);
       risk=rr.R;
@@ -3221,7 +3228,7 @@ function showChartTooltip(evt, canvasId){
           mxR=Math.max(mxR,Math.round(_dv*10)/10);
           if(t.alert_val>0){
             const e=calcEtr2AtSeg(t,seg,qpfField);
-            mxE=Math.max(mxE,Math.round(e/t.alert_val*100));
+            mxE=Math.max(mxE,Math.round(e/_etrDen(t)*100));
           }
           const rr=calcRiskIndicator(t,seg);
           mxRisk=Math.max(mxRisk??0,rr.R);
@@ -3253,7 +3260,7 @@ function showChartTooltip(evt, canvasId){
           mxR=Math.max(mxR,getQpfArr(t,qpfField)[barIdx]||0);
           if(t.alert_val>0){
             const e=calcEtr2AtSeg(t,barIdx,qpfField);
-            mxE=Math.max(mxE,Math.round(e/t.alert_val*100));
+            mxE=Math.max(mxE,Math.round(e/_etrDen(t)*100));
           }
           const rr=calcRiskIndicator(t,barIdx);
           mxRisk=Math.max(mxRisk??0,rr.R);
@@ -3537,7 +3544,7 @@ function copyEtrPanel(btn){
     TOWNSHIPS.forEach(t=>{
       if(!counties.includes(t.county)) return;
       if(!t.alert_val || t.alert_val <= 0) return;
-      const ep = Math.round(calcEtr2AtSeg(t, panelSeg, qpfField) / t.alert_val * 100);
+      const ep = Math.round(calcEtr2AtSeg(t, panelSeg, qpfField) / _etrDen(t) * 100);
       if(ep < 70) return;
       if(!byCounty[t.county]) byCounty[t.county] = [];
       byCounty[t.county].push({name:t.township, ep});
@@ -3904,14 +3911,14 @@ function calcRiskIndicator(t, seg){
   // ETR2% 路徑（需 alert_val）
   let E_now = null, E_proj = null;
   if(t.alert_val > 0){
-    E_now = Math.round(calcEtr2AtSeg(t, s, qpfField) / t.alert_val * 100);
+    E_now = Math.round(calcEtr2AtSeg(t, s, qpfField) / _etrDen(t) * 100);
     // 展望：下一段的乾/濕情境
     const eWetRaw = calcEtr2AtSeg(t, s+1, qpfField);
     const w0 = (typeof ETR2_WEIGHTS !== 'undefined') ? ETR2_WEIGHTS[0] : 1;
     const nextRain = qa[s+1] || 0;
     const eDryRaw = Math.max(0, eWetRaw - w0 * nextRain);
-    const E_wet = eWetRaw / t.alert_val * 100;
-    const E_dry = eDryRaw / t.alert_val * 100;
+    const E_wet = eWetRaw / _etrDen(t) * 100;
+    const E_dry = eDryRaw / _etrDen(t) * 100;
     const pop = (t.pop_6h||[])[s+1];
     E_proj = Math.round(E_dry + _popGate(pop) * (E_wet - E_dry));
   }
