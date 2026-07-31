@@ -51,12 +51,16 @@ def load_static():
     print(f"靜態警戒值：{len(table)} 個鄉鎮")
     return table
 
-def fetch_swcb_etr2(slope_warn=None):
-    """抓水保署土石流參考雨量站 API → 各鄉鎮 ETR2%（官方同源）。
-    STRT = 該站有效累積雨量(ETR2, mm)。
-    ★只採用「官方坡地警戒表指定的代表站」（slope_warn），不用 API 內其他
-      第二參考站——否則會選到鄰區高值站，與官方警戒分析總表不一致。
-    回傳 {縣市+鄉鎮: {best_pct,best_etr2,station,alert,regions[]}}；失敗回 {}。"""
+def _stn_key(n):
+    """站名正規化：去除尾端網站代碼字母（s水保/w水利/tp台北/sr/fr等）。"""
+    import re as _re
+    return _re.sub(r'[A-Za-z]+$', '', (n or '').strip()).strip()
+
+
+def fetch_swcb_etr2():
+    """抓水保署土石流參考雨量站 API → 回傳「站名 → ETR2(mm)」對照表。
+    STRT = 該站有效累積雨量（官方同源）。含原名與正規化名兩種鍵以利對站。
+    失敗回 {}（agg_obs 會退回以 CWA 觀測自算）。"""
     def num(v):
         try: return float(v)
         except: return None
@@ -77,51 +81,15 @@ def fetch_swcb_etr2(slope_warn=None):
             time.sleep(3)
     if not data:
         return {}
-
-    # 站名 → STRT(ETR2 mm)；同時建去後綴(s/w)的別名鍵以利對站
     st_val = {}
     for row in data:
         for nk, vk in [('STName1','STRT1'), ('STName2','STRT2')]:
             nm = (row.get(nk) or '').strip(); v = num(row.get(vk))
             if not nm or v is None: continue
             st_val[nm] = v
-            st_val.setdefault(nm.rstrip('sSWw').strip(), v)
-
-    if not slope_warn:
-        print("    無官方警戒表可對照，略過（避免選到非官方代表站）")
-        return {}
-
-    town = {}
-    n_hit = 0
-    for key, units in slope_warn.items():
-        best_pct = None; best_etr2 = None; best_stn = None; best_av = None
-        regions = []; seen = set()
-        for u in units:
-            stn = (u.get('station') or '').strip()
-            if not stn: continue
-            av = u.get('alert', 0) or 0
-            if isinstance(av, str):
-                import re as _re
-                _m = _re.search(r'\d+', av); av = int(_m.group()) if _m else 0
-            stn_norm = u.get('station_norm') or stn.rstrip('sSWw').strip()
-            etr2 = st_val.get(stn)
-            if etr2 is None: etr2 = st_val.get(stn_norm)
-            if etr2 is None: continue          # 該官方站今日無資料
-            pct = round(etr2/av, 4) if av > 0 else None
-            sig = (u.get('village',''), stn)
-            if sig not in seen:                 # 去重（同站同村里在多條溪流重複出現）
-                seen.add(sig)
-                regions.append({'village': u.get('village',''), 'station': stn,
-                                'alert': av, 'etr2': etr2, 'etr2_pct': pct})
-            if pct is not None and (best_pct is None or pct > best_pct):
-                best_pct = pct; best_etr2 = etr2; best_stn = stn; best_av = av
-        if regions:
-            town[key] = {'best_pct': best_pct, 'best_etr2': best_etr2,
-                         'station': best_stn, 'alert': best_av, 'regions': regions}
-            if best_pct is not None: n_hit += 1
-    print(f"    水保署ETR2：{len(town)} 鄉鎮、{n_hit} 個有 ETR2%"
-          f"（僅採官方指定代表站，鎮內取最高）")
-    return town
+            st_val.setdefault(_stn_key(nm), v)
+    print(f"    水保署ETR2：{len(data)} 條潛勢溪流、{len(st_val)} 個站名鍵")
+    return st_val
 
 
 def load_slope_warn():
@@ -375,56 +343,59 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
 
     # ── ETR2 計算（改法B：逐官方警戒區用指定代表站，鎮內取最高 ETR2%）──
     if slope_warn:
-        n_aligned = 0; n_swcb = 0; n_fallback = 0
+        n_aligned = 0; n_swcb = 0; n_cwa = 0
         for key, td in town.items():
-            # ── 優先：水保署 API 的官方 ETR2（同源、零落差）──
-            sw = swcb_etr2.get(key) if swcb_etr2 else None
-            if sw and sw.get('best_pct') is not None:
-                td['etr2'] = sw['best_etr2']
-                # etr2_pct 以「系統靜態警戒值」為分母，與前端 etr2/alert_val 完全一致，
-                # 避免各面板因分母不同（單元警戒值 vs 靜態警戒值）出現數字落差。
-                _sav = (alert_table.get(key, {}) or {}).get('alert_val', 0) or 0
-                td['etr2_pct'] = (round(sw['best_etr2']/_sav, 4)
-                                  if (_sav > 0 and sw['best_etr2'] is not None)
-                                  else sw['best_pct'])
-                td['etr2_src'] = 'swcb'   # 標示來源
-                td['slope_regions'] = [
-                    {'village': r.get('village',''), 'station': r.get('station',''),
-                     'alert': r.get('alert'), 'etr2': r.get('etr2'), 'etr2_pct': r.get('etr2_pct')}
-                    for r in sw.get('regions', [])
-                ]
-                n_aligned += 1; n_swcb += 1
-                continue
-            # ── 備援：改法B（氣象署雨量用官方指定站自算）──
             regions = slope_warn.get(key)
             if not regions:
                 td['etr2'] = None; td['etr2_pct'] = None
                 continue
-            best_pct = None; best_etr2 = None; region_detail = []
+            best_pct = None; best_etr2 = None; best_av = None
+            detail = []; seen = set(); used_swcb = False; used_cwa = False
             for reg in regions:
-                stn = reg.get('station','').strip()
-                stn_norm = reg.get('station_norm','') or stn.rstrip('sSWw').strip()
-                sid = name2sid.get(stn) or name2sid.get(stn_norm)
+                stn = (reg.get('station') or '').strip()
+                if not stn: continue
                 av = reg.get('alert', 0) or 0
-                if isinstance(av, str):   # 容錯：官方偶有 '#300(350)' 格式，取第一個數字
+                if isinstance(av, str):
                     import re as _re
                     _m = _re.search(r'\d+', av); av = int(_m.group()) if _m else 0
-                ev = calc_etr2(sid, history, now_tpe) if sid else None
-                pct = round(ev/av, 4) if (ev is not None and av > 0) else None
-                region_detail.append({
-                    'village': reg.get('village',''),
-                    'station': stn, 'alert': av,
-                    'etr2': ev, 'etr2_pct': pct,
-                })
+                # ① 官方值優先（水保署 API）
+                ev = None; src = None
+                if swcb_etr2:
+                    ev = swcb_etr2.get(stn)
+                    if ev is None:
+                        ev = swcb_etr2.get(reg.get('station_norm') or _stn_key(stn))
+                    if ev is None:
+                        ev = swcb_etr2.get(_stn_key(stn))
+                    if ev is not None: src = 'swcb'; used_swcb = True
+                # ② 備援：以 CWA 觀測自算（該官方指定站）
+                if ev is None:
+                    sid = name2sid.get(stn) or name2sid.get(_stn_key(stn))
+                    if sid:
+                        ev = calc_etr2(sid, history, now_tpe)
+                        if ev is not None: src = 'cwa'; used_cwa = True
+                if ev is None: continue
+                # ★分母用「該單元的官方警戒值」（與官方警戒分析總表一致）
+                pct = round(ev/av, 4) if av > 0 else None
+                sig = (reg.get('village',''), stn)
+                if sig not in seen:
+                    seen.add(sig)
+                    detail.append({'village': reg.get('village',''), 'station': stn,
+                                   'alert': av, 'etr2': ev, 'etr2_pct': pct, 'src': src})
                 if pct is not None and (best_pct is None or pct > best_pct):
-                    best_pct = pct; best_etr2 = ev
+                    best_pct = pct; best_etr2 = ev; best_av = av
             td['etr2'] = best_etr2
             td['etr2_pct'] = best_pct
-            td['etr2_src'] = 'cwa_fallback'
-            td['slope_regions'] = region_detail   # 點擊明細（選項2）
-            if best_pct is not None: n_aligned += 1; n_fallback += 1
-        print(f"  鄉鎮聚合（水保署API優先＋改法B備援）：{n_aligned} 個鄉鎮有 ETR2%"
-              f"（水保署 {n_swcb}、CWA備援 {n_fallback}）")
+            td['etr2_alert'] = best_av          # 該最高單元的官方警戒值（前端算%用）
+            td['etr2_src'] = ('swcb' if (used_swcb and not used_cwa)
+                              else 'mixed' if (used_swcb and used_cwa)
+                              else 'cwa' if used_cwa else None)
+            td['slope_regions'] = detail
+            if best_pct is not None:
+                n_aligned += 1
+                if used_swcb: n_swcb += 1
+                else: n_cwa += 1
+        print(f"  鄉鎮聚合（逐官方警戒單元）：{n_aligned} 個鄉鎮有 ETR2%"
+              f"（含水保署官方值 {n_swcb}、純CWA自算 {n_cwa}）")
     else:
         # 退回舊法：鎮內所有登記站取最大（相容無對照表時）
         etr2_valid = set()
@@ -1663,7 +1634,7 @@ def main():
 
     alert_table = load_static()
     slope_warn = load_slope_warn()
-    swcb_etr2 = fetch_swcb_etr2(slope_warn)   # 水保署官方 ETR2（僅官方指定代表站）
+    swcb_etr2 = fetch_swcb_etr2()   # 站名→官方ETR2 對照
     time.sleep(1)
     static_list = list(alert_table.values())
     counties_needed = set(t['county'] for t in static_list)
@@ -1743,7 +1714,8 @@ def main():
         obs=town_obs.get(key,{})
         etr2_val    = obs.get('etr2')
         etr2_pct    = obs.get('etr2_pct')   # 小數，0.48=48%
-        etr2_src    = obs.get('etr2_src')          # 'swcb' 或 'cwa_fallback'
+        etr2_src    = obs.get('etr2_src')          # 'swcb'/'mixed'/'cwa'
+        etr2_alert  = obs.get('etr2_alert')        # 最高單元的官方警戒值（前端算%分母）
         slope_regions = obs.get('slope_regions')   # 各警戒區明細
         rain_24h    = obs.get('rain_24h')
         rain_6h     = obs.get('rain_6h')
@@ -1861,7 +1833,7 @@ def main():
             'rain_24h':rain_24h,'rain_6h':rain_6h,
             'rain_2d':rain_2d,'rain_3d':rain_3d,
             'etr2':etr2_val,'etr2_pct':etr2_pct,
-            'etr2_src':etr2_src,'slope_regions':slope_regions,
+            'etr2_src':etr2_src,'etr2_alert':etr2_alert,'slope_regions':slope_regions,
             'qpf_15d':qpf15d,'daily_qpf':daily,
             'seg_etr_pct':seg_etr_pct,
             'qpf_24h':round(sum(qpf_best[:4]),1),
