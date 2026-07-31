@@ -118,7 +118,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <a href="https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan" target="_blank" class="ext-btn">WISSDOM</a>
       <a href="https://fema.ardswc.gov.tw/Portal/Layout" target="_blank" class="ext-btn">FEMA</a>
       <a href="https://www.tropicaltidbits.com/analysis/models/?model=ecmwf&region=ea&pkg=mslp_pcpn" target="_blank" class="ext-btn">Tropical Tidbits</a>
-      <a href="https://www.weathernerds.org/models/fnv3.html?&inittype=zoom&initfield=SST_Anomaly_Surface&initcycle=determine&initfhour=240&initimdimx=1050&initimdimy=750&initrange=57.000000000000:95.000000000000:0:190.000000000000&initcx1=0&initcy1=0&initcx2=0&initcy2=0&initcross=False&initsound=False&initsoundx=1&initsoundy=1&initloop=False&initoverlay=False&initlstart=000&initlend=360&initlint=6&initol1=SST_Anomaly_Surface&initol2=null&initol3=null&initol4=null&initol5=null&initcities=Off&inithgwys=Off&inittracks=On&initlows=On&initlatlon=Off" target="_blank" class="ext-btn">Google FNV3</a>
+      <a href="https://www.weathernerds.org/models/fnv3.html?&inittype=zoom&initfield=SST_Anomaly_Surface&initcycle=determine&initfhour=240&initimdimx=1050&initimdimy=750&initrange=57.000000000000:95.000000000000:0:190.000000000000&initcx1=0&initcy1=0&initcx2=0&initcy2=0&initcross=False&initsound=False&initsoundx=1&initsoundy=1&initloop=False&initoverlay=False&initlstart=000&initlend=360&initlint=6&initol1=SST_Anomaly_Surface&initol2=null&initol3=null&initol4=null&initol5=null&initcities=Off&inithgwys=Off&inittracks=On&initlows=Off&initlatlon=Off" target="_blank" class="ext-btn">Google FNV3</a>
       <a href="https://tropic.ssec.wisc.edu/" target="_blank" class="ext-btn">CIMSS</a>
       <a href="https://www.easterlywave.com/typhoon/ensemble/" target="_blank" class="ext-btn">EasterlyWave</a>
       <a href="https://www.windy.com/?21.487,120.674,5" target="_blank" class="ext-btn">Windy</a>
@@ -685,7 +685,7 @@ function toggleEtrCounty(county){
 
 function _panelSeg(){
   // 跟當前選取的時間視窗一致
-  if(winKey === 'today') return 3;
+  if(winKey === 'today') return _nowSeg();   // ETR2等當下量：今天＝現在（對齊官方）
   if(winKey.startsWith('past')){ const n=parseInt(winKey.slice(4)); return -(n*4+1); }
   if(winKey.startsWith('day')){ const n=parseInt(winKey.slice(3)); return (n-1)*4+3; }
   if(winKey.startsWith('fut6_')){ const n=parseInt(winKey.slice(5)); return Math.floor(BASE_TIME.getHours()/6)+(n-1); }
@@ -1045,7 +1045,7 @@ function toggleBiasApply(){
 
 // 計算「以 seg 為基準時刻」的 ETR2（往前推7天，過去用觀測、未來用QPF）
 // seg: 6h段索引，0=現在這一段，正值=未來，負值=過去
-function calcEtr2AtSeg(t, seg, qpfField){
+function _calcEtr2Raw(t, seg, qpfField){
   const dailyObs = t.daily_rain || [];          // index 0=今天, 1=昨天...
   const qpfArr   = getQpfArr(t, qpfField);       // 60個6h段（日曆日對齊：[0]=今天00-06）
   // 逐日 QPF（每4段=1天，00-24時）
@@ -1085,8 +1085,12 @@ function calcEtr2AtSeg(t, seg, qpfField){
         rainVal = Math.round(acc*10)/10;
       }
     } else if(day === 0){
-      // 完整的今天（seg在未來日時回顧）：00-24時QPF
-      rainVal = dailyQpf[0]||0;
+      // 完整的今天（seg在未來日時回顧）：已實現觀測 + 今日剩餘QPF
+      //   註：今天的雨多已落地為觀測，QPF陣列的已過時段為0；
+      //   若只取 dailyQpf[0] 會讓今日雨量在跨日後憑空消失，造成 ETR2 假性陡降。
+      let accToday = dailyObs[0] || 0;
+      for(let s = _nowSeg()+1; s <= 3; s++) accToday += qpfArr[s]||0;
+      rainVal = Math.round(accToday*10)/10;
     } else if(day < 0){
       // 過去：氣象署觀測，obsIdx=-day（昨天=1，前天=2...）
       const obsIdx = -day;
@@ -1111,6 +1115,45 @@ function calcEtr2AtSeg(t, seg, qpfField){
   }
   return etr2;
 }
+
+// 現在所在的 6h 段（0~3，今日內）——ETR2 等「當下狀態」量的共用時間基準
+function _nowSeg(){
+  return Math.max(0, Math.min(3,
+    Math.floor((Date.now() - SEG_EPOCH().getTime()) / 216e5)));
+}
+
+// ── ETR2 對外介面：以水保署官方值為錨點，依 ETR2 公式遞推 ──
+//   錨點：t.etr2（水保署官方 ETR2，mm）＝「現在」的權威值，直接採用。
+//   未來：E(s+1) = E(s) × 0.7^(1/4) + QPF(s+1)
+//         （官方公式日折減 0.7 換算為每 6h 折減；有雨上升、無雨依公式緩降）
+//   過去：raw + (錨點 − raw現在)  → 加法位移接上官方值（不用乘法，避免放大失真）
+//   無官方錨點者（無警戒值鄉鎮）→ 退回原始算法，行為不變。
+const ETR2_DECAY_6H = Math.pow(0.7, 1/4);   // ≈0.9147
+function calcEtr2AtSeg(t, seg, qpfField){
+  const anchor = t.etr2;
+  if(anchor === null || anchor === undefined || !isFinite(anchor)){
+    return _calcEtr2Raw(t, seg, qpfField);
+  }
+  const ns = _nowSeg();
+  if(seg === ns) return anchor;                    // 現在＝官方值（完全對齊）
+
+  if(seg > ns){
+    // 未來：自官方錨點起，逐段「折減 + 加入該段QPF」
+    const qpfArr = getQpfArr(t, qpfField);
+    let e = anchor;
+    for(let s = ns + 1; s <= seg; s++){
+      e = e * ETR2_DECAY_6H + (qpfArr[s] || 0);
+    }
+    return e;
+  }
+
+  // 過去：加法位移（保留 raw 的歷史形狀，於「現在」平滑接上官方錨點）
+  const raw    = _calcEtr2Raw(t, seg, qpfField);
+  const rawNow = _calcEtr2Raw(t, ns, qpfField);
+  const off    = anchor - rawNow;
+  return Math.max(0, raw + off);
+}
+
 function getQpfSeg(t, seg, qpfField){
   const qpfArr = getQpfArr(t, qpfField);
   if(seg < 0) return null;  // 過去無QPF概念
@@ -1196,7 +1239,9 @@ function getAccum(t){
       : Math.round((obsToday + rest)*10)/10;
     let etrPct = null;
     if(hasEtr){
-      const etr2 = calcEtr2AtSeg(t, 3, qpfField);
+      // ETR2 是「當下狀態」而非期間累積：「今天」視窗顯示「現在」的 ETR2，
+      // 與官方警戒分析總表同一時間基準（未來演變請用未來6h段／逐日按鈕）。
+      const etr2 = calcEtr2AtSeg(t, _nowSeg(), qpfField);
       etrPct = Math.round(etr2/t.alert_val*1000)/10;
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
@@ -2656,7 +2701,7 @@ function _calcDistrictDaily(qpfField){
         const _ds=getQpfArr(t,qpfField).slice(d*4,d*4+4);
         const _dv=_ds.length===4?_ds.reduce((a,b)=>a+(b||0),0):((t.daily_qpf||[])[d]||0);
         mxR=Math.max(mxR,Math.round(_dv*10)/10);
-        if(t.alert_val>0){const e=calcEtr2AtSeg(t,d===0?3:d*4+3,qpfField);mxE=Math.max(mxE,Math.round(e/t.alert_val*100));}
+        if(t.alert_val>0){const e=calcEtr2AtSeg(t,d===0?_nowSeg():d*4+3,qpfField);mxE=Math.max(mxE,Math.round(e/t.alert_val*100));}
       });
       rr.push(mxR);er.push(mxE);gMR=Math.max(gMR,mxR);gME=Math.max(gME,mxE);
     }
@@ -3084,7 +3129,7 @@ function showChartTooltip(evt, canvasId){
       // 今天：只顯示全天累積雨量、ETR2%、風險指標
       let ep=null;
       if(t.alert_val>0){
-        const e=calcEtr2AtSeg(t,3,qpfField);
+        const e=calcEtr2AtSeg(t,_nowSeg(),qpfField);
         ep=Math.round(e/t.alert_val*100);
       }
       lines+=`ETR2%：${ep!=null?`<span style="color:${etrColorOf(ep)};font-weight:700">${ep}%</span>`:'<span style="color:#5a7a9a">—</span>'}<br>`;
@@ -3161,7 +3206,8 @@ function showChartTooltip(evt, canvasId){
     const dayIdx=Math.floor((cx-pL)/itemW);
     if(dayIdx<0||dayIdx>=nItems){ hideChartTooltip(); return; }
     const dt=new Date(SEG_EPOCH().getTime()+dayIdx*86400000);
-    const seg=dayIdx*4+3;
+    // 今天的 ETR2 取「現在」（當下狀態量，對齊官方）；未來日取當日最後一段
+    const seg=dayIdx===0?_nowSeg():dayIdx*4+3;
     let lines=`<b style="color:#d0e8ff">${fmtDay(dt)}（00-24時）</b><br>`+
       `<span style="color:#5a8aaa;font-size:9px">分署：日雨量 / ETR2% / 風險</span><br>`;
     DISTRICT_ORDER.forEach(district=>{
@@ -3169,7 +3215,10 @@ function showChartTooltip(evt, canvasId){
       let mxR=0,mxE=0,mxRisk=null;
       DISTRICT_COUNTIES[district].forEach(county=>{
         TOWNSHIPS.filter(t=>t.county===county).forEach(t=>{
-          mxR=Math.max(mxR,(t.daily_qpf||[])[dayIdx]||0);
+          // 依當前模式的 QPF 計算日雨量（與圖表一致；強降雨/弱降雨等模式才會跟著切換）
+          const _ds=getQpfArr(t,qpfField).slice(dayIdx*4,dayIdx*4+4);
+          const _dv=_ds.length===4?_ds.reduce((a,b)=>a+(b||0),0):((t.daily_qpf||[])[dayIdx]||0);
+          mxR=Math.max(mxR,Math.round(_dv*10)/10);
           if(t.alert_val>0){
             const e=calcEtr2AtSeg(t,seg,qpfField);
             mxE=Math.max(mxE,Math.round(e/t.alert_val*100));

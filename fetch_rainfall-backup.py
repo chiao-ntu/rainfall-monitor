@@ -1710,6 +1710,8 @@ def main():
         obs=town_obs.get(key,{})
         etr2_val    = obs.get('etr2')
         etr2_pct    = obs.get('etr2_pct')   # 小數，0.48=48%
+        etr2_src    = obs.get('etr2_src')          # 'swcb' 或 'cwa_fallback'
+        slope_regions = obs.get('slope_regions')   # 各警戒區明細
         rain_24h    = obs.get('rain_24h')
         rain_6h     = obs.get('rain_6h')
         rain_2d     = obs.get('rain_2d',0.0)
@@ -1826,6 +1828,7 @@ def main():
             'rain_24h':rain_24h,'rain_6h':rain_6h,
             'rain_2d':rain_2d,'rain_3d':rain_3d,
             'etr2':etr2_val,'etr2_pct':etr2_pct,
+            'etr2_src':etr2_src,'slope_regions':slope_regions,
             'qpf_15d':qpf15d,'daily_qpf':daily,
             'seg_etr_pct':seg_etr_pct,
             'qpf_24h':round(sum(qpf_best[:4]),1),
