@@ -648,6 +648,11 @@ function applyCustomScale(){
   // 確保遞增
   for(let i=1;i<6;i++){ if(vals[i]<=vals[i-1]) vals[i]=vals[i-1]+1; }
   for(let i=0;i<6;i++) RAIN_SCALE[i].max = vals[i];
+  // 同步渲染（邊界漸層）用的 CWA 配色色階門檻——兩者級距相同、僅顏色不同，
+  //   未同步會導致「開啟渲染時仍以預設級距著色」。
+  if(typeof RAIN_SCALE_CWA !== 'undefined'){
+    for(let i=0;i<6;i++) RAIN_SCALE_CWA[i].max = vals[i];
+  }
   // 同步更新圖例標籤
   RAIN_SCALE[0].label = `< ${vals[0]} mm`;
   for(let i=1;i<6;i++) RAIN_SCALE[i].label = `${vals[i-1]}–${vals[i]} mm`;

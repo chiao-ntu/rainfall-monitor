@@ -115,7 +115,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <a href="https://watch.ncdr.nat.gov.tw/plotrainonline" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">雨量觀測累積</a>
       <a href="https://watch.ncdr.nat.gov.tw/watch_swcb" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">颱風資訊</a>
       <a href="https://watch.ncdr.nat.gov.tw/watch_tracks_pro" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">颱風路徑</a>
-      <a href="https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan" target="_blank" class="ext-btn">WISSDOM</a>
+      <a href="https://watch.ncdr.nat.gov.tw/watch_smart_map" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">SMART</a>
+      <a href="https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">WISSDOM</a>
       <a href="https://fema.ardswc.gov.tw/Portal/Layout" target="_blank" class="ext-btn">FEMA</a>
       <a href="https://www.tropicaltidbits.com/analysis/models/?model=ecmwf&region=ea&pkg=mslp_pcpn" target="_blank" class="ext-btn">Tropical Tidbits</a>
       <a href="https://www.weathernerds.org/models/fnv3.html?&inittype=zoom&initfield=SST_Anomaly_Surface&initcycle=determine&initfhour=240&initimdimx=1050&initimdimy=750&initrange=57.000000000000:95.000000000000:0:190.000000000000&initcx1=0&initcy1=0&initcx2=0&initcy2=0&initcross=False&initsound=False&initsoundx=1&initsoundy=1&initloop=False&initoverlay=False&initlstart=000&initlend=360&initlint=6&initol1=SST_Anomaly_Surface&initol2=null&initol3=null&initol4=null&initol5=null&initcities=Off&inithgwys=Off&inittracks=On&initlows=Off&initlatlon=Off" target="_blank" class="ext-btn">Google FNV3</a>
@@ -755,8 +756,14 @@ function updateEtrAlertPanel(){
     const etr2 = calcEtr2AtSeg(t, panelSeg, qpfField);
     const pct = Math.round(etr2 / _etrDen(t) * 100);
     if(pct < 70) return;
-    const prevE = calcEtr2AtSeg(t, panelSeg-1, qpfField);
-    const prevPct = Math.round(prevE / _etrDen(t) * 100);
+    // 趨勢基準：檢視「現在」時用【上一輪更新的官方 ETR2】（同一資料源可比，
+    //   避免當期用官方值、前期用氣象署推算值而方向矛盾）；檢視未來時段則比相鄰段。
+    let prevPct;
+    if(panelSeg === _nowSeg() && t.etr2_prev !== null && t.etr2_prev !== undefined){
+      prevPct = Math.round(t.etr2_prev / _etrDen(t) * 100);
+    } else {
+      prevPct = Math.round(calcEtr2AtSeg(t, panelSeg-1, qpfField) / _etrDen(t) * 100);
+    }
     const district = COUNTY_TO_DISTRICT[t.county] || '其他';
     if(!byDistrict[district]) byDistrict[district] = {};
     if(!byDistrict[district][t.county]) byDistrict[district][t.county] = [];
@@ -790,7 +797,7 @@ function updateEtrAlertPanel(){
         const col = etrColor(pct);
         const isNew = _prevEtrSet && !_prevEtrSet.has(county+'|'+township);
         // 趨勢基準＝前一個6h時段（這期 > 前期＝上升紅▲；< 前期＝下降綠▼）
-        const _tTip = `較前一時段 ${prevPct}% → ${pct}%`;
+        const _tTip = `較前期 ${prevPct}% → 本期 ${pct}%`;
         const arrow = pct > prevPct
           ? `<span style="color:#ff4433;font-weight:700" title="${_tTip}"> ▲</span>`
           : (pct < prevPct ? `<span style="color:#33cc66;font-weight:700" title="${_tTip}"> ▼</span>` : '');
