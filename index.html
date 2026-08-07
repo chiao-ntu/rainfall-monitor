@@ -137,6 +137,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
       <button class="b"    id="bTyphoon" onclick="toggleTyphoonLayer()"
         style="border-color:#8a3a9a;color:#c88ae8">🌀 颱風路徑</button>
+      <button class="b"    id="bDebris" onclick="toggleDebrisLayer()"
+        style="border-color:#b06010;color:#ffa050">⛰ 土石流警戒</button>
+      <button class="b"    id="bLandslide" onclick="toggleLandslideLayer()"
+        style="border-color:#7a4a2a;color:#d09060">▲ 大規模崩塌</button>
     </div>
   </div>
   <div class="ctrl-row">
@@ -2178,6 +2182,15 @@ async function tryLoadLive(){
     window._dataGenAt = d.generated_at || '';  // 供各面板快取鍵使用
     // 颱風路徑（W-C0034-005）：無颱風時為空陣列
     window.TYPHOON_TRACK = d.typhoon_track || [];
+    // 土石流警戒研判（逐潛勢溪流；圖層開啟時重繪套用最新警戒）
+    window.DEBRIS_ALERTS = d.debris_alerts || {};
+    const _da = Object.values(window.DEBRIS_ALERTS);
+    if(_da.length){
+      const _r = _da.filter(x=>x.red).length, _y = _da.filter(x=>x.yellow).length;
+      console.log(`土石流警戒：紅色 ${_r} 條、黃色 ${_y} 條（共 ${_da.length} 條潛勢溪流）`);
+    }
+    if(typeof showDebris !== 'undefined' && showDebris) renderDebrisLayer();
+    if(typeof showLandslide !== 'undefined' && showLandslide) renderLandslideLayer();
     if(window.TYPHOON_TRACK.length){
       console.log('颱風路徑載入：', window.TYPHOON_TRACK.map(t=>t.name_zh).join('、'));
     }
@@ -3321,6 +3334,156 @@ let disasterPanelOpen = true;
 
 // ── 颱風路徑圖層（W-C0034-005：過去軌跡＋預報路徑＋暴風圈）──
 let showTyphoon = false, typhoonLayer = null;
+// ── 土石流警戒圖層（潛勢溪流＋集水區＋影響範圍；按需載入幾何）──
+let showDebris = false, debrisLayer = null, _debrisGeo = null, _debrisLoading = false;
+let showLandslide = false, landslideLayer = null, _lsGeo = null, _lsLoading = false;
+
+function _alertStyleOf(a){
+  // 依官方警戒：紅＝實際ETR2達標、黃＝預測(ETR2+未來QPF)達標、其餘依達成率淡色
+  if(!a) return {color:'#8899aa', w:1.4, op:0.55, tag:'無資料'};
+  if(a.red)    return {color:'#ff2020', w:3.2, op:1.00, tag:'🔴紅色警戒'};
+  if(a.yellow) return {color:'#ffd400', w:2.8, op:0.95, tag:'🟡黃色警戒'};
+  const p = (a.pct || 0) * 100;
+  if(p >= 70) return {color:'#ff9030', w:2.2, op:0.9,  tag:'接近警戒'};
+  if(p >= 40) return {color:'#79b7e0', w:1.6, op:0.75, tag:'注意'};
+  return {color:'#8899aa', w:1.2, op:0.5, tag:'未達標'};
+}
+
+async function toggleDebrisLayer(){
+  showDebris = !showDebris;
+  const btn = document.getElementById('bDebris');
+  if(btn) btn.classList.toggle('on', showDebris);
+  if(showDebris && !_debrisGeo){
+    if(_debrisLoading) return;
+    _debrisLoading = true;
+    if(btn) btn.textContent = '⛰ 載入中…';
+    try{
+      const r = await fetch('debris_geo.json?t=' + (window._dataGenAt || ''));
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      _debrisGeo = await r.json();
+      console.log('土石流圖資載入：', Object.keys(_debrisGeo.streams || {}).length, '條潛勢溪流');
+    }catch(e){
+      console.error('土石流圖資載入失敗：', e);
+      showDebris = false;
+      if(btn){ btn.classList.remove('on'); btn.textContent = '⛰ 土石流警戒'; }
+      _debrisLoading = false; return;
+    }
+    _debrisLoading = false;
+    if(btn) btn.textContent = '⛰ 土石流警戒';
+  }
+  renderDebrisLayer();
+}
+
+function renderDebrisLayer(){
+  if(debrisLayer){ map.removeLayer(debrisLayer); debrisLayer = null; }
+  if(!showDebris || !_debrisGeo) return;
+  const alerts = window.DEBRIS_ALERTS || {};
+  const streams = _debrisGeo.streams || {};
+  const affect  = _debrisGeo.affect  || {};
+  const wsheds  = _debrisGeo.watershed || {};
+  debrisLayer = L.layerGroup().addTo(map);
+  let nRed = 0, nYel = 0;
+
+  Object.keys(streams).forEach(no=>{
+    const st = streams[no], a = alerts[no];
+    const stl = _alertStyleOf(a);
+    if(a && a.red) nRed++; else if(a && a.yellow) nYel++;
+    const info = st.i || {};
+    const loc = (info.County01||'') + (info.Town01||'') + (info.Vill01||'');
+    const tip =
+      `<b>${no}</b>　${stl.tag}<br>${loc}` +
+      (info.Name ? `<br>溪流：${info.Name}` : '') +
+      (a ? `<br>ETR2 <b>${a.etr2}</b> / 警戒值 <b>${a.alert}</b> mm（${(a.pct*100).toFixed(0)}%）` +
+           (a.qpf24 != null ? `<br>未來24h QPF ${a.qpf24} mm → 預測 ${a.fc_etr2} mm` : '') +
+           (a.station ? `<br>參考站：${a.station}` : '')
+         : '<br><span style="color:#889">無即時雨量資料</span>') +
+      (info.TRes_Class ? `<br>保全戶：${info.TRes_Class}｜風險 ${info.Risk||'—'}` : '');
+
+    // 警戒中才顯示集水區與影響範圍（避免全台1753條同時鋪滿）
+    if(a && (a.red || a.yellow)){
+      (wsheds[no]||[]).forEach(ring=>{
+        L.polygon(ring.map(c=>[c[1],c[0]]), {color:stl.color, weight:1, opacity:0.5,
+          fillColor:stl.color, fillOpacity:0.10, interactive:false}).addTo(debrisLayer);
+      });
+      (affect[no]||[]).forEach(ring=>{
+        L.polygon(ring.map(c=>[c[1],c[0]]), {color:stl.color, weight:1.4, opacity:0.85,
+          fillColor:stl.color, fillOpacity:0.30, interactive:false}).addTo(debrisLayer);
+      });
+    }
+    // 溪流線（黑描邊＋警戒色）
+    (st.l||[]).forEach(seg=>{
+      const ll = seg.map(c=>[c[1],c[0]]);
+      L.polyline(ll, {color:'#000', weight:stl.w+1.4, opacity:stl.op*0.5,
+        interactive:false}).addTo(debrisLayer);
+      L.polyline(ll, {color:stl.color, weight:stl.w, opacity:stl.op})
+        .bindTooltip(tip, {sticky:true}).addTo(debrisLayer);
+    });
+  });
+  console.log(`土石流圖層：紅色 ${nRed} 條、黃色 ${nYel} 條`);
+}
+
+// ── 大規模崩塌警戒發布區（94處）──
+async function toggleLandslideLayer(){
+  showLandslide = !showLandslide;
+  const btn = document.getElementById('bLandslide');
+  if(btn) btn.classList.toggle('on', showLandslide);
+  if(showLandslide && !_lsGeo){
+    if(_lsLoading) return;
+    _lsLoading = true;
+    if(btn) btn.textContent = '▲ 載入中…';
+    try{
+      const r = await fetch('landslide_geo.json?t=' + (window._dataGenAt || ''));
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      _lsGeo = await r.json();
+      console.log('大規模崩塌圖資載入：', Object.keys(_lsGeo).length, '處');
+    }catch(e){
+      console.error('大崩圖資載入失敗：', e);
+      showLandslide = false;
+      if(btn){ btn.classList.remove('on'); btn.textContent = '▲ 大規模崩塌'; }
+      _lsLoading = false; return;
+    }
+    _lsLoading = false;
+    if(btn) btn.textContent = '▲ 大規模崩塌';
+  }
+  renderLandslideLayer();
+}
+
+function renderLandslideLayer(){
+  if(landslideLayer){ map.removeLayer(landslideLayer); landslideLayer = null; }
+  if(!showLandslide || !_lsGeo) return;
+  landslideLayer = L.layerGroup().addTo(map);
+  Object.keys(_lsGeo).forEach(no=>{
+    const d = _lsGeo[no], info = d.i || {};
+    // 以該鄉鎮 ETR2%（水保署官方值）反映降雨風險
+    const t = TMAP[(info.County01||'') + (info.Town01||'')];
+    const pct = (t && t.etr2_pct != null) ? t.etr2_pct*100 : null;
+    let col = '#a0703a', tag = 'ETR2 —';
+    if(pct != null){
+      tag = `ETR2 ${pct.toFixed(0)}%`;
+      if(pct >= 100)     col = '#ff2020';
+      else if(pct >= 90) col = '#ff6a00';
+      else if(pct >= 70) col = '#ffd400';
+      else if(pct >= 50) col = '#9acd32';
+    }
+    const tip =
+      `<b>${no}　${info.Name||''}</b><br>` +
+      `${(info.County01||'')}${(info.Town01||'')}${(info.Vill01||'')}<br>` +
+      `類型：${info.Type||'—'}｜風險 ${info.Risk||'—'}<br>` +
+      `保全戶：${info.Total_Res ?? info.Dw_count ?? '—'} 戶（${info.TRes_Class||'—'}）<br>` +
+      `潛勢面積：${info.P_area||'—'} ha｜${tag}`;
+    (d.p||[]).forEach(ring=>{                    // 潛勢範圍
+      L.polygon(ring.map(c=>[c[1],c[0]]), {color:col, weight:1.6, opacity:0.9,
+        fillColor:col, fillOpacity:0.18, dashArray:'5,4'})
+        .bindTooltip(tip, {sticky:true}).addTo(landslideLayer);
+    });
+    (d.a||[]).forEach(ring=>{                    // 影響範圍（保全對象）
+      L.polygon(ring.map(c=>[c[1],c[0]]), {color:col, weight:2, opacity:1,
+        fillColor:col, fillOpacity:0.38})
+        .bindTooltip(tip, {sticky:true}).addTo(landslideLayer);
+    });
+  });
+}
+
 function toggleTyphoonLayer(){
   showTyphoon = !showTyphoon;
   const btn = document.getElementById('bTyphoon');
