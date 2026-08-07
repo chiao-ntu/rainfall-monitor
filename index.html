@@ -266,6 +266,48 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
       <div id="disaster-panel-body" style="padding:5px 7px;overflow-y:auto;flex:1;min-height:0;font-size:11px;color:#f2e0d8;background:#150c07"></div>
     </div>
+    <!-- 颱風路徑區塊（預設收合） -->
+    <div id="lsb-ty-sec" style="display:flex;flex-direction:column;flex:0 0 auto;min-height:0;border-top:2px solid #4a2a5a;overflow:hidden">
+      <div onclick="toggleLsbSection('typhoon')" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
+        border-bottom:1px solid #4a2a5a;background:#1e0f2a;flex-shrink:0;cursor:pointer">
+        <span style="font-weight:700;color:#c88ae8;font-size:11px"><span id="lsb-typhoon-arrow">▸</span> 🌀 颱風路徑</span>
+        <span style="display:flex;gap:4px;align-items:center">
+          <button onclick="event.stopPropagation();copyTyphoonPanel(this)"
+            style="font-size:9px;padding:1px 5px;background:#241030;color:#d0a8e8;border:1px solid #5a3a6a;border-radius:3px;cursor:pointer">複製</button>
+          <button onclick="event.stopPropagation();downloadTyphoonCsv()"
+            style="font-size:9px;padding:1px 5px;background:#241030;color:#8ad8a8;border:1px solid #3a5a3a;border-radius:3px;cursor:pointer">CSV</button>
+        </span>
+      </div>
+      <div id="typhoon-panel-body" style="display:none;padding:5px 7px;overflow-y:auto;flex:1;min-height:0;font-size:11px;color:#eadcf5;background:#120a18"></div>
+    </div>
+    <!-- 土石流警戒區塊（預設收合） -->
+    <div id="lsb-df-sec" style="display:flex;flex-direction:column;flex:0 0 auto;min-height:0;border-top:2px solid #6a3a10;overflow:hidden">
+      <div onclick="toggleLsbSection('debris')" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
+        border-bottom:1px solid #6a3a10;background:#2a1806;flex-shrink:0;cursor:pointer">
+        <span style="font-weight:700;color:#ffa050;font-size:11px"><span id="lsb-debris-arrow">▸</span> ⛰ 土石流警戒</span>
+        <span style="display:flex;gap:4px;align-items:center">
+          <button onclick="event.stopPropagation();copyDebrisPanel(this)"
+            style="font-size:9px;padding:1px 5px;background:#2a1a08;color:#f0b880;border:1px solid #6a4a2a;border-radius:3px;cursor:pointer">複製</button>
+          <button onclick="event.stopPropagation();downloadDebrisCsv()"
+            style="font-size:9px;padding:1px 5px;background:#2a1a08;color:#8ad8a8;border:1px solid #3a5a3a;border-radius:3px;cursor:pointer">CSV</button>
+        </span>
+      </div>
+      <div id="debris-panel-body" style="display:none;padding:5px 7px;overflow-y:auto;flex:1;min-height:0;font-size:11px;color:#f5e6d8;background:#160e06"></div>
+    </div>
+    <!-- 大規模崩塌區塊（預設收合） -->
+    <div id="lsb-ls-sec" style="display:flex;flex-direction:column;flex:0 0 auto;min-height:0;border-top:2px solid #5a3a1a;overflow:hidden">
+      <div onclick="toggleLsbSection('landslide')" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
+        border-bottom:1px solid #5a3a1a;background:#241606;flex-shrink:0;cursor:pointer">
+        <span style="font-weight:700;color:#d09060;font-size:11px"><span id="lsb-landslide-arrow">▸</span> ▲ 大規模崩塌</span>
+        <span style="display:flex;gap:4px;align-items:center">
+          <button onclick="event.stopPropagation();copyLandslidePanel(this)"
+            style="font-size:9px;padding:1px 5px;background:#241606;color:#e0b090;border:1px solid #5a4030;border-radius:3px;cursor:pointer">複製</button>
+          <button onclick="event.stopPropagation();downloadLandslideCsv()"
+            style="font-size:9px;padding:1px 5px;background:#241606;color:#8ad8a8;border:1px solid #3a5a3a;border-radius:3px;cursor:pointer">CSV</button>
+        </span>
+      </div>
+      <div id="landslide-panel-body" style="display:none;padding:5px 7px;overflow-y:auto;flex:1;min-height:0;font-size:11px;color:#f0e0d0;background:#140d06"></div>
+    </div>
   </div>
   <!-- 左側欄收合按鈕（右緣、上下到底） -->
   <button id="lsb-toggle" onclick="toggleLsb()" title="收合/展開左側欄"
@@ -2191,6 +2233,7 @@ async function tryLoadLive(){
     }
     if(typeof showDebris !== 'undefined' && showDebris) renderDebrisLayer();
     if(typeof showLandslide !== 'undefined' && showLandslide) renderLandslideLayer();
+    try{ updateTyphoonPanel(); updateDebrisPanel(); updateLandslidePanel(); }catch(e){}
     if(window.TYPHOON_TRACK.length){
       console.log('颱風路徑載入：', window.TYPHOON_TRACK.map(t=>t.name_zh).join('、'));
     }
@@ -3372,6 +3415,7 @@ async function toggleDebrisLayer(){
     if(btn) btn.textContent = '⛰ 土石流警戒';
   }
   renderDebrisLayer();
+  try{ updateDebrisPanel(); }catch(e){}
 }
 
 function renderDebrisLayer(){
@@ -3446,6 +3490,7 @@ async function toggleLandslideLayer(){
     if(btn) btn.textContent = '▲ 大規模崩塌';
   }
   renderLandslideLayer();
+  try{ updateLandslidePanel(); }catch(e){}
 }
 
 function renderLandslideLayer(){
@@ -3489,6 +3534,7 @@ function toggleTyphoonLayer(){
   const btn = document.getElementById('bTyphoon');
   if(btn) btn.classList.toggle('on', showTyphoon);
   renderTyphoonLayer();
+  try{ updateTyphoonPanel(); }catch(e){}
 }
 function _tyIntensity(ws){
   // 依近中心最大風速(m/s)分級（CWA：輕度17.2+、中度32.7+、強烈51.0+）
@@ -3891,6 +3937,200 @@ function downloadRangeCsv(){
   _downloadCsv(rows, `降雨監測_${fmtDT(new Date()).replace(/[\/\s:]/g,'')}.csv`);
 }
 // 共用 CSV 下載（含 BOM 供 Excel 開啟中文）
+
+// ════════════════════════════════════════════════
+//  左側面板：颱風路徑 / 土石流警戒 / 大規模崩塌
+// ════════════════════════════════════════════════
+function _tyRows(){
+  const out = [];
+  (window.TYPHOON_TRACK || []).forEach(ty=>{
+    const c = ty.current || {};
+    out.push({ty, cur:c, fut:(ty.forecast||[])});
+  });
+  return out;
+}
+function updateTyphoonPanel(){
+  const body = document.getElementById('typhoon-panel-body');
+  if(!body) return;
+  const rows = _tyRows();
+  if(!rows.length){
+    body.innerHTML = '<div style="color:#8a7a9a;font-size:10px;padding:4px 0">目前無活動中颱風</div>';
+    return;
+  }
+  let h = '';
+  rows.forEach(({ty, cur, fut})=>{
+    const it = _tyIntensity(cur.ws);
+    h += `<div style="margin-bottom:7px;border-left:3px solid ${it.color};padding-left:6px">
+      <div style="font-weight:700;color:#e8c8ff">${ty.name_zh}（${ty.name_en}）<span style="color:#9a8aaa;font-weight:400">編號${ty.ty_no}</span></div>
+      <div style="color:${it.color};font-size:10px">${it.name}</div>
+      <div style="font-size:10px;color:#c8b8d8">
+        中心 ${cur.lat ?? '—'}N / ${cur.lng ?? '—'}E<br>
+        風速 <b>${cur.ws ?? '—'}</b> m/s（陣風 ${cur.gust ?? '—'}）｜氣壓 <b>${cur.p ?? '—'}</b> hPa<br>
+        七級風半徑 ${cur.r15 ?? '—'} km｜十級風半徑 ${cur.r25 ?? '—'} km
+      </div>`;
+    if(fut.length){
+      h += `<div style="font-size:10px;color:#9a8aaa;margin-top:3px">預報路徑</div>`;
+      fut.slice(0,5).forEach(f=>{
+        h += `<div style="font-size:10px;color:#c8b8d8">　+${f.fh}h　${f.lat}N/${f.lng}E　${f.ws ?? '—'}m/s　70%圈 ${f.r70 ?? '—'}km</div>`;
+      });
+    }
+    h += '</div>';
+  });
+  body.innerHTML = h;
+}
+function copyTyphoonPanel(btn){
+  const rows = _tyRows();
+  if(!rows.length){ _copyRich(btn, '目前無活動中颱風', '目前無活動中颱風'); return; }
+  let t = '', hs = '';
+  rows.forEach(({ty, cur, fut})=>{
+    const it = _tyIntensity(cur.ws);
+    t += `${ty.name_zh}（${ty.name_en}）編號${ty.ty_no}　${it.name}\n`;
+    t += `中心 ${cur.lat}N/${cur.lng}E　風速 ${cur.ws}m/s　氣壓 ${cur.p}hPa\n`;
+    hs += `<div><b>${ty.name_zh}（${ty.name_en}）編號${ty.ty_no}　${it.name}</b></div>`;
+    hs += `<div>中心 ${cur.lat}N/${cur.lng}E　風速 ${cur.ws}m/s　氣壓 ${cur.p}hPa</div>`;
+    fut.forEach(f=>{
+      t += `　+${f.fh}h　${f.lat}N/${f.lng}E　${f.ws}m/s　70%圈${f.r70}km\n`;
+      hs += `<div>　+${f.fh}h　${f.lat}N/${f.lng}E　${f.ws}m/s　70%圈${f.r70}km</div>`;
+    });
+  });
+  _copyRich(btn, t, hs);
+}
+function downloadTyphoonCsv(){
+  const rows = [['颱風','英文名','編號','類別','時間點','緯度','經度','風速m/s','陣風m/s','氣壓hPa','70%機率半徑km']];
+  _tyRows().forEach(({ty, cur, fut})=>{
+    const it = _tyIntensity(cur.ws);
+    rows.push([ty.name_zh, ty.name_en, ty.ty_no, it.name, '現在',
+               cur.lat ?? '', cur.lng ?? '', cur.ws ?? '', cur.gust ?? '', cur.p ?? '', '']);
+    fut.forEach(f=>rows.push([ty.name_zh, ty.name_en, ty.ty_no, _tyIntensity(f.ws).name,
+      `+${f.fh}h`, f.lat, f.lng, f.ws ?? '', f.gust ?? '', f.p ?? '', f.r70 ?? '']));
+  });
+  _downloadCsv(rows, `颱風路徑_${fmtDT(new Date()).replace(/[\/\s:]/g,'')}.csv`);
+}
+
+// ── 土石流警戒面板 ──
+function _debrisHits(){
+  const a = window.DEBRIS_ALERTS || {};
+  return Object.keys(a).map(no=>({no, d:a[no]}))
+    .filter(x=>x.d.red || x.d.yellow || (x.d.pct||0) >= 0.7)
+    .sort((p,q)=>(q.d.pct||0)-(p.d.pct||0));
+}
+function updateDebrisPanel(){
+  const body = document.getElementById('debris-panel-body');
+  if(!body) return;
+  const all = Object.values(window.DEBRIS_ALERTS || {});
+  if(!all.length){
+    body.innerHTML = '<div style="color:#a08a70;font-size:10px;padding:4px 0">尚無土石流警戒資料（待後端更新）</div>';
+    return;
+  }
+  const hits = _debrisHits();
+  const nR = all.filter(x=>x.red).length, nY = all.filter(x=>x.yellow).length;
+  let h = `<div style="font-size:10px;color:#c8a888;margin-bottom:4px">
+    🔴 紅色 <b style="color:#ff6644">${nR}</b>　🟡 黃色 <b style="color:#ffd400">${nY}</b>　
+    <span style="color:#8a7a6a">／共 ${all.length} 條潛勢溪流</span></div>`;
+  if(!hits.length){
+    h += '<div style="color:#8a7a6a;font-size:10px">目前無達警戒或接近警戒之潛勢溪流</div>';
+    body.innerHTML = h; return;
+  }
+  // 依縣市→鄉鎮分組
+  const by = {};
+  hits.forEach(({no,d})=>{
+    const c = d.county||'', t = d.town||'';
+    (by[c] = by[c] || {}); (by[c][t] = by[c][t] || []).push({no,d});
+  });
+  Object.keys(by).forEach(c=>{
+    h += `<div style="color:#ffb070;font-weight:700;margin-top:4px">${c}</div>`;
+    Object.keys(by[c]).forEach(t=>{
+      h += `<div style="color:#e8c8a8;padding-left:5px">${t}</div>`;
+      by[c][t].forEach(({no,d})=>{
+        const col = d.red ? '#ff4433' : (d.yellow ? '#ffd400' : '#ff9030');
+        const tag = d.red ? '🔴' : (d.yellow ? '🟡' : '△');
+        h += `<div style="padding-left:11px;font-size:10px;color:#d8c0a8">
+          ${tag} <span style="color:${col};font-weight:700">${no}</span>
+          ${d.etr2}/${d.alert}mm（<b style="color:${col}">${(d.pct*100).toFixed(0)}%</b>）
+          ${d.vill ? `<span style="color:#9a8a7a">${d.vill}</span>` : ''}</div>`;
+      });
+    });
+  });
+  body.innerHTML = h;
+}
+function copyDebrisPanel(btn){
+  const hits = _debrisHits();
+  if(!hits.length){ _copyRich(btn, '目前無達警戒之潛勢溪流', '目前無達警戒之潛勢溪流'); return; }
+  let t = '', hs = '';
+  hits.forEach(({no,d})=>{
+    const lv = d.red ? '紅色警戒' : (d.yellow ? '黃色警戒' : '接近警戒');
+    const line = `${no}　${d.county}${d.town}${d.vill||''}　${lv}　ETR2 ${d.etr2}/${d.alert}mm（${(d.pct*100).toFixed(0)}%）`;
+    t += line + '\n'; hs += `<div>${line}</div>`;
+  });
+  _copyRich(btn, t, hs);
+}
+function downloadDebrisCsv(){
+  const rows = [['潛勢溪流編號','縣市','鄉鎮','村里','警戒等級','ETR2(mm)','警戒值(mm)','達成率(%)','未來24hQPF(mm)','預測ETR2(mm)','參考站']];
+  const a = window.DEBRIS_ALERTS || {};
+  Object.keys(a).sort((p,q)=>(a[q].pct||0)-(a[p].pct||0)).forEach(no=>{
+    const d = a[no];
+    rows.push([no, d.county||'', d.town||'', d.vill||'',
+      d.red ? '紅色警戒' : (d.yellow ? '黃色警戒' : ''),
+      d.etr2 ?? '', d.alert ?? '', ((d.pct||0)*100).toFixed(1),
+      d.qpf24 ?? '', d.fc_etr2 ?? '', d.station||'']);
+  });
+  _downloadCsv(rows, `土石流警戒_${fmtDT(new Date()).replace(/[\/\s:]/g,'')}.csv`);
+}
+
+// ── 大規模崩塌面板（94處，依所在鄉鎮 ETR2% 排序）──
+function _lsRows(){
+  if(!_lsGeo) return [];
+  return Object.keys(_lsGeo).map(no=>{
+    const i = _lsGeo[no].i || {};
+    const t = TMAP[(i.County01||'') + (i.Town01||'')];
+    const pct = (t && t.etr2_pct != null) ? t.etr2_pct*100 : null;
+    return {no, i, pct};
+  }).sort((a,b)=>(b.pct ?? -1)-(a.pct ?? -1));
+}
+function updateLandslidePanel(){
+  const body = document.getElementById('landslide-panel-body');
+  if(!body) return;
+  if(!_lsGeo){
+    body.innerHTML = '<div style="color:#a08a70;font-size:10px;padding:4px 0">請先開啟「▲ 大規模崩塌」圖層以載入圖資</div>';
+    return;
+  }
+  const rows = _lsRows();
+  let h = `<div style="font-size:10px;color:#c8a888;margin-bottom:4px">94 處警戒發布區（依所在鄉鎮 ETR2% 排序）</div>`;
+  rows.slice(0, 40).forEach(({no,i,pct})=>{
+    let col = '#a0703a';
+    if(pct != null){
+      if(pct >= 100) col = '#ff4433'; else if(pct >= 90) col = '#ff8833';
+      else if(pct >= 70) col = '#ffd400'; else if(pct >= 50) col = '#9acd32';
+    }
+    h += `<div style="font-size:10px;color:#e0c8b0;padding:1px 0">
+      <span style="color:${col};font-weight:700">${no}</span>
+      ${i.County01||''}${i.Town01||''} ${i.Name||''}
+      <span style="color:${col}">${pct != null ? pct.toFixed(0)+'%' : '—'}</span>
+      <span style="color:#9a8a7a">${i.Type||''}｜${i.Total_Res ?? i.Dw_count ?? '—'}戶</span></div>`;
+  });
+  if(rows.length > 40) h += `<div style="font-size:9px;color:#8a7a6a">…共 ${rows.length} 處，完整清單請下載 CSV</div>`;
+  body.innerHTML = h;
+}
+function copyLandslidePanel(btn){
+  const rows = _lsRows();
+  if(!rows.length){ _copyRich(btn, '請先開啟大規模崩塌圖層', '請先開啟大規模崩塌圖層'); return; }
+  let t = '', hs = '';
+  rows.forEach(({no,i,pct})=>{
+    const line = `${no}　${i.County01||''}${i.Town01||''}${i.Vill01||''}　${i.Name||''}　${i.Type||''}　ETR2 ${pct != null ? pct.toFixed(0)+'%' : '—'}　${i.Total_Res ?? i.Dw_count ?? '—'}戶`;
+    t += line + '\n'; hs += `<div>${line}</div>`;
+  });
+  _copyRich(btn, t, hs);
+}
+function downloadLandslideCsv(){
+  const rows = [['崩塌區編號','縣市','鄉鎮','村里','名稱','類型','風險','保全戶數','戶數級距','潛勢面積ha','所在鄉鎮ETR2%']];
+  _lsRows().forEach(({no,i,pct})=>{
+    rows.push([no, i.County01||'', i.Town01||'', i.Vill01||'', i.Name||'', i.Type||'',
+      i.Risk||'', i.Total_Res ?? i.Dw_count ?? '', i.TRes_Class||'', i.P_area ?? '',
+      pct != null ? pct.toFixed(1) : '']);
+  });
+  _downloadCsv(rows, `大規模崩塌警戒發布區_${fmtDT(new Date()).replace(/[\/\s:]/g,'')}.csv`);
+}
+
 function _downloadCsv(rows, filename){
   const csv = '\ufeff' + rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
@@ -3995,25 +4235,29 @@ function _windowRisk(t){
 }
 
 
-// 左側欄各面板收合
-const _lsbSecOpen = {etr:true, disaster:true};
+// 左側欄各面板收合（面板→body/section 對照，新增面板只需在此加一列）
+const _LSB_SEC = {
+  etr:       {body:'etr-panel-body',       sec:'lsb-etr-sec'},
+  disaster:  {body:'disaster-panel-body',  sec:'lsb-dis-sec'},
+  typhoon:   {body:'typhoon-panel-body',   sec:'lsb-ty-sec'},
+  debris:    {body:'debris-panel-body',    sec:'lsb-df-sec'},
+  landslide: {body:'landslide-panel-body', sec:'lsb-ls-sec'},
+};
+const _lsbSecOpen = {etr:true, disaster:true, typhoon:false, debris:false, landslide:false};
 function toggleLsbSection(name){
   _lsbSecOpen[name] = !_lsbSecOpen[name];
-  const body = document.getElementById(name==='etr' ? 'etr-panel-body' : 'disaster-panel-body');
+  const m = _LSB_SEC[name] || {};
+  const body  = document.getElementById(m.body);
   const arrow = document.getElementById('lsb-'+name+'-arrow');
   if(body) body.style.display = _lsbSecOpen[name] ? 'block' : 'none';
   if(arrow) arrow.textContent = _lsbSecOpen[name] ? '▾' : '▸';
-  // 收合區縮到只剩標題列（flex:0 0 auto），展開區自然吃掉全部剩餘空間；
-  // 兩區都展開時按內容比例分配並各自捲動，收合任一區另一區立即接上不留空白
-  const section = document.getElementById(name==='etr' ? 'lsb-etr-sec' : 'lsb-dis-sec');
+  // 展開＝flex:1 1 0（吃剩餘空間、內容自捲）；收合＝0 0 auto（只剩標題列）
+  const section = document.getElementById(m.sec);
   if(section){
-    // 展開＝flex:1 1 0 + min-height:0（讓內容超出時 body 自己捲動，不撐破容器）；
-    // 收合＝0 0 auto 只剩標題列。兩區展開時平均分配並各自捲動。
     section.style.flex      = _lsbSecOpen[name] ? '1 1 0' : '0 0 auto';
     section.style.minHeight = '0';
   }
 }
-
 
 // ════════════════════════════════════════════════
 //  CWA 警特報預估（問題2）
