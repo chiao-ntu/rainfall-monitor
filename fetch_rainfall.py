@@ -1033,6 +1033,97 @@ def calc_bias_24h(daily_rain, model_yday):
 # ── 颱風期 QPF 格點 ──────────────────────────────
 QPF_TYPHOON = [f"{BASE_URL}/F-C0041-{str(i).zfill(3)}" for i in range(1,9)]
 
+def fetch_typhoon_track():
+    """W-C0034-005：西北太平洋及南海活動中熱帶氣旋之過去軌跡與預報路徑。
+    注意：CWA 此資料集欄位一律大寫開頭（TropicalCyclones/AnalysisData/Fix...）。
+    回傳精簡結構陣列；無颱風或失敗回 []。"""
+    def _f(v):
+        try: return float(v)
+        except: return None
+    def _i(v):
+        try: return int(float(v))
+        except: return None
+    def _radius(node):
+        """Circle15ms/Circle25ms → 半徑(km)；象限半徑略過（畫圓即可）。"""
+        if not isinstance(node, dict): return None
+        return _i(node.get('Radius'))
+
+    print("抓取颱風路徑（W-C0034-005）...")
+    doc = None
+    for attempt in range(3):
+        try:
+            r = requests.get(f"{BASE_URL}/W-C0034-005",
+                             params={'Authorization': CWA_API_KEY, 'format': 'JSON'},
+                             timeout=45)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}")
+                if attempt < 2: time.sleep(3); continue
+                return []
+            doc = json.loads(r.content.decode('utf-8', 'replace'))
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return []
+            time.sleep(3)
+    if not doc: return []
+
+    try:
+        rec = doc.get('records', {}) or {}
+        tcs = rec.get('TropicalCyclones') or {}
+        lst = tcs.get('TropicalCyclone') or []
+        if isinstance(lst, dict): lst = [lst]
+        out = []
+        for ty in lst:
+            ana = (ty.get('AnalysisData') or {}).get('Fix') or []
+            if isinstance(ana, dict): ana = [ana]
+            fcs = (ty.get('ForecastData') or {}).get('Fix') or []
+            if isinstance(fcs, dict): fcs = [fcs]
+            past = []
+            for f in ana:
+                lng, lat = _f(f.get('CoordinateLongitude')), _f(f.get('CoordinateLatitude'))
+                if lng is None or lat is None: continue
+                past.append({
+                    't': f.get('DateTime',''), 'lng': lng, 'lat': lat,
+                    'ws': _i(f.get('MaxWindSpeed')), 'gust': _i(f.get('MaxGustSpeed')),
+                    'p': _i(f.get('Pressure')),
+                    'r15': _radius(f.get('Circle15ms')), 'r25': _radius(f.get('Circle25ms')),
+                })
+            fut = []
+            for f in fcs:
+                lng, lat = _f(f.get('CoordinateLongitude')), _f(f.get('CoordinateLatitude'))
+                if lng is None or lat is None: continue
+                fut.append({
+                    'init': f.get('InitialTime',''), 'fh': _i(f.get('ForecastHour')),
+                    'lng': lng, 'lat': lat,
+                    'ws': _i(f.get('MaxWindSpeed')), 'gust': _i(f.get('MaxGustSpeed')),
+                    'p': _i(f.get('Pressure')),
+                    'mspd': _i(f.get('MovingSpeed')), 'mdir': f.get('MovingDirection',''),
+                    'r15': _radius(f.get('Circle15ms')), 'r25': _radius(f.get('Circle25ms')),
+                    'r70': _i(f.get('Radius70PercentProbability')),
+                })
+            if not past and not fut: continue
+            cur = past[-1] if past else None
+            out.append({
+                'name_en': ty.get('TyphoonName',''),
+                'name_zh': ty.get('CwaTyphoonName',''),
+                'ty_no': ty.get('CwaTyNo',''), 'td_no': ty.get('CwaTdNo',''),
+                'year': ty.get('Year',''),
+                'current': cur, 'past': past, 'forecast': fut,
+            })
+        if out:
+            for t in out:
+                c = t.get('current') or {}
+                print(f"    {t['name_zh']}({t['name_en']}) 編號{t['ty_no']}："
+                      f"現在 {c.get('lat')}N/{c.get('lng')}E 風速{c.get('ws')}m/s "
+                      f"氣壓{c.get('p')}hPa｜過去{len(t['past'])}點、預報{len(t['forecast'])}點")
+        else:
+            print("    目前無活動中熱帶氣旋")
+        return out
+    except Exception as e:
+        print(f"    解析失敗：{e}")
+        return []
+
+
 def fetch_typhoon_qpf():
     if not CWA_API_KEY: return []
     print("抓取颱風 QPF（F-C0041）...")
@@ -1680,6 +1771,7 @@ def main():
 
     # 颱風 QPF（先抓，決定 is_typhoon 旗標）
     typhoon_segs = fetch_typhoon_qpf() if CWA_API_KEY else []
+    typhoon_track = fetch_typhoon_track() if CWA_API_KEY else []
     is_typhoon   = len(typhoon_segs) >= 4
 
     # 常態 CWA QPF（官方預報員修正值；治本預測偏差）——任何時候都跑，
@@ -2017,6 +2109,7 @@ def main():
         'source':'CWA_OBS+POP' if stations else 'DEMO',
         'cwa_qpf_active': bool(is_typhoon or routine_seg_map),  # True=前48h已覆蓋CWA官方QPF
         'radar_qpf_time': radar_dt,   # F-B0046 未來1h雷達QPF 發布時間（空=本次未取得）
+        'typhoon_track': typhoon_track,  # W-C0034-005 颱風過去軌跡＋預報路徑（無颱風＝[]）
         # 模式：typhoon(精確格點) / typhoon+routine_png(颱風段精確+其餘段圖判讀) /
         #       routine(格點) / routine_png(全圖判讀近似)
         'cwa_qpf_mode': (

@@ -135,6 +135,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bWarn"  onclick="setMode('warn')" style="border-color:#3a8a5a;color:#7ee8a8">警特報</button>
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
         style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
+      <button class="b"    id="bTyphoon" onclick="toggleTyphoonLayer()"
+        style="border-color:#8a3a9a;color:#c88ae8">🌀 颱風路徑</button>
     </div>
   </div>
   <div class="ctrl-row">
@@ -2174,6 +2176,12 @@ async function tryLoadLive(){
     // CWA QPF 資料來源標示（供內部快取鍵/邏輯使用；不對使用者顯示採用了什麼）
     _cwaQpfActive = !!d.cwa_qpf_active;
     window._dataGenAt = d.generated_at || '';  // 供各面板快取鍵使用
+    // 颱風路徑（W-C0034-005）：無颱風時為空陣列
+    window.TYPHOON_TRACK = d.typhoon_track || [];
+    if(window.TYPHOON_TRACK.length){
+      console.log('颱風路徑載入：', window.TYPHOON_TRACK.map(t=>t.name_zh).join('、'));
+    }
+    if(typeof showTyphoon !== 'undefined' && showTyphoon) renderTyphoonLayer();
 
     // ── 雷達1h QPF：獨立讀 radar.json（由每小時腳本寫，與 data.json 分離避免競態）──
     let _radarDt = d.radar_qpf_time || '';
@@ -3311,6 +3319,92 @@ let showDisaster = false;
 let disasterLayer = null;
 let disasterPanelOpen = true;
 
+// ── 颱風路徑圖層（W-C0034-005：過去軌跡＋預報路徑＋暴風圈）──
+let showTyphoon = false, typhoonLayer = null;
+function toggleTyphoonLayer(){
+  showTyphoon = !showTyphoon;
+  const btn = document.getElementById('bTyphoon');
+  if(btn) btn.classList.toggle('on', showTyphoon);
+  renderTyphoonLayer();
+}
+function _tyIntensity(ws){
+  // 依近中心最大風速(m/s)分級（CWA：輕度17.2+、中度32.7+、強烈51.0+）
+  if(ws == null) return {name:'熱帶低壓', color:'#7ec8e3'};
+  if(ws >= 51.0) return {name:'強烈颱風', color:'#c0006e'};
+  if(ws >= 32.7) return {name:'中度颱風', color:'#e8453c'};
+  if(ws >= 17.2) return {name:'輕度颱風', color:'#f5a623'};
+  return {name:'熱帶低壓', color:'#7ec8e3'};
+}
+function renderTyphoonLayer(){
+  if(typhoonLayer){ map.removeLayer(typhoonLayer); typhoonLayer=null; }
+  if(!showTyphoon) return;
+  const list = (window.TYPHOON_TRACK || []);
+  if(!list.length){
+    if(typeof showToast === 'function') showToast('目前無活動中颱風');
+    else console.log('目前無活動中颱風');
+    return;
+  }
+  typhoonLayer = L.layerGroup().addTo(map);
+  list.forEach(ty=>{
+    const past = ty.past || [], fut = ty.forecast || [], cur = ty.current;
+    // (1) 過去軌跡：灰白實線
+    if(past.length > 1){
+      L.polyline(past.map(p=>[p.lat,p.lng]),
+        {color:'#000', weight:4, opacity:0.5, interactive:false}).addTo(typhoonLayer);
+      L.polyline(past.map(p=>[p.lat,p.lng]),
+        {color:'#ffffff', weight:2, opacity:0.95, interactive:false}).addTo(typhoonLayer);
+    }
+    // (2) 過去定位點：小圓（依強度上色）
+    past.forEach((p,i)=>{
+      if(i % 2 && i !== past.length-1) return;   // 每12h一點，避免過密
+      const it = _tyIntensity(p.ws);
+      L.circleMarker([p.lat,p.lng], {radius:3, color:'#333', weight:1,
+        fillColor:it.color, fillOpacity:0.9})
+        .bindTooltip(`${ty.name_zh} ${p.t ? p.t.slice(5,16).replace('T',' ') : ''}<br>` +
+                     `${it.name}｜風速 ${p.ws ?? '—'} m/s｜氣壓 ${p.p ?? '—'} hPa`,
+                     {sticky:true}).addTo(typhoonLayer);
+    });
+    // (3) 預報路徑：紅色虛線（從現在位置接出去）
+    if(fut.length){
+      const head = cur ? [[cur.lat,cur.lng]] : [];
+      L.polyline(head.concat(fut.map(f=>[f.lat,f.lng])),
+        {color:'#ff2d2d', weight:2.5, opacity:0.95, dashArray:'8,6',
+         interactive:false}).addTo(typhoonLayer);
+    }
+    // (4) 預報點：70%機率圈 + 標記
+    fut.forEach(f=>{
+      if(f.r70){
+        L.circle([f.lat,f.lng], {radius:f.r70*1000, color:'#ff2d2d', weight:1,
+          opacity:0.5, fillColor:'#ff2d2d', fillOpacity:0.05,
+          interactive:false}).addTo(typhoonLayer);
+      }
+      const it = _tyIntensity(f.ws);
+      L.circleMarker([f.lat,f.lng], {radius:4, color:'#ff2d2d', weight:1.5,
+        fillColor:it.color, fillOpacity:0.85})
+        .bindTooltip(`${ty.name_zh} 預報 +${f.fh}h<br>${it.name}｜風速 ${f.ws ?? '—'} m/s｜` +
+                     `氣壓 ${f.p ?? '—'} hPa<br>70%機率半徑 ${f.r70 ?? '—'} km`,
+                     {sticky:true}).addTo(typhoonLayer);
+    });
+    // (5) 現在位置：暴風圈 + 颱風符號
+    if(cur){
+      if(cur.r15) L.circle([cur.lat,cur.lng], {radius:cur.r15*1000, color:'#f5a623',
+        weight:1.5, opacity:0.8, fillColor:'#f5a623', fillOpacity:0.10,
+        interactive:false}).addTo(typhoonLayer);   // 七級風(15m/s)
+      if(cur.r25) L.circle([cur.lat,cur.lng], {radius:cur.r25*1000, color:'#e8453c',
+        weight:1.5, opacity:0.9, fillColor:'#e8453c', fillOpacity:0.16,
+        interactive:false}).addTo(typhoonLayer);   // 十級風(25m/s)
+      const it = _tyIntensity(cur.ws);
+      L.marker([cur.lat,cur.lng], {icon: L.divIcon({className:'', html:
+        `<div style="font-size:22px;line-height:22px;text-shadow:0 0 3px #000">🌀</div>`,
+        iconSize:[22,22], iconAnchor:[11,11]})})
+        .bindTooltip(`<b>${ty.name_zh}（${ty.name_en}）</b> 編號 ${ty.ty_no}<br>` +
+                     `${it.name}｜風速 ${cur.ws ?? '—'} m/s｜陣風 ${cur.gust ?? '—'} m/s<br>` +
+                     `氣壓 ${cur.p ?? '—'} hPa<br>` +
+                     `七級風半徑 ${cur.r15 ?? '—'} km｜十級風半徑 ${cur.r25 ?? '—'} km`,
+                     {sticky:true, direction:'top'}).addTo(typhoonLayer);
+    }
+  });
+}
 function toggleDisasterLayer(){
   showDisaster = !showDisaster;
   const btn = document.getElementById('bDisaster');
