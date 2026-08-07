@@ -57,6 +57,58 @@ def _stn_key(n):
     return _re.sub(r'[A-Za-z]+$', '', (n or '').strip()).strip()
 
 
+def fetch_debris_alerts():
+    """土石流警戒研判（依官方標準，以水保署 API 逐潛勢溪流計算）。
+      紅色警戒：實際有效累積雨量(ETR2) ≥ 警戒值 → 強制/勸告撤離
+      黃色警戒：預測雨量(ETR2＋未來QPF) ≥ 警戒值 → 疏散避難勸告
+    本函式先算「紅色」與「達成率」；黃色需未來QPF，於主流程併入。
+    回傳 {DebrisNO: {...}}；失敗回 {}。"""
+    def num(v):
+        try: return float(v)
+        except: return None
+    print("土石流警戒研判（水保署潛勢溪流）...")
+    data = None
+    for attempt in range(3):
+        try:
+            r = requests.get(SWCB_RAIN_URL, timeout=60)
+            if r.status_code != 200:
+                if attempt < 2: time.sleep(3); continue
+                return {}
+            data = json.loads(r.content.decode('utf-8', 'replace'))
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return {}
+            time.sleep(3)
+    if not data: return {}
+
+    out = {}
+    n_red = 0
+    for row in data:
+        no = row.get('DebrisNO')
+        if not no: continue
+        av = num(row.get('AlertValue'))
+        if not av or av <= 0: continue
+        # 兩支參考站取較高的 ETR2（保守，不漏報）
+        cands = []
+        for nk, vk in [('STName1','STRT1'), ('STName2','STRT2')]:
+            v = num(row.get(vk))
+            if v is not None: cands.append((v, (row.get(nk) or '').strip()))
+        if not cands: continue
+        etr2, stn = max(cands)
+        pct = round(etr2/av, 4)
+        red = etr2 >= av
+        if red: n_red += 1
+        out[no] = {
+            'county': row.get('County',''), 'town': row.get('Town',''),
+            'vill': row.get('Vill',''),
+            'alert': av, 'etr2': round(etr2, 1), 'pct': pct,
+            'station': stn, 'red': red,
+        }
+    print(f"    {len(out)} 條潛勢溪流｜達紅色警戒（ETR2≥警戒值）：{n_red} 條")
+    return out
+
+
 def fetch_swcb_etr2():
     """抓水保署土石流參考雨量站 API → 回傳「站名 → ETR2(mm)」對照表。
     STRT = 該站有效累積雨量（官方同源）。含原名與正規化名兩種鍵以利對站。
@@ -1772,6 +1824,7 @@ def main():
     # 颱風 QPF（先抓，決定 is_typhoon 旗標）
     typhoon_segs = fetch_typhoon_qpf() if CWA_API_KEY else []
     typhoon_track = fetch_typhoon_track() if CWA_API_KEY else []
+    debris_alerts = fetch_debris_alerts()
     is_typhoon   = len(typhoon_segs) >= 4
 
     # 常態 CWA QPF（官方預報員修正值；治本預測偏差）——任何時候都跑，
@@ -2103,13 +2156,35 @@ def main():
             'daily_rain': obs.get('daily_rain', [0.0]*15),
         })
 
+    # ── 土石流黃色警戒：預測雨量(ETR2＋未來24h QPF) ≥ 警戒值 ──
+    #   官方定義：黃色＝預測達標（疏散勸告）、紅色＝實際達標（強制撤離）
+    if debris_alerts:
+        _tq = {}
+        for _t in out_towns:
+            _k = _t['county'] + _t['township']
+            _q = _t.get('qpf_24h')
+            if _q is not None: _tq[_k] = _q
+        _ny = 0
+        for _no, _d in debris_alerts.items():
+            _q24 = _tq.get(_d['county'] + _d['town'], 0) or 0
+            _d['qpf24'] = round(_q24, 1)
+            _fc = _d['etr2'] + _q24
+            _d['fc_etr2'] = round(_fc, 1)
+            _d['fc_pct'] = round(_fc / _d['alert'], 4) if _d['alert'] > 0 else None
+            _d['yellow'] = (not _d['red']) and _fc >= _d['alert']
+            if _d['yellow']: _ny += 1
+        _nr = sum(1 for _d in debris_alerts.values() if _d['red'])
+        print(f"  土石流警戒：紅色 {_nr} 條、黃色 {_ny} 條（黃＝ETR2＋未來24hQPF 達警戒值）")
+
     output={
+
         'base_time':base_time_str,
         'generated_at':now_tpe.strftime('%Y-%m-%dT%H:%M:%S'),
         'source':'CWA_OBS+POP' if stations else 'DEMO',
         'cwa_qpf_active': bool(is_typhoon or routine_seg_map),  # True=前48h已覆蓋CWA官方QPF
         'radar_qpf_time': radar_dt,   # F-B0046 未來1h雷達QPF 發布時間（空=本次未取得）
         'typhoon_track': typhoon_track,  # W-C0034-005 颱風過去軌跡＋預報路徑（無颱風＝[]）
+        'debris_alerts': debris_alerts,   # 土石流逐潛勢溪流警戒研判（紅/黃）
         # 模式：typhoon(精確格點) / typhoon+routine_png(颱風段精確+其餘段圖判讀) /
         #       routine(格點) / routine_png(全圖判讀近似)
         'cwa_qpf_mode': (
