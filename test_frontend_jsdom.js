@@ -343,6 +343,47 @@ if (need('_lsRows')) {
   chk('排序：推估最後', only[2].no, 'A2');
 }
 
+// ════════ 7. 海警線等值線與縣市涵蓋 ════════
+console.log('\n=== 100km 海警線等值線 ===');
+if (need('_seaLineSegs')) {
+  const t0 = Date.now();
+  const segs = G._seaLineSegs();
+  console.log(`   ${segs.length} 段，耗時 ${Date.now() - t0}ms`);
+  if (!(segs.length > 100)) fails.push(`海警線段數過少（${segs.length}）`);
+  else console.log('  OK  等值線段數合理');
+  // 等值線上的點，距陸地應接近 100km（這是「畫的線＝判定的線」的驗證）
+  let worst = 0;
+  const sample = segs.filter((_, i) => i % Math.max(1, Math.floor(segs.length / 40)) === 0);
+  sample.forEach(sg => {
+    sg.forEach(p => {
+      const d = G._distToTaiwanKm(p[0], p[1]);
+      worst = Math.max(worst, Math.abs(d - 100));
+    });
+  });
+  console.log(`   抽樣 ${sample.length} 段，距陸地與 100km 的最大偏差 = ${worst.toFixed(1)}km`);
+  if (!(worst < 5)) fails.push(`等值線偏差過大 ${worst.toFixed(1)}km`);
+  else console.log('  OK  等值線確實落在 100km 附近（畫的線＝判定用的線）');
+}
+
+console.log('\n=== _countiesInRadius：觸陸後列出涵蓋縣市 ===');
+if (need('_countiesInRadius')) {
+  // 中心放在臺灣正中央、半徑 300km → 應涵蓋多個縣市
+  const many = G._countiesInRadius(23.8, 121.0, 300);
+  console.log(`   (23.8N,121.0E) r=300km → ${many.length} 縣市：${many.slice(0, 8).join('、')}…`);
+  if (!(many.length >= 10)) fails.push('300km 應涵蓋 10 個以上縣市');
+  else console.log('  OK  大範圍涵蓋多縣市');
+  // 半徑 0 / 負值 → 空
+  chk('r=0 回空', G._countiesInRadius(23.8, 121.0, 0), []);
+  chk('r=null 回空', G._countiesInRadius(23.8, 121.0, null), []);
+  // 遠方小圈 → 空
+  chk('遠方小圈回空', G._countiesInRadius(26.9, 126.6, 50), []);
+  // 恆春半島小圈 → 應含屏東縣
+  const ken = G._countiesInRadius(22.0, 120.75, 40);
+  console.log(`   (22.0N,120.75E) r=40km → ${ken.join('、') || '(空)'}`);
+  if (!ken.includes('屏東縣')) fails.push('恆春半島 40km 應含屏東縣');
+  else console.log('  OK  小範圍定位正確');
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

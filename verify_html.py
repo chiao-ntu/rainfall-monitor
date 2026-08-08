@@ -58,6 +58,14 @@ stale = re.findall(r'🌀 颱風路徑', s)
 if stale:
     fail.append('殘留舊名「🌀 颱風路徑」'); print('!! 殘留舊名 ×', len(stale))
 
+# --- 6. 漏空格的宣告（node --check 抓不到：`const深 = {}` 會變成隱式全域）---
+#   實際踩過：`const深 = {}` 語法合法，但宣告的是名為 const深 的變數，
+#   後續引用 深 會 ReferenceError。只有執行期測試才會發現，故在此靜態掃描。
+for m in re.finditer(r'\b(const|let|var)([^\sA-Za-z_$\(\[\{=/（\-])', js):
+    line = js[:m.start()].count('\n') + 1
+    fail.append(f'第{line}行 疑似漏空格宣告：{m.group(0)!r}')
+    print(f'!! 疑似漏空格宣告（第{line}行，抽出的JS）：{m.group(0)!r}')
+
 print(f'\n檔案 {len(s)//1024}KB、{s.count(chr(10))+1} 行')
 print('=== 全部通過 ===' if not fail else f'=== 失敗 {len(fail)} 項：{fail} ===')
 sys.exit(1 if fail else 0)

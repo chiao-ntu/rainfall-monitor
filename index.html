@@ -3732,17 +3732,49 @@ function _kmBetween(la1, lo1, la2, lo2){
   const a = Math.sin(dLa/2)**2 + Math.cos(la1*rad)*Math.cos(la2*rad)*Math.sin(dLo/2)**2;
   return 2*R*Math.asin(Math.min(1, Math.sqrt(a)));
 }
+// ── 海岸點空間索引（0.25° 格）──────────────────────────
+// 讓最近點查詢由 O(9495) 降到 O(附近數十點)，這樣「距離場」可以用**完整點集**計算，
+// 不必為了速度稀疏取樣——等值線才會真的等於警報判定用的那條線。
+const _TW_CELL = 0.25;                       // 度；緯向≈27.8km、經向≈24.7km(27°N)
+const _TW_CELL_MIN_KM = 24;                  // 保守下界（用於環搜尋的剪枝，不可高估）
+let _twGridCache = null;
+function _twGrid(){
+  if(_twGridCache) return _twGridCache;
+  const g = new Map();
+  const pts = _twLandPts();
+  pts.forEach(p=>{
+    const k = Math.floor(p[0]/_TW_CELL) + ',' + Math.floor(p[1]/_TW_CELL);
+    let arr = g.get(k); if(!arr){ arr = []; g.set(k, arr); }
+    arr.push(p);
+  });
+  _twGridCache = g;
+  return g;
+}
 function _distToTaiwanKm(lat, lng){
   const pts = _twLandPts();
   if(!pts.length) return null;
-  // 不做平面近似預篩：原本的預篩用固定 km/度係數，可能高估近似距離而把
-  // 真正的最近點剪掉（實測誤差 0.5km）。點集僅數千點、且結果有快取，直接全掃。
+  const g = _twGrid();
+  const ci = Math.floor(lat/_TW_CELL), cj = Math.floor(lng/_TW_CELL);
   let best = Infinity;
-  for(let i=0;i<pts.length;i++){
-    const d = _kmBetween(lat, lng, pts[i][0], pts[i][1]);
-    if(d < best) best = d;
+  for(let r=0; r<200; r++){
+    // 環 r 之外的格子，最近可能距離至少 (r-1)*格寬；已優於此則可停止
+    if(best < Infinity && (r-1)*_TW_CELL_MIN_KM > best) break;
+    let touched = false;
+    for(let di=-r; di<=r; di++){
+      for(let dj=-r; dj<=r; dj++){
+        if(Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;   // 只掃最外環
+        const arr = g.get((ci+di) + ',' + (cj+dj));
+        if(!arr) continue;
+        touched = true;
+        for(let k=0;k<arr.length;k++){
+          const d = _kmBetween(lat, lng, arr[k][0], arr[k][1]);
+          if(d < best) best = d;
+        }
+      }
+    }
+    if(!touched && best === Infinity && r > 80) break;              // 極遠點的保險
   }
-  return best;
+  return best === Infinity ? null : best;
 }
 
 // ── 颱風關鍵時間點 ─────────────────────────────────────
@@ -3831,6 +3863,91 @@ function _tyKeyPoints(ty){
   return {points, times, path};
 }
 
+// ── 縣市查詢：暴風圈已涵蓋哪些縣市（觸陸後 tooltip 用）──
+let _twCountyPtsCache = null;
+function _twCountyPts(){
+  if(_twCountyPtsCache) return _twCountyPtsCache;
+  const pts = [];
+  const GEO = (typeof TOWN_GEO !== 'undefined') ? TOWN_GEO : null;
+  if(GEO && GEO.features){
+    GEO.features.forEach(f=>{
+      const cty = (f.properties||{}).COUNTYNAME || '';
+      const g = f.geometry; if(!g || !cty) return;
+      const polys = g.type === 'Polygon' ? [g.coordinates]
+                  : g.type === 'MultiPolygon' ? g.coordinates : [];
+      polys.forEach(poly=>{
+        (poly[0]||[]).forEach((c,i)=>{
+          if(i % 12 !== 0) return;                     // 只判斷「有無涵蓋」，取樣可更疏
+          if(_inWarnScope(c[1], c[0])) pts.push([c[1], c[0], cty]);
+        });
+      });
+    });
+  }
+  _twCountyPtsCache = pts;
+  return pts;
+}
+// 回傳暴風圈(半徑 rKm)涵蓋到的縣市清單（依最深入程度排序）
+function _countiesInRadius(lat, lng, rKm){
+  if(!rKm || rKm <= 0) return [];
+  const pts = _twCountyPts();
+  const depth = {};                 // 縣市 → 深入暴風圈的最大距離(km)
+  for(let i=0;i<pts.length;i++){
+    const d = _kmBetween(lat, lng, pts[i][0], pts[i][1]);
+    if(d <= rKm){
+      const cty = pts[i][2], pen = rKm - d;
+      if(!(cty in depth) || pen > depth[cty]) depth[cty] = pen;
+    }
+  }
+  return Object.keys(depth).sort((a,b)=>depth[b]-depth[a]);
+}
+
+// ── 100km 海警線（marching squares 等距線）──────────────
+// ★ 直接對「同一個 _distToTaiwanKm 距離場」取 100km 等值線，
+//   所以畫在地圖上的線就是警報判定實際用的那條線，視覺與計算不可能不一致。
+let _seaLineCache = null;
+function _seaLineSegs(){
+  if(_seaLineCache) return _seaLineCache;
+  if(!_twLandPts().length){ _seaLineCache = []; return _seaLineCache; }
+  // ★ 距離場一律用 _distToTaiwanKm 本身（完整 9495 點＋空間索引）計算。
+  //   早期為求速度把海岸點稀疏 6 倍，導致等值線與判定用的距離最大差 22.7km——
+  //   那就不能說「畫的線＝判定的線」。改用空間索引後全點集也夠快。
+  const LA0 = 20.6, LA1 = 27.4, LO0 = 116.6, LO1 = 123.6, STEP = 0.04;
+  const nx = Math.round((LO1-LO0)/STEP)+1, ny = Math.round((LA1-LA0)/STEP)+1;
+  const fld = new Float32Array(nx*ny);
+  for(let j=0;j<ny;j++){
+    const la = LA0 + j*STEP;
+    for(let i=0;i<nx;i++){
+      const d = _distToTaiwanKm(la, LO0 + i*STEP);
+      fld[j*nx+i] = (d == null ? 9999 : d) - TY_SEA_KM;   // 等值線取 0
+    }
+  }
+  // marching squares：對每個格子的四邊做線性內插求交點，輸出線段
+  const segs = [];
+  const P = (i,j)=>[LA0 + j*STEP, LO0 + i*STEP];
+  const mid = (a,b,va,vb)=>{
+    const t = va/(va-vb);
+    return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t];
+  };
+  for(let j=0;j<ny-1;j++){
+    for(let i=0;i<nx-1;i++){
+      const v0 = fld[j*nx+i], v1 = fld[j*nx+i+1],
+            v2 = fld[(j+1)*nx+i+1], v3 = fld[(j+1)*nx+i];
+      const c0 = P(i,j), c1 = P(i+1,j), c2 = P(i+1,j+1), c3 = P(i,j+1);
+      const code = (v0<0?1:0) | (v1<0?2:0) | (v2<0?4:0) | (v3<0?8:0);
+      if(code === 0 || code === 15) continue;
+      const e = [];
+      if((v0<0) !== (v1<0)) e.push(mid(c0,c1,v0,v1));
+      if((v1<0) !== (v2<0)) e.push(mid(c1,c2,v1,v2));
+      if((v2<0) !== (v3<0)) e.push(mid(c2,c3,v2,v3));
+      if((v3<0) !== (v0<0)) e.push(mid(c3,c0,v3,v0));
+      for(let k=0;k+1<e.length;k+=2) segs.push([e[k], e[k+1]]);
+    }
+  }
+  _seaLineCache = segs;
+  console.log(`100km 海警線等值線：${segs.length} 段（格網 ${nx}×${ny}，完整海岸點集）`);
+  return _seaLineCache;
+}
+
 function toggleTyphoonLayer(){
   showTyphoon = !showTyphoon;
   const btn = document.getElementById('bTyphoon');
@@ -3849,13 +3966,29 @@ function _tyIntensity(ws){
 function renderTyphoonLayer(){
   if(typhoonLayer){ map.removeLayer(typhoonLayer); typhoonLayer=null; }
   if(!showTyphoon) return;
+  typhoonLayer = L.layerGroup().addTo(map);
+
+  // 100km 海警線＋經緯度虛線格網（參考 NCDR 呈現）。
+  // ★ 畫在逐颱風迴圈之外：沒有颱風時也要看得到判準線。
+  _seaLineSegs().forEach(sg=>{
+    L.polyline([sg[0], sg[1]], {color:'#e8e83a', weight:1.4, opacity:0.85,
+      interactive:false}).addTo(typhoonLayer);
+  });
+  for(let la=20; la<=28; la++){
+    L.polyline([[la,116],[la,126]], {color:'#8a8a6a', weight:0.6, opacity:0.45,
+      dashArray:'4,6', interactive:false}).addTo(typhoonLayer);
+  }
+  for(let lo=116; lo<=126; lo++){
+    L.polyline([[20,lo],[28,lo]], {color:'#8a8a6a', weight:0.6, opacity:0.45,
+      dashArray:'4,6', interactive:false}).addTo(typhoonLayer);
+  }
+
   const list = (window.TYPHOON_TRACK || []);
   if(!list.length){
-    if(typeof showToast === 'function') showToast('目前無活動中颱風');
-    else console.log('目前無活動中颱風');
+    if(typeof showToast === 'function') showToast('目前無活動中颱風（僅顯示100km海警線）');
+    else console.log('目前無活動中颱風（僅顯示100km海警線）');
     return;
   }
-  typhoonLayer = L.layerGroup().addTo(map);
   list.forEach(ty=>{
     const past = ty.past || [], fut = ty.forecast || [], cur = ty.current;
     // (1) 過去軌跡：灰白實線
@@ -3914,35 +4047,47 @@ function renderTyphoonLayer(){
                      `七級風半徑 ${cur.r15 ?? '—'} km｜十級風半徑 ${cur.r25 ?? '—'} km`,
                      {sticky:true, direction:'top'}).addTo(typhoonLayer);
     }
-    // (6) 關鍵時間點：只畫警報觸及/脫離與強度升降階，其餘忽略（避免雜訊）
+    // (6) 關鍵時間點：以「編號徽章」呈現，細節放 tooltip 與左側清單。
+    //     不用彩色小字＋文字陰影——縮放時字級不變、疊在深色底圖上很難讀。
+    //     （海警線與經緯度格網已在函式開頭畫過，無颱風時也要顯示，故不在此迴圈內）
     const kp = _tyKeyPoints(ty);
-    (kp.points||[]).forEach(pt=>{
+    (kp.points||[]).forEach((pt, idx)=>{
       const st = TY_KIND_STYLE[pt.kind] || TY_KIND_STYLE.grade;
       const it = _tyIntensity(pt.ws);
+      const n = idx + 1;
       const tm = `${pt.time.getMonth()+1}/${pt.time.getDate()} ` +
                  `${String(pt.time.getHours()).padStart(2,'0')}:00`;
-      // 七級風圈（虛線）＋十級風圈（較密虛線）——兩個都畫
+      // 觸陸後直接列出暴風圈涵蓋的縣市，而不是報一個負的「距陸地」
+      let reach;
+      if(pt.edge == null){
+        reach = '暴風圈資料不足';
+      }else if(pt.edge > 0){
+        reach = `暴風圈邊緣距陸地 ${Math.round(pt.edge)} km`;
+      }else{
+        const ctys = _countiesInRadius(pt.lat, pt.lng, pt.r15);
+        reach = ctys.length
+          ? `<b style="color:#ffb0b0">暴風圈已涵蓋：${ctys.join('、')}</b>`
+          : '<b style="color:#ffb0b0">暴風圈已觸及陸地</b>';
+      }
+      const tip =
+        `<div style="font-size:12px"><b>${n}. ${pt.label}</b><br>` +
+        `<span style="font-size:11px;color:#666">${tm}（+${pt.fh}h，系統推估）</span><br>` +
+        `${it.name}｜風速 ${pt.ws==null?'—':Math.round(pt.ws)} m/s（陣風 ` +
+        `${pt.gust==null?'—':Math.round(pt.gust)}）｜氣壓 ${pt.p==null?'—':Math.round(pt.p)} hPa<br>` +
+        `七級風半徑 ${pt.r15==null?'—':Math.round(pt.r15)} km｜` +
+        `十級風半徑 ${pt.r25==null?'—':Math.round(pt.r25)} km<br>${reach}</div>`;
+
       if(pt.r15) L.circle([pt.lat,pt.lng], {radius: pt.r15*1000, color: st.color,
-        weight:1.2, opacity:0.55, dashArray:'6,6', fill:false,
-        interactive:false}).addTo(typhoonLayer);
+        weight:1.2, opacity:0.5, dashArray:'6,6', fill:false, interactive:false}).addTo(typhoonLayer);
       if(pt.r25) L.circle([pt.lat,pt.lng], {radius: pt.r25*1000, color: st.color,
-        weight:1.2, opacity:0.75, dashArray:'2,4', fill:false,
-        interactive:false}).addTo(typhoonLayer);
-      L.circleMarker([pt.lat,pt.lng], {radius:6, color:st.color, weight:2.2,
-        fillColor:'#fff', fillOpacity:0.9})
-        .bindTooltip(
-          `<b>${st.icon} ${pt.label}</b><br>${tm}（+${pt.fh}h）<br>` +
-          `${it.name}｜風速 ${pt.ws==null?'—':Math.round(pt.ws)} m/s｜` +
-          `陣風 ${pt.gust==null?'—':Math.round(pt.gust)} m/s<br>` +
-          `氣壓 ${pt.p==null?'—':Math.round(pt.p)} hPa<br>` +
-          `七級風半徑 ${pt.r15==null?'—':Math.round(pt.r15)} km｜` +
-          `十級風半徑 ${pt.r25==null?'—':Math.round(pt.r25)} km<br>` +
-          `暴風圈邊緣距陸地 ${pt.edge==null?'—':Math.round(pt.edge)} km`,
-          {sticky:true, direction:'top'}).addTo(typhoonLayer);
+        weight:1.2, opacity:0.7, dashArray:'2,4', fill:false, interactive:false}).addTo(typhoonLayer);
       L.marker([pt.lat,pt.lng], {icon: L.divIcon({className:'', html:
-        `<div style="font-size:9px;font-weight:700;color:${st.color};white-space:nowrap;
-          text-shadow:0 0 3px #000,0 0 2px #000;transform:translate(9px,-6px)">${st.icon}${tm}</div>`,
-        iconSize:[0,0], iconAnchor:[0,0]}), interactive:false}).addTo(typhoonLayer);
+        `<div style="width:18px;height:18px;border-radius:50%;background:${st.color};
+          border:2px solid #fff;box-sizing:border-box;color:#fff;font-size:11px;
+          font-weight:700;line-height:14px;text-align:center;font-family:system-ui,sans-serif;
+          box-shadow:0 1px 3px rgba(0,0,0,.6)">${n}</div>`,
+        iconSize:[18,18], iconAnchor:[9,9]})})
+        .bindTooltip(tip, {sticky:true, direction:'top'}).addTo(typhoonLayer);
     });
   });
   renderTyphoonLegend();
@@ -3969,9 +4114,19 @@ function renderTyphoonLegend(){
     ['#8a3a9a', '◆', '強度升降階'],
   ];
   let h = `<div style="font-weight:700;margin-bottom:4px">🌀 颱風動態</div>`;
+  h += `<div style="margin-bottom:4px;padding-bottom:4px;border-bottom:1px solid #ccd">
+      <div style="display:flex;align-items:center;gap:5px"><svg width="22" height="8">
+        <line x1="0" y1="4" x2="22" y2="4" stroke="#c8c81a" stroke-width="1.8"/></svg>
+        <span>100km 海警線</span></div>
+      <div style="display:flex;align-items:center;gap:5px"><svg width="22" height="8">
+        <line x1="0" y1="4" x2="22" y2="4" stroke="#8a8a6a" stroke-width="1"
+          stroke-dasharray="4,6"/></svg><span>經緯度格網（1°）</span></div>
+    </div>
+    <div style="font-weight:700;margin-bottom:2px">關鍵時間點（編號對應地圖徽章）</div>`;
   rows.forEach(([c,ic,txt])=>{
-    h += `<div style="display:flex;align-items:center;gap:5px;line-height:1.5">
-      <span style="color:${c};font-weight:700;width:12px;text-align:center">${ic}</span>
+    h += `<div style="display:flex;align-items:center;gap:5px;line-height:1.6">
+      <span style="width:13px;height:13px;border-radius:50%;background:${c};
+        border:1.5px solid #fff;box-sizing:border-box;box-shadow:0 0 0 1px #99a"></span>
       <span>${txt}</span></div>`;
   });
   h += `<div style="margin-top:5px;padding-top:4px;border-top:1px solid #ccd">
@@ -4380,6 +4535,12 @@ function _heavyRainLine(){
   return rows.map(r=>r.html).join('、');
 }
 
+// 四個警報時間的配色，與地圖徽章語意一致
+const TY_TIME_STYLE = {
+  '預計發布海警時間': '#1e6fd9', '預計發布陸警時間': '#d92020',
+  '預計解除陸警時間': '#e8845a', '預計解除海警時間': '#6aa8e8',
+};
+
 function updateTyphoonPanel(){
   const body = document.getElementById('typhoon-panel-body');
   if(!body) return;
@@ -4390,72 +4551,96 @@ function updateTyphoonPanel(){
     return;
   }
   const th = window.HEAVY_RAIN_TH || 150;
+  const SEC = 'font-size:10px;font-weight:700;color:#8ab8d8;margin:6px 0 2px';
   let h = '';
 
-  // ── 官方警報單（原文照抄，不改寫）──
   warns.forEach(w=>{
-    const col = /陸上/.test(w.severity_level||w.headline||'') ? '#ff6a5a' : '#f5a623';
-    h += `<div style="margin-bottom:8px;border-left:3px solid ${col};padding-left:6px">`;
-    h += `<div style="font-weight:700;color:${col};font-size:11px">
-            ${w.severity_level || w.headline || '颱風警報'}
-            ${w.report_no ? `第${w.report_no}報` : ''}
-            ${w.name_zh ? `<span style="color:#e8c8ff">　${w.name_zh}</span>` : ''}</div>`;
-    h += `<div style="font-size:10px;color:#c8b8d8;margin:2px 0">
-            📅 發布時間：${(w.effective||'').replace('T',' ').slice(0,16) || '—'}
-            <span style="color:#7a6a8a">（${w.sender||'中央氣象署'}）</span></div>`;
-    h += `<div style="font-size:10px;color:#c8b8d8;margin:2px 0">
-            📍 雨勢較大地區（日累積≥${th}mm）：${_heavyRainLine()}</div>`;
-    h += `<div style="font-size:10px;color:#9a8aaa;margin-top:4px">📋 動態：</div>`;
-    // 系統推估的四個警報時間
+    const isLand = /陸上/.test(w.severity_level || w.headline || '');
+    const col = isLand ? '#ff6a5a' : '#f5a623';
+    // 標題列
+    h += `<div style="background:${col}22;border-left:3px solid ${col};padding:4px 6px;
+      border-radius:0 3px 3px 0;margin-bottom:4px">
+      <div style="font-weight:700;color:${col};font-size:12px">
+        ${w.severity_level || w.headline || '颱風警報'}
+        ${w.report_no ? `<span style="font-size:10px;font-weight:400">第${w.report_no}報</span>` : ''}</div>
+      <div style="font-size:11px;color:#e8c8ff;font-weight:700;margin-top:1px">
+        ${w.name_zh || ''}${w.name_en ? `<span style="color:#9a8aaa;font-weight:400"> ${w.name_en}</span>` : ''}
+        ${w.ty_no ? `<span style="color:#9a8aaa;font-weight:400">　編號 ${w.ty_no}</span>` : ''}</div>
+      <div style="font-size:10px;color:#b8a8c8;margin-top:1px">
+        發布 ${(w.effective||'').replace('T',' ').slice(0,16) || '—'}
+        <span style="color:#7a6a8a">${w.sender||'中央氣象署'}</span></div>
+    </div>`;
+
+    // 雨勢較大地區
+    h += `<div style="${SEC}">雨勢較大地區（日累積≥${th}mm）</div>
+      <div style="font-size:10px;color:#c8b8d8;line-height:1.5">${_heavyRainLine()}</div>`;
+
+    // 四個警報時間：一列一項，色塊左標，推估與已發布可一眼區分
+    h += `<div style="${SEC}">警報時間（系統依預報路徑推估）</div>`;
     _tyAlertTimes((window.TYPHOON_TRACK||[])[0] || {}).forEach(([k, v])=>{
-      h += `<div style="font-size:10px;color:#c8b8d8;padding-left:2px">
-              <span style="color:#8ab8d8">【${k}】</span>${v}</div>`;
+      const c = TY_TIME_STYLE[k] || '#8ab8d8';
+      const done = /已發布/.test(v);
+      h += `<div style="display:flex;gap:5px;align-items:baseline;font-size:10px;
+        line-height:1.5;padding:1px 0">
+        <span style="flex:0 0 3px;align-self:stretch;background:${c};border-radius:2px"></span>
+        <span style="flex:0 0 62px;color:#a8b8c8">${k.replace('預計','')}</span>
+        <span style="flex:1;color:${done ? '#8ae8a8' : '#d8c8e8'}">${v}</span></div>`;
     });
-    // 官方原文段落
+
+    // 官方原文段落：標題獨立一行，內文縮排，段間留白
+    h += `<div style="${SEC}">颱風警報單原文（中央氣象署）</div>`;
     (w.sections||[]).forEach(s=>{
-      h += `<div style="font-size:10px;color:#c8b8d8;padding-left:2px;margin-top:2px">
-              <span style="color:#8ab8d8">【${s.title}】</span>${s.value}</div>`;
+      h += `<div style="margin-bottom:3px">
+        <div style="font-size:10px;font-weight:700;color:#9ab8d8">${s.title}</div>
+        <div style="font-size:10px;color:#c8b8d8;line-height:1.55;padding-left:5px;
+          border-left:1px solid #3a2a4a">${s.value}</div></div>`;
     });
     if((w.areas||[]).length){
-      h += `<div style="font-size:9px;color:#7a6a8a;margin-top:3px">
-              官方警戒區域：${w.areas.join('、')}</div>`;
+      h += `<div style="font-size:9px;color:#7a6a8a;margin-top:2px">
+        官方警戒區域：${w.areas.join('、')}</div>`;
     }
-    h += '</div>';
   });
 
-  // ── 無警報但有活動中颱風：顯示軌跡摘要 ──
+  // 無警報但有活動中颱風
   if(!warns.length){
-    rows.forEach(({ty, cur, fut})=>{
+    rows.forEach(({ty, cur})=>{
       const it = _tyIntensity(cur.ws);
-      h += `<div style="margin-bottom:7px;border-left:3px solid ${it.color};padding-left:6px">
-        <div style="font-weight:700;color:#e8c8ff">${ty.name_zh}（${ty.name_en}）
-          <span style="color:#9a8aaa;font-weight:400">編號${ty.ty_no}</span></div>
-        <div style="color:${it.color};font-size:10px">${it.name}　<span style="color:#8a7a9a">尚未發布颱風警報</span></div>
-        <div style="font-size:10px;color:#c8b8d8">
+      h += `<div style="border-left:3px solid ${it.color};padding:3px 6px;margin-bottom:4px">
+        <div style="font-weight:700;color:#e8c8ff;font-size:11px">${ty.name_zh}
+          <span style="color:#9a8aaa;font-weight:400">${ty.name_en}　編號${ty.ty_no}</span></div>
+        <div style="color:${it.color};font-size:10px">${it.name}
+          <span style="color:#8a7a9a">　尚未發布颱風警報</span></div>
+        <div style="font-size:10px;color:#c8b8d8;line-height:1.5">
           中心 ${cur.lat ?? '—'}N / ${cur.lng ?? '—'}E<br>
           風速 <b>${cur.ws ?? '—'}</b> m/s（陣風 ${cur.gust ?? '—'}）｜氣壓 <b>${cur.p ?? '—'}</b> hPa<br>
-          七級風半徑 ${cur.r15 ?? '—'} km｜十級風半徑 ${cur.r25 ?? '—'} km
-        </div>`;
+          七級風半徑 ${cur.r15 ?? '—'} km｜十級風半徑 ${cur.r25 ?? '—'} km</div></div>`;
+      h += `<div style="${SEC}">警報時間（系統依預報路徑推估）</div>`;
       _tyAlertTimes(ty).forEach(([k, v])=>{
-        h += `<div style="font-size:10px;color:#c8b8d8"><span style="color:#8ab8d8">【${k}】</span>${v}</div>`;
+        const c = TY_TIME_STYLE[k] || '#8ab8d8';
+        h += `<div style="display:flex;gap:5px;align-items:baseline;font-size:10px;line-height:1.5">
+          <span style="flex:0 0 3px;align-self:stretch;background:${c};border-radius:2px"></span>
+          <span style="flex:0 0 62px;color:#a8b8c8">${k.replace('預計','')}</span>
+          <span style="flex:1;color:#d8c8e8">${v}</span></div>`;
       });
-      h += '</div>';
     });
   }
 
-  // ── 關鍵時間點清單（與地圖標示同源）──
+  // 關鍵時間點：編號與地圖徽章一致
   (window.TYPHOON_TRACK||[]).forEach(ty=>{
     const kp = _tyKeyPoints(ty);
     if(!(kp.points||[]).length) return;
-    h += `<div style="font-size:10px;color:#9a8aaa;margin-top:4px;border-top:1px solid #3a2a4a;padding-top:3px">
-            關鍵時間點（系統依預報路徑推估）</div>`;
-    kp.points.forEach(pt=>{
+    h += `<div style="${SEC}">關鍵時間點（編號對應地圖徽章）</div>`;
+    kp.points.forEach((pt, idx)=>{
       const st = TY_KIND_STYLE[pt.kind] || TY_KIND_STYLE.grade;
       const it = _tyIntensity(pt.ws);
-      h += `<div style="font-size:10px;color:#c8b8d8;padding-left:2px">
-        <span style="color:${st.color};font-weight:700">${st.icon}</span>
-        ${_tyFmt(pt.time)}　${pt.label}
-        <span style="color:#8a7a9a">（${it.name}／七級 ${pt.r15==null?'—':Math.round(pt.r15)}km／十級 ${pt.r25==null?'—':Math.round(pt.r25)}km）</span></div>`;
+      h += `<div style="display:flex;gap:5px;align-items:baseline;font-size:10px;
+        line-height:1.5;padding:1px 0">
+        <span style="flex:0 0 15px;height:15px;border-radius:50%;background:${st.color};
+          color:#fff;font-weight:700;text-align:center;line-height:15px;font-size:9px">${idx+1}</span>
+        <span style="flex:0 0 62px;color:#d8c8e8">${_tyFmt(pt.time)}</span>
+        <span style="flex:1;color:#c8b8d8">${pt.label}
+          <span style="color:#8a7a9a">${it.name}／七級 ${pt.r15==null?'—':Math.round(pt.r15)}km</span></span>
+      </div>`;
     });
   });
 
