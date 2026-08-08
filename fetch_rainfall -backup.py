@@ -12,8 +12,21 @@ from datetime import datetime, timezone, timedelta
 CWA_API_KEY  = os.environ.get("CWA_API_KEY", "")
 STATIC_FILE  = "etr2_static.json"
 SLOPE_WARN_FILE = "slope_warning_stations.json"  # 官方坡地警戒區→代表站+警戒值（改法B對齊）
+LS_WARN_FILE = "landslide_warning_stations.json"  # 官方大崩警戒區→代表站+警戒值（115年明細表）
 # 水保署土石流參考雨量站 API：直接回官方 ETR2(STRT)，涵蓋氣象署抓不到的自建站
 SWCB_RAIN_URL = "https://246.ardswc.gov.tw/webService/GetDebrisRainData.ashx"
+# ── 官方警戒（雙軌架構的「現況」側，權威值）──────────────
+#   現況紅/黃一律採官方發布值；系統只在「未來推估」側自行研判（明確標示推估）。
+SWCB_ALERT_URL   = "https://ls.ardswc.gov.tw/api/LandslideAlertOpenData"          # D=土石流 L=大崩
+SWCB_LSVAL_URL   = "https://246.ardswc.gov.tw/WebService/GetLSCountyTownAlertValueList.ashx"
+SWCB_EOCINFO_URL = "https://246.ardswc.gov.tw/webService/GetIDisasterInfo.ashx"   # 應變小組開設
+HEAVY_RAIN_COUNTY_TH = 150.0   # 「雨勢較大地區」縣市門檻：任一鄉鎮日累積達此值即納入
+HOURLY_FILE = "rain_hourly.json"   # 由 fetch_qpesums_hourly.py 每小時寫入（本腳本只讀）
+SWCB_STN_LOC = {}   # (縣市,鄉鎮) → {站名: ETR2}；由 fetch_swcb_etr2() 填充
+# 代表站對站層級的可讀名稱（log 與前端共用語彙）
+_LS_TIER_NAME = {'exact': '代表站精確', 'norm': '代表站正規化',
+                 'near_town': '同鄉鎮相似站', 'near_county': '同縣市相似站',
+                 'town': '退回鄉鎮值', 'none': '無值'}
 ALL_TOWNSHIPS_FILE = "all_townships.json"  # 全台368個行政區（含座標），不依賴是否有觀測站
 HISTORY_FILE = "obs_history.json"
 OUTPUT_FILE  = "data.json"
@@ -112,6 +125,10 @@ def fetch_debris_alerts():
 def fetch_swcb_etr2():
     """抓水保署土石流參考雨量站 API → 回傳「站名 → ETR2(mm)」對照表。
     STRT = 該站有效累積雨量（官方同源）。含原名與正規化名兩種鍵以利對站。
+    副作用：同時填充模組級 SWCB_STN_LOC（(縣市,鄉鎮) → {站名: ETR2}），
+      供大崩代表站找不到時「同鄉鎮／同縣市相似名」替代之用——這樣模糊比對
+      有地理範圍約束，不會把「大武」誤配到隔縣的「大武山」。
+      刻意用副作用而非改回傳值，以免動到 agg_obs 的呼叫介面。
     失敗回 {}（agg_obs 會退回以 CWA 觀測自算）。"""
     def num(v):
         try: return float(v)
@@ -134,14 +151,391 @@ def fetch_swcb_etr2():
     if not data:
         return {}
     st_val = {}
+    SWCB_STN_LOC.clear()
     for row in data:
+        _cty = (row.get('County') or '').strip()
+        _twn = (row.get('Town') or '').strip()
         for nk, vk in [('STName1','STRT1'), ('STName2','STRT2')]:
             nm = (row.get(nk) or '').strip(); v = num(row.get(vk))
             if not nm or v is None: continue
             st_val[nm] = v
             st_val.setdefault(_stn_key(nm), v)
-    print(f"    水保署ETR2：{len(data)} 條潛勢溪流、{len(st_val)} 個站名鍵")
+            if _cty and _twn:
+                SWCB_STN_LOC.setdefault((_cty, _twn), {})[nm] = v
+    print(f"    水保署ETR2：{len(data)} 條潛勢溪流、{len(st_val)} 個站名鍵、"
+          f"{len(SWCB_STN_LOC)} 個鄉鎮位置索引")
     return st_val
+
+
+# ══════════════════════════════════════════════════════════
+#  官方警戒（雙軌架構「現況」側）
+#    現況紅/黃 = 水保署官方發布值（權威，含報別）
+#    未來推估 = 系統自算（ETR2＋QPF，依技術指引門檻），一律標示為推估
+# ══════════════════════════════════════════════════════════
+def _swcb_json(url, label, tries=3, timeout=60):
+    """水保署系列 API 通用取用（回 list/dict；失敗回 None）。"""
+    for attempt in range(tries):
+        try:
+            r = requests.get(url, timeout=timeout)
+            if r.status_code != 200:
+                print(f"    {label} HTTP {r.status_code}")
+                if attempt < tries - 1: time.sleep(3); continue
+                return None
+            return json.loads(r.content.decode('utf-8', 'replace'))
+        except Exception as e:
+            print(f"    {label} 失敗（{attempt+1}/{tries}）：{e}")
+            if attempt == tries - 1: return None
+            time.sleep(3)
+    return None
+
+
+def fetch_official_alerts():
+    """水保署官方已發布之土石流／大規模崩塌紅黃警戒。
+    來源 ls.ardswc.gov.tw/api/LandslideAlertOpenData
+      AlertType D=土石流（DebrisNo）、L=大規模崩塌（LandslideID）
+      AlertLevel y=黃色警戒、r=紅色警戒
+    回傳 {'debris':{編號:{...}}, 'landslide':{編號:{...}}, 'report_id':..., 'updated':...}
+    無警戒時 API 可能回空陣列或錯誤物件 → 回空結構（非失敗）。"""
+    print("抓取官方土石流／大崩警戒（水保署 LandslideAlertOpenData）...")
+    data = _swcb_json(SWCB_ALERT_URL, "官方警戒")
+    out = {'debris': {}, 'landslide': {}, 'report_id': '', 'updated': '', 'ok': data is not None}
+    if data is None:
+        print("    取用失敗 → 現況警戒改以系統推估值代用（前端會標示為推估）")
+        return out
+    if isinstance(data, dict):
+        # 無警戒時可能回 {"errorMessage": "目前無警戒"}
+        if data.get('errorMessage'):
+            print(f"    {data.get('errorMessage')}")
+            return out
+        data = [data]
+    if not isinstance(data, list):
+        print(f"    非預期結構（{type(data).__name__}）→ 視為無警戒")
+        return out
+    for row in data:
+        if not isinstance(row, dict): continue
+        lvl = (row.get('AlertLevel') or '').strip().lower()
+        if lvl not in ('y', 'r'): continue
+        rec = {
+            'level': lvl,
+            'county': (row.get('County') or '').strip(),
+            'town':   (row.get('Town') or '').strip(),
+            'vill':   (row.get('Vill') or '').strip() or None,
+            'name':   (row.get('LandslideName') or '').strip() or None,
+            'updated': (row.get('LastUpdateDate') or '').strip(),
+            'report':  (row.get('ReportID') or '').strip(),
+        }
+        typ = (row.get('AlertType') or '').strip().upper()
+        no_d = (row.get('DebrisNo') or '').strip()
+        no_l = (row.get('LandslideID') or '').strip()
+        if typ == 'D' and no_d and no_d != '-':
+            out['debris'][no_d] = rec
+        elif typ == 'L' and no_l and no_l != '-':
+            out['landslide'][no_l] = rec
+        if rec['report'] and not out['report_id']: out['report_id'] = rec['report']
+        if rec['updated'] > out['updated']:        out['updated'] = rec['updated']
+    dr = sum(1 for v in out['debris'].values()    if v['level'] == 'r')
+    dy = sum(1 for v in out['debris'].values()    if v['level'] == 'y')
+    lr = sum(1 for v in out['landslide'].values() if v['level'] == 'r')
+    ly = sum(1 for v in out['landslide'].values() if v['level'] == 'y')
+    print(f"    官方警戒｜土石流 紅{dr}/黃{dy} 條、大崩 紅{lr}/黃{ly} 處"
+          f"（報別 {out['report_id'] or '—'}，更新 {out['updated'] or '—'}）")
+    return out
+
+
+def fetch_ls_alert_values():
+    """大規模崩塌潛勢區官方警戒值（GetLSCountyTownAlertValueList.ashx）。
+    逐潛勢區：LSNo / Name / AlertValue / Lng / Lat。新增潛勢區會自動出現，
+    故本表優先於 landslide_warning_stations.json 的靜態 alert 值。
+    回傳 {LSNo: {...}}；失敗回 {}。"""
+    print("抓取大崩潛勢區官方警戒值...")
+    data = _swcb_json(SWCB_LSVAL_URL, "大崩警戒值")
+    if not isinstance(data, list):
+        print("    取用失敗 → 改用 landslide_warning_stations.json 靜態警戒值")
+        return {}
+    out = {}
+    for row in data:
+        if not isinstance(row, dict): continue
+        no = (row.get('LSNo') or '').strip()
+        if not no: continue
+        try: av = float(row.get('AlertValue'))
+        except (TypeError, ValueError): continue
+        if av <= 0: continue
+        def _f(v):
+            try: return float(v)
+            except (TypeError, ValueError): return None
+        out[no] = {
+            'alert': av,
+            'name':  (row.get('Name') or '').strip(),
+            'county': (row.get('County') or '').strip(),
+            'town':   (row.get('Town') or '').strip(),
+            'lat': _f(row.get('Lat')), 'lng': _f(row.get('Lng')),
+        }
+    print(f"    大崩官方警戒值：{len(out)} 處潛勢區")
+    return out
+
+
+def _stn_key2(n):
+    """強化版站名正規化：去尾端機關代碼字母、再去尾端 (數字) 或 空白數字，反覆到收斂。
+    與 landslide_warning_stations.json 的 station_norm、fetch_qpesums_hourly.py 的
+    _stn_key 規則一致（例：太平山(1)w→太平山、知本(5)→知本、太麻里 2→太麻里）。
+
+    ★ 刻意與上面的 _stn_key() 分開：_stn_key() 是既有 ETR2 官方對齊在用的
+      （v8.0 修正的 21 個 sr/tp 站），它只去尾端字母。若把 (數字) 也一併去掉，
+      「集集(2)」「知本(5)」這類同名不同機關的獨立測站會塌成同一個鍵，
+      可能改變已驗證的 ETR2 對齊結果。故新邏輯另立函式，不動舊路徑。
+    """
+    import re as _re, unicodedata as _ud
+    s = _ud.normalize('NFKC', (n or '')).strip()
+    prev = None
+    while prev != s:
+        prev = s
+        s = _re.sub(r'[A-Za-z]+$', '', s).strip()
+        s = _re.sub(r'\(\s*\d+\s*\)$', '', s).strip()
+        s = _re.sub(r'\s+\d+$', '', s).strip()
+    return s
+
+
+def resolve_station_etr2(names, swcb_etr2, county='', town=''):
+    """依序嘗試把「官方代表站名」對到即時 ETR2 值。
+
+    決策目的是「給官方未來發布紅黃的建議」，所以寧可用同鄉鎮的鄰近站
+    也不要退回鄉鎮聚合值——但模糊比對必須有地理約束，否則會跨區誤配
+    （例：「大武」→隔縣「大武山」、「太平」→「太平山」）。
+
+    層級（先到先用，回傳第一個命中）：
+      1 exact   代表站原名精確命中
+      2 norm    去機關代碼/序號後命中（太平山(1)w → 太平山）
+      3 near_t  同鄉鎮內名稱相似（子字串或 difflib≥0.72）
+      4 near_c  同縣市內名稱相似（同上，較寬鬆的地理範圍）
+    回傳 (etr2, tier, matched_name)；全不中回 (None, '', '')。
+    """
+    import difflib
+    cands = [n for n in names if n]
+    # 1 精確
+    for n in cands:
+        if n in swcb_etr2: return swcb_etr2[n], 'exact', n
+    # 2 正規化
+    for n in cands:
+        k = _stn_key2(n)
+        if k and k in swcb_etr2: return swcb_etr2[k], 'norm', k
+
+    def _best(pool):
+        """pool = {站名: ETR2}；回傳最相似者（需通過門檻）。"""
+        best, best_score, best_nm = None, 0.0, ''
+        for n in cands:
+            kn = _stn_key2(n)
+            if not kn: continue
+            for pn, pv in pool.items():
+                kp = _stn_key2(pn)
+                if not kp: continue
+                if kn == kp:
+                    return pv, 1.0, pn
+                # 子字串：短名須≥2字，避免單字誤配
+                if len(kn) >= 2 and len(kp) >= 2 and (kn in kp or kp in kn):
+                    sc = 0.9
+                else:
+                    sc = difflib.SequenceMatcher(None, kn, kp).ratio()
+                if sc > best_score:
+                    best, best_score, best_nm = pv, sc, pn
+        return (best, best_score, best_nm) if best_score >= 0.72 else (None, 0.0, '')
+
+    # 3 同鄉鎮
+    if county and town:
+        v, sc, nm = _best(SWCB_STN_LOC.get((county, town), {}))
+        if v is not None: return v, 'near_town', nm
+    # 4 同縣市
+    if county:
+        pool = {}
+        for (c, t), d in SWCB_STN_LOC.items():
+            if c == county: pool.update(d)
+        v, sc, nm = _best(pool)
+        if v is not None: return v, 'near_county', nm
+    return None, '', ''
+
+
+def load_hourly_series():
+    """讀 fetch_qpesums_hourly.py 寫的 rain_hourly.json（本腳本只讀不寫）。
+    回傳 (series dict, meta dict)；缺檔／壞檔回 (None, meta)。"""
+    meta = {'available': False, 'hours': 0, 'gap_count': None, 'updated': '',
+            'warm': {}, 'reason': ''}
+    if not os.path.exists(HOURLY_FILE):
+        meta['reason'] = f'尚無 {HOURLY_FILE}（每小時腳本還沒跑過或未部署）'
+        print(f"逐時序列：{meta['reason']}")
+        return None, meta
+    try:
+        with open(HOURLY_FILE, encoding='utf-8') as f:
+            ser = json.load(f)
+        assert isinstance(ser, dict) and 'hours' in ser
+    except Exception as e:
+        meta['reason'] = f'讀取失敗：{e}'
+        print(f"逐時序列：{meta['reason']}")
+        return None, meta
+    hrs = ser.get('hours') or []
+    meta.update({'available': bool(hrs), 'hours': len(hrs),
+                 'gap_count': ser.get('gap_count'), 'updated': ser.get('updated', '')})
+    # 各項判定所需的最短序列長度——未達者一律回「資料不足」，不回「未達標」
+    meta['warm'] = {'r2h': len(hrs) >= 2, 'r3h': len(hrs) >= 3,
+                    'no_abate': len(hrs) >= 2,
+                    'release_2stage': len(hrs) >= 6, 'release_1stage': len(hrs) >= 12,
+                    'self_etr2': len(hrs) >= 168}
+    print(f"逐時序列：{len(hrs)} 小時（缺格 {ser.get('gap_count')}，更新 {ser.get('updated','—')}）"
+          f"｜可用判定：" + "、".join(k for k, v in meta['warm'].items() if v) or "（暖機中）")
+    if len(hrs) < 12:
+        print(f"  ⚠ 暖機中：解除判定需12h、自算ETR2需168h；未達前相關欄位回 None＋reason")
+    return ser, meta
+
+
+def hourly_metrics(ser, meta, station_names):
+    """由逐時序列算出技術指引判定所需的量。station_names 為候選代表站名（依序試）。
+
+    回傳 dict，欄位語意：
+      r1h/r2h/r3h      近1/2/3小時累積雨量（mm）；None＝序列不足或對不到站
+      no_abate         降雨無減緩趨勢（★代理判斷，見下）
+      adj_level/adj_mm 警戒基準值動態調降級別與調降量（依原警戒值決定，見 apply_dynamic_adj）
+      rel_2stage       符合二階段調降標準：連續6h平均<4mm 且最大時雨≤10mm
+      rel_1stage       符合一階段解除標準：連續12h平均<10mm
+      reissue_th1      再發布門檻1：時雨量≥40mm 或 連續2h每小時>20mm
+      reissue_th2      再發布門檻2：24h累積≥200mm（豪雨標準）
+      reason           不可判定時的原因字串（前端顯示「資料不足」而非「未達標」）
+
+    ★「降雨無減緩趨勢」官方未給量化定義，此處以代理判斷：
+        近1h≥4mm（＝官方雨場持續門檻）且 近1h ≥ 前1h×0.6
+      前端必須標明為代理判斷，不可顯示成官方判定。
+    """
+    out = {k: None for k in ('r1h', 'r2h', 'r3h', 'no_abate', 'rel_2stage', 'rel_1stage',
+                             'reissue_th1', 'reissue_th2')}
+    out['reason'] = ''
+    out['station'] = ''
+    if not ser or not meta.get('available'):
+        out['reason'] = meta.get('reason') or '逐時序列尚未建立'
+        return out
+    hrs = ser.get('hours') or []
+    cwa = ser.get('cwa') or {}
+    # 對站：精確 → 強化正規化
+    keys = [n for n in station_names if n]
+    latest = cwa.get(hrs[-1], {}) if hrs else {}
+    stn = next((n for n in keys if n in latest), None)
+    if stn is None:
+        norm = {_stn_key2(k): k for k in latest}
+        stn = next((norm[_stn_key2(n)] for n in keys if _stn_key2(n) in norm), None)
+    if stn is None:
+        out['reason'] = '逐時序列中對不到代表站'
+        return out
+    out['station'] = stn
+
+    def val(h):
+        v = (cwa.get(h) or {}).get(stn)
+        return None if v is None else float(v)
+
+    def window(n):
+        """最近 n 小時的時雨量序列（時間升冪）；有任一小時缺格→回 None。"""
+        need = hrs[-n:] if len(hrs) >= n else None
+        if not need or len(need) < n: return None
+        vs = [val(h) for h in need]
+        return None if any(v is None for v in vs) else vs
+
+    w1, w2, w3 = window(1), window(2), window(3)
+    if w1: out['r1h'] = round(w1[-1], 1)
+    if w2: out['r2h'] = round(sum(w2), 1)
+    if w3: out['r3h'] = round(sum(w3), 1)
+
+    # 降雨無減緩（代理判斷）
+    if w2:
+        cur, prev = w2[-1], w2[-2]
+        out['no_abate'] = bool(cur >= 4.0 and cur >= prev * 0.6)
+    # 解除標準
+    w6, w12 = window(6), window(12)
+    if w6:
+        out['rel_2stage'] = bool(sum(w6) / 6.0 < 4.0 and max(w6) <= 10.0)
+    if w12:
+        out['rel_1stage'] = bool(sum(w12) / 12.0 < 10.0)
+    # 再發布門檻
+    if w1: out['reissue_th1'] = bool(w1[-1] >= 40.0)
+    if w2 and not out['reissue_th1']:
+        out['reissue_th1'] = bool(all(v > 20.0 for v in w2))
+    w24 = window(24)
+    if w24: out['reissue_th2'] = bool(sum(w24) >= 200.0)
+
+    miss = [k for k in ('rel_2stage', 'rel_1stage') if out[k] is None]
+    if miss: out['reason'] = f"序列不足或有缺格（{len(hrs)}h）：{'、'.join(miss)} 無法判定"
+    return out
+
+
+def apply_dynamic_adj(alert, r3h, r2h):
+    """警戒基準值動態調整機制（技術指引三-(三)-3）。
+
+      一級：近3h>200mm → 原值≤400 調降100；原值≥450 調降150
+      二級：近3h>150mm → 原值≤400 調降 50；原值≥450 調降100
+      三級：近2h>100mm → 原值≤400 調降 50；原值≥450 維持不變
+    取最先成立者（一級優先）。回傳 (調整後警戒值, 級別, 調降量)。
+    r3h/r2h 為 None（序列不足）→ 不調整並回級別 None，前端顯示「資料不足」。
+    """
+    if not alert or alert <= 0: return alert, None, 0
+    if r3h is None and r2h is None: return alert, None, 0
+    lo = alert <= 400
+    if r3h is not None and r3h > 200:
+        d = 100 if lo else 150
+        return max(0, alert - d), 1, d
+    if r3h is not None and r3h > 150:
+        d = 50 if lo else 100
+        return max(0, alert - d), 2, d
+    if r2h is not None and r2h > 100:
+        d = 50 if lo else 0
+        return max(0, alert - d), 3, d
+    return alert, 0, 0      # 0 = 已判定且無需調整（區別於 None = 無法判定）
+
+
+def slope_est(etr2, alert, qpf24, qpf_night=None):
+    """依技術指引推估紅／黃（**推估側專用**；現況紅黃一律以官方發布為準）。
+
+    官方黃色警戒標準（技術指引三-(二)）：
+      警戒值≦350mm → 實際降雨量已達警戒值 30%，且該值加預測雨量 > 警戒值
+      警戒值≧400mm → 實際降雨量已達警戒值 40%，且該值加預測雨量 > 警戒值
+    官方紅色警戒標準：實際降雨量已達警戒基準值（另需近3h>30mm 且降雨無減緩
+      ——此兩項屬「現況」判定，推估側無從得知未來的實測時雨量，故不套用）。
+    入夜前示警（技術指引三-(四)）：已發布黃警地區，實際＋夜間預測雨量可能達警戒值。
+
+    回傳 dict；alert 無效時所有判定回 None（不猜，不以 False 冒充「未達標」）。"""
+    if not alert or alert <= 0 or etr2 is None:
+        return {'pct': None, 'fc_etr2': None, 'fc_pct': None,
+                'est_yellow_now': None, 'est_red_fc': None,
+                'yellow_th': None, 'reached_th': None, 'night_warn': None}
+    q24 = qpf24 or 0.0
+    fc  = etr2 + q24
+    th_ratio = 0.30 if alert <= 350 else 0.40      # 350<x<400 不存在（級距為50mm）
+    reached_th = etr2 >= alert * th_ratio
+
+    # 兩個語意不同、可同時成立的推估旗標——刻意不合併成單一「推估等級」：
+    #   est_yellow_now：此刻已符合官方「黃色警戒發布標準」
+    #                   （實際達警戒值 th_ratio，且實際＋預測 > 警戒值）
+    #   est_red_fc    ：未來24h預測有效累積雨量達警戒值 → 可能達紅色警戒
+    est_yellow_now = reached_th and fc > alert
+    est_red_fc     = fc >= alert
+    return {
+        'pct':     round(etr2 / alert, 4),
+        'fc_etr2': round(fc, 1),
+        'fc_pct':  round(fc / alert, 4),
+        'est_yellow_now': est_yellow_now,
+        'est_red_fc':     est_red_fc,
+        'yellow_th':  round(th_ratio, 2),
+        'reached_th': reached_th,
+        # 入夜前示警：實際＋夜間(19–06)預測雨量可能達警戒值（None＝無夜間QPF可用）
+        'night_warn': None if qpf_night is None else (etr2 + qpf_night) >= alert,
+    }
+
+
+def load_ls_warn():
+    """載入大崩警戒區明細（代表站＋靜態警戒值；未來推估側需要代表站）。
+    回傳 zones list；缺檔回 []。"""
+    if not os.path.exists(LS_WARN_FILE):
+        print(f"警告：找不到 {LS_WARN_FILE}，大崩未來推估將停用（現況仍走官方警戒）")
+        return []
+    with open(LS_WARN_FILE, encoding='utf-8') as f:
+        d = json.load(f)
+    zones = d.get('zones', [])
+    n = sum(z.get('n_zones', 1) for z in zones)
+    print(f"大崩警戒區明細：{len(zones)} 列／{n} 處潛勢區（{d.get('source','')[:24]}…）")
+    return zones
 
 
 def load_slope_warn():
@@ -206,6 +600,7 @@ def fetch_obs():
             'township':geo.get('TownName',''),
             'rain_now':  gp(re,'Now'),
             'rain_1h':   gp(re,'Past1hr'),
+            'rain_3h':   gp(re,'Past3hr'),   # 紅警「近3h>30mm」與動態調降門檻需要
             'rain_6h':   gp(re,'Past6Hr'),
             'rain_12h':  gp(re,'Past12hr'),
             'rain_24h':  gp(re,'Past24hr'),
@@ -1176,6 +1571,133 @@ def fetch_typhoon_track():
         return []
 
 
+def fetch_typhoon_warning():
+    """W-C0034-001：颱風警報單（官方原文）。
+    已實測結構（2026-08-08 白海豚 海警第6報）：
+      records.info[] 每筆＝一份警報單
+        effective / onset / expires          發布、生效、失效時間
+        headline                             「海上颱風警報」/「陸上颱風警報」…
+        description.section[]                {title,value} ← 官方原文段落
+            命名與位置／強度與半徑／移速與預測／颱風動態／警戒區域及事項
+            （條件出現：大雨特報／強風特報／注意事項）
+        description['typhoon-info'][0].section[]
+            警報報數／警報類別(SEA|LAND)／颱風編號／颱風資訊{analysis,prediction}
+        parameter[]  alert_title / severity_level / alert_color / website_color
+        area[]       areaDesc + polygon（警戒海域/陸域）
+    警報單文字**一律照抄不改寫**；系統自算的時間點另外標示。
+    無警報或失敗回 []。"""
+    print("抓取颱風警報單（W-C0034-001）...")
+    doc = None
+    for attempt in range(3):
+        try:
+            r = requests.get(f"{BASE_URL}/W-C0034-001",
+                             params={'Authorization': CWA_API_KEY, 'format': 'JSON'},
+                             timeout=45)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}")
+                if attempt < 2: time.sleep(3); continue
+                return []
+            doc = json.loads(r.content.decode('utf-8', 'replace'))
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return []
+            time.sleep(3)
+    if not doc: return []
+
+    def _sections(node):
+        """{title,value} 陣列 → [{'title':..,'value':..}]（保序、去空）。"""
+        if isinstance(node, dict): node = [node]
+        if not isinstance(node, list): return []
+        out = []
+        for s in node:
+            if not isinstance(s, dict): continue
+            ti = (s.get('title') or s.get('Title') or '').strip()
+            va = s.get('value') if 'value' in s else s.get('Value')
+            if isinstance(va, (dict, list)): continue      # 颱風資訊那種結構化節點另外處理
+            va = (va or '').strip()
+            if ti and va: out.append({'title': ti, 'value': va})
+        return out
+
+    def _struct(node):
+        """從 typhoon-info 的 section 撈出結構化的 analysis / prediction。"""
+        if isinstance(node, dict): node = [node]
+        if not isinstance(node, list): return {}
+        got = {}
+        for s in node:
+            if not isinstance(s, dict): continue
+            for key in ('analysis', 'Analysis', 'prediction', 'Prediction'):
+                if isinstance(s.get(key), dict):
+                    got[key.lower()] = s[key]
+        return got
+
+    try:
+        rec = doc.get('records', {}) or {}
+        infos = rec.get('info') or rec.get('Info') or []
+        if isinstance(infos, dict): infos = [infos]
+        out = []
+        for inf in infos:
+            if not isinstance(inf, dict): continue
+            desc = inf.get('description') or {}
+            nm_zh, nm_en = '', ''
+            if isinstance(desc, str):        # 極少數情形整段是純文字
+                secs, tyinfo, struct = [{'title': '警報內容', 'value': desc.strip()}], [], {}
+            else:
+                secs   = _sections(desc.get('section') or desc.get('Section'))
+                tinode = desc.get('typhoon-info') or desc.get('typhoonInfo') or []
+                if isinstance(tinode, dict): tinode = [tinode]
+                tsec, struct = [], {}
+                for ti in tinode:
+                    if not isinstance(ti, dict): continue
+                    tsec += _sections(ti.get('section') or ti.get('Section'))
+                    struct.update(_struct(ti.get('section') or ti.get('Section')))
+                    nm_zh = nm_zh or (ti.get('cwa_typhoon_name') or '').strip()
+                    nm_en = nm_en or (ti.get('typhoon_name') or '').strip()
+                tyinfo = tsec
+            params = {}
+            pl = inf.get('parameter') or []
+            if isinstance(pl, dict): pl = [pl]
+            for p in pl:
+                if isinstance(p, dict) and p.get('valueName'):
+                    params[str(p['valueName']).strip()] = str(p.get('value', '')).strip()
+            areas = []
+            al = inf.get('area') or []
+            if isinstance(al, dict): al = [al]
+            for a in al:
+                if isinstance(a, dict) and (a.get('areaDesc') or '').strip():
+                    areas.append((a['areaDesc']).strip())   # polygon 刻意不帶（前端不畫警戒海域）
+            meta = {s['title']: s['value'] for s in tyinfo}
+            out.append({
+                'effective': (inf.get('effective') or '').strip(),
+                'onset':     (inf.get('onset') or '').strip(),
+                'expires':   (inf.get('expires') or '').strip(),
+                'headline':  (inf.get('headline') or '').strip(),
+                'sender':    (inf.get('senderName') or '').strip(),
+                'severity_level': params.get('severity_level', ''),
+                'alert_color':    params.get('alert_color', ''),
+                'name_zh': nm_zh, 'name_en': nm_en,
+                'report_no': meta.get('警報報數', ''),
+                'warn_kind': meta.get('警報類別', ''),      # SEA / LAND
+                'ty_no':     meta.get('颱風編號', ''),
+                'sections':  secs,                          # ← 官方原文，前端照抄
+                'analysis':   struct.get('analysis'),
+                'prediction': struct.get('prediction'),
+                'areas': areas,
+                'params': params,
+            })
+        if out:
+            for o in out:
+                print(f"    {o['headline']}第{o['report_no'] or '?'}報"
+                      f"（{o['warn_kind'] or '?'}）發布 {o['effective'][:16]}"
+                      f"｜段落 {len(o['sections'])} 個｜警戒區 {len(o['areas'])} 處")
+        else:
+            print("    目前無颱風警報")
+        return out
+    except Exception as e:
+        print(f"    解析失敗：{e}")
+        return []
+
+
 def fetch_typhoon_qpf():
     if not CWA_API_KEY: return []
     print("抓取颱風 QPF（F-C0041）...")
@@ -1794,6 +2316,7 @@ def main():
 
     alert_table = load_static()
     slope_warn = load_slope_warn()
+    ls_warn    = load_ls_warn()      # 大崩警戒區（代表站；未來推估側用）
     # 讀上一輪 data.json 的官方 ETR2 → 供前端「這期 vs 前期」趨勢箭頭（同一資料源，可比）
     prev_etr2 = {}
     try:
@@ -1808,6 +2331,7 @@ def main():
     except Exception as _e:
         print(f"  讀取前期 ETR2 失敗（不影響）：{_e}")
     swcb_etr2 = fetch_swcb_etr2()   # 站名→官方ETR2 對照
+    hourly_ser, hourly_meta = load_hourly_series()   # 逐時序列（暖機未滿時自動回「資料不足」）
     time.sleep(1)
     static_list = list(alert_table.values())
     counties_needed = set(t['county'] for t in static_list)
@@ -1824,7 +2348,11 @@ def main():
     # 颱風 QPF（先抓，決定 is_typhoon 旗標）
     typhoon_segs = fetch_typhoon_qpf() if CWA_API_KEY else []
     typhoon_track = fetch_typhoon_track() if CWA_API_KEY else []
+    typhoon_warn  = fetch_typhoon_warning() if CWA_API_KEY else []
     debris_alerts = fetch_debris_alerts()
+    # 雙軌：現況紅黃走官方發布值、未來推估自算
+    official_alerts = fetch_official_alerts()
+    ls_alert_vals   = fetch_ls_alert_values()
     is_typhoon   = len(typhoon_segs) >= 4
 
     # 常態 CWA QPF（官方預報員修正值；治本預測偏差）——任何時候都跑，
@@ -2156,25 +2684,202 @@ def main():
             'daily_rain': obs.get('daily_rain', [0.0]*15),
         })
 
-    # ── 土石流黃色警戒：預測雨量(ETR2＋未來24h QPF) ≥ 警戒值 ──
-    #   官方定義：黃色＝預測達標（疏散勸告）、紅色＝實際達標（強制撤離）
+    # ════════════════════════════════════════════════════════
+    #  警戒研判（雙軌）
+    #    現況紅/黃 ＝ 水保署官方發布值（權威；欄位 off_level / off_report）
+    #    未來推估   ＝ 系統自算（ETR2＋QPF，依技術指引門檻；欄位皆冠 est_）
+    #  兩者刻意分欄，前端不得把推估值顯示成官方警戒。
+    # ════════════════════════════════════════════════════════
+    # 逐鄉鎮 QPF 查表：未來24h、以及夜間(今日19時→明日06時)窗
+    _night_a = now_tpe.replace(hour=19, minute=0, second=0, microsecond=0)
+    if now_tpe.hour >= 19:                     # 已過19時 → 指今晚剩餘至明晨06時
+        _night_a = now_tpe
+    _night_b = (_night_a + timedelta(days=1)).replace(hour=6, minute=0, second=0, microsecond=0)
+    if _night_a.hour < 19 and now_tpe.hour < 6:   # 凌晨執行 → 夜間窗指「現在→今晨06時」
+        _night_a, _night_b = now_tpe, now_tpe.replace(hour=6, minute=0, second=0, microsecond=0)
+
+    _tq, _tqn = {}, {}
+    for _t in out_towns:
+        _k = _t['county'] + _t['township']
+        if _t.get('qpf_24h') is not None: _tq[_k] = _t['qpf_24h']
+        # 夜間窗 QPF：加總與 [_night_a,_night_b) 重疊的 6h 段（段起點 = base_dt + 6h*i）
+        _arr = _t.get('qpf_best') or []
+        _sum, _hit = 0.0, 0
+        for _i, _v in enumerate(_arr[:12]):
+            if _v is None: continue
+            _s = base_dt + timedelta(hours=6 * _i)
+            _e = _s + timedelta(hours=6)
+            if _e <= _night_a or _s >= _night_b: continue
+            _ov = (min(_e, _night_b) - max(_s, _night_a)).total_seconds() / 21600.0
+            if _ov > 0: _sum += _v * _ov; _hit += 1
+        _tqn[_k] = round(_sum, 1) if _hit else None
+    print(f"  夜間窗（入夜前示警用）：{_night_a.strftime('%m/%d %H:%M')} → "
+          f"{_night_b.strftime('%m/%d %H:%M')}，{sum(1 for v in _tqn.values() if v)} 個鄉鎮有夜間QPF")
+
+    _off_d = official_alerts.get('debris', {})
+    _off_l = official_alerts.get('landslide', {})
+    _off_ok = official_alerts.get('ok', False)
+
+    # ── 土石流（逐潛勢溪流）──────────────────────────
     if debris_alerts:
-        _tq = {}
-        for _t in out_towns:
-            _k = _t['county'] + _t['township']
-            _q = _t.get('qpf_24h')
-            if _q is not None: _tq[_k] = _q
-        _ny = 0
+        _n_est_y = _n_est_r = _n_night = _n_adj = 0
         for _no, _d in debris_alerts.items():
-            _q24 = _tq.get(_d['county'] + _d['town'], 0) or 0
-            _d['qpf24'] = round(_q24, 1)
-            _fc = _d['etr2'] + _q24
-            _d['fc_etr2'] = round(_fc, 1)
-            _d['fc_pct'] = round(_fc / _d['alert'], 4) if _d['alert'] > 0 else None
-            _d['yellow'] = (not _d['red']) and _fc >= _d['alert']
-            if _d['yellow']: _ny += 1
-        _nr = sum(1 for _d in debris_alerts.values() if _d['red'])
-        print(f"  土石流警戒：紅色 {_nr} 條、黃色 {_ny} 條（黃＝ETR2＋未來24hQPF 達警戒值）")
+            _key = _d['county'] + _d['town']
+            _q24 = _tq.get(_key)
+            _qn  = _tqn.get(_key)
+            _d['qpf24'] = None if _q24 is None else round(_q24, 1)
+            _d['qpf_night'] = _qn
+            # 逐時量（近1/2/3h、無減緩、解除、再發布門檻）
+            _hm = hourly_metrics(hourly_ser, hourly_meta,
+                                 [_d.get('station'), _stn_key2(_d.get('station') or '')])
+            _d.update({k: _hm[k] for k in
+                       ('r1h', 'r2h', 'r3h', 'no_abate', 'rel_2stage', 'rel_1stage',
+                        'reissue_th1', 'reissue_th2')})
+            _d['hourly_reason'] = _hm['reason']
+            _d['hourly_station'] = _hm['station']
+            # 動態調降（雨場期間以調整後值為研判基準）
+            _adj, _lvl, _dmm = apply_dynamic_adj(_d.get('alert'), _hm['r3h'], _hm['r2h'])
+            _d['alert_adj'] = _adj if _lvl else _d.get('alert')
+            _d['adj_level'] = _lvl
+            _d['adj_mm'] = _dmm
+            if _lvl: _n_adj += 1
+            # 推估以調整後警戒值為基準（官方語意：雨場結束前皆用調整後值）
+            _est = slope_est(_d.get('etr2'), _d['alert_adj'], _q24, _qn)
+            _d.update({k: _est[k] for k in
+                       ('fc_etr2', 'fc_pct', 'est_yellow_now', 'est_red_fc',
+                        'yellow_th', 'reached_th', 'night_warn')})
+            # 官方現況（權威）
+            _o = _off_d.get(_no)
+            _d['off_level']  = _o['level'] if _o else (None if not _off_ok else '')
+            _d['off_report'] = _o['report'] if _o else ''
+            _d['off_updated'] = _o['updated'] if _o else ''
+            # 相容舊前端欄位：red/yellow 改為「官方現況」語意
+            _d['red']    = (_d['off_level'] == 'r') if _off_ok else None
+            _d['yellow'] = (_d['off_level'] == 'y') if _off_ok else None
+            if _est['est_yellow_now']: _n_est_y += 1
+            if _est['est_red_fc']:     _n_est_r += 1
+            if _est['night_warn']:     _n_night += 1
+        _or = sum(1 for _d in debris_alerts.values() if _d.get('off_level') == 'r')
+        _oy = sum(1 for _d in debris_alerts.values() if _d.get('off_level') == 'y')
+        print(f"  土石流｜官方現況 紅{_or}/黃{_oy} 條"
+              f"（{'官方值' if _off_ok else '★官方取用失敗，現況為 None'}）")
+        print(f"        ｜推估 符合黃警發布標準 {_n_est_y} 條、未來24h可能達紅 {_n_est_r} 條、"
+              f"入夜前示警 {_n_night} 條、動態調降 {_n_adj} 條")
+
+    # ── 大規模崩塌（逐警戒區）────────────────────────
+    #   警戒值優先用官方 API（會自動含新增潛勢區），缺才退回靜態明細表。
+    landslide_alerts = {}
+    if ls_warn or ls_alert_vals:
+        _claimed = set()
+        _rows = []
+        for _z in ls_warn:
+            for _i in _z.get('ids', []):
+                _rows.append((_i, _z)); _claimed.add(_i)
+        # 未顯式標編號的列：以 (縣市,鄉鎮,村里) 認領官方清單中尚未被認領的潛勢區
+        _by_loc = {}
+        for _no, _v in ls_alert_vals.items():
+            _by_loc.setdefault((_v['county'], _v['town']), []).append(_no)
+        for _z in ls_warn:
+            if _z.get('ids'): continue
+            _cand = [n for n in _by_loc.get((_z['county'], _z['town']), []) if n not in _claimed]
+            for _no in _cand[:_z.get('n_zones', 1)]:
+                _rows.append((_no, _z)); _claimed.add(_no)
+        # 官方清單有、但明細表沒對到的（例如新增 6 處）→ 仍納入，代表站留空
+        for _no in ls_alert_vals:
+            if _no not in _claimed: _rows.append((_no, None))
+
+        for _no, _z in _rows:
+            _v = ls_alert_vals.get(_no) or {}
+            _alert = _v.get('alert') or (_z.get('alert') if _z else None)
+            _cty = _v.get('county') or (_z.get('county') if _z else '')
+            _twn = _v.get('town')   or (_z.get('town')   if _z else '')
+            # ETR2：官方代表站優先，依序 精確→正規化→同鄉鎮相似→同縣市相似，
+            #        全不中才退回鄉鎮 ETR2（etr2_src 標明來源層級，前端可辨識可信度）
+            _etr, _src, _stn = None, '', ''
+            if _z:
+                _etr, _tier, _stn = resolve_station_etr2(
+                    [_z.get('station1'), _z.get('station2'),
+                     _z.get('station1_norm'), _z.get('station2_norm')],
+                    swcb_etr2, _cty, _twn)
+                if _etr is not None: _src = _tier
+            if _etr is None:
+                _t = next((t for t in out_towns
+                           if t['county'] == _cty and t['township'] == _twn), None)
+                if _t and _t.get('etr2') is not None:
+                    _etr, _src, _stn = _t['etr2'], 'town', f"{_cty}{_twn}(鄉鎮值)"
+            _key = _cty + _twn
+            _q24, _qn = _tq.get(_key), _tqn.get(_key)
+            _hm = hourly_metrics(hourly_ser, hourly_meta,
+                                 [_stn, _stn_key2(_stn or '')] +
+                                 ([_z.get('station1'), _z.get('station2')] if _z else []))
+            _adj, _lvl, _dmm = apply_dynamic_adj(_alert, _hm['r3h'], _hm['r2h'])
+            _alert_adj = _adj if _lvl else _alert
+            _est = slope_est(_etr, _alert_adj, _q24, _qn)
+            _o = _off_l.get(_no)
+            landslide_alerts[_no] = {
+                'county': _cty, 'town': _twn,
+                'village': (_z.get('village') if _z else ''),
+                'name': _v.get('name', ''),
+                'lat': _v.get('lat'), 'lng': _v.get('lng'),
+                'alert': _alert,
+                'alert_adj': _alert_adj, 'adj_level': _lvl, 'adj_mm': _dmm,
+                'alert_src': 'api' if _v.get('alert') else ('table' if _alert else None),
+                'etr2': None if _etr is None else round(_etr, 1),
+                'etr2_src': _src, 'etr2_src_name': _LS_TIER_NAME.get(_src, _src),
+                'station': _stn,
+                'forest_bureau': bool(_z.get('forest_bureau')) if _z else None,
+                'qpf24': None if _q24 is None else round(_q24, 1),
+                'qpf_night': _qn,
+                'off_level':   _o['level'] if _o else (None if not _off_ok else ''),
+                'off_report':  _o['report'] if _o else '',
+                'off_updated': _o['updated'] if _o else '',
+                'hourly_reason': _hm['reason'], 'hourly_station': _hm['station'],
+                **{k: _hm[k] for k in ('r1h', 'r2h', 'r3h', 'no_abate',
+                                       'rel_2stage', 'rel_1stage',
+                                       'reissue_th1', 'reissue_th2')},
+                **{k: _est[k] for k in ('pct', 'fc_etr2', 'fc_pct', 'est_yellow_now',
+                                        'est_red_fc', 'yellow_th', 'reached_th', 'night_warn')},
+            }
+        _lr = sum(1 for v in landslide_alerts.values() if v['off_level'] == 'r')
+        _ly = sum(1 for v in landslide_alerts.values() if v['off_level'] == 'y')
+        _tiers = {}
+        for v in landslide_alerts.values():
+            _tiers[v['etr2_src'] or 'none'] = _tiers.get(v['etr2_src'] or 'none', 0) + 1
+        print(f"  大規模崩塌｜{len(landslide_alerts)} 處警戒區"
+              f"（警戒值來源 API {sum(1 for v in landslide_alerts.values() if v['alert_src']=='api')}"
+              f"／靜態表 {sum(1 for v in landslide_alerts.values() if v['alert_src']=='table')}）")
+        print(f"        ｜官方現況 紅{_lr}/黃{_ly} 處")
+        print(f"        ｜ETR2 來源：" + "、".join(
+            f"{_LS_TIER_NAME.get(k, k)} {n}處" for k, n in sorted(_tiers.items(), key=lambda x: -x[1])))
+        print(f"        ｜推估 符合黃警發布標準 "
+              f"{sum(1 for v in landslide_alerts.values() if v['est_yellow_now'])} 處、"
+              f"未來24h可能達紅 {sum(1 for v in landslide_alerts.values() if v['est_red_fc'])} 處")
+
+    # ── 雨勢較大地區（縣市級，日累積≥150mm）──────────
+    #   颱風面板用；區分「觀測」與「預測」，不混為一談。
+    heavy_counties = {}
+    for _t in out_towns:
+        _c = _t['county']
+        # daily_rain[0] ＝今天（見 get_daily_rain_array 註解），非 [-1]
+        _dr = _t.get('daily_rain') or []
+        # daily_qpf[i] ＝自 base_time 起第 i 個滾動24h 區塊（非日曆日，故以窗序標示）
+        _dq = _t.get('daily_qpf') or []
+        _obs_today = _dr[0] if _dr else None
+        _cur = heavy_counties.setdefault(_c, {'obs_max': None, 'obs_town': '',
+                                              'fc_max': None, 'fc_town': '', 'fc_win': None})
+        if _obs_today is not None and (_cur['obs_max'] is None or _obs_today > _cur['obs_max']):
+            _cur['obs_max'], _cur['obs_town'] = round(_obs_today, 1), _t['township']
+        for _i, _v in enumerate(_dq[:3]):
+            if _v is None: continue
+            if _cur['fc_max'] is None or _v > _cur['fc_max']:
+                _cur['fc_max'], _cur['fc_town'] = round(_v, 1), _t['township']
+                _cur['fc_win'] = _i          # 0＝未來24h、1＝24–48h、2＝48–72h
+    heavy_rain_counties = {c: d for c, d in heavy_counties.items()
+                           if (d['obs_max'] or 0) >= HEAVY_RAIN_COUNTY_TH
+                           or (d['fc_max'] or 0) >= HEAVY_RAIN_COUNTY_TH}
+    print(f"  雨勢較大地區（日累積≥{HEAVY_RAIN_COUNTY_TH:.0f}mm）："
+          f"{len(heavy_rain_counties)} 縣市 "
+          f"{'、'.join(sorted(heavy_rain_counties)) if heavy_rain_counties else '（無）'}")
 
     output={
 
@@ -2184,7 +2889,20 @@ def main():
         'cwa_qpf_active': bool(is_typhoon or routine_seg_map),  # True=前48h已覆蓋CWA官方QPF
         'radar_qpf_time': radar_dt,   # F-B0046 未來1h雷達QPF 發布時間（空=本次未取得）
         'typhoon_track': typhoon_track,  # W-C0034-005 颱風過去軌跡＋預報路徑（無颱風＝[]）
-        'debris_alerts': debris_alerts,   # 土石流逐潛勢溪流警戒研判（紅/黃）
+        'typhoon_warn': typhoon_warn,    # W-C0034-001 官方警報單原文（無警報＝[]）
+        # 雙軌警戒：off_* ＝官方發布（權威）、est_* ＝系統推估（前端須標示）
+        'debris_alerts': debris_alerts,        # 土石流逐潛勢溪流
+        'landslide_alerts': landslide_alerts,  # 大規模崩塌逐警戒區
+        'official_alert_meta': {              # 官方警戒取用狀態（前端據此決定是否顯示「官方」字樣）
+            'ok': official_alerts.get('ok', False),
+            'report_id': official_alerts.get('report_id', ''),
+            'updated': official_alerts.get('updated', ''),
+            'src': SWCB_ALERT_URL,
+        },
+        'heavy_rain_counties': heavy_rain_counties,  # 雨勢較大地區（縣市級，日累積≥150mm）
+        'heavy_rain_th': HEAVY_RAIN_COUNTY_TH,
+        # 逐時序列暖機狀態：前端據此把未達長度的判定顯示為「資料不足」而非「未達標」
+        'hourly_meta': hourly_meta,
         # 模式：typhoon(精確格點) / typhoon+routine_png(颱風段精確+其餘段圖判讀) /
         #       routine(格點) / routine_png(全圖判讀近似)
         'cwa_qpf_mode': (

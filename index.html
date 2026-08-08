@@ -136,7 +136,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
         style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
       <button class="b"    id="bTyphoon" onclick="toggleTyphoonLayer()"
-        style="border-color:#8a3a9a;color:#c88ae8">🌀 颱風路徑</button>
+        style="border-color:#8a3a9a;color:#c88ae8">🌀 颱風動態</button>
       <button class="b"    id="bDebris" onclick="toggleDebrisLayer()"
         style="border-color:#b06010;color:#ffa050">⛰ 土石流警戒</button>
       <button class="b"    id="bLandslide" onclick="toggleLandslideLayer()"
@@ -266,11 +266,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
       <div id="disaster-panel-body" style="padding:5px 7px;overflow-y:auto;flex:1;min-height:0;font-size:11px;color:#f2e0d8;background:#150c07"></div>
     </div>
-    <!-- 颱風路徑區塊（預設收合） -->
+    <!-- 颱風動態區塊（預設收合） -->
     <div id="lsb-ty-sec" style="display:flex;flex-direction:column;flex:0 0 auto;min-height:0;border-top:2px solid #4a2a5a;overflow:hidden">
       <div onclick="toggleLsbSection('typhoon')" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
         border-bottom:1px solid #4a2a5a;background:#1e0f2a;flex-shrink:0;cursor:pointer">
-        <span style="font-weight:700;color:#c88ae8;font-size:11px"><span id="lsb-typhoon-arrow">▸</span> 🌀 颱風路徑</span>
+        <span style="font-weight:700;color:#c88ae8;font-size:11px"><span id="lsb-typhoon-arrow">▸</span> 🌀 颱風動態</span>
         <span style="display:flex;gap:4px;align-items:center">
           <button onclick="event.stopPropagation();copyTyphoonPanel(this)"
             style="font-size:9px;padding:1px 5px;background:#241030;color:#d0a8e8;border:1px solid #5a3a6a;border-radius:3px;cursor:pointer">複製</button>
@@ -337,6 +337,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
       <div id="scalebar-wrap" style="pointer-events:none;background:#fff;border:1px solid #99aabb;border-radius:4px;padding:2px 6px;width:fit-content"></div>
     </div>
+    <!-- 颱風動態圖例：左下角（按下颱風動態按鈕才顯示） -->
+    <div id="typhoon-legend" style="display:none;position:absolute;bottom:30px;left:12px;z-index:600;
+      background:rgba(255,255,255,0.96);border:1px solid #99aabb;border-radius:5px;padding:7px 9px;
+      font-size:10px;color:#111;pointer-events:none;width:fit-content;max-width:230px;
+      box-shadow:0 1px 4px rgba(0,0,0,.3)"></div>
     <div id="map-overlay"></div>
     <div id="no-data-msg">
       <div class="nd-icon">⚠</div>
@@ -1276,6 +1281,20 @@ function getAccum(t){
     return {totalRain: lv, etrPct: lv, isWarn: true};
   }
 
+  // ── 自訂範圍：可任意跨越「現在」，過去用觀測、未來用QPF ──
+  //   必須擋在下面「segTo<0」分支之前：那支只看 segTo、忽略 segFrom，
+  //   自訂範圍若整段在過去且跨多天，會只算到其中一天。
+  if(winKey === 'custom'){
+    const sp = _spanAccum(t, segFrom, segTo);
+    let etrPct = null;
+    if(hasEtr){
+      const etr2 = calcEtr2AtSeg(t, segTo, qpfField);
+      etrPct = Math.round(etr2/_etrDen(t)*1000)/10;
+    }
+    if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
+    return {totalRain: sp.total, etrPct, span: sp};
+  }
+
   // ── 過去整天（segTo < 0，表示某一天的0-24h，已結束的整天）──
   if(segTo < 0){
     const dailyObs = t.daily_rain || [];
@@ -1814,6 +1833,48 @@ function _hourlyBars(t){
   return {vals, hFrom, nowIdx:48, nowH, pastObsN, estMask};
 }
 
+// ── 任意時間範圍累積（可跨「現在」）──────────────────────
+// 自訂範圍專用：過去段用觀測、未來段用QPF，兩者相加。
+// ★ 直接沿用 _hourlyBars() 那條序列（過去48h官方逐時觀測＋缺值補齊＋未來QPF），
+//   所以自訂範圍的數字與 120 槽組體圖同源，切換不會出現兩個答案。
+// 超過48h以前的過去：只有日觀測，按重疊比例分攤（近似，回傳 approxDays 供標示）。
+// 回傳 {total, obs, fc, approxDays, hasNull}
+function _spanAccum(t, sf, st){
+  const bars = _hourlyBars(t);                 // {vals, hFrom, nowH, estMask}
+  const nowH = bars.nowH, hFrom = bars.hFrom;
+  const hA = sf*6, hB = st*6+6;                // [hA, hB) 小時區間，h=距今天00時
+  let obs = 0, fc = 0, approxDays = 0, hasNull = false;
+
+  for(let h=hA; h<hB; h++){
+    if(h >= hFrom && h < hFrom + bars.vals.length){
+      const v = bars.vals[h - hFrom];
+      if(v == null){ hasNull = true; continue; }
+      if(h < nowH) obs += v; else fc += v;
+    }else if(h < hFrom){
+      // 48h 以前：只有日解析度，於下面整日處理，這裡先跳過
+    }else{
+      hasNull = true;                          // 超出預報範圍（>+72h）
+    }
+  }
+  // 48h 以前的過去：以日觀測按重疊小時比例分攤
+  if(hA < hFrom){
+    const dr = t.daily_rain || [];
+    for(let d=1; d<dr.length; d++){
+      const dS = -24*d, dE = -24*d + 24;       // 該日的小時區間
+      const ovA = Math.max(hA, dS), ovB = Math.min(Math.min(hB, hFrom), dE);
+      if(ovB <= ovA) continue;
+      const dv = dr[d];
+      if(dv == null){ hasNull = true; continue; }
+      const frac = (ovB - ovA) / 24;
+      obs += dv * frac;
+      if(frac < 0.999) approxDays++;           // 非整日→分攤為近似
+    }
+  }
+  return {total: Math.round((obs+fc)*10)/10,
+          obs: Math.round(obs*10)/10, fc: Math.round(fc*10)/10,
+          approxDays, hasNull};
+}
+
 // 逐時 ETR2 序列（hFrom..hTo，h=距今天00的小時數，可負）——前綴和優化+觀測錨定+權重連續內插
 function _etr2HourlySeries(t, hFrom, hTo){
   if(!(t.alert_val>0)) return null;
@@ -2222,20 +2283,41 @@ async function tryLoadLive(){
     // CWA QPF 資料來源標示（供內部快取鍵/邏輯使用；不對使用者顯示採用了什麼）
     _cwaQpfActive = !!d.cwa_qpf_active;
     window._dataGenAt = d.generated_at || '';  // 供各面板快取鍵使用
-    // 颱風路徑（W-C0034-005）：無颱風時為空陣列
+    // 颱風動態（W-C0034-005 軌跡）：無颱風時為空陣列
     window.TYPHOON_TRACK = d.typhoon_track || [];
+    // 官方颱風警報單原文（W-C0034-001）：面板照抄，不改寫
+    window.TYPHOON_WARN = d.typhoon_warn || [];
+    // 雨勢較大地區（縣市級，日累積≥門檻）
+    window.HEAVY_RAIN_COUNTIES = d.heavy_rain_counties || {};
+    window.HEAVY_RAIN_TH = d.heavy_rain_th || 150;
+    // 逐時序列暖機狀態：判定為 null 時要顯示「資料不足」而非「未達標」
+    window.HOURLY_META = d.hourly_meta || null;
+    // 官方警戒取用狀態：ok=false 代表取用失敗，不可顯示成「目前無警戒」
+    window.OFFICIAL_ALERT_META = d.official_alert_meta || {ok:false};
+    // 大規模崩塌逐警戒區（官方現況 off_* ＋ 系統推估 est_*）
+    window.LANDSLIDE_ALERTS = d.landslide_alerts || {};
     // 土石流警戒研判（逐潛勢溪流；圖層開啟時重繪套用最新警戒）
     window.DEBRIS_ALERTS = d.debris_alerts || {};
     const _da = Object.values(window.DEBRIS_ALERTS);
     if(_da.length){
-      const _r = _da.filter(x=>x.red).length, _y = _da.filter(x=>x.yellow).length;
-      console.log(`土石流警戒：紅色 ${_r} 條、黃色 ${_y} 條（共 ${_da.length} 條潛勢溪流）`);
+      const _r = _da.filter(x=>x.off_level==='r').length, _y = _da.filter(x=>x.off_level==='y').length;
+      const _ok = window.OFFICIAL_ALERT_META.ok;
+      console.log(`土石流｜官方現況 紅${_r}/黃${_y} 條（共 ${_da.length} 條）` +
+                  (_ok ? `　報別 ${window.OFFICIAL_ALERT_META.report_id||'—'}` : '　★官方取用失敗'));
+    }
+    const _la = Object.values(window.LANDSLIDE_ALERTS);
+    if(_la.length){
+      console.log(`大規模崩塌｜官方現況 紅${_la.filter(x=>x.off_level==='r').length}/` +
+                  `黃${_la.filter(x=>x.off_level==='y').length} 處（共 ${_la.length} 處）`);
+    }
+    if(window.HOURLY_META && !window.HOURLY_META.available){
+      console.log('逐時序列尚未可用：', window.HOURLY_META.reason || '(暖機中)');
     }
     if(typeof showDebris !== 'undefined' && showDebris) renderDebrisLayer();
     if(typeof showLandslide !== 'undefined' && showLandslide) renderLandslideLayer();
     try{ updateTyphoonPanel(); updateDebrisPanel(); updateLandslidePanel(); }catch(e){}
     if(window.TYPHOON_TRACK.length){
-      console.log('颱風路徑載入：', window.TYPHOON_TRACK.map(t=>t.name_zh).join('、'));
+      console.log('颱風動態載入：', window.TYPHOON_TRACK.map(t=>t.name_zh).join('、'));
     }
     if(typeof showTyphoon !== 'undefined' && showTyphoon) renderTyphoonLayer();
 
@@ -2447,8 +2529,15 @@ function onSlider(){
   }
   document.getElementById('slS-v').textContent = segLabel(s);
   document.getElementById('slE-v').textContent = segLabel(e);
+  // 範圍組成：跨越「現在」時標明過去用觀測、未來用預測（兩者資料性質不同）
+  const _nS = _nowSeg();
+  let _comp = '';
+  if(e < _nS)       _comp = '｜全為觀測';
+  else if(s > _nS)  _comp = '｜全為預測';
+  else              _comp = '｜觀測＋預測併計';
+  if(s < -8) _comp += '（48h前為日觀測分攤）';
   document.getElementById('rng-disp').textContent =
-    `${segLabel(s)} → ${segLabel(e)}（共${((e-s+1)*6/24).toFixed(1)}天）`;
+    `${segLabel(s)} → ${segLabel(e)}（共${((e-s+1)*6/24).toFixed(1)}天）${_comp}`;
 
   updateModelRowVisibility(true);
   withTransition(()=>{
@@ -3375,17 +3464,22 @@ let showDisaster = false;
 let disasterLayer = null;
 let disasterPanelOpen = true;
 
-// ── 颱風路徑圖層（W-C0034-005：過去軌跡＋預報路徑＋暴風圈）──
+// ── 颱風動態圖層（W-C0034-005 軌跡＋W-C0034-001 官方警報單）──
 let showTyphoon = false, typhoonLayer = null;
 // ── 土石流警戒圖層（潛勢溪流＋集水區＋影響範圍；按需載入幾何）──
 let showDebris = false, debrisLayer = null, _debrisGeo = null, _debrisLoading = false;
 let showLandslide = false, landslideLayer = null, _lsGeo = null, _lsLoading = false;
 
 function _alertStyleOf(a){
-  // 依官方警戒：紅＝實際ETR2達標、黃＝預測(ETR2+未來QPF)達標、其餘依達成率淡色
+  // 雙軌：官方已發布之紅/黃為權威（實線、最粗）；系統推估以較細線＋不同色標示，
+  // 兩者刻意在視覺上可區分，避免把推估看成官方警戒。
   if(!a) return {color:'#8899aa', w:1.4, op:0.55, tag:'無資料'};
-  if(a.red)    return {color:'#ff2020', w:3.2, op:1.00, tag:'🔴紅色警戒'};
-  if(a.yellow) return {color:'#ffd400', w:2.8, op:0.95, tag:'🟡黃色警戒'};
+  if(a.off_level === 'r') return {color:'#ff2020', w:3.2, op:1.00, tag:'🔴官方紅色警戒'};
+  if(a.off_level === 'y') return {color:'#ffd400', w:2.8, op:0.95, tag:'🟡官方黃色警戒'};
+  if(a.off_level == null)  return {color:'#8899aa', w:1.4, op:0.55, tag:'官方警戒取用失敗'};
+  if(a.est_red_fc)     return {color:'#ff8833', w:2.4, op:0.92, tag:'推估未來24h達紅'};
+  if(a.est_yellow_now) return {color:'#e8c84a', w:2.0, op:0.88, tag:'推估符合黃警發布標準'};
+  if(a.night_warn)     return {color:'#c89a5a', w:1.8, op:0.8,  tag:'入夜前示警'};
   const p = (a.pct || 0) * 100;
   if(p >= 70) return {color:'#ff9030', w:2.2, op:0.9,  tag:'接近警戒'};
   if(p >= 40) return {color:'#79b7e0', w:1.6, op:0.75, tag:'注意'};
@@ -3431,20 +3525,24 @@ function renderDebrisLayer(){
   Object.keys(streams).forEach(no=>{
     const st = streams[no], a = alerts[no];
     const stl = _alertStyleOf(a);
-    if(a && a.red) nRed++; else if(a && a.yellow) nYel++;
+    if(a && a.off_level === 'r') nRed++; else if(a && a.off_level === 'y') nYel++;
     const info = st.i || {};
     const loc = (info.County01||'') + (info.Town01||'') + (info.Vill01||'');
     const tip =
       `<b>${no}</b>　${stl.tag}<br>${loc}` +
       (info.Name ? `<br>溪流：${info.Name}` : '') +
-      (a ? `<br>ETR2 <b>${a.etr2}</b> / 警戒值 <b>${a.alert}</b> mm（${(a.pct*100).toFixed(0)}%）` +
+      (a ? `<br>ETR2 <b>${a.etr2}</b> / 警戒值 <b>${a.alert_adj ?? a.alert}</b> mm（${(a.pct*100).toFixed(0)}%）` +
+           (a.adj_level ? `<br><span style="color:#ff9a6a">動態調降第${a.adj_level}級 −${a.adj_mm}mm（原 ${a.alert}mm）</span>` : '') +
            (a.qpf24 != null ? `<br>未來24h QPF ${a.qpf24} mm → 預測 ${a.fc_etr2} mm` : '') +
+           `<br>近1/2/3h ${a.r1h ?? '—'}/${a.r2h ?? '—'}/${a.r3h ?? '—'} mm` +
+           (a.hourly_reason ? `<br><span style="color:#c8a">逐時：${a.hourly_reason}</span>` : '') +
            (a.station ? `<br>參考站：${a.station}` : '')
          : '<br><span style="color:#889">無即時雨量資料</span>') +
       (info.TRes_Class ? `<br>保全戶：${info.TRes_Class}｜風險 ${info.Risk||'—'}` : '');
 
     // 警戒中才顯示集水區與影響範圍（避免全台1753條同時鋪滿）
-    if(a && (a.red || a.yellow)){
+    //   官方紅黃、或系統推估達警戒級別者都展開，供發布決策參考
+    if(a && (a.off_level === 'r' || a.off_level === 'y' || a.est_red_fc || a.est_yellow_now)){
       (wsheds[no]||[]).forEach(ring=>{
         L.polygon(ring.map(c=>[c[1],c[0]]), {color:stl.color, weight:1, opacity:0.5,
           fillColor:stl.color, fillOpacity:0.10, interactive:false}).addTo(debrisLayer);
@@ -3463,7 +3561,7 @@ function renderDebrisLayer(){
         .bindTooltip(tip, {sticky:true}).addTo(debrisLayer);
     });
   });
-  console.log(`土石流圖層：紅色 ${nRed} 條、黃色 ${nYel} 條`);
+  console.log(`土石流圖層：官方紅色 ${nRed} 條、官方黃色 ${nYel} 條`);
 }
 
 // ── 大規模崩塌警戒發布區（94處）──
@@ -3482,9 +3580,16 @@ async function toggleLandslideLayer(){
       console.log('大規模崩塌圖資載入：', Object.keys(_lsGeo).length, '處');
     }catch(e){
       console.error('大崩圖資載入失敗：', e);
-      showLandslide = false;
-      if(btn){ btn.classList.remove('on'); btn.textContent = '▲ 大規模崩塌'; }
-      _lsLoading = false; return;
+      // 幾何載入失敗不必整層關掉：官方警戒資料帶經緯度，仍可畫標記與面板
+      _lsGeo = null;
+      if(btn) btn.textContent = '▲ 大規模崩塌';
+      _lsLoading = false;
+      if(!Object.keys(window.LANDSLIDE_ALERTS || {}).length){
+        showLandslide = false;
+        if(btn) btn.classList.remove('on');
+        return;
+      }
+      console.warn('改以警戒資料的座標顯示標記（無潛勢/影響範圍面）');
     }
     _lsLoading = false;
     if(btn) btn.textContent = '▲ 大規模崩塌';
@@ -3495,27 +3600,40 @@ async function toggleLandslideLayer(){
 
 function renderLandslideLayer(){
   if(landslideLayer){ map.removeLayer(landslideLayer); landslideLayer = null; }
-  if(!showLandslide || !_lsGeo) return;
+  if(!showLandslide) return;
   landslideLayer = L.layerGroup().addTo(map);
-  Object.keys(_lsGeo).forEach(no=>{
-    const d = _lsGeo[no], info = d.i || {};
-    // 以該鄉鎮 ETR2%（水保署官方值）反映降雨風險
-    const t = TMAP[(info.County01||'') + (info.Town01||'')];
-    const pct = (t && t.etr2_pct != null) ? t.etr2_pct*100 : null;
-    let col = '#a0703a', tag = 'ETR2 —';
-    if(pct != null){
-      tag = `ETR2 ${pct.toFixed(0)}%`;
-      if(pct >= 100)     col = '#ff2020';
-      else if(pct >= 90) col = '#ff6a00';
-      else if(pct >= 70) col = '#ffd400';
-      else if(pct >= 50) col = '#9acd32';
-    }
+  const A = window.LANDSLIDE_ALERTS || {};
+  const keys = new Set(Object.keys(A).concat(_lsGeo ? Object.keys(_lsGeo) : []));
+
+  keys.forEach(no=>{
+    const a = A[no];
+    const d = (_lsGeo && _lsGeo[no]) || {};
+    const info = d.i || {};
+    const st = _lsState(a);
+    const pct = _lsPct(a);
+    const col = st.col;
+    const den = a ? (a.alert_adj || a.alert) : null;
+    const cty = (a && a.county) || info.County01 || '';
+    const twn = (a && a.town)   || info.Town01   || '';
+    const vil = (a && a.village) || info.Vill01  || '';
     const tip =
-      `<b>${no}　${info.Name||''}</b><br>` +
-      `${(info.County01||'')}${(info.Town01||'')}${(info.Vill01||'')}<br>` +
-      `類型：${info.Type||'—'}｜風險 ${info.Risk||'—'}<br>` +
-      `保全戶：${info.Total_Res ?? info.Dw_count ?? '—'} 戶（${info.TRes_Class||'—'}）<br>` +
-      `潛勢面積：${info.P_area||'—'} ha｜${tag}`;
+      `<b>${no}　${(a && a.name) || info.Name || ''}</b><br>` +
+      `${cty}${twn}${vil}<br>` +
+      `<b style="color:${col}">${st.tag}</b>` +
+      (st.isOfficial && a.off_report ? `<span style="color:#888">（報別 ${a.off_report}）</span>` : '') + '<br>' +
+      (a ? `ETR2 <b>${a.etr2 ?? '—'}</b> / 警戒值 <b>${den ?? '—'}</b> mm` +
+           `（${pct != null ? pct.toFixed(0) : '—'}%）` +
+           (a.adj_level ? `<br><span style="color:#ff9a6a">動態調降第${a.adj_level}級 −${a.adj_mm}mm</span>` : '') +
+           `<br>預測ETR2 ${a.fc_etr2 ?? '—'} mm（未來24hQPF ${a.qpf24 ?? '—'} mm）` +
+           `<br>近1/2/3h ${a.r1h ?? '—'}/${a.r2h ?? '—'}/${a.r3h ?? '—'} mm` +
+           (a.hourly_reason ? `<br><span style="color:#c8a">逐時：${a.hourly_reason}</span>` : '') +
+           `<br><span style="color:#999">ETR2來源：${a.etr2_src_name || a.etr2_src || '—'}` +
+           `${a.station ? `（${a.station}）` : ''}</span>`
+        : '無警戒研判資料') +
+      (info.Type ? `<br>類型：${info.Type}｜風險 ${info.Risk || '—'}` : '') +
+      (info.Total_Res != null || info.Dw_count != null
+        ? `<br>保全戶：${info.Total_Res ?? info.Dw_count} 戶` : '');
+
     (d.p||[]).forEach(ring=>{                    // 潛勢範圍
       L.polygon(ring.map(c=>[c[1],c[0]]), {color:col, weight:1.6, opacity:0.9,
         fillColor:col, fillOpacity:0.18, dashArray:'5,4'})
@@ -3526,7 +3644,191 @@ function renderLandslideLayer(){
         fillColor:col, fillOpacity:0.38})
         .bindTooltip(tip, {sticky:true}).addTo(landslideLayer);
     });
+
+    // ★ 放大的可點擊標記：潛勢範圍在小比例尺下只有幾個像素，很難點。
+    //   達警戒級別者再放大並加脈動外圈，方便在全臺視圖直接找到。
+    const ll = _lsCentroid(a, d);
+    if(ll){
+      const big = st.rank >= 4, mid = st.rank > 0;
+      const r = big ? 11 : (mid ? 9 : 7);
+      if(mid){
+        L.circleMarker(ll, {radius:r+4, color:col, weight:1, opacity:0.5,
+          fillColor:col, fillOpacity:0.14, interactive:false}).addTo(landslideLayer);
+      }
+      L.circleMarker(ll, {radius:r, color:'#2a1a0a', weight:2,
+        fillColor:col, fillOpacity:0.95})
+        .bindTooltip(tip, {sticky:true, direction:'top'})
+        .on('click', ()=>{ if(cty && twn) focusTownship(cty, twn); })
+        .addTo(landslideLayer);
+      L.marker(ll, {icon: L.divIcon({className:'', html:
+        `<div style="font-size:9px;font-weight:700;color:#fff;text-align:center;
+          line-height:${r*2}px;width:${r*2}px;text-shadow:0 0 2px #000">▲</div>`,
+        iconSize:[r*2, r*2], iconAnchor:[r, r]}), interactive:false}).addTo(landslideLayer);
+    }
   });
+}
+// 警戒區代表座標：官方 API 的經緯度優先，否則由影響/潛勢範圍環算形心
+function _lsCentroid(a, d){
+  if(a && a.lat != null && a.lng != null) return [a.lat, a.lng];
+  const ring = ((d.a||[])[0]) || ((d.p||[])[0]);
+  if(!ring || !ring.length) return null;
+  let sx=0, sy=0;
+  ring.forEach(c=>{ sx += c[0]; sy += c[1]; });
+  return [sy/ring.length, sx/ring.length];
+}
+
+// ── 臺灣陸域距離（CWA 颱風警報範圍：本島＋澎湖＋金門＋馬祖）──
+// ★ 必須做地理框限：368 鄉鎮的圖資包含「釣魚臺列嶼」（行政上屬宜蘭縣頭城鎮，
+//   赤尾嶼達 124.56°E）與「東沙島／南沙太平島」（屬高雄市旗津區，南至 10.37°N）。
+//   這些無人島礁不在 CWA「臺灣近海100公里」的警報判準內；若不排除，
+//   暴風圈會先碰到赤尾嶼而讓海警/陸警時間全部提前失真。
+//   因為釣魚臺與本島同屬頭城鎮，無法用鄉鎮名排除，只能用經緯度框。
+const TW_WARN_BOXES = [
+  // [latMin, latMax, lngMin, lngMax]  說明
+  [21.75, 25.75, 119.25, 122.15],  // 本島＋澎湖＋綠島＋蘭嶼＋小琉球＋北方三島
+  [24.10, 25.10, 118.00, 119.50],  // 金門＋烏坵
+  [25.90, 26.40, 119.85, 120.55],  // 馬祖（連江）
+];
+function _inWarnScope(lat, lng){
+  for(let i=0;i<TW_WARN_BOXES.length;i++){
+    const b = TW_WARN_BOXES[i];
+    if(lat >= b[0] && lat <= b[1] && lng >= b[2] && lng <= b[3]) return true;
+  }
+  return false;
+}
+let _twLandCache = null;
+function _twLandPts(){
+  if(_twLandCache) return _twLandCache;
+  const pts = [];
+  // ★ TOWN_GEO 是 const（詞法綁定），不會掛到 window 上。
+  //   原本寫 `window.TOWN_GEO && TOWN_GEO.features` 會恆為 falsy →
+  //   點集永遠是空的 → _distToTaiwanKm 恆回 null → 關鍵時間點整個功能靜默失效。
+  //   一律直接引用詞法綁定，並用 typeof 防未定義。
+  const GEO = (typeof TOWN_GEO !== 'undefined') ? TOWN_GEO : null;
+  let dropped = 0;
+  if(GEO && GEO.features){
+    GEO.features.forEach(f=>{
+      const g = f.geometry; if(!g) return;
+      const polys = g.type === 'Polygon' ? [g.coordinates]
+                  : g.type === 'MultiPolygon' ? g.coordinates : [];
+      polys.forEach(poly=>{
+        (poly[0]||[]).forEach((c,i)=>{
+          if(i % 4 !== 0) return;
+          const lat = c[1], lng = c[0];
+          if(_inWarnScope(lat, lng)) pts.push([lat, lng]);
+          else dropped++;
+        });
+      });
+    });
+  }
+  _twLandCache = pts;
+  console.log(`臺灣陸域海岸點集：${pts.length} 點（本島＋澎湖＋金馬）` +
+              `，排除框外 ${dropped} 點（釣魚臺列嶼／東沙／南沙）`);
+  return pts;
+}
+function _kmBetween(la1, lo1, la2, lo2){
+  const R = 6371, rad = Math.PI/180;
+  const dLa = (la2-la1)*rad, dLo = (lo2-lo1)*rad;
+  const a = Math.sin(dLa/2)**2 + Math.cos(la1*rad)*Math.cos(la2*rad)*Math.sin(dLo/2)**2;
+  return 2*R*Math.asin(Math.min(1, Math.sqrt(a)));
+}
+function _distToTaiwanKm(lat, lng){
+  const pts = _twLandPts();
+  if(!pts.length) return null;
+  // 不做平面近似預篩：原本的預篩用固定 km/度係數，可能高估近似距離而把
+  // 真正的最近點剪掉（實測誤差 0.5km）。點集僅數千點、且結果有快取，直接全掃。
+  let best = Infinity;
+  for(let i=0;i<pts.length;i++){
+    const d = _kmBetween(lat, lng, pts[i][0], pts[i][1]);
+    if(d < best) best = d;
+  }
+  return best;
+}
+
+// ── 颱風關鍵時間點 ─────────────────────────────────────
+// 依 CWA 發布標準：七級風(r15)暴風範圍觸及臺灣100km海域→海警（提前24h發布）；
+//                  觸及陸地→陸警（提前18h發布）。脫離即為解除時機。
+// 只輸出四個警報時間點與強度升降階點，其餘忽略（避免雜訊）。
+const TY_SEA_KM = 100, TY_SEA_LEAD_H = 24, TY_LAND_LEAD_H = 18;
+function _tyInterp(ty){
+  // 現在位置 + 預報點 → 每小時內插（lat/lng/ws/r15/r25 線性）
+  const cur = ty.current, fut = (ty.forecast||[]).slice().sort((a,b)=>(a.fh||0)-(b.fh||0));
+  if(!cur || !fut.length) return [];
+  const nodes = [{fh:0, lat:cur.lat, lng:cur.lng, ws:cur.ws, p:cur.p,
+                  r15:cur.r15, r25:cur.r25, gust:cur.gust}].concat(
+                 fut.map(f=>({fh:f.fh||0, lat:f.lat, lng:f.lng, ws:f.ws, p:f.p,
+                              r15:f.r15, r25:f.r25, gust:f.gust})));
+  const out = [];
+  for(let i=0;i<nodes.length-1;i++){
+    const a = nodes[i], b = nodes[i+1], span = (b.fh - a.fh) || 1;
+    for(let k=0;k<span;k++){
+      const u = k/span, lerp = (x,y)=> (x==null||y==null) ? (x==null?y:x) : x+(y-x)*u;
+      out.push({fh: a.fh+k, lat: lerp(a.lat,b.lat), lng: lerp(a.lng,b.lng),
+                ws: lerp(a.ws,b.ws), p: lerp(a.p,b.p),
+                r15: lerp(a.r15,b.r15), r25: lerp(a.r25,b.r25), gust: lerp(a.gust,b.gust)});
+    }
+  }
+  out.push(nodes[nodes.length-1]);
+  return out;
+}
+function _tyKeyPoints(ty){
+  const path = _tyInterp(ty);
+  if(!path.length) return {points:[], times:{}};
+  const base = BASE_TIME ? new Date(BASE_TIME) : new Date();
+  const at = fh => new Date(base.getTime() + fh*3600000);
+  // 逐點算「暴風圈邊緣到陸地的距離」
+  path.forEach(pt=>{
+    const d = _distToTaiwanKm(pt.lat, pt.lng);
+    pt.d = d;
+    pt.edge = (d==null || pt.r15==null) ? null : d - pt.r15;   // ≤100 觸及海警線、≤0 觸及陸地
+  });
+  const valid = path.filter(p=>p.edge!=null);
+  const firstIdx = f => { const i = valid.findIndex(f); return i<0?null:valid[i]; };
+  const lastIdx  = f => { for(let i=valid.length-1;i>=0;i--) if(f(valid[i])) return valid[i]; return null; };
+
+  const seaOn  = firstIdx(p=>p.edge <= TY_SEA_KM);
+  const landOn = firstIdx(p=>p.edge <= 0);
+  let landOff  = landOn ? lastIdx(p=>p.edge <= 0) : null;
+  let seaOff   = seaOn  ? lastIdx(p=>p.edge <= TY_SEA_KM) : null;
+  // ★ 若「最後一次仍在範圍內」就落在預報末端，代表預報期間內根本沒離開，
+  //   不能把預報邊界當成脫離時間（否則會報出一個預報並未顯示的解除時刻）。
+  const lastFh = path.length ? path[path.length-1].fh : 0;
+  const landStillIn = !!(landOff && landOff.fh >= lastFh);
+  const seaStillIn  = !!(seaOff  && seaOff.fh  >= lastFh);
+  if(landStillIn) landOff = null;
+  if(seaStillIn)  seaOff  = null;
+
+  const points = [], seen = new Set();
+  const push = (pt, kind, label) => {
+    if(!pt) return;
+    const k = kind + '@' + pt.fh;
+    if(seen.has(k)) return; seen.add(k);
+    points.push(Object.assign({}, pt, {kind, label, time: at(pt.fh)}));
+  };
+  push(seaOn,  'sea_on',   '暴風圈觸及100km海域');
+  push(landOn, 'land_on',  '暴風圈觸及陸地');
+  push(landOff,'land_off', '暴風圈脫離陸地');
+  push(seaOff, 'sea_off',  '暴風圈脫離100km海域');
+  // 強度升降階
+  for(let i=1;i<path.length;i++){
+    const a = _tyIntensity(path[i-1].ws).name, b = _tyIntensity(path[i].ws).name;
+    if(a !== b) push(path[i], 'grade', `${a} → ${b}`);
+  }
+  points.sort((x,y)=>x.fh-y.fh);
+
+  // 四個警報時間：發布＝觸及時間往前推提前量；解除＝脫離時間
+  const times = {
+    sea_issue:   seaOn  ? at(seaOn.fh  - TY_SEA_LEAD_H)  : null,
+    land_issue:  landOn ? at(landOn.fh - TY_LAND_LEAD_H) : null,
+    land_lift:   landOff? at(landOff.fh + 1) : null,
+    sea_lift:    seaOff ? at(seaOff.fh  + 1) : null,
+    sea_touch:   seaOn  ? at(seaOn.fh)  : null,
+    land_touch:  landOn ? at(landOn.fh) : null,
+    willLand:    !!landOn,
+    landStillIn, seaStillIn,
+    horizonH:    lastFh,
+  };
+  return {points, times, path};
 }
 
 function toggleTyphoonLayer(){
@@ -3612,8 +3914,88 @@ function renderTyphoonLayer(){
                      `七級風半徑 ${cur.r15 ?? '—'} km｜十級風半徑 ${cur.r25 ?? '—'} km`,
                      {sticky:true, direction:'top'}).addTo(typhoonLayer);
     }
+    // (6) 關鍵時間點：只畫警報觸及/脫離與強度升降階，其餘忽略（避免雜訊）
+    const kp = _tyKeyPoints(ty);
+    (kp.points||[]).forEach(pt=>{
+      const st = TY_KIND_STYLE[pt.kind] || TY_KIND_STYLE.grade;
+      const it = _tyIntensity(pt.ws);
+      const tm = `${pt.time.getMonth()+1}/${pt.time.getDate()} ` +
+                 `${String(pt.time.getHours()).padStart(2,'0')}:00`;
+      // 七級風圈（虛線）＋十級風圈（較密虛線）——兩個都畫
+      if(pt.r15) L.circle([pt.lat,pt.lng], {radius: pt.r15*1000, color: st.color,
+        weight:1.2, opacity:0.55, dashArray:'6,6', fill:false,
+        interactive:false}).addTo(typhoonLayer);
+      if(pt.r25) L.circle([pt.lat,pt.lng], {radius: pt.r25*1000, color: st.color,
+        weight:1.2, opacity:0.75, dashArray:'2,4', fill:false,
+        interactive:false}).addTo(typhoonLayer);
+      L.circleMarker([pt.lat,pt.lng], {radius:6, color:st.color, weight:2.2,
+        fillColor:'#fff', fillOpacity:0.9})
+        .bindTooltip(
+          `<b>${st.icon} ${pt.label}</b><br>${tm}（+${pt.fh}h）<br>` +
+          `${it.name}｜風速 ${pt.ws==null?'—':Math.round(pt.ws)} m/s｜` +
+          `陣風 ${pt.gust==null?'—':Math.round(pt.gust)} m/s<br>` +
+          `氣壓 ${pt.p==null?'—':Math.round(pt.p)} hPa<br>` +
+          `七級風半徑 ${pt.r15==null?'—':Math.round(pt.r15)} km｜` +
+          `十級風半徑 ${pt.r25==null?'—':Math.round(pt.r25)} km<br>` +
+          `暴風圈邊緣距陸地 ${pt.edge==null?'—':Math.round(pt.edge)} km`,
+          {sticky:true, direction:'top'}).addTo(typhoonLayer);
+      L.marker([pt.lat,pt.lng], {icon: L.divIcon({className:'', html:
+        `<div style="font-size:9px;font-weight:700;color:${st.color};white-space:nowrap;
+          text-shadow:0 0 3px #000,0 0 2px #000;transform:translate(9px,-6px)">${st.icon}${tm}</div>`,
+        iconSize:[0,0], iconAnchor:[0,0]}), interactive:false}).addTo(typhoonLayer);
+    });
   });
+  renderTyphoonLegend();
 }
+
+// 關鍵時間點樣式（顏色語意：海警藍、陸警紅、脫離淡化、強度升降階紫）
+const TY_KIND_STYLE = {
+  sea_on:   {color:'#1e6fd9', icon:'▼'},
+  land_on:  {color:'#d92020', icon:'▼'},
+  land_off: {color:'#e8845a', icon:'▲'},
+  sea_off:  {color:'#6aa8e8', icon:'▲'},
+  grade:    {color:'#8a3a9a', icon:'◆'},
+};
+
+function renderTyphoonLegend(){
+  const el = document.getElementById('typhoon-legend');
+  if(!el) return;
+  if(!showTyphoon){ el.style.display = 'none'; return; }
+  const rows = [
+    ['#1e6fd9', '▼', '暴風圈觸及100km海域'],
+    ['#d92020', '▼', '暴風圈觸及陸地'],
+    ['#e8845a', '▲', '暴風圈脫離陸地'],
+    ['#6aa8e8', '▲', '暴風圈脫離100km海域'],
+    ['#8a3a9a', '◆', '強度升降階'],
+  ];
+  let h = `<div style="font-weight:700;margin-bottom:4px">🌀 颱風動態</div>`;
+  rows.forEach(([c,ic,txt])=>{
+    h += `<div style="display:flex;align-items:center;gap:5px;line-height:1.5">
+      <span style="color:${c};font-weight:700;width:12px;text-align:center">${ic}</span>
+      <span>${txt}</span></div>`;
+  });
+  h += `<div style="margin-top:5px;padding-top:4px;border-top:1px solid #ccd">
+      <div style="display:flex;align-items:center;gap:5px"><svg width="22" height="8">
+        <line x1="0" y1="4" x2="22" y2="4" stroke="#555" stroke-width="1.4"
+          stroke-dasharray="6,6"/></svg><span>七級風半徑</span></div>
+      <div style="display:flex;align-items:center;gap:5px"><svg width="22" height="8">
+        <line x1="0" y1="4" x2="22" y2="4" stroke="#555" stroke-width="1.4"
+          stroke-dasharray="2,4"/></svg><span>十級風半徑</span></div>
+      <div style="display:flex;align-items:center;gap:5px"><svg width="22" height="8">
+        <line x1="0" y1="4" x2="22" y2="4" stroke="#ff2d2d" stroke-width="2"
+          stroke-dasharray="8,6"/></svg><span>預報路徑</span></div>
+      <div style="display:flex;align-items:center;gap:5px"><svg width="22" height="8">
+        <line x1="0" y1="4" x2="22" y2="4" stroke="#fff" stroke-width="2"
+          style="paint-order:stroke" stroke-linecap="round"/>
+        <line x1="0" y1="4" x2="22" y2="4" stroke="#000" stroke-width="1" opacity="0.5"/>
+        </svg><span>過去軌跡</span></div>
+    </div>
+    <div style="margin-top:4px;font-size:9px;color:#666;line-height:1.35">
+      關鍵時間點為系統依預報路徑推估，非官方發布值</div>`;
+  el.innerHTML = h;
+  el.style.display = 'block';
+}
+
 function toggleDisasterLayer(){
   showDisaster = !showDisaster;
   const btn = document.getElementById('bDisaster');
@@ -3939,7 +4321,7 @@ function downloadRangeCsv(){
 // 共用 CSV 下載（含 BOM 供 Excel 開啟中文）
 
 // ════════════════════════════════════════════════
-//  左側面板：颱風路徑 / 土石流警戒 / 大規模崩塌
+//  左側面板：颱風動態 / 土石流警戒 / 大規模崩塌
 // ════════════════════════════════════════════════
 function _tyRows(){
   const out = [];
@@ -3949,69 +4331,223 @@ function _tyRows(){
   });
   return out;
 }
+function _tyFmt(d){
+  if(!d) return null;
+  return `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ` +
+         `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+function _tyWarnList(){ return (window.TYPHOON_WARN || []); }
+
+// 四個警報時間：官方已發布者以警報單為準，未發布者用幾何推估（明確標示）
+function _tyAlertTimes(ty){
+  const kp = _tyKeyPoints(ty);
+  const t = kp.times || {};
+  const w = _tyWarnList();
+  const hasSea  = w.some(x => (x.warn_kind||'') === 'SEA'  || /海上颱風警報/.test(x.headline||''));
+  const hasLand = w.some(x => (x.warn_kind||'') === 'LAND' || /陸上颱風警報/.test(x.headline||''));
+  const noLand = !t.willLand;
+  const hz = Math.round(t.horizonH || 0);
+  const na = `預測${hz}小時內暴風圈未觸及陸地，不發布陸上颱風警報`;
+  const stillLand = `預測${hz}小時內暴風圈尚未脫離陸地（無法推估解除時間）`;
+  const stillSea  = `預測${hz}小時內暴風圈尚未脫離100km海域（無法推估解除時間）`;
+  return [
+    ['預計發布海警時間', hasSea  ? '已發布海上颱風警報'
+                               : (t.sea_issue  ? `推估 ${_tyFmt(t.sea_issue)} 發布（暴風圈 ${_tyFmt(t.sea_touch)} 觸及100km海域）` : `預測${hz}小時內暴風圈未觸及100km海域`)],
+    ['預計發布陸警時間', hasLand ? '已發布陸上颱風警報'
+                               : (noLand ? na : `推估 ${_tyFmt(t.land_issue)} 發布（暴風圈 ${_tyFmt(t.land_touch)} 觸及陸地）`)],
+    ['預計解除陸警時間', noLand ? na : (t.land_lift ? `推估 ${_tyFmt(t.land_lift)}` : stillLand)],
+    ['預計解除海警時間', t.sea_lift ? `推估 ${_tyFmt(t.sea_lift)}` : (t.sea_touch ? stillSea : `預測${hz}小時內暴風圈未觸及100km海域`)],
+  ];
+}
+
+// 雨勢較大地區（縣市級，日累積≥門檻）——取代官方警報單的強風影響地區，
+// 直接連結本系統雨量資料，對防災決策更直接。
+function _heavyRainLine(){
+  const hc = window.HEAVY_RAIN_COUNTIES || {};
+  const th = window.HEAVY_RAIN_TH || 150;
+  const keys = Object.keys(hc);
+  if(!keys.length) return `<span style="color:#8a7a9a">目前無縣市日累積雨量達 ${th}mm</span>`;
+  const WIN = ['未來24h', '24–48h', '48–72h'];
+  const rows = keys.map(c=>{
+    const d = hc[c] || {};
+    const o = d.obs_max, f = d.fc_max;
+    const parts = [];
+    if(o != null && o >= th) parts.push(`<span style="color:#ffd08a">觀測 ${Math.round(o)}mm</span>`);
+    if(f != null && f >= th) parts.push(`<span style="color:#8ac8f0">${WIN[d.fc_win]||'預測'} ${Math.round(f)}mm</span>`);
+    const peak = Math.max(o||0, f||0);
+    return {c, peak, html:`${c} ${parts.join('／')}`};
+  }).sort((a,b)=>b.peak-a.peak);
+  return rows.map(r=>r.html).join('、');
+}
+
 function updateTyphoonPanel(){
   const body = document.getElementById('typhoon-panel-body');
   if(!body) return;
-  const rows = _tyRows();
-  if(!rows.length){
-    body.innerHTML = '<div style="color:#8a7a9a;font-size:10px;padding:4px 0">目前無活動中颱風</div>';
+  const warns = _tyWarnList();
+  const rows  = _tyRows();
+  if(!warns.length && !rows.length){
+    body.innerHTML = '<div style="color:#8a7a9a;font-size:10px;padding:4px 0">目前無颱風警報，亦無活動中颱風</div>';
     return;
   }
+  const th = window.HEAVY_RAIN_TH || 150;
   let h = '';
-  rows.forEach(({ty, cur, fut})=>{
-    const it = _tyIntensity(cur.ws);
-    h += `<div style="margin-bottom:7px;border-left:3px solid ${it.color};padding-left:6px">
-      <div style="font-weight:700;color:#e8c8ff">${ty.name_zh}（${ty.name_en}）<span style="color:#9a8aaa;font-weight:400">編號${ty.ty_no}</span></div>
-      <div style="color:${it.color};font-size:10px">${it.name}</div>
-      <div style="font-size:10px;color:#c8b8d8">
-        中心 ${cur.lat ?? '—'}N / ${cur.lng ?? '—'}E<br>
-        風速 <b>${cur.ws ?? '—'}</b> m/s（陣風 ${cur.gust ?? '—'}）｜氣壓 <b>${cur.p ?? '—'}</b> hPa<br>
-        七級風半徑 ${cur.r15 ?? '—'} km｜十級風半徑 ${cur.r25 ?? '—'} km
-      </div>`;
-    if(fut.length){
-      h += `<div style="font-size:10px;color:#9a8aaa;margin-top:3px">預報路徑</div>`;
-      fut.slice(0,5).forEach(f=>{
-        h += `<div style="font-size:10px;color:#c8b8d8">　+${f.fh}h　${f.lat}N/${f.lng}E　${f.ws ?? '—'}m/s　70%圈 ${f.r70 ?? '—'}km</div>`;
-      });
+
+  // ── 官方警報單（原文照抄，不改寫）──
+  warns.forEach(w=>{
+    const col = /陸上/.test(w.severity_level||w.headline||'') ? '#ff6a5a' : '#f5a623';
+    h += `<div style="margin-bottom:8px;border-left:3px solid ${col};padding-left:6px">`;
+    h += `<div style="font-weight:700;color:${col};font-size:11px">
+            ${w.severity_level || w.headline || '颱風警報'}
+            ${w.report_no ? `第${w.report_no}報` : ''}
+            ${w.name_zh ? `<span style="color:#e8c8ff">　${w.name_zh}</span>` : ''}</div>`;
+    h += `<div style="font-size:10px;color:#c8b8d8;margin:2px 0">
+            📅 發布時間：${(w.effective||'').replace('T',' ').slice(0,16) || '—'}
+            <span style="color:#7a6a8a">（${w.sender||'中央氣象署'}）</span></div>`;
+    h += `<div style="font-size:10px;color:#c8b8d8;margin:2px 0">
+            📍 雨勢較大地區（日累積≥${th}mm）：${_heavyRainLine()}</div>`;
+    h += `<div style="font-size:10px;color:#9a8aaa;margin-top:4px">📋 動態：</div>`;
+    // 系統推估的四個警報時間
+    _tyAlertTimes((window.TYPHOON_TRACK||[])[0] || {}).forEach(([k, v])=>{
+      h += `<div style="font-size:10px;color:#c8b8d8;padding-left:2px">
+              <span style="color:#8ab8d8">【${k}】</span>${v}</div>`;
+    });
+    // 官方原文段落
+    (w.sections||[]).forEach(s=>{
+      h += `<div style="font-size:10px;color:#c8b8d8;padding-left:2px;margin-top:2px">
+              <span style="color:#8ab8d8">【${s.title}】</span>${s.value}</div>`;
+    });
+    if((w.areas||[]).length){
+      h += `<div style="font-size:9px;color:#7a6a8a;margin-top:3px">
+              官方警戒區域：${w.areas.join('、')}</div>`;
     }
     h += '</div>';
   });
+
+  // ── 無警報但有活動中颱風：顯示軌跡摘要 ──
+  if(!warns.length){
+    rows.forEach(({ty, cur, fut})=>{
+      const it = _tyIntensity(cur.ws);
+      h += `<div style="margin-bottom:7px;border-left:3px solid ${it.color};padding-left:6px">
+        <div style="font-weight:700;color:#e8c8ff">${ty.name_zh}（${ty.name_en}）
+          <span style="color:#9a8aaa;font-weight:400">編號${ty.ty_no}</span></div>
+        <div style="color:${it.color};font-size:10px">${it.name}　<span style="color:#8a7a9a">尚未發布颱風警報</span></div>
+        <div style="font-size:10px;color:#c8b8d8">
+          中心 ${cur.lat ?? '—'}N / ${cur.lng ?? '—'}E<br>
+          風速 <b>${cur.ws ?? '—'}</b> m/s（陣風 ${cur.gust ?? '—'}）｜氣壓 <b>${cur.p ?? '—'}</b> hPa<br>
+          七級風半徑 ${cur.r15 ?? '—'} km｜十級風半徑 ${cur.r25 ?? '—'} km
+        </div>`;
+      _tyAlertTimes(ty).forEach(([k, v])=>{
+        h += `<div style="font-size:10px;color:#c8b8d8"><span style="color:#8ab8d8">【${k}】</span>${v}</div>`;
+      });
+      h += '</div>';
+    });
+  }
+
+  // ── 關鍵時間點清單（與地圖標示同源）──
+  (window.TYPHOON_TRACK||[]).forEach(ty=>{
+    const kp = _tyKeyPoints(ty);
+    if(!(kp.points||[]).length) return;
+    h += `<div style="font-size:10px;color:#9a8aaa;margin-top:4px;border-top:1px solid #3a2a4a;padding-top:3px">
+            關鍵時間點（系統依預報路徑推估）</div>`;
+    kp.points.forEach(pt=>{
+      const st = TY_KIND_STYLE[pt.kind] || TY_KIND_STYLE.grade;
+      const it = _tyIntensity(pt.ws);
+      h += `<div style="font-size:10px;color:#c8b8d8;padding-left:2px">
+        <span style="color:${st.color};font-weight:700">${st.icon}</span>
+        ${_tyFmt(pt.time)}　${pt.label}
+        <span style="color:#8a7a9a">（${it.name}／七級 ${pt.r15==null?'—':Math.round(pt.r15)}km／十級 ${pt.r25==null?'—':Math.round(pt.r25)}km）</span></div>`;
+    });
+  });
+
   body.innerHTML = h;
 }
 function copyTyphoonPanel(btn){
-  const rows = _tyRows();
-  if(!rows.length){ _copyRich(btn, '目前無活動中颱風', '目前無活動中颱風'); return; }
+  const warns = _tyWarnList(), rows = _tyRows();
+  if(!warns.length && !rows.length){
+    _copyRich(btn, '目前無颱風警報，亦無活動中颱風', '目前無颱風警報，亦無活動中颱風'); return;
+  }
+  const th = window.HEAVY_RAIN_TH || 150;
+  const plain = s => String(s).replace(/<[^>]*>/g, '');
   let t = '', hs = '';
-  rows.forEach(({ty, cur, fut})=>{
-    const it = _tyIntensity(cur.ws);
-    t += `${ty.name_zh}（${ty.name_en}）編號${ty.ty_no}　${it.name}\n`;
-    t += `中心 ${cur.lat}N/${cur.lng}E　風速 ${cur.ws}m/s　氣壓 ${cur.p}hPa\n`;
-    hs += `<div><b>${ty.name_zh}（${ty.name_en}）編號${ty.ty_no}　${it.name}</b></div>`;
-    hs += `<div>中心 ${cur.lat}N/${cur.lng}E　風速 ${cur.ws}m/s　氣壓 ${cur.p}hPa</div>`;
-    fut.forEach(f=>{
-      t += `　+${f.fh}h　${f.lat}N/${f.lng}E　${f.ws}m/s　70%圈${f.r70}km\n`;
-      hs += `<div>　+${f.fh}h　${f.lat}N/${f.lng}E　${f.ws}m/s　70%圈${f.r70}km</div>`;
+  const add = (txt, html) => { t += txt + '\n'; hs += (html || `<div>${txt}</div>`); };
+
+  warns.forEach(w=>{
+    add(`${w.severity_level || w.headline || '颱風警報'}` +
+        `${w.report_no ? ` 第${w.report_no}報` : ''}${w.name_zh ? `　${w.name_zh}` : ''}`,
+        `<div><b>${w.severity_level || w.headline || '颱風警報'}` +
+        `${w.report_no ? ` 第${w.report_no}報` : ''}${w.name_zh ? `　${w.name_zh}` : ''}</b></div>`);
+    add(`📅 發布時間：${(w.effective||'').replace('T',' ').slice(0,16)}`);
+    add(`📍 雨勢較大地區（日累積≥${th}mm）：${plain(_heavyRainLine())}`);
+    add('📋 動態：');
+    _tyAlertTimes((window.TYPHOON_TRACK||[])[0] || {}).forEach(([k,v])=> add(`【${k}】${v}`));
+    (w.sections||[]).forEach(s=> add(`【${s.title}】${s.value}`));
+    if((w.areas||[]).length) add(`官方警戒區域：${w.areas.join('、')}`);
+    add('');
+  });
+  if(!warns.length){
+    rows.forEach(({ty, cur})=>{
+      const it = _tyIntensity(cur.ws);
+      add(`${ty.name_zh}（${ty.name_en}）編號${ty.ty_no}　${it.name}　尚未發布颱風警報`);
+      add(`中心 ${cur.lat}N/${cur.lng}E　風速 ${cur.ws}m/s　氣壓 ${cur.p}hPa`);
+      _tyAlertTimes(ty).forEach(([k,v])=> add(`【${k}】${v}`));
+      add('');
+    });
+  }
+  (window.TYPHOON_TRACK||[]).forEach(ty=>{
+    const kp = _tyKeyPoints(ty);
+    if(!(kp.points||[]).length) return;
+    add('關鍵時間點（系統依預報路徑推估）：');
+    kp.points.forEach(pt=>{
+      const it = _tyIntensity(pt.ws);
+      add(`　${_tyFmt(pt.time)}　${pt.label}（${it.name}／七級 ` +
+          `${pt.r15==null?'—':Math.round(pt.r15)}km／十級 ${pt.r25==null?'—':Math.round(pt.r25)}km）`);
     });
   });
   _copyRich(btn, t, hs);
 }
 function downloadTyphoonCsv(){
-  const rows = [['颱風','英文名','編號','類別','時間點','緯度','經度','風速m/s','陣風m/s','氣壓hPa','70%機率半徑km']];
+  const rows = [['類別','颱風','英文名','編號','時間','項目/強度','緯度','經度',
+                 '風速m/s','陣風m/s','氣壓hPa','七級風半徑km','十級風半徑km','70%機率半徑km','內容']];
+  // 官方警報單原文
+  _tyWarnList().forEach(w=>{
+    rows.push(['官方警報單', w.name_zh, w.name_en, w.ty_no,
+               (w.effective||'').replace('T',' ').slice(0,16),
+               `${w.severity_level||w.headline||''}${w.report_no?` 第${w.report_no}報`:''}`,
+               '','','','','','','','', '']);
+    (w.sections||[]).forEach(s=>{
+      rows.push(['官方警報單', w.name_zh, '', '', '', s.title, '','','','','','','','', s.value]);
+    });
+  });
+  // 系統推估的警報時間與關鍵時間點
   _tyRows().forEach(({ty, cur, fut})=>{
     const it = _tyIntensity(cur.ws);
-    rows.push([ty.name_zh, ty.name_en, ty.ty_no, it.name, '現在',
-               cur.lat ?? '', cur.lng ?? '', cur.ws ?? '', cur.gust ?? '', cur.p ?? '', '']);
-    fut.forEach(f=>rows.push([ty.name_zh, ty.name_en, ty.ty_no, _tyIntensity(f.ws).name,
-      `+${f.fh}h`, f.lat, f.lng, f.ws ?? '', f.gust ?? '', f.p ?? '', f.r70 ?? '']));
+    rows.push(['現在', ty.name_zh, ty.name_en, ty.ty_no, '', it.name,
+               cur.lat ?? '', cur.lng ?? '', cur.ws ?? '', cur.gust ?? '', cur.p ?? '',
+               cur.r15 ?? '', cur.r25 ?? '', '', '']);
+    _tyAlertTimes(ty).forEach(([k,v])=>
+      rows.push(['推估警報時間', ty.name_zh, '', '', '', k, '','','','','','','','', v]));
+    _tyKeyPoints(ty).points.forEach(pt=>
+      rows.push(['推估關鍵時間點', ty.name_zh, '', '', _tyFmt(pt.time),
+                 `${pt.label}／${_tyIntensity(pt.ws).name}`,
+                 pt.lat==null?'':pt.lat.toFixed(2), pt.lng==null?'':pt.lng.toFixed(2),
+                 pt.ws==null?'':Math.round(pt.ws), pt.gust==null?'':Math.round(pt.gust),
+                 pt.p==null?'':Math.round(pt.p),
+                 pt.r15==null?'':Math.round(pt.r15), pt.r25==null?'':Math.round(pt.r25), '',
+                 `暴風圈邊緣距陸地 ${pt.edge==null?'—':Math.round(pt.edge)}km`]));
+    fut.forEach(f=>rows.push(['官方預報點', ty.name_zh, ty.name_en, ty.ty_no, `+${f.fh}h`,
+      _tyIntensity(f.ws).name, f.lat, f.lng, f.ws ?? '', f.gust ?? '', f.p ?? '',
+      f.r15 ?? '', f.r25 ?? '', f.r70 ?? '', '']));
   });
-  _downloadCsv(rows, `颱風路徑_${fmtDT(new Date()).replace(/[\/\s:]/g,'')}.csv`);
+  _downloadCsv(rows, `颱風動態_${fmtDT(new Date()).replace(/[\/\s:]/g,'')}.csv`);
 }
 
 // ── 土石流警戒面板 ──
 function _debrisHits(){
   const a = window.DEBRIS_ALERTS || {};
   return Object.keys(a).map(no=>({no, d:a[no]}))
-    .filter(x=>x.d.red || x.d.yellow || (x.d.pct||0) >= 0.7)
+    .filter(x=>x.d.off_level === 'r' || x.d.off_level === 'y'
+             || x.d.est_red_fc || x.d.est_yellow_now || x.d.night_warn
+             || (x.d.pct||0) >= 0.7)
     .sort((p,q)=>(q.d.pct||0)-(p.d.pct||0));
 }
 function updateDebrisPanel(){
@@ -4023,9 +4559,14 @@ function updateDebrisPanel(){
     return;
   }
   const hits = _debrisHits();
-  const nR = all.filter(x=>x.red).length, nY = all.filter(x=>x.yellow).length;
+  const nR = all.filter(x=>x.off_level==='r').length, nY = all.filter(x=>x.off_level==='y').length;
+  const _om = window.OFFICIAL_ALERT_META || {};
+  const nEr = all.filter(x=>x.est_red_fc).length, nEy = all.filter(x=>x.est_yellow_now).length;
   let h = `<div style="font-size:10px;color:#c8a888;margin-bottom:4px">
-    🔴 紅色 <b style="color:#ff6644">${nR}</b>　🟡 黃色 <b style="color:#ffd400">${nY}</b>　
+    🔴 官方紅色 <b style="color:#ff6644">${nR}</b>　🟡 官方黃色 <b style="color:#ffd400">${nY}</b>
+    ${_om.ok ? `<span style="color:#8a9a7a">（報別 ${_om.report_id||'—'}）</span>`
+             : `<span style="color:#ff8866">（★官方取用失敗）</span>`}<br>
+    <span style="color:#e8a860">推估：未來24h達紅 <b>${nEr}</b>、符合黃警標準 <b>${nEy}</b></span>
     <span style="color:#8a7a6a">／共 ${all.length} 條潛勢溪流</span></div>`;
   if(!hits.length){
     h += '<div style="color:#8a7a6a;font-size:10px">目前無達警戒或接近警戒之潛勢溪流</div>';
@@ -4042,15 +4583,21 @@ function updateDebrisPanel(){
     Object.keys(by[c]).forEach(t=>{
       h += `<div style="color:#e8c8a8;padding-left:5px">${t}</div>`;
       by[c][t].forEach(({no,d})=>{
-        const col = d.red ? '#ff4433' : (d.yellow ? '#ffd400' : '#ff9030');
-        const tag = d.red ? '🔴' : (d.yellow ? '🟡' : '△');
+        const stl = _alertStyleOf(d);
+        const tag = d.off_level==='r' ? '🔴' : d.off_level==='y' ? '🟡'
+                  : (d.est_red_fc || d.est_yellow_now) ? '◈' : '△';
+        const den = d.alert_adj ?? d.alert;
         h += `<div style="padding-left:11px;font-size:10px;color:#d8c0a8">
-          ${tag} <span style="color:${col};font-weight:700">${no}</span>
-          ${d.etr2}/${d.alert}mm（<b style="color:${col}">${(d.pct*100).toFixed(0)}%</b>）
+          ${tag} <span style="color:${stl.color};font-weight:700">${no}</span>
+          ${d.etr2}/${den}mm（<b style="color:${stl.color}">${(d.pct*100).toFixed(0)}%</b>）
+          <span style="color:${stl.color};font-size:9px">${stl.tag}</span>
+          ${d.adj_level ? `<span style="color:#ff9a6a;font-size:9px">▼${d.adj_mm}</span>` : ''}
           ${d.vill ? `<span style="color:#9a8a7a">${d.vill}</span>` : ''}</div>`;
       });
     });
   });
+  h += `<div style="font-size:9px;color:#8a7a6a;margin-top:4px">
+    🔴🟡＝水保署已發布之警戒；◈＝系統推估（依技術指引門檻，供發布決策參考）；△＝接近警戒。</div>`;
   body.innerHTML = h;
 }
 function copyDebrisPanel(btn){
@@ -4058,77 +4605,157 @@ function copyDebrisPanel(btn){
   if(!hits.length){ _copyRich(btn, '目前無達警戒之潛勢溪流', '目前無達警戒之潛勢溪流'); return; }
   let t = '', hs = '';
   hits.forEach(({no,d})=>{
-    const lv = d.red ? '紅色警戒' : (d.yellow ? '黃色警戒' : '接近警戒');
-    const line = `${no}　${d.county}${d.town}${d.vill||''}　${lv}　ETR2 ${d.etr2}/${d.alert}mm（${(d.pct*100).toFixed(0)}%）`;
+    const stl = _alertStyleOf(d);
+    const den = d.alert_adj ?? d.alert;
+    const line = `${no}　${d.county}${d.town}${d.vill||''}　${stl.tag}　` +
+      `ETR2 ${d.etr2}/${den}mm（${(d.pct*100).toFixed(0)}%）` +
+      (d.adj_level ? `　動態調降第${d.adj_level}級 −${d.adj_mm}mm` : '');
     t += line + '\n'; hs += `<div>${line}</div>`;
   });
   _copyRich(btn, t, hs);
 }
 function downloadDebrisCsv(){
-  const rows = [['潛勢溪流編號','縣市','鄉鎮','村里','警戒等級','ETR2(mm)','警戒值(mm)','達成率(%)','未來24hQPF(mm)','預測ETR2(mm)','參考站']];
-  const a = window.DEBRIS_ALERTS || {};
-  Object.keys(a).sort((p,q)=>(a[q].pct||0)-(a[p].pct||0)).forEach(no=>{
-    const d = a[no];
-    rows.push([no, d.county||'', d.town||'', d.vill||'',
-      d.red ? '紅色警戒' : (d.yellow ? '黃色警戒' : ''),
-      d.etr2 ?? '', d.alert ?? '', ((d.pct||0)*100).toFixed(1),
-      d.qpf24 ?? '', d.fc_etr2 ?? '', d.station||'']);
+  const rows = [['潛勢溪流編號','縣市','鄉鎮','村里','狀態','資料性質',
+                 '官方警戒','官方報別','官方更新','ETR2(mm)','原警戒值(mm)','調整後警戒值(mm)',
+                 '動態調降級別','調降mm','達成率(%)','未來24hQPF(mm)','夜間QPF(mm)','預測ETR2(mm)',
+                 '推估符合黃警標準','推估未來24h達紅','入夜前示警',
+                 '近1h','近2h','近3h','降雨無減緩','一階段解除','二階段調降',
+                 '再發布門檻1','再發布門檻2','參考站','逐時資料狀態']];
+  const A = window.DEBRIS_ALERTS || {};
+  const tri = v => v == null ? '資料不足' : (v ? '是' : '否');
+  Object.keys(A).sort((p,q)=>(A[q].pct||0)-(A[p].pct||0)).forEach(no=>{
+    const d = A[no];
+    const stl = _alertStyleOf(d);
+    const isOff = d.off_level === 'r' || d.off_level === 'y';
+    rows.push([no, d.county||'', d.town||'', d.vill||'', stl.tag,
+      isOff ? '官方' : ((d.est_red_fc||d.est_yellow_now) ? '系統推估' : '—'),
+      d.off_level==='r'?'紅色':d.off_level==='y'?'黃色':(d.off_level===''?'無':'取用失敗'),
+      d.off_report||'', d.off_updated||'',
+      d.etr2 ?? '', d.alert ?? '', d.alert_adj ?? '',
+      d.adj_level ?? '', d.adj_mm ?? '', ((d.pct||0)*100).toFixed(1),
+      d.qpf24 ?? '', d.qpf_night ?? '', d.fc_etr2 ?? '',
+      tri(d.est_yellow_now), tri(d.est_red_fc), tri(d.night_warn),
+      d.r1h ?? '', d.r2h ?? '', d.r3h ?? '', tri(d.no_abate),
+      d.rel_1stage == null ? '資料不足' : (d.rel_1stage ? '符合' : '未符合'),
+      d.rel_2stage == null ? '資料不足' : (d.rel_2stage ? '符合' : '未符合'),
+      tri(d.reissue_th1), tri(d.reissue_th2),
+      d.station||'', d.hourly_reason||'']);
   });
   _downloadCsv(rows, `土石流警戒_${fmtDT(new Date()).replace(/[\/\s:]/g,'')}.csv`);
 }
 
-// ── 大規模崩塌面板（94處，依所在鄉鎮 ETR2% 排序）──
-function _lsRows(){
-  if(!_lsGeo) return [];
-  return Object.keys(_lsGeo).map(no=>{
-    const i = _lsGeo[no].i || {};
-    const t = TMAP[(i.County01||'') + (i.Town01||'')];
-    const pct = (t && t.etr2_pct != null) ? t.etr2_pct*100 : null;
-    return {no, i, pct};
-  }).sort((a,b)=>(b.pct ?? -1)-(a.pct ?? -1));
+// ── 大規模崩塌面板（只列達警戒級別者；官方現況＋系統推估雙軌）──
+// 大崩統一狀態：官方現況優先，其次系統推估。回傳 {rank, col, tag, isOfficial}
+// rank 用於排序：5 官方紅 / 4 官方黃 / 3 推估未來達紅 / 2 推估符合黃警標準 / 1 入夜前示警 / 0 其他
+function _lsState(a){
+  if(!a) return {rank:0, col:'#a0703a', tag:'—', isOfficial:false};
+  if(a.off_level === 'r') return {rank:5, col:'#ff2020', tag:'🔴官方紅色警戒', isOfficial:true};
+  if(a.off_level === 'y') return {rank:4, col:'#ffd400', tag:'🟡官方黃色警戒', isOfficial:true};
+  if(a.est_red_fc)      return {rank:3, col:'#ff8833', tag:'推估未來24h達紅', isOfficial:false};
+  if(a.est_yellow_now)  return {rank:2, col:'#e8c84a', tag:'推估符合黃警發布標準', isOfficial:false};
+  if(a.night_warn)      return {rank:1, col:'#c89a5a', tag:'入夜前示警', isOfficial:false};
+  return {rank:0, col:'#a0703a', tag:'未達標', isOfficial:false};
+}
+function _lsPct(a){
+  if(!a) return null;
+  const den = a.alert_adj || a.alert;
+  if(!den || a.etr2 == null) return null;
+  return a.etr2 / den * 100;
+}
+function _lsRows(onlyAlert){
+  const A = window.LANDSLIDE_ALERTS || {};
+  let rows = Object.keys(A).map(no=>{
+    const a = A[no];
+    const g = (_lsGeo && _lsGeo[no]) ? (_lsGeo[no].i || {}) : {};
+    return {no, a, i:g, st:_lsState(a), pct:_lsPct(a)};
+  });
+  if(onlyAlert) rows = rows.filter(r=>r.st.rank > 0);
+  return rows.sort((x,y)=> (y.st.rank - x.st.rank) || ((y.pct ?? -1) - (x.pct ?? -1)));
 }
 function updateLandslidePanel(){
   const body = document.getElementById('landslide-panel-body');
   if(!body) return;
-  if(!_lsGeo){
-    body.innerHTML = '<div style="color:#a08a70;font-size:10px;padding:4px 0">請先開啟「▲ 大規模崩塌」圖層以載入圖資</div>';
+  const A = window.LANDSLIDE_ALERTS || {};
+  const total = Object.keys(A).length;
+  if(!total){
+    body.innerHTML = '<div style="color:#a08a70;font-size:10px;padding:4px 0">尚無大規模崩塌警戒資料（等待排程產生）</div>';
     return;
   }
-  const rows = _lsRows();
-  let h = `<div style="font-size:10px;color:#c8a888;margin-bottom:4px">94 處警戒發布區（依所在鄉鎮 ETR2% 排序）</div>`;
-  rows.slice(0, 40).forEach(({no,i,pct})=>{
-    let col = '#a0703a';
-    if(pct != null){
-      if(pct >= 100) col = '#ff4433'; else if(pct >= 90) col = '#ff8833';
-      else if(pct >= 70) col = '#ffd400'; else if(pct >= 50) col = '#9acd32';
+  const meta = window.OFFICIAL_ALERT_META || {};
+  const rows = _lsRows(true);          // ★ 只列達警戒值者，不再列出全部
+  let h = `<div style="font-size:10px;color:#c8a888;margin-bottom:4px">
+    共 ${total} 處警戒區，以下列出達警戒級別者
+    ${meta.ok ? `<span style="color:#8a9a7a">（官方報別 ${meta.report_id||'—'}）</span>`
+              : `<span style="color:#ff8866">（★官方警戒取用失敗，僅顯示系統推估）</span>`}</div>`;
+  if(!rows.length){
+    h += `<div style="font-size:10px;color:#8a9a7a;padding:3px 0">目前無警戒區達警戒級別</div>`;
+    body.innerHTML = h; return;
+  }
+  let lastCounty = '';
+  rows.forEach(({no, a, i, st, pct})=>{
+    if(a.county !== lastCounty){
+      lastCounty = a.county;
+      h += `<div style="font-size:10px;font-weight:700;color:#d0b090;margin-top:4px;
+        border-bottom:1px solid #4a3a2a">${a.county}</div>`;
     }
-    h += `<div style="font-size:10px;color:#e0c8b0;padding:1px 0">
-      <span style="color:${col};font-weight:700">${no}</span>
-      ${i.County01||''}${i.Town01||''} ${i.Name||''}
-      <span style="color:${col}">${pct != null ? pct.toFixed(0)+'%' : '—'}</span>
-      <span style="color:#9a8a7a">${i.Type||''}｜${i.Total_Res ?? i.Dw_count ?? '—'}戶</span></div>`;
+    const den = a.alert_adj || a.alert;
+    const adj = (a.adj_level ? ` <span style="color:#ff9a6a" title="警戒基準值動態調降第${a.adj_level}級，調降${a.adj_mm}mm">▼${a.adj_mm}</span>` : '');
+    const srcNote = a.etr2_src && a.etr2_src !== 'exact'
+      ? ` <span style="color:#8a7a6a" title="ETR2 來源：${a.etr2_src_name||a.etr2_src}（非代表站精確值）">*</span>` : '';
+    h += `<div style="font-size:10px;color:#e0c8b0;padding:1px 0 1px 4px">
+      <span style="color:${st.col};font-weight:700">${no}</span>
+      <span style="color:#c8b09a">${a.town||''}${a.village||''}</span>
+      <span style="color:${st.col}">${st.tag}</span>
+      <span style="color:#b0a090">ETR2 ${a.etr2 ?? '—'}/${den ?? '—'}mm
+        （${pct != null ? pct.toFixed(0)+'%' : '—'}）${adj}${srcNote}</span>
+      ${i.Total_Res != null || i.Dw_count != null
+        ? `<span style="color:#9a8a7a">｜${i.Total_Res ?? i.Dw_count}戶</span>` : ''}
+    </div>`;
   });
-  if(rows.length > 40) h += `<div style="font-size:9px;color:#8a7a6a">…共 ${rows.length} 處，完整清單請下載 CSV</div>`;
+  h += `<div style="font-size:9px;color:#8a7a6a;margin-top:4px">
+    官方標示者為水保署已發布之警戒；「推估」為本系統依技術指引門檻研判，供發布決策參考。
+    標 * 者 ETR2 非取自官方代表站精確值。</div>`;
   body.innerHTML = h;
 }
 function copyLandslidePanel(btn){
-  const rows = _lsRows();
-  if(!rows.length){ _copyRich(btn, '請先開啟大規模崩塌圖層', '請先開啟大規模崩塌圖層'); return; }
+  const rows = _lsRows(true);
+  if(!rows.length){ _copyRich(btn, '目前無大規模崩塌警戒區達警戒級別', '目前無大規模崩塌警戒區達警戒級別'); return; }
   let t = '', hs = '';
-  rows.forEach(({no,i,pct})=>{
-    const line = `${no}　${i.County01||''}${i.Town01||''}${i.Vill01||''}　${i.Name||''}　${i.Type||''}　ETR2 ${pct != null ? pct.toFixed(0)+'%' : '—'}　${i.Total_Res ?? i.Dw_count ?? '—'}戶`;
+  rows.forEach(({no, a, st, pct})=>{
+    const den = a.alert_adj || a.alert;
+    const line = `${no}　${a.county||''}${a.town||''}${a.village||''}　${st.tag}　` +
+      `ETR2 ${a.etr2 ?? '—'}/${den ?? '—'}mm（${pct != null ? pct.toFixed(0)+'%' : '—'}）` +
+      (a.adj_level ? `　動態調降${a.adj_mm}mm` : '');
     t += line + '\n'; hs += `<div>${line}</div>`;
   });
   _copyRich(btn, t, hs);
 }
 function downloadLandslideCsv(){
-  const rows = [['崩塌區編號','縣市','鄉鎮','村里','名稱','類型','風險','保全戶數','戶數級距','潛勢面積ha','所在鄉鎮ETR2%']];
-  _lsRows().forEach(({no,i,pct})=>{
-    rows.push([no, i.County01||'', i.Town01||'', i.Vill01||'', i.Name||'', i.Type||'',
-      i.Risk||'', i.Total_Res ?? i.Dw_count ?? '', i.TRes_Class||'', i.P_area ?? '',
-      pct != null ? pct.toFixed(1) : '']);
+  const rows = [['崩塌區編號','縣市','鄉鎮','村里','名稱','狀態','資料性質',
+                 '官方警戒','官方報別','官方更新','ETR2mm','原警戒值mm','調整後警戒值mm',
+                 '動態調降級別','調降mm','達成率%','未來24hQPF','夜間QPF','預測ETR2',
+                 '推估符合黃警標準','推估未來24h達紅','入夜前示警',
+                 '近1h','近2h','近3h','降雨無減緩','一階段解除','二階段調降',
+                 'ETR2來源','代表站','保全戶數','風險等級','逐時資料狀態']];
+  _lsRows(false).forEach(({no, a, i, st, pct})=>{
+    rows.push([no, a.county||'', a.town||'', a.village||'', a.name||'', st.tag,
+      st.isOfficial ? '官方' : (st.rank>0 ? '系統推估' : '—'),
+      a.off_level==='r'?'紅色':a.off_level==='y'?'黃色':(a.off_level===''?'無':'取用失敗'),
+      a.off_report||'', a.off_updated||'',
+      a.etr2 ?? '', a.alert ?? '', a.alert_adj ?? '',
+      a.adj_level ?? '', a.adj_mm ?? '', pct != null ? pct.toFixed(1) : '',
+      a.qpf24 ?? '', a.qpf_night ?? '', a.fc_etr2 ?? '',
+      a.est_yellow_now == null ? '資料不足' : (a.est_yellow_now ? '是' : '否'),
+      a.est_red_fc     == null ? '資料不足' : (a.est_red_fc ? '是' : '否'),
+      a.night_warn     == null ? '資料不足' : (a.night_warn ? '是' : '否'),
+      a.r1h ?? '', a.r2h ?? '', a.r3h ?? '',
+      a.no_abate   == null ? '資料不足' : (a.no_abate ? '是' : '否'),
+      a.rel_1stage == null ? '資料不足' : (a.rel_1stage ? '符合' : '未符合'),
+      a.rel_2stage == null ? '資料不足' : (a.rel_2stage ? '符合' : '未符合'),
+      a.etr2_src_name || a.etr2_src || '', a.station || '',
+      i.Total_Res ?? i.Dw_count ?? '', i.Risk || '', a.hourly_reason || '']);
   });
-  _downloadCsv(rows, `大規模崩塌警戒發布區_${fmtDT(new Date()).replace(/[\/\s:]/g,'')}.csv`);
+  _downloadCsv(rows, `大規模崩塌警戒_${fmtDT(new Date()).replace(/[\/\s:]/g,'')}.csv`);
 }
 
 function _downloadCsv(rows, filename){
