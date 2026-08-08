@@ -20,6 +20,13 @@ DATA_FILE    = "data.json"
 RADAR_FILE   = "radar.json"   # 雷達獨立檔（避免與主腳本搶寫 data.json）
 HIST_FILE    = "qpesums_history.json"
 TOWNS_FILE   = "all_townships.json"
+# ── 逐時雨量快照（解鎖近2h/近3h、降雨無減緩、動態調降、解除/再發布判定）──
+#   本腳本每小時第12分執行，是全系統唯一的逐時序列來源。
+#   主腳本 fetch_rainfall.py 只讀不寫；兩支各寫各檔，永不搶寫。
+HOURLY_FILE   = "rain_hourly.json"
+OBS_URL       = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0002-001"
+SWCB_RAIN_URL = "https://246.ardswc.gov.tw/webService/GetDebrisRainData.ashx"
+KEEP_SERIES_HOURS = 168   # 保留7日＝官方有效累積雨量的前期降雨時段（α=0.7、7日）
 # 網格參數（與 fetch_rainfall.py 保持一致）
 QP_LON0, QP_LAT0, QP_D, QP_NX, QP_NY = 118.0, 20.0, 0.0125, 441, 561
 KEEP_HOURS   = 50   # 保留50小時（過去48h逐時觀測+24h合成餘裕）
@@ -200,6 +207,169 @@ def fetch_radar_qpf_1h(townships):
         print(f"    解析失敗：{e}"); return {}, ''
 
 
+# ══════════════════════════════════════════════════════════
+#  逐時雨量快照
+#    必須同時抓 CWA 與水保署兩個來源：官方代表站有一批是自建站
+#    （s水保/w水利/f林保/sr石門/fr翡翠），氣象署 opendata 沒有它們的即時雨量。
+#    只抓 CWA 會讓那批站的時序永遠是洞，解除判定就會失真。
+# ══════════════════════════════════════════════════════════
+def _stn_key(n):
+    """站名正規化：去尾端機關代碼字母、再去尾端 (數字) 或 空白數字。
+    與 fetch_rainfall.py / landslide_warning_stations.json 保持一致。"""
+    import unicodedata
+    s = unicodedata.normalize('NFKC', (n or '')).strip()
+    prev = None
+    while prev != s:
+        prev = s
+        s = re.sub(r'[A-Za-z]+$', '', s).strip()
+        s = re.sub(r'\(\s*\d+\s*\)$', '', s).strip()
+        s = re.sub(r'\s+\d+$', '', s).strip()
+    return s
+
+
+def fetch_cwa_hourly():
+    """CWA O-A0002：取各站 Past1hr（與 Now/3h/24h 供交叉檢查）。
+    回傳 {站名: {'r1':mm,'r3':mm,'r24':mm,'now':mm}}；失敗回 {}。"""
+    print("抓取 CWA 觀測站時雨量（O-A0002）...")
+    for attempt in range(3):
+        try:
+            r = requests.get(OBS_URL, params={'Authorization': CWA_API_KEY, 'format': 'JSON'},
+                             timeout=90)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}")
+                if attempt < 2: time.sleep(3); continue
+                return {}
+            doc = json.loads(r.content.decode('utf-8', 'replace'))
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return {}
+            time.sleep(3)
+    def gp(re_, k):
+        v = (re_ or {}).get(k)
+        try:
+            f = float(v)
+            return None if f < -90 else f      # CWA 缺值為 -998/-999
+        except (TypeError, ValueError):
+            return None
+    out = {}
+    try:
+        for st in doc.get('records', {}).get('Station', []) or []:
+            nm = (st.get('StationName') or '').strip()
+            if not nm: continue
+            el = st.get('RainfallElement', {}) or {}
+            out[nm] = {'r1': gp(el, 'Past1hr'), 'r3': gp(el, 'Past3hr'),
+                       'r24': gp(el, 'Past24hr'), 'now': gp(el, 'Now')}
+    except Exception as e:
+        print(f"    解析失敗：{e}"); return {}
+    n1 = sum(1 for v in out.values() if v['r1'])
+    print(f"    {len(out)} 站，時雨量>0：{n1} 站")
+    return out
+
+
+def fetch_swcb_hourly():
+    """水保署土石流參考雨量站 API：取 STRT（官方有效累積雨量 ETR2）。
+    此 API 只給累積量、不給時雨量，故 ETR2 逐時序列由本快照的差分推得。
+    回傳 {站名: ETR2}；失敗回 {}。"""
+    print("抓取水保署參考雨量站 ETR2...")
+    for attempt in range(3):
+        try:
+            r = requests.get(SWCB_RAIN_URL, timeout=60)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}")
+                if attempt < 2: time.sleep(3); continue
+                return {}
+            data = json.loads(r.content.decode('utf-8', 'replace'))
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return {}
+            time.sleep(3)
+    if not isinstance(data, list): return {}
+    out = {}
+    for row in data:
+        if not isinstance(row, dict): continue
+        for nk, vk in (('STName1', 'STRT1'), ('STName2', 'STRT2')):
+            nm = (row.get(nk) or '').strip()
+            try: v = float(row.get(vk))
+            except (TypeError, ValueError): continue
+            if not nm: continue
+            out[nm] = v
+            out.setdefault(_stn_key(nm), v)
+    print(f"    {len(out)} 個站名鍵（含正規化鍵）")
+    return out
+
+
+def update_hourly_series(now_tpe):
+    """把本小時的 CWA 時雨量與水保署 ETR2 併入 rain_hourly.json 滾動序列。
+
+    結構（刻意用「時戳→站→值」而非「站→時戳」，缺跑的整個小時一眼可辨）：
+      {"updated": "2026-08-08T14:12",
+       "hours": ["2026-08-08T13", ...],            ← 升冪，最多 168 筆
+       "cwa":  {"2026-08-08T13": {"六龜": 12.5, ...}},   ← Past1hr
+       "swcb": {"2026-08-08T13": {"六龜": 431.2, ...}}}  ← STRT(ETR2)
+
+    絕不覆寫既有小時（該小時已寫過就跳過），避免同小時重跑污染序列。
+    """
+    hour_key = now_tpe.strftime('%Y-%m-%dT%H')
+    ser = {'updated': '', 'hours': [], 'cwa': {}, 'swcb': {}}
+    if os.path.exists(HOURLY_FILE):
+        try:
+            with open(HOURLY_FILE, encoding='utf-8') as f:
+                old = json.load(f)
+            if isinstance(old, dict) and 'hours' in old:
+                ser = old
+                ser.setdefault('cwa', {}); ser.setdefault('swcb', {})
+        except Exception as e:
+            print(f"    既有 {HOURLY_FILE} 讀取失敗，重建序列：{e}")
+
+    if hour_key in ser.get('hours', []):
+        print(f"    {hour_key} 已存在 → 不覆寫（同小時重跑）")
+    else:
+        cwa  = fetch_cwa_hourly()
+        swcb = fetch_swcb_hourly()
+        if not cwa and not swcb:
+            print("    兩個來源都失敗 → 本小時不寫入（序列留空格，判定端會回『資料不足』）")
+            return
+        ser['cwa'][hour_key]  = {k: v['r1'] for k, v in cwa.items() if v.get('r1') is not None}
+        ser['swcb'][hour_key] = swcb
+        ser['hours'] = sorted(set(ser['hours']) | {hour_key})
+
+    # 修剪：只留最近 KEEP_SERIES_HOURS 小時
+    cutoff = (now_tpe - timedelta(hours=KEEP_SERIES_HOURS)).strftime('%Y-%m-%dT%H')
+    keep = [h for h in ser['hours'] if h >= cutoff]
+    dropped = len(ser['hours']) - len(keep)
+    ser['hours'] = keep
+    for bucket in ('cwa', 'swcb'):
+        ser[bucket] = {h: v for h, v in ser[bucket].items() if h in keep}
+    ser['updated'] = now_tpe.strftime('%Y-%m-%dT%H:%M')
+    ser['keep_hours'] = KEEP_SERIES_HOURS
+
+    # 完整度：判定端據此決定「資料不足」而非「未達標」
+    span = len(keep)
+    expected = min(span, KEEP_SERIES_HOURS)
+    gaps = []
+    if keep:
+        t = datetime.strptime(keep[0], '%Y-%m-%dT%H')
+        end = datetime.strptime(keep[-1], '%Y-%m-%dT%H')
+        have = set(keep)
+        while t <= end:
+            k = t.strftime('%Y-%m-%dT%H')
+            if k not in have: gaps.append(k)
+            t += timedelta(hours=1)
+    ser['gaps'] = gaps[-48:]          # 只留最近的缺格清單，避免無限長
+    ser['gap_count'] = len(gaps)
+
+    with open(HOURLY_FILE, 'w', encoding='utf-8') as f:
+        json.dump(ser, f, ensure_ascii=False, separators=(',', ':'))
+    sz = os.path.getsize(HOURLY_FILE) // 1024
+    print(f"    已寫 {HOURLY_FILE}：{span} 小時序列（清除{dropped}筆過期），"
+          f"缺格 {len(gaps)} 小時，{sz}KB")
+    if span < 12:
+        print(f"    ⚠ 暖機中（{span}/12h）：解除判定需12h、自算ETR2需168h，"
+              f"未達前判定端會回『資料不足』而非『未達解除標準』")
+
+
 def patch_radar_into_data(radar_vals, radar_dt):
     """寫獨立的 radar.json（只有本每小時腳本寫、主腳本不碰）。
     前端載入時併入——兩個 workflow 各寫各檔，永不在 data.json 上撞車。"""
@@ -237,6 +407,13 @@ def main():
         patch_radar_into_data(radar_vals, radar_dt)
     else:
         print("    雷達QPF 本次未取得，radar.json 維持原值")
+
+    # ── 逐時雨量快照（獨立於雷達成敗；雷達掛掉不該讓序列斷格）──
+    print("逐時雨量快照...")
+    try:
+        update_hourly_series(now)
+    except Exception as e:
+        print(f"    逐時快照失敗（不影響 radar.json）：{e}")
 
 
 if __name__ == '__main__':
