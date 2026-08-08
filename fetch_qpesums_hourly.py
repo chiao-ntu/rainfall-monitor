@@ -245,13 +245,26 @@ def fetch_cwa_hourly():
             print(f"    失敗（{attempt+1}/3）：{e}")
             if attempt == 2: return {}
             time.sleep(3)
-    def gp(re_, k):
-        v = (re_ or {}).get(k)
-        try:
-            f = float(v)
-            return None if f < -90 else f      # CWA 缺值為 -998/-999
-        except (TypeError, ValueError):
-            return None
+    # ★ O-A0002 的 RainfallElement 值是**嵌套**在 'Precipitation' 下，且鍵名大小寫不一致
+    #   （Past6Hr 大寫 H、Past24hr 小寫 h）。早期版本寫 float(el.get(k)) 直接對 dict
+    #   取 float → 每一站都是 None → cwa 桶全空 → r1h/r2h/r3h 永遠算不出來。
+    #   本函式與 fetch_rainfall.py 的 gp() 行為必須一致。
+    def gp(el, key):
+        for k in (key, key.replace('hr', 'Hr'), key.replace('Hr', 'hr')):
+            node = el.get(k)
+            if isinstance(node, dict):
+                v = node.get('Precipitation')
+            else:
+                v = node          # 萬一哪天 CWA 改成直接給值也吃得下
+            if v is None:
+                continue
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            # CWA 缺值為 -998/-999；'T' 微量等非數值已在上面被跳過
+            return None if f < -90 else max(0.0, f)
+        return None
     out = {}
     try:
         for st in doc.get('records', {}).get('Station', []) or []:
@@ -262,8 +275,11 @@ def fetch_cwa_hourly():
                        'r24': gp(el, 'Past24hr'), 'now': gp(el, 'Now')}
     except Exception as e:
         print(f"    解析失敗：{e}"); return {}
+    n_val = sum(1 for v in out.values() if v['r1'] is not None)
     n1 = sum(1 for v in out.values() if v['r1'])
-    print(f"    {len(out)} 站，時雨量>0：{n1} 站")
+    print(f"    {len(out)} 站，有時雨量值：{n_val} 站，時雨量>0：{n1} 站")
+    if out and n_val == 0:
+        print("    ★ 警告：所有站的 Past1hr 都取不到值——欄位結構可能改變，請貼 log 檢查")
     return out
 
 
