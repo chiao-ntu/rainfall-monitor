@@ -70,6 +70,23 @@ function chk(label, got, exp) {
   console.log(`  ${ok ? 'OK ' : '!! '}${label}: ${JSON.stringify(got)}` +
     (ok ? '' : `  期望 ${JSON.stringify(exp)}`));
 }
+
+// ★ index.html 的頂層 let/const 是**詞法綁定**，不會掛到 window 上：
+//   `G._userFactor = 1.5` 只是新增一個 window 屬性，程式讀的仍是詞法變數。
+//   （與 TOWN_GEO 同一個陷阱。）同一 global scope 的後續 script 可以指派既有綁定，
+//   故以注入 script 的方式設定，才是真的改到程式讀的那個變數。
+function setLex(expr) {
+  const el = win.document.createElement('script');
+  el.textContent = expr;
+  win.document.body.appendChild(el);
+}
+function getLex(expr) {
+  const key = '__probe_' + Math.random().toString(36).slice(2);
+  setLex(`window.${key} = (${expr});`);
+  const v = win[key]; delete win[key];
+  return v;
+}
+
 function need(name) {
   if (typeof G[name] !== 'function') { fails.push(`${name} 未定義`); console.log(`!! ${name} 未定義`); return false; }
   return true;
@@ -143,10 +160,24 @@ if (need('_distToTaiwanKm') && need('_tyKeyPoints')) {
                    loMin=Math.min(loMin,p[1]); loMax=Math.max(loMax,p[1]); });
   console.log(`   點集 ${pts.length} 點｜lat ${laMin.toFixed(2)}~${laMax.toFixed(2)}｜lng ${loMin.toFixed(2)}~${loMax.toFixed(2)}`);
   // ★ 必須排除釣魚臺列嶼(至124.56E)、東沙(116.7E)、南沙太平島(10.37N)
-  if (loMax > 122.3) fails.push(`點集含釣魚臺列嶼（最東 ${loMax.toFixed(2)}E）`);
-  else console.log('  OK  已排除釣魚臺列嶼（最東 ≤122.3E）');
+  if (loMax > 122.05) fails.push(`點集含釣魚臺列嶼或北方三島（最東 ${loMax.toFixed(3)}E）`);
+  else console.log('  OK  已排除釣魚臺列嶼與北方三島（最東 ≤122.05E）');
   if (laMin < 21.0) fails.push(`點集含東沙/南沙（最南 ${laMin.toFixed(2)}N）`);
   else console.log('  OK  已排除東沙／南沙（最南 ≥21.0N）');
+  // 逐一確認被排除的島礁座標不在點集判準內，且該保留者仍在
+  [['花瓶嶼',25.424,121.946,false],['棉花嶼',25.484,122.108,false],
+   ['彭佳嶼',25.628,122.078,false],['赤尾嶼',25.923,124.559,false],
+   ['釣魚臺',25.745,123.478,false],['東沙島',20.70,116.72,false],
+   ['南沙太平島',10.37,114.36,false],
+   ['龜山島',24.845,121.950,true],['三貂角(貢寮)',25.010,122.000,true],
+   ['蘭嶼',22.05,121.55,true],['澎湖馬公',23.57,119.57,true],
+   ['金門',24.45,118.30,true],['烏坵',24.99,119.45,true],
+   ['馬祖東引',26.38,120.47,true]].forEach(([nm,la,lo,want])=>{
+    const got = G._inWarnScope(la,lo);
+    const ok = got === want;
+    if(!ok) fails.push(`${nm} 判準範圍應為 ${want}`);
+    console.log(`   ${ok?'OK ':'!! '}${nm} (${la},${lo}) 納入判準=${got}${want?'（應納入）':'（應排除）'}`);
+  });
   // 金馬必須納入（使用者明確要求）
   const dKinmen = G._distToTaiwanKm(24.45, 118.30);
   const dMatsu  = G._distToTaiwanKm(26.15, 119.95);
@@ -382,6 +413,90 @@ if (need('_countiesInRadius')) {
   console.log(`   (22.0N,120.75E) r=40km → ${ken.join('、') || '(空)'}`);
   if (!ken.includes('屏東縣')) fails.push('恆春半島 40km 應含屏東縣');
   else console.log('  OK  小範圍定位正確');
+}
+
+
+// ════════ 8. CSV 與地圖著色必須同源（回歸測試）════════
+console.log('\n=== _summaryRain 與 getAccum 一致性（CSV vs 地圖）===');
+if (need('_summaryRain') && need('getAccum')) {
+  const t = {
+    county:'高雄市', township:'六龜區', alert_val:300, rain_24h:50,
+    obs_1h_p48: Array(48).fill(2), qpf_1h_p48: Array(48).fill(1),
+    qpf_best: Array(16).fill(12), qpf_1h: Array(96).fill(2),
+    daily_rain:[10,48,48,48,30,20,10,5,0,0,0,0,0,0,0],
+  };
+  const nowSeg = G._nowSeg();
+  const vals = [];
+  const cases = [
+    ['自訂-跨時',   'custom', -4, nowSeg + 2],
+    ['自訂-純過去', 'custom', -12, -1],
+    ['自訂-純未來', 'custom', nowSeg + 1, nowSeg + 3],
+    ['過去整天',    'past1',  -8, -5],
+    ['今天',        'today',  0, 3],
+  ];
+  cases.forEach(([lbl, wk, sf, st]) => {
+    // winKey/segFrom/segTo/mode 同為詞法綁定，必須用 setLex 才改得到（見上方註解）
+    setLex(`winKey='${wk}'; segFrom=${sf}; segTo=${st}; mode='rain';`);
+    const a = G.getAccum(t, 'rain');
+    const b = G._summaryRain(t);
+    const av = a && a.totalRain == null ? null : Math.round(a.totalRain*10)/10;
+    const ok = av === b;
+    if (!ok) fails.push(`${lbl}: 地圖 ${av} ≠ CSV ${b}`);
+    console.log(`  ${ok?'OK ':'!! '}${lbl}: 地圖=${av} CSV=${b}` +
+      `  [winKey=${getLex('winKey')} segFrom=${getLex('segFrom')} segTo=${getLex('segTo')}]`);
+    vals.push(av);
+  });
+  // 五種視窗若算出完全相同的值，代表 setLex 沒生效（測試本身失效），要喊出來
+  if (new Set(vals.map(v => String(v))).size === 1) {
+    fails.push('五種視窗值全同 → 視窗狀態沒被真正切換，測試無效');
+    console.log('  !! 五種視窗值全同，測試無效（狀態未切換）');
+  } else {
+    console.log('  OK  各視窗值有差異，狀態確實有切換');
+  }
+}
+
+
+// ════════ 9. 自訂倍率（與自動偏差修正疊加）════════
+console.log('\n=== 自訂倍率 ===');
+if (need('getQpfArr') && need('_qpfFactor') && need('setUserFactor')) {
+  const t = { qpf_best: [10, 20, null, 5], qpf_cwa: [10, 20, null, 5] };
+  setLex('_biasApplyOn = false; _userFactorOn = false; _userFactor = 1; _biasFactor = 2;');
+  chk('都關閉時倍率=1', G._qpfFactor(), 1);
+  chk('都關閉時原值', G.getQpfArr(t, 'qpf_best'), [10, 20, null, 5]);
+
+  setLex('_userFactor = 1.5; _userFactorOn = true;');
+  chk('僅自訂倍率 1.5', G._qpfFactor(), 1.5);
+  chk('值×1.5，null 保持 null', G.getQpfArr(t, 'qpf_best'), [15, 30, null, 7.5]);
+
+  setLex('_biasApplyOn = true;');            // 偏差 2 × 自訂 1.5 = 3
+  chk('疊加倍率=3', G._qpfFactor(), 3);
+  chk('值×3', G.getQpfArr(t, 'qpf_best'), [30, 60, null, 15]);
+  chk('★純CWA不受任何倍率影響', G.getQpfArr(t, 'qpf_cwa'), [10, 20, null, 5]);
+
+  // 只乘一次、只捨入一次
+  setLex('_biasFactor = 1.15; _userFactor = 1.15;');   // 合併 1.3225
+  const once = Math.round(7.7 * 1.3225 * 10) / 10;
+  chk('合併後只捨入一次', G.getQpfArr({ qpf_best: [7.7] }, 'qpf_best'), [once]);
+
+  // 快取鍵必須隨倍率與開關改變
+  if (need('_factorKey')) {
+    setLex('_userFactor = 1.0;'); const k1 = G._factorKey();
+    setLex('_userFactor = 2.0;'); const k2 = G._factorKey();
+    chk('快取鍵隨自訂倍率改變', k1 !== k2, true);
+    setLex('_userFactorOn = false;'); const k3 = G._factorKey();
+    chk('快取鍵隨開關改變', k2 !== k3, true);
+  }
+
+  // 限幅與無效輸入（走 setUserFactor 公開介面）
+  setLex('_userFactorOn = false; _biasApplyOn = false;');
+  G.setUserFactor(99);    chk('上限截斷至 5', getLex('_userFactor'), 5);
+  G.setUserFactor(0.01);  chk('下限截斷至 0.1', getLex('_userFactor'), 0.1);
+  const keep = getLex('_userFactor');
+  G.setUserFactor('abc'); chk('非數字不套用', getLex('_userFactor'), keep);
+  G.setUserFactor(-3);    chk('負值不套用', getLex('_userFactor'), keep);
+  G.setUserFactor(0);     chk('零不套用', getLex('_userFactor'), keep);
+  G.setUserFactor(1.234); chk('四捨五入到兩位', getLex('_userFactor'), 1.23);
+  setLex('_userFactor = 1; _userFactorOn = false; _biasApplyOn = false;');
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`

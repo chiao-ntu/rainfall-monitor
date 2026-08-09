@@ -31,7 +31,10 @@ MUST = ['getAccum', 'setWin', 'onSlider', '_spanAccum', '_hourlyBars', '_futuHou
         'toggleDisasterLayer', 'renderDisasterLayer',
         'toggleDebrisLayer', 'renderDebrisLayer', 'updateDebrisPanel',
         'toggleLandslideLayer', 'renderLandslideLayer', 'updateLandslidePanel',
-        'toggleLsbSection', 'calcEtr2AtSeg', '_etrDen', '_nowSeg', 'getQpfArr']
+        'toggleLsbSection', 'calcEtr2AtSeg', '_etrDen', '_nowSeg', 'getQpfArr',
+        'toggleTyphoonLegend', '_applyTyphoonLegendCollapse', '_summaryRain',
+        '_inWarnScope', '_seaLineSegs', '_countiesInRadius', '_twGrid',
+        'downloadRangeCsv', 'toggleMapPanel']
 for fn in MUST:
     n = len(re.findall(r'^\s*(?:async\s+)?function\s+' + re.escape(fn) + r'\s*\(', s, re.M))
     if n == 0:
@@ -47,6 +50,7 @@ for tag in ['</html>', '</body>', '<div id="map"']:
 
 # --- 4. 關鍵功能字串 ---
 MUST_STR = ['TOWN_GEO', 'TYPHOON_TRACK', 'DEBRIS_ALERTS', 'typhoon-panel-body',
+            'typhoon-legend-wrap', 'typhoon-legend-toggle', 'TW_WARN_EXCLUDE',
             'debris-panel-body', 'landslide-panel-body', 'typhoon-legend',
             'cust-ctrl', 'slS', 'slE', '颱風動態', 'ETR2']
 for k in MUST_STR:

@@ -337,11 +337,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
       <div id="scalebar-wrap" style="pointer-events:none;background:#fff;border:1px solid #99aabb;border-radius:4px;padding:2px 6px;width:fit-content"></div>
     </div>
-    <!-- 颱風動態圖例：左下角（按下颱風動態按鈕才顯示） -->
-    <div id="typhoon-legend" style="display:none;position:absolute;bottom:30px;left:12px;z-index:600;
-      background:rgba(255,255,255,0.96);border:1px solid #99aabb;border-radius:5px;padding:7px 9px;
-      font-size:10px;color:#111;pointer-events:none;width:fit-content;max-width:230px;
-      box-shadow:0 1px 4px rgba(0,0,0,.3)"></div>
+    <!-- 颱風動態圖例：左下角（按下颱風動態按鈕才顯示），可收合 -->
+    <div id="typhoon-legend-wrap" style="display:none;position:absolute;bottom:30px;left:12px;
+      z-index:600;display:none;flex-direction:column;align-items:flex-start;gap:5px">
+      <div id="typhoon-legend" style="background:rgba(255,255,255,0.96);border:1px solid #99aabb;
+        border-radius:5px;padding:7px 9px;font-size:10px;color:#111;pointer-events:none;
+        width:fit-content;max-width:230px;box-shadow:0 1px 4px rgba(0,0,0,.3);
+        transition:opacity 0.2s ease,transform 0.2s ease"></div>
+      <button id="typhoon-legend-toggle" onclick="toggleTyphoonLegend()"
+        title="收合/展開颱風動態圖例"
+        style="background:#fff;border:1px solid #99aabb;border-radius:4px;width:22px;height:22px;
+        font-size:11px;cursor:pointer;color:#222;display:flex;align-items:center;
+        justify-content:center;pointer-events:auto;box-shadow:0 1px 3px rgba(0,0,0,.25);
+        transition:transform 0.2s ease">&#9660;</button>
+    </div>
     <div id="map-overlay"></div>
     <div id="no-data-msg">
       <div class="nd-icon">⚠</div>
@@ -756,7 +765,7 @@ let _prevEtrSet = null;  // 上次警戒清單（偵測新增項目）
 function _etrHistPeaks(){
   // 近7日 ETR2 峰值備查：過去達標為既定事實，即使現已折減仍留存可查。
   // 需 daily_rain 回推14天（後端已延長至15天；歷史檔補滿前，較早日期會偏低——誠實限制）
-  const key = forecastModel + '|' + (_biasApplyOn ? _biasFactor : 0) + '|' + (window._dataGenAt || '');
+  const key = forecastModel + '|' + _factorKey() + '|' + (window._dataGenAt || '');
   if(window._etrHistCache && window._etrHistCache.key === key) return window._etrHistCache.rows;
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
   const nowSeg = Math.max(0, Math.min(3, Math.floor((Date.now()-SEG_EPOCH().getTime())/216e5)));
@@ -1084,30 +1093,91 @@ function toggleSumSec(kind){
 
 let _biasFactor = null;    // 24h偏差比中位數（載入時設定）
 let _biasApplyOn = false;  // 偏差修正套用開關（顯示層，可隨時關閉）
+let _userFactor = 1.0;     // 使用者自訂倍率（顯示層）
+let _userFactorOn = false; // 自訂倍率套用開關
+const USER_FACTOR_MIN = 0.1, USER_FACTOR_MAX = 5.0;
+
+// 目前實際生效的預測倍率（自動偏差修正 × 自訂倍率，兩者可疊加）
+// ★ 所有預測值都經 getQpfArr()，故只要改這裡，地圖／圖表／ETR2／風險／左右狀態列／
+//   CSV／複製 全部自動連動——不要在別處再乘一次。
+function _qpfFactor(){
+  let f = 1;
+  if(_biasApplyOn && _biasFactor) f *= _biasFactor;
+  if(_userFactorOn && _userFactor) f *= _userFactor;
+  return f;
+}
+// 快取鍵用：把兩個倍率一起編碼（漏掉會讓快取吐出舊倍率的值）
+function _factorKey(){
+  return (_biasApplyOn ? _biasFactor : 0) + '/' + (_userFactorOn ? _userFactor : 0);
+}
 
 function getQpfArr(t, qpfField){
-  // 純CWA模式：有多少算多少，絕不以其他模式補值（官方值也不套偏差修正）
+  // 純CWA模式：有多少算多少，絕不以其他模式補值（官方值也不套任何倍率）
   if(qpfField === 'qpf_cwa') return t.qpf_cwa || [];
   const arr = t[qpfField] || t.qpf_15d || new Array(60).fill(0);
-  if(_biasApplyOn && _biasFactor){
-    return arr.map(v => v==null ? v : Math.round(v*_biasFactor*10)/10);
+  const f = _qpfFactor();
+  if(f !== 1){
+    // 合併後只乘一次、只四捨五入一次（分兩次乘會累積捨入誤差）
+    return arr.map(v => v==null ? v : Math.round(v*f*10)/10);
   }
   return arr;
 }
 
-function toggleBiasApply(){
-  _biasApplyOn = !_biasApplyOn;
-  const btn = document.getElementById('bias-apply-btn');
-  if(btn){
-    btn.style.background = _biasApplyOn ? '#5a3a10' : '';
-    btn.style.borderColor = _biasApplyOn ? '#ffcc44' : '#555';
-  }
+function _refreshAfterFactorChange(){
   withTransition(()=>{
     renderLayer(); renderLegend();
     if(selected) updateInfo(selected);
     try{ updateAllDistrictCharts(); }catch(e){}
     try{ _redrawZoom(); }catch(e){}
+    try{ updateSummary(); }catch(e){}
+    try{ updateDebrisPanel(); }catch(e){}
+    try{ updateLandslidePanel(); }catch(e){}
+    try{ updateTyphoonPanel(); }catch(e){}
   });
+  _updateFactorBtns();
+}
+
+function _updateFactorBtns(){
+  const bb = document.getElementById('bias-apply-btn');
+  if(bb){
+    bb.style.background  = _biasApplyOn ? '#5a3a10' : '';
+    bb.style.borderColor = _biasApplyOn ? '#ffcc44' : '#555';
+  }
+  const ub = document.getElementById('ufac-btn');
+  if(ub){
+    ub.style.background  = _userFactorOn ? '#10405a' : '';
+    ub.style.borderColor = _userFactorOn ? '#44ccff' : '#555';
+    ub.textContent = `✕自訂倍率 ×${_userFactor}`;
+  }
+  const inp = document.getElementById('ufac-input');
+  if(inp && document.activeElement !== inp) inp.value = _userFactor;
+  // 生效中的合併倍率提示（讓使用者知道兩個開關疊加後的實際值）
+  const eff = document.getElementById('ufac-eff');
+  if(eff){
+    const f = _qpfFactor();
+    eff.textContent = (f === 1) ? '' : `生效 ×${Math.round(f*100)/100}`;
+    eff.style.color = f > 1 ? '#ff9a6a' : (f < 1 ? '#8ac8f0' : '#888');
+  }
+}
+
+function setUserFactor(v){
+  const n = parseFloat(v);
+  if(!isFinite(n) || n <= 0){ _updateFactorBtns(); return; }   // 無效輸入不套用
+  _userFactor = Math.max(USER_FACTOR_MIN, Math.min(USER_FACTOR_MAX, Math.round(n*100)/100));
+  if(_userFactorOn) _refreshAfterFactorChange(); else _updateFactorBtns();
+}
+function toggleUserFactor(){
+  _userFactorOn = !_userFactorOn;
+  _refreshAfterFactorChange();
+}
+function nudgeUserFactor(d){
+  setUserFactor(_userFactor + d);
+  if(!_userFactorOn){ _userFactorOn = true; _refreshAfterFactorChange(); }
+}
+
+function toggleBiasApply(){
+  _biasApplyOn = !_biasApplyOn;
+  _refreshAfterFactorChange();
 }
 
 // 計算「以 seg 為基準時刻」的 ETR2（往前推7天，過去用觀測、未來用QPF）
@@ -2361,6 +2431,21 @@ async function tryLoadLive(){
         `<button id="bias-apply-btn" class="b" onclick="toggleBiasApply()" style="margin-left:6px;font-size:10px;padding:1px 6px" `+
         `title="開啟後所有預測值（地圖/圖表/ETR2/風險/左右狀態列）×${_biasFactor}（限幅0.5~3）。純CWA模式不受影響。可隨時關閉還原。">⚙套用修正 ×${_biasFactor}</button>`;
     }
+    // 自訂倍率：與「套用修正」走同一條路徑（getQpfArr），兩者相乘後生效。
+    //   放在同一列，讓「自動偏差修正」與「手動倍率」被讀成同一組工具。
+    if(sysNote){
+      sysNote.innerHTML += `${sysNote.innerHTML?' \u00b7 ':''}` +
+        `<span style="font-size:9px;color:#8ac8f0" title="手動倍率。與『套用修正』相乘後作用於所有預測值（地圖／圖表／ETR2／風險／左右狀態列／CSV／複製）。純CWA模式不受影響。">自訂倍率</span>` +
+        `<button class="b" onclick="nudgeUserFactor(-0.1)" style="font-size:10px;padding:0 5px;margin-left:3px" title="倍率 -0.1">-</button>` +
+        `<input id="ufac-input" type="number" step="0.1" min="${USER_FACTOR_MIN}" max="${USER_FACTOR_MAX}" value="${_userFactor}" ` +
+        `onchange="setUserFactor(this.value)" onkeydown="if(event.key==='Enter'){setUserFactor(this.value);this.blur();}" ` +
+        `style="width:48px;font-size:10px;padding:1px 3px;margin:0 2px;background:#1a1a22;color:#ddd;border:1px solid #555;border-radius:3px">` +
+        `<button class="b" onclick="nudgeUserFactor(0.1)" style="font-size:10px;padding:0 5px" title="倍率 +0.1">+</button>` +
+        `<button id="ufac-btn" class="b" onclick="toggleUserFactor()" style="margin-left:4px;font-size:10px;padding:1px 6px" ` +
+        `title="開關自訂倍率。與『套用修正』相乘，兩者都開時以合併倍率生效。">\u2715自訂倍率 \u00d7${_userFactor}</button>` +
+        `<span id="ufac-eff" style="font-size:9px;margin-left:5px;font-weight:700"></span>`;
+    }
+    _updateFactorBtns();
     // 系集比值失敗提示（強/弱降雨按鈕仍可按，但值=原始預測）
     if(d.ens_active === false){
       const hiBtn = document.getElementById('mHi'), loBtn = document.getElementById('mLo');
@@ -2832,26 +2917,14 @@ body.innerHTML = h;
 
 // 摘要用：當前時段的累積雨量（不受 mode 影響，永遠回傳雨量）
 function _summaryRain(t){
-  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
-  if(segTo < 0){
-    const dayIdx = Math.abs(Math.floor(segTo/4));
-    const v = (t.daily_rain||[])[dayIdx];
-    return (v!=null) ? v : null;
-  }
-  if(key_is_today_window(segFrom, segTo)){
-    // 與 getAccum 同公式：已實現觀測 + 現在後QPF
-    const qa = getQpfArr(t, qpfField);
-    if(forecastModel==='cwa' && qa.length===0) return null;   // 純CWA：無資料不補值
-    const nowH = Math.max(0, Math.min(23, Math.floor((Date.now()-SEG_EPOCH().getTime())/3600e3)));
-    const fu = _futuHourly(t);
-    let rest = 0;
-    for(let h=nowH+1; h<24; h++) rest += fu[h]||0;
-    return Math.round((((t.daily_rain||[])[0]||0) + rest)*10)/10;
-  }
-  const qa = getQpfArr(t, qpfField);
-  let tot=0;
-  for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++) tot+=qa[s]||0;
-  return Math.round(tot*10)/10;
+  // ★ 一律委派 getAccum()，不要自己再算一份。
+  //   本函式原本是 getAccum 的平行實作，自訂範圍改走 _spanAccum 後就對不上：
+  //   segTo<0 只看 segTo（忽略 segFrom）、其餘用 Math.max(0,segFrom) 把過去段整段丟掉，
+  //   於是畫面上的地圖與匯出的 CSV 顏色不一致（繪圖地圖匯入後變成另一張圖）。
+  //   共用同一條路徑是唯一能保證兩者一致的做法。
+  const r = getAccum(t, 'rain');
+  const v = r ? r.totalRain : null;
+  return (v == null) ? null : Math.round(v*10)/10;
 }
 
 // 摘要用：當前時段的 ETR2%
@@ -3678,18 +3751,33 @@ function _lsCentroid(a, d){
 }
 
 // ── 臺灣陸域距離（CWA 颱風警報範圍：本島＋澎湖＋金門＋馬祖）──
-// ★ 必須做地理框限：368 鄉鎮的圖資包含「釣魚臺列嶼」（行政上屬宜蘭縣頭城鎮，
-//   赤尾嶼達 124.56°E）與「東沙島／南沙太平島」（屬高雄市旗津區，南至 10.37°N）。
-//   這些無人島礁不在 CWA「臺灣近海100公里」的警報判準內；若不排除，
-//   暴風圈會先碰到赤尾嶼而讓海警/陸警時間全部提前失真。
-//   因為釣魚臺與本島同屬頭城鎮，無法用鄉鎮名排除，只能用經緯度框。
+// ★ 必須做地理框限：368 鄉鎮的圖資包含下列不在警報判準內的離島島礁，
+//   若不排除，暴風圈會先碰到它們而讓海警/陸警時間全部提前失真：
+//     釣魚臺列嶼（宜蘭縣頭城鎮，123.46~124.56°E／25.72~25.93°N，實測 101 個多邊形）
+//     北方三島：花瓶嶼(121.946,25.424)／棉花嶼(122.10,25.48)／彭佳嶼(122.08,25.63)
+//                （皆屬基隆市中正區）
+//     東沙島（116.7°E）／南沙太平島（10.37°N），皆屬高雄市旗津區
+//   這些島礁與本島同屬同一鄉鎮，**無法用鄉鎮名排除，只能用經緯度**。
+//   白名單邊界依實測值訂：本島最東 122.008°E（新北貢寮）、最北約 25.30°N（富貴角），
+//   龜山島（121.965°E／24.85°N）須保留。
 const TW_WARN_BOXES = [
   // [latMin, latMax, lngMin, lngMax]  說明
-  [21.75, 25.75, 119.25, 122.15],  // 本島＋澎湖＋綠島＋蘭嶼＋小琉球＋北方三島
+  [21.75, 25.35, 119.25, 122.05],  // 本島＋澎湖＋綠島＋蘭嶼＋小琉球＋龜山島
   [24.10, 25.10, 118.00, 119.50],  // 金門＋烏坵
   [25.90, 26.40, 119.85, 120.55],  // 馬祖（連江）
 ];
+// 明確黑名單（第二道防線）：即使白名單日後被放寬，這些島礁仍不納入警報判準
+const TW_WARN_EXCLUDE = [
+  [25.38, 25.70, 121.90, 122.20],  // 北方三島（花瓶嶼／棉花嶼／彭佳嶼）
+  [25.60, 26.10, 123.30, 124.80],  // 釣魚臺列嶼
+  [20.50, 21.00, 116.50, 117.00],  // 東沙島
+  [10.00, 11.00, 114.00, 115.00],  // 南沙太平島
+];
 function _inWarnScope(lat, lng){
+  for(let i=0;i<TW_WARN_EXCLUDE.length;i++){
+    const b = TW_WARN_EXCLUDE[i];
+    if(lat >= b[0] && lat <= b[1] && lng >= b[2] && lng <= b[3]) return false;
+  }
   for(let i=0;i<TW_WARN_BOXES.length;i++){
     const b = TW_WARN_BOXES[i];
     if(lat >= b[0] && lat <= b[1] && lng >= b[2] && lng <= b[3]) return true;
@@ -4103,9 +4191,10 @@ const TY_KIND_STYLE = {
 };
 
 function renderTyphoonLegend(){
-  const el = document.getElementById('typhoon-legend');
-  if(!el) return;
-  if(!showTyphoon){ el.style.display = 'none'; return; }
+  const el   = document.getElementById('typhoon-legend');
+  const wrap = document.getElementById('typhoon-legend-wrap');
+  if(!el || !wrap) return;
+  if(!showTyphoon){ wrap.style.display = 'none'; return; }
   const rows = [
     ['#1e6fd9', '▼', '暴風圈觸及100km海域'],
     ['#d92020', '▼', '暴風圈觸及陸地'],
@@ -4149,6 +4238,40 @@ function renderTyphoonLegend(){
       關鍵時間點為系統依預報路徑推估，非官方發布值</div>`;
   el.innerHTML = h;
   el.style.display = 'block';
+  wrap.style.display = 'flex';
+  _applyTyphoonLegendCollapse();     // 重繪後沿用使用者先前的收合狀態
+}
+
+// 颱風圖例收合（與右下角圖例 toggleMapPanel 同一套互動：本體淡出縮起、按鈕箭頭翻轉）
+let _tyLegendCollapsed = false;
+function _applyTyphoonLegendCollapse(){
+  const el  = document.getElementById('typhoon-legend');
+  const btn = document.getElementById('typhoon-legend-toggle');
+  if(!el || !btn) return;
+  if(_tyLegendCollapsed){
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(8px) scale(0.96)';
+    el.style.pointerEvents = 'none';
+    el.style.height = '0';
+    el.style.padding = '0';
+    el.style.overflow = 'hidden';
+    el.style.border = 'none';
+    btn.innerHTML = '&#9650;';
+    btn.title = '展開颱風動態圖例';
+  }else{
+    el.style.opacity = '1';
+    el.style.transform = 'none';
+    el.style.height = '';
+    el.style.padding = '7px 9px';
+    el.style.overflow = '';
+    el.style.border = '1px solid #99aabb';
+    btn.innerHTML = '&#9660;';
+    btn.title = '收合颱風動態圖例';
+  }
+}
+function toggleTyphoonLegend(){
+  _tyLegendCollapsed = !_tyLegendCollapsed;
+  _applyTyphoonLegendCollapse();
 }
 
 function toggleDisasterLayer(){
@@ -5084,7 +5207,7 @@ const WARN_COLORS = ['', '#FFFF00', '#FF8C00', '#FF0000', '#FF00FF'];
 function _warnHourlySeries(t){
   // 警特報統一逐時序列 hAbs∈[-48,96)（144槽）：過去=官方觀測（QPESUMS逐時；
   // 缺逐時觀測時以該日官方日觀測均攤——總量守恆），未來=_futuHourly（權威段值分配）
-  const ck = forecastModel + '|' + (_biasApplyOn ? _biasFactor : 0);
+  const ck = forecastModel + '|' + _factorKey();
   if(t._whCache && t._whKey === ck) return t._whCache;
   const nowH = Math.max(0, Math.min(23, Math.floor((Date.now()-SEG_EPOCH().getTime())/3600e3)));
   const obs = t.obs_1h_p48 || [];
