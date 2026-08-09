@@ -614,6 +614,56 @@ if (need('getQpfArr') && need('_scnActive') && need('_townGroupKey')) {
   setLex('_scnOn=false; _scnDays={};');
 }
 
+
+// ════════ 12. 本輪修正的回歸測試 ════════
+console.log('\n=== 官方值(CWA)絕不調整 ===');
+if (need('getQpfArr')) {
+  const t = { county:'南投縣', township:'仁愛鄉', alert_val:700,
+              qpf_best:Array(64).fill(10), qpf_cwa:Array(64).fill(8) };
+  setLex("forecastModel='cwa'; _userFactor=3; _userFactorOn=true; _biasApplyOn=false;");
+  setLex("_scnOn=true; _scnDays={0:{model:null,g:{'南投分署|山區':{add:200,mul:3}}}};");
+  chk('全域倍率+情境下 CWA 仍為原值', G.getQpfArr(t,'qpf_cwa').slice(0,4), [8,8,8,8]);
+  setLex("forecastModel='best'; _scnDays={0:{model:'cwa',g:{'南投分署|山區':{add:200,mul:3}}}};");
+  chk('情境中某日選 CWA → 該日不受調整', G.getQpfArr(t,'qpf_best').slice(0,4), [8,8,8,8]);
+  setLex("_scnDays={0:{model:'hi',g:{}},1:{model:'cwa',g:{'南投分署|山區':{add:200,mul:3}}}};");
+  const mix = G.getQpfArr(Object.assign({qpf_hi:Array(64).fill(20)}, t), 'qpf_best');
+  console.log(`   day0(hi,×3全域)=${mix.slice(0,4)} day1(cwa)=${mix.slice(4,8)}`);
+  chk('非CWA日仍套全域倍率', mix.slice(0,1), [60]);
+  chk('CWA日不套任何倍率', mix.slice(4,8), [8,8,8,8]);
+  setLex("_userFactorOn=false; _userFactor=1; _scnOn=false; _scnDays={};");
+}
+
+console.log('\n=== 加成語意：每日總量 ===');
+if (need('getQpfArr')) {
+  const t = { county:'南投縣', township:'仁愛鄉', alert_val:700, qpf_best:Array(64).fill(10) };
+  setLex("forecastModel='best'; _userFactorOn=false; _biasApplyOn=false;");
+  setLex("_scnOn=true; _scnDays={0:{model:null,g:{'南投分署|山區':{add:200,mul:3}}}};");
+  const a = G.getQpfArr(t,'qpf_best');
+  const daySum = a.slice(0,4).reduce((x,y)=>x+(y||0),0);
+  console.log(`   段值=${a.slice(0,4)}  日和=${daySum}`);
+  chk('每段 (10+200/4)*3 = 180', a.slice(0,4), [180,180,180,180]);
+  chk('日和 = 4*180 = 720（加成貢獻 600）', daySum, 720);
+  chk('加成對日總量的貢獻 = 200*3', daySum - 4*10*3, 600);
+  setLex("_scnOn=false; _scnDays={};");
+}
+
+console.log('\n=== 日期短標籤不得截斷 ===');
+if (need('_scnDayShort')) {
+  const s0 = G._scnDayShort(0), s5 = G._scnDayShort(5);
+  console.log(`   day0="${s0}"  day5="${s5}"`);
+  chk('括號成對(day0)', /^\d+\/\d+\([日一二三四五六]\)$/.test(s0), true);
+  chk('括號成對(day5)', /^\d+\/\d+\([日一二三四五六]\)$/.test(s5), true);
+  // 16 天全部檢查
+  // SCN_DAYS_MAX 是 const（詞法綁定，不在 window 上）→ 必須用 getLex 讀
+  const nDays = getLex('SCN_DAYS_MAX');
+  chk('SCN_DAYS_MAX = 16（UI 做滿，無有/無UI日期落差）', nDays, 16);
+  let bad = [];
+  for (let d = 0; d < nDays; d++) {
+    if (!/^\d+\/\d+\([日一二三四五六]\)$/.test(G._scnDayShort(d))) bad.push(d);
+  }
+  chk('全 16 天標籤格式正確', bad, []);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

@@ -351,34 +351,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         justify-content:center;pointer-events:auto;box-shadow:0 1px 3px rgba(0,0,0,.25);
         transition:transform 0.2s ease">&#9660;</button>
     </div>
-    <!-- 情境編輯器彈出視窗（逐日 × 分署×地形 × 模式／加成／倍率） -->
-    <div id="scn-modal" style="display:none;position:fixed;inset:0;z-index:3000;
-      background:rgba(0,0,0,.6);align-items:center;justify-content:center">
-      <div style="background:#0b1622;border:1px solid #4a3a6a;border-radius:6px;
-        width:min(760px,94vw);max-height:88vh;display:flex;flex-direction:column;
-        box-shadow:0 6px 24px rgba(0,0,0,.6)">
-        <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;
-          background:#1a1030;border-bottom:1px solid #4a3a6a;border-radius:6px 6px 0 0">
-          <b style="color:#cc88ff;font-size:12px">情境編輯器</b>
-          <span style="font-size:9px;color:#8a7a9a">逐日設定模式與各分署加成／倍率</span>
-          <span style="flex:1"></span>
-          <button class="b" style="font-size:10px;padding:1px 6px" onclick="scnExport()"
-            title="匯出為 JSON（可與同事共用或存進 repo 當個案記錄）">匯出</button>
-          <label class="b" style="font-size:10px;padding:1px 6px;cursor:pointer"
-            title="匯入先前匯出的 JSON">匯入
-            <input type="file" accept="application/json" style="display:none"
-              onchange="scnImport(this)"></label>
-          <button class="b" style="font-size:10px;padding:1px 6px;border-color:#8a4444;color:#ff9988"
-            onclick="scnClearAll()">全部清除</button>
-          <button class="b" style="font-size:11px;padding:1px 7px" onclick="closeScnModal()">✕</button>
-        </div>
-        <div id="scn-body" style="overflow:auto;padding:8px 10px"></div>
-        <div style="padding:6px 10px;border-top:1px solid #2a3a4a;font-size:9px;color:#7a8a9a">
-          設定自動存於本機瀏覽器（localStorage）；換電腦請用「匯出／匯入」。
-          未設定的日期沿用上方的模式與全域倍率。
-        </div>
-      </div>
-    </div>
     <div id="map-overlay"></div>
     <div id="no-data-msg">
       <div class="nd-icon">⚠</div>
@@ -1132,10 +1104,11 @@ function toggleSumSec(kind){
 //     刻意用平均而非依模式形狀分配：模式報 0 的地區才可能被加起來——
 //     這正是「模式沒報但我認為會下」的使用情境（乘法在此無效）。
 // ══════════════════════════════════════════════════════════
-const SCN_DAYS_MAX = 10;                  // UI 提供前 10 天，其後沿用全域設定
+const SCN_DAYS_MAX = 16;                  // 做滿 16 天（qpf_15d 的完整段數），避免有UI/無UI日期落差
 const SCN_TERRAIN = ['山區', '平地'];
 let _scnOn = false;
 let _scnDays = {};    // {dayIdx: {model: string|null, g: {groupKey: {add, mul}}}}
+let _scnOpenDay = {};  // {dayIdx: true} 展開狀態（預設全收合）
 
 function _scnGroupKeys(){
   const ks = [];
@@ -1199,11 +1172,10 @@ function _factorKey(){
 
 function getQpfArr(t, qpfField){
   const scn = _scnActive();
-  // 純CWA模式：有多少算多少，絕不以其他模式補值。
-  // ★ 情境模式下例外：情境編輯器是「明確主觀」的工具，使用者指定的加成/倍率
-  //   會套用到當日所選的任何陣列（含 qpf_cwa）。但 CWA 值本質是色階級距，
-  //   調整後仍繼承該粗糙度——面板上有標示，不要當成精確值。
-  if(qpfField === 'qpf_cwa' && !scn) return t.qpf_cwa || [];
+  // ★ 官方值絕不調整（使用者明訂）：氣象署 CWA QPF 一律原樣回傳，
+  //   不套全域倍率、不套情境加成/倍率。出事時這是可以引述的官方數據。
+  //   情境中某日若選 CWA，該日同樣不受調整（見下方迴圈的 isCwa 判斷）。
+  if(qpfField === 'qpf_cwa') return t.qpf_cwa || [];
   const base = t[qpfField] || t.qpf_15d || new Array(60).fill(0);
   const gf = _qpfFactor();
 
@@ -1221,12 +1193,14 @@ function getQpfArr(t, qpfField){
   for(let s=0; s<len; s++){
     const day = Math.floor(s/4);
     const rule = (day < SCN_DAYS_MAX) ? _scnRule(day) : null;
-    let arr = base;
+    let arr = base, isCwa = false;
     if(rule && rule.model && MODEL_FIELD[rule.model]){
+      isCwa = (rule.model === 'cwa');
       arr = t[MODEL_FIELD[rule.model]] || base;
     }
     let v = arr[s];
     if(v == null){ out[s] = null; continue; }
+    if(isCwa){ out[s] = v; continue; }      // 官方值原樣輸出，不套任何調整
     if(rule && rule.g){
       const g = rule.g[gk] || rule.g['ALL'];
       if(g){
@@ -1240,6 +1214,9 @@ function getQpfArr(t, qpfField){
 }
 
 function _refreshAfterFactorChange(){
+  // ★ 圖表極值快取必須重置：否則逐日/組體圖的比例尺仍沿用舊倍率的極值
+  NATIONWIDE_EXTREMES = null;
+  DAILY_CHART_EXTREMES = null;
   withTransition(()=>{
     renderLayer(); renderLegend();
     if(selected) updateInfo(selected);
@@ -1298,11 +1275,19 @@ function toggleBiasApply(){
 
 // ── 情境編輯器 UI ────────────────────────────────────────
 const SCN_LS_KEY = 'rainfall_scenario_v1';
-function _scnDayLabel(day){
+function _scnDate(day){
   const b = BASE_TIME ? new Date(BASE_TIME) : new Date();
-  const d = new Date(b.getFullYear(), b.getMonth(), b.getDate() + day);
-  const wd = ['日','一','二','三','四','五','六'][d.getDay()];
-  return `${d.getMonth()+1}/${d.getDate()}（${wd}）` + (day===0 ? ' 今日' : '');
+  return new Date(b.getFullYear(), b.getMonth(), b.getDate() + day);
+}
+const _WD = ['日','一','二','三','四','五','六'];
+function _scnDayLabel(day){
+  const d = _scnDate(day);
+  return `${d.getMonth()+1}/${d.getDate()}（${_WD[d.getDay()]}）` + (day===0 ? ' 今日' : '');
+}
+// 短標籤（摘要列用）。★ 不可用 slice 截字：會把「（六）」切成「（六」
+function _scnDayShort(day){
+  const d = _scnDate(day);
+  return `${d.getMonth()+1}/${d.getDate()}(${_WD[d.getDay()]})`;
 }
 function _scnEnsure(day){
   if(!_scnDays[day]) _scnDays[day] = {model:null, g:{}};
@@ -1397,7 +1382,9 @@ function scnImport(input){
 }
 function openScnModal(){
   const m = document.getElementById('scn-modal');
-  if(m){ m.style.display = 'flex'; renderScnModal(); }
+  if(!m) return;
+  m.style.display = 'flex';
+  renderScnModal();
 }
 function closeScnModal(){
   const m = document.getElementById('scn-modal');
@@ -1417,73 +1404,150 @@ function renderScnSummary(){
   if(!days.length){ el.textContent = ''; return; }
   el.innerHTML = _scnOn
     ? `<span style="color:#cc88ff;font-weight:700" title="情境設定生效中：已設定 ${days.length} 天">
-        情境生效（${days.map(d=>_scnDayLabel(d).slice(0,5)).join('、')}）</span>`
+        情境生效（${days.map(_scnDayShort).join('、')}）</span>`
     : `<span style="color:#8a7a9a" title="已設定但未套用">情境已設定 ${days.length} 天（未套用）</span>`;
 }
+function scnToggleDay(day){
+  _scnOpenDay[day] = !_scnOpenDay[day];
+  renderScnModal();
+}
+function scnApplyAndClose(){
+  if(!_scnOn){ _scnOn = true; scnSave(); }
+  _refreshAfterFactorChange();
+  renderScnSummary();
+  closeScnModal();
+}
+// 該日設定摘要（收合時顯示，一眼看出設了什麼）
+function _scnDaySummary(day){
+  const r = _scnDays[day];
+  if(!r) return '';
+  const bits = [];
+  if(r.model) bits.push(SCN_MODEL_SHORT[r.model] || r.model);
+  const gs = Object.keys(r.g||{}).filter(k=>{
+    const v = r.g[k] || {};
+    return (v.add && v.add !== 0) || (v.mul != null && v.mul !== 1);
+  });
+  gs.forEach(k=>{
+    const v = r.g[k];
+    const parts = [];
+    if(v.add) parts.push(`+${v.add}`);
+    if(v.mul != null && v.mul !== 1) parts.push(`×${v.mul}`);
+    bits.push(`${k.replace('分署','').replace('|','')} ${parts.join(' ')}`);
+  });
+  return bits.join('｜');
+}
+const SCN_MODEL_SHORT = {best:'綜合', ecmwf:'ECMWF', gfs:'GFS', icon:'ICON',
+                         hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'};
+const SCN_MODEL_LABEL = {'':'（沿用上方）', best:'綜合 ECMWF+GFS', ecmwf:'ECMWF IFS',
+  gfs:'NOAA GFS', icon:'DWD ICON', hi:'強降雨（系集上緣）', lo:'弱降雨（系集下緣）',
+  cwa:'CWA 官方（不受調整）'};
+
 function renderScnModal(){
   const body = document.getElementById('scn-body');
   if(!body) return;
-  const MODEL_LABEL = {'':'（沿用上方選擇）', best:'綜合 ECMWF+GFS', ecmwf:'ECMWF IFS',
-    gfs:'NOAA GFS', icon:'DWD ICON', hi:'強降雨（系集上緣）', lo:'弱降雨（系集下緣）',
-    cwa:'CWA 官方 QPF'};
-  let h = `<div style="font-size:10px;color:#9ab8d8;margin-bottom:6px;line-height:1.6">
-    套用順序：<b>（模式值 ＋ 加成÷4）× 群組倍率 × 全域倍率</b>。
-    「加成」是<b>該日總量 mm</b>，平均分配到當日 4 個 6h 段——
-    模式報 0 的地區也會被加起來（乘法在此無效）。
-    地形以「是否有官方坡地警戒值」判定：159 個坡地警戒鄉鎮＝山區、其餘 209 個＝平地。
-    <span style="color:#e8a860">選 CWA 官方 QPF 的日期若加了調整，數值仍繼承色階級距的粗糙度。</span>
-  </div>`;
+  let h = '';
   for(let day=0; day<SCN_DAYS_MAX; day++){
     const r = _scnDays[day] || {};
     const on = !!_scnRule(day);
-    h += `<div style="border:1px solid ${on?'#6a3a8a':'#2a3a4a'};border-radius:4px;
-      margin-bottom:5px;background:${on?'#1a1024':'#0d1520'}">
-      <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;
-        background:${on?'#2a1636':'#12202c'};border-radius:4px 4px 0 0">
-        <b style="font-size:11px;color:${on?'#cc88ff':'#8aa8c0'}">${_scnDayLabel(day)}</b>
-        <select onchange="scnSetModel(${day}, this.value)"
-          style="font-size:10px;background:#1a1a22;color:#ddd;border:1px solid #555;border-radius:3px;padding:1px 3px">`;
-    Object.keys(MODEL_LABEL).forEach(k=>{
-      h += `<option value="${k}" ${((r.model||'')===k)?'selected':''}>${MODEL_LABEL[k]}</option>`;
-    });
-    h += `</select>
-        ${day>0 ? `<button class="b" style="font-size:9px;padding:0 4px" onclick="scnCopyPrevDay(${day})" title="複製前一天的整日設定">↧前一天</button>` : ''}
-        <button class="b" style="font-size:9px;padding:0 4px" onclick="scnClearDay(${day})" title="清除本日設定">清除</button>
-      </div>
-      <table style="width:100%;border-collapse:collapse;font-size:10px">
-        <tr style="color:#7a92a8">
-          <th style="text-align:left;padding:1px 4px">分署／地形</th>
-          <th style="padding:1px 2px;width:64px" title="該日總量加成(mm)，平均分到4個6h段">加成 mm</th>
-          <th style="padding:1px 2px;width:56px" title="乘在（模式值＋加成）之上">倍率 ×</th>
-          <th style="width:26px"></th>
-        </tr>`;
-    DISTRICT_ORDER.forEach(d=>{
-      const dc = DISTRICT_COLOR[d] || '#aaccee';
-      SCN_TERRAIN.forEach((tr, ti)=>{
-        const gk = d + '|' + tr;
-        const g = (r.g||{})[gk] || {};
-        const add = g.add || 0, mul = (g.mul == null ? 1 : g.mul);
-        const dirty = (add !== 0) || (mul !== 1);
-        h += `<tr style="background:${dirty?'#241a30':'transparent'}">
-          <td style="padding:1px 4px;color:${ti===0?dc:'#8aa8c0'}">
-            ${ti===0 ? `<b>${d.replace('分署','')}</b>` : '　'} ${tr}</td>
-          <td style="padding:1px 2px"><input type="number" step="5" value="${add}"
-            onchange="scnSetVal(${day},'${gk}','add',this.value)"
-            style="width:58px;font-size:10px;background:#1a1a22;color:${add?'#ffb070':'#999'};
-            border:1px solid #555;border-radius:3px;padding:0 2px"></td>
-          <td style="padding:1px 2px"><input type="number" step="0.1" min="0" max="10" value="${mul}"
-            onchange="scnSetVal(${day},'${gk}','mul',this.value)"
-            style="width:50px;font-size:10px;background:#1a1a22;color:${mul!==1?'#8ac8f0':'#999'};
-            border:1px solid #555;border-radius:3px;padding:0 2px"></td>
-          <td style="padding:1px 2px">${ti===0 ? `<button class="b" style="font-size:9px;padding:0 3px"
-            onclick="scnCopyToTerrain(${day},'${d}')" title="把本列設定套到該分署山區＋平地">⇅</button>` : ''}</td>
-        </tr>`;
+    const open = !!_scnOpenDay[day];
+    const isCwa = (r.model === 'cwa');
+    h += `<div style="border:1px solid ${on?'#6a3a8a':'#22303c'};border-radius:4px;
+      margin-bottom:3px;background:${on?'#150e1e':'#0c1420'}">
+      <div onclick="scnToggleDay(${day})" style="display:flex;align-items:center;gap:5px;
+        padding:3px 6px;cursor:pointer;background:${on?'#241634':'#101c26'};border-radius:4px 4px 0 0">
+        <span style="color:#7a92a8;font-size:9px;width:9px">${open?'▾':'▸'}</span>
+        <b style="font-size:11px;color:${on?'#cc88ff':'#8aa8c0'};white-space:nowrap">${_scnDayLabel(day)}</b>
+        <span style="flex:1;font-size:9px;color:#8a9aaa;overflow:hidden;
+          text-overflow:ellipsis;white-space:nowrap">${_scnDaySummary(day)}</span>
+      </div>`;
+    if(open){
+      h += `<div style="padding:3px 5px">
+        <div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">
+          <select onchange="scnSetModel(${day}, this.value)"
+            style="font-size:10px;background:#1a1a22;color:#ddd;border:1px solid #555;
+            border-radius:3px;padding:1px 2px;flex:1">`;
+      Object.keys(SCN_MODEL_LABEL).forEach(k=>{
+        h += `<option value="${k}" ${((r.model||'')===k)?'selected':''}>${SCN_MODEL_LABEL[k]}</option>`;
       });
-    });
-    h += `</table></div>`;
+      h += `</select>
+          ${day>0 ? `<button class="b" style="font-size:9px;padding:0 4px" onclick="scnCopyPrevDay(${day})" title="複製前一天">↧</button>` : ''}
+          <button class="b" style="font-size:9px;padding:0 4px" onclick="scnClearDay(${day})" title="清除本日">清除</button>
+        </div>`;
+      if(isCwa){
+        h += `<div style="font-size:9px;color:#e8a860;padding:1px 2px">
+          CWA 為官方值，本日不套用加成／倍率</div>`;
+      }
+      h += `<table style="width:100%;border-collapse:collapse;font-size:10px">
+        <tr style="color:#7a92a8">
+          <th style="text-align:left;padding:0 3px">分署／地形</th>
+          <th style="padding:0 2px;width:58px" title="該日總量加成，平均分到當日4個6h段">加成mm/日</th>
+          <th style="padding:0 2px;width:46px" title="乘在（模式值＋加成）之上">倍率×</th>
+          <th style="width:20px"></th>
+        </tr>`;
+      DISTRICT_ORDER.forEach(d=>{
+        const dc = DISTRICT_COLOR[d] || '#aaccee';
+        SCN_TERRAIN.forEach((tr, ti)=>{
+          const gk = d + '|' + tr;
+          const g = (r.g||{})[gk] || {};
+          const add = g.add || 0, mul = (g.mul == null ? 1 : g.mul);
+          const dirty = (add !== 0) || (mul !== 1);
+          const dis = isCwa ? ' disabled' : '';
+          h += `<tr style="background:${dirty?'#201829':'transparent'};opacity:${isCwa?0.45:1}">
+            <td style="padding:0 3px;color:${ti===0?dc:'#8aa8c0'};white-space:nowrap">
+              ${ti===0 ? `<b>${d.replace('分署','')}</b>` : '　'}${tr}</td>
+            <td style="padding:0 2px"><input type="number" step="10" value="${add}"${dis}
+              onchange="scnSetVal(${day},'${gk}','add',this.value)"
+              style="width:54px;font-size:10px;background:#1a1a22;color:${add?'#ffb070':'#888'};
+              border:1px solid #555;border-radius:3px;padding:0 2px"></td>
+            <td style="padding:0 2px"><input type="number" step="0.1" min="0" max="10" value="${mul}"${dis}
+              onchange="scnSetVal(${day},'${gk}','mul',this.value)"
+              style="width:42px;font-size:10px;background:#1a1a22;color:${mul!==1?'#8ac8f0':'#888'};
+              border:1px solid #555;border-radius:3px;padding:0 2px"></td>
+            <td style="padding:0 1px">${ti===0 && !isCwa ? `<button class="b" style="font-size:9px;padding:0 2px"
+              onclick="scnCopyToTerrain(${day},'${d}')" title="套用到山區＋平地">⇅</button>` : ''}</td>
+          </tr>`;
+        });
+      });
+      h += `</table></div>`;
+    }
+    h += `</div>`;
   }
   body.innerHTML = h;
+  const s2 = document.getElementById('scn-summary2');
+  if(s2){
+    const n = Object.keys(_scnDays).filter(d=>_scnRule(d)).length;
+    s2.innerHTML = n
+      ? `<span style="color:${_scnOn?'#8ae8a8':'#8a7a9a'}">${_scnOn?'生效中':'未套用'}・已設 ${n} 天</span>`
+      : '<span style="color:#6a7a8a">尚未設定</span>';
+  }
 }
+
+// ── 彈窗拖曳（標題列）──
+(function(){
+  let dx=0, dy=0, dragging=false;
+  document.addEventListener('mousedown', e=>{
+    const bar = e.target.closest && e.target.closest('#scn-drag');
+    if(!bar) return;
+    if(e.target.closest('button,label,input,select')) return;   // 按鈕區不觸發拖曳
+    const m = document.getElementById('scn-modal');
+    if(!m) return;
+    dragging = true;
+    const r = m.getBoundingClientRect();
+    dx = e.clientX - r.left; dy = e.clientY - r.top;
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e=>{
+    if(!dragging) return;
+    const m = document.getElementById('scn-modal');
+    if(!m) return;
+    // 限制在視窗內，避免拖到看不見
+    const w = m.offsetWidth, hh = m.offsetHeight;
+    m.style.left = Math.max(0, Math.min(window.innerWidth  - 60, e.clientX - dx)) + 'px';
+    m.style.top  = Math.max(0, Math.min(window.innerHeight - 30, e.clientY - dy)) + 'px';
+  });
+  document.addEventListener('mouseup', ()=>{ dragging = false; });
+})();
+
 
 // 計算「以 seg 為基準時刻」的 ETR2（往前推7天，過去用觀測、未來用QPF）
 // seg: 6h段索引，0=現在這一段，正值=未來，負值=過去
@@ -3688,7 +3752,11 @@ function showChartTooltip(evt, canvasId){
     const dt=new Date(SEG_EPOCH().getTime()+dayIdx*86400000);
     const qa=getQpfArr(t,qpfField);
     let lines=`<b style="color:#d0e8ff">${t.county}${t.township} ${fmtDay(dt)}（00-24時）</b><br>`;
-    const dayRain=(t.daily_qpf||[])[dayIdx];
+    // ★ 用 getQpfArr 的日和，不可用原始 t.daily_qpf——後者不含倍率/情境調整，
+    //   會與長條高度和地圖著色不一致。
+    const _dsT=qa.slice(dayIdx*4, dayIdx*4+4);
+    const dayRain=_dsT.length===4 ? Math.round(_dsT.reduce((a,b)=>a+(b||0),0)*10)/10
+                                  : (t.daily_qpf||[])[dayIdx];
     lines+=`全天累積雨量：<b>${dayRain!=null?dayRain+'mm':'—'}</b><br>`;
     // 當日風險指標（取該日4個6h段最高，新統一公式）
     if(dayIdx!==0){
@@ -6073,5 +6141,29 @@ function toggleBlurRender(){
 }
 
 </script>
+<!-- 情境編輯器：★必須放在 #map 之外，否則 Leaflet 會攔截滾輪事件導致無法捲動 -->
+<div id="scn-modal" style="display:none;position:fixed;z-index:3000;top:60px;left:60px;
+  width:520px;max-height:82vh;background:#0b1622;border:1px solid #4a3a6a;border-radius:6px;
+  box-shadow:0 6px 24px rgba(0,0,0,.6);flex-direction:column">
+  <div id="scn-drag" style="display:flex;align-items:center;gap:6px;padding:6px 9px;
+    background:#1a1030;border-bottom:1px solid #4a3a6a;border-radius:6px 6px 0 0;cursor:move">
+    <b style="color:#cc88ff;font-size:12px;pointer-events:none">情境編輯器</b>
+    <span id="scn-summary2" style="font-size:9px;pointer-events:none"></span>
+    <span style="flex:1"></span>
+    <button class="b" style="font-size:10px;padding:1px 6px" onclick="scnExport()" title="匯出 JSON">匯出</button>
+    <label class="b" style="font-size:10px;padding:1px 6px;cursor:pointer" title="匯入 JSON">匯入
+      <input type="file" accept="application/json" style="display:none" onchange="scnImport(this)"></label>
+    <button class="b" style="font-size:11px;padding:1px 7px" onclick="closeScnModal()">&#10005;</button>
+  </div>
+  <div id="scn-body" style="overflow-y:auto;overflow-x:hidden;padding:6px 8px;flex:1"></div>
+  <div style="display:flex;align-items:center;gap:6px;padding:6px 9px;
+    border-top:1px solid #2a3a4a;border-radius:0 0 6px 6px">
+    <button class="b" style="font-size:10px;padding:2px 8px;border-color:#8a4444;color:#ff9988"
+      onclick="scnClearAll()">全部清除</button>
+    <span style="flex:1"></span>
+    <button class="b" style="font-size:10px;padding:2px 10px;border-color:#4a8a5a;color:#8ae8a8"
+      onclick="scnApplyAndClose()">確定套用</button>
+  </div>
+</div>
 </body>
 </html>
