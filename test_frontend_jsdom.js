@@ -537,6 +537,83 @@ if (need('_spanAccum')) {
   else console.log('  OK  範圍加長總量不減');
 }
 
+
+// ════════ 11. 情境編輯器（逐日 × 分署×地形 × 模式／加成／倍率）════════
+console.log('\n=== 情境編輯器 ===');
+if (need('getQpfArr') && need('_scnActive') && need('_townGroupKey')) {
+  // 山區（有坡地警戒值）與平地（無）各一個鄉鎮，分屬不同分署
+  const mtn = { county:'南投縣', township:'仁愛鄉', alert_val:700,
+                qpf_best:Array(40).fill(10), qpf_hi:Array(40).fill(30),
+                qpf_lo:Array(40).fill(4), qpf_cwa:Array(40).fill(8) };
+  const flat= { county:'臺南市', township:'安南區', alert_val:0,
+                qpf_best:Array(40).fill(10), qpf_hi:Array(40).fill(30),
+                qpf_lo:Array(40).fill(4), qpf_cwa:Array(40).fill(8) };
+  chk('山區群組鍵', G._townGroupKey(mtn), '南投分署|山區');
+  chk('平地群組鍵', G._townGroupKey(flat), '臺南分署|平地');
+
+  setLex("forecastModel='best'; _userFactorOn=false; _biasApplyOn=false; _scnOn=false; _scnDays={};");
+  chk('未啟用時 _scnActive=false', G._scnActive(), false);
+  chk('未啟用時原值', G.getQpfArr(mtn,'qpf_best').slice(0,4), [10,10,10,10]);
+
+  // 情境：第0天用強降雨、南投山區倍率1.5；第1天用弱降雨、臺南平地加成20mm
+  setLex(`_scnOn = true; _scnDays = {
+    0:{model:'hi', g:{'南投分署|山區':{add:0, mul:1.5}}},
+    1:{model:'lo', g:{'臺南分署|平地':{add:20, mul:1}}}
+  };`);
+  chk('_scnActive=true', G._scnActive(), true);
+  const m = G.getQpfArr(mtn,'qpf_best'), f = G.getQpfArr(flat,'qpf_best');
+  console.log(`   山區 day0(段0-3)=${m.slice(0,4)} day1(段4-7)=${m.slice(4,8)}`);
+  console.log(`   平地 day0(段0-3)=${f.slice(0,4)} day1(段4-7)=${f.slice(4,8)}`);
+  chk('山區day0：強降雨30×1.5', m.slice(0,4), [45,45,45,45]);
+  chk('山區day1：弱降雨4，未設群組不調整', m.slice(4,8), [4,4,4,4]);
+  chk('★平地day0：非目標群組不受影響（用強降雨原值）', f.slice(0,4), [30,30,30,30]);
+  chk('平地day1：弱降雨4＋20/4=9', f.slice(4,8), [9,9,9,9]);
+  chk('未設定的第3天沿用全域模式(best)', m.slice(12,16), [10,10,10,10]);
+
+  // 加成能讓模式報 0 的地區產生雨量（乘法做不到的事）
+  const dry = { county:'臺南市', township:'安南區', alert_val:0, qpf_best:Array(40).fill(0) };
+  setLex(`_scnDays = {0:{model:null, g:{'臺南分署|平地':{add:40, mul:1}}}};`);
+  chk('模式報0＋加成40 → 每段10', G.getQpfArr(dry,'qpf_best').slice(0,4), [10,10,10,10]);
+  setLex(`_scnDays = {0:{model:null, g:{'臺南分署|平地':{add:0, mul:3}}}};`);
+  chk('模式報0×倍率3 仍為0（故需加成）', G.getQpfArr(dry,'qpf_best').slice(0,4), [0,0,0,0]);
+
+  // 負加成不得產生負雨量
+  setLex(`_scnDays = {0:{model:null, g:{'南投分署|山區':{add:-200, mul:1}}}};`);
+  const neg = G.getQpfArr(mtn,'qpf_best').slice(0,4);
+  chk('負加成截止於 0', neg.every(v=>v>=0), true);
+
+  // 與全域倍率相乘
+  setLex(`_scnDays = {0:{model:null, g:{'南投分署|山區':{add:0, mul:2}}}};
+          _userFactor = 1.5; _userFactorOn = true;`);
+  chk('群組倍率2 × 全域1.5 = 30', G.getQpfArr(mtn,'qpf_best').slice(0,1), [30]);
+  setLex('_userFactorOn = false;');
+
+  // 快取鍵必須含情境簽章
+  if (need('_factorKey')) {
+    const k1 = G._factorKey();
+    setLex(`_scnDays = {0:{model:null, g:{'南投分署|山區':{add:0, mul:2.5}}}};`);
+    chk('快取鍵隨情境改變', k1 !== G._factorKey(), true);
+    setLex('_scnOn = false;');
+    const kOff = G._factorKey();
+    setLex('_scnOn = true;');
+    chk('快取鍵隨情境開關改變', kOff !== G._factorKey(), true);
+  }
+
+  // null 值保持 null（不得被加成填成數字）
+  const withNull = { county:'南投縣', township:'仁愛鄉', alert_val:700,
+                     qpf_best:[null,10,null,10, 10,10,10,10] };
+  setLex(`_scnDays = {0:{model:null, g:{'南投分署|山區':{add:40, mul:2}}}};`);
+  const wn = G.getQpfArr(withNull,'qpf_best').slice(0,4);
+  console.log(`   含 null 的段: ${JSON.stringify(wn)}`);
+  chk('null 仍為 null', [wn[0], wn[2]], [null, null]);
+  chk('非 null 段正常調整 (10+10)*2', [wn[1], wn[3]], [40, 40]);
+
+  // 全部歸零後應回到未啟用
+  setLex(`_scnDays = {0:{model:null, g:{'南投分署|山區':{add:0, mul:1}}}};`);
+  chk('設定值全為中性 → _scnActive=false', G._scnActive(), false);
+  setLex('_scnOn=false; _scnDays={};');
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

@@ -351,6 +351,34 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         justify-content:center;pointer-events:auto;box-shadow:0 1px 3px rgba(0,0,0,.25);
         transition:transform 0.2s ease">&#9660;</button>
     </div>
+    <!-- 情境編輯器彈出視窗（逐日 × 分署×地形 × 模式／加成／倍率） -->
+    <div id="scn-modal" style="display:none;position:fixed;inset:0;z-index:3000;
+      background:rgba(0,0,0,.6);align-items:center;justify-content:center">
+      <div style="background:#0b1622;border:1px solid #4a3a6a;border-radius:6px;
+        width:min(760px,94vw);max-height:88vh;display:flex;flex-direction:column;
+        box-shadow:0 6px 24px rgba(0,0,0,.6)">
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;
+          background:#1a1030;border-bottom:1px solid #4a3a6a;border-radius:6px 6px 0 0">
+          <b style="color:#cc88ff;font-size:12px">情境編輯器</b>
+          <span style="font-size:9px;color:#8a7a9a">逐日設定模式與各分署加成／倍率</span>
+          <span style="flex:1"></span>
+          <button class="b" style="font-size:10px;padding:1px 6px" onclick="scnExport()"
+            title="匯出為 JSON（可與同事共用或存進 repo 當個案記錄）">匯出</button>
+          <label class="b" style="font-size:10px;padding:1px 6px;cursor:pointer"
+            title="匯入先前匯出的 JSON">匯入
+            <input type="file" accept="application/json" style="display:none"
+              onchange="scnImport(this)"></label>
+          <button class="b" style="font-size:10px;padding:1px 6px;border-color:#8a4444;color:#ff9988"
+            onclick="scnClearAll()">全部清除</button>
+          <button class="b" style="font-size:11px;padding:1px 7px" onclick="closeScnModal()">✕</button>
+        </div>
+        <div id="scn-body" style="overflow:auto;padding:8px 10px"></div>
+        <div style="padding:6px 10px;border-top:1px solid #2a3a4a;font-size:9px;color:#7a8a9a">
+          設定自動存於本機瀏覽器（localStorage）；換電腦請用「匯出／匯入」。
+          未設定的日期沿用上方的模式與全域倍率。
+        </div>
+      </div>
+    </div>
     <div id="map-overlay"></div>
     <div id="no-data-msg">
       <div class="nd-icon">⚠</div>
@@ -1091,36 +1119,124 @@ function toggleSumSec(kind){
   if(arrow) arrow.textContent = _sumSecOpen[kind] ? '▾' : '▸';
 }
 
+// ══════════════════════════════════════════════════════════
+//  情境編輯器：逐日 × 分署×地形 × 模式／加成／倍率
+//  設計要點：
+//   - 全部只在 getQpfArr() 這個咽喉點生效 → 地圖、逐日QPF、組體圖、ETR2、
+//     風險指標、左右狀態列、CSV、複製 全部自動連動，不需為每張圖另外改。
+//   - 群組 = 分署(6) × 地形(2)。地形採「是否有官方坡地警戒值」(alert_val>0) 判定，
+//     159 個坡地警戒鄉鎮視為山區、其餘 209 個為平地——沿用官方既有分類，
+//     不自行畫山線。
+//   - 套用順序：(模式值 + 加成/4) × 群組倍率 × 全域倍率
+//     「加成」是**該日總量(mm)**，平均分到當日 4 個 6h 段（故 /4）。
+//     刻意用平均而非依模式形狀分配：模式報 0 的地區才可能被加起來——
+//     這正是「模式沒報但我認為會下」的使用情境（乘法在此無效）。
+// ══════════════════════════════════════════════════════════
+const SCN_DAYS_MAX = 10;                  // UI 提供前 10 天，其後沿用全域設定
+const SCN_TERRAIN = ['山區', '平地'];
+let _scnOn = false;
+let _scnDays = {};    // {dayIdx: {model: string|null, g: {groupKey: {add, mul}}}}
+
+function _scnGroupKeys(){
+  const ks = [];
+  DISTRICT_ORDER.forEach(d=>SCN_TERRAIN.forEach(tr=>ks.push(d + '|' + tr)));
+  return ks;
+}
+// 鄉鎮 → 群組鍵。地形以官方坡地警戒值有無判定（非地形學定義）
+function _townGroupKey(t){
+  const d = COUNTY_TO_DISTRICT[t.county] || '其他';
+  return d + '|' + ((t.alert_val > 0) ? '山區' : '平地');
+}
+// 該日規則（無設定回 null）
+function _scnRule(day){
+  const r = _scnDays[day];
+  if(!r) return null;
+  const hasG = r.g && Object.keys(r.g).some(k=>{
+    const v = r.g[k];
+    return v && ((v.add && v.add !== 0) || (v.mul != null && v.mul !== 1));
+  });
+  return (r.model || hasG) ? r : null;
+}
+function _scnActive(){
+  if(!_scnOn) return false;
+  for(let d=0; d<SCN_DAYS_MAX; d++) if(_scnRule(d)) return true;
+  return false;
+}
+// 情境簽章（快取鍵用；漏掉會吐出舊情境的值）
+function _scnKey(){
+  if(!_scnActive()) return '0';
+  const parts = [];
+  for(let d=0; d<SCN_DAYS_MAX; d++){
+    const r = _scnRule(d);
+    if(!r) continue;
+    const gs = Object.keys(r.g||{}).sort().map(k=>{
+      const v = r.g[k] || {};
+      return `${k}:${v.add||0}:${v.mul==null?1:v.mul}`;
+    }).join(',');
+    parts.push(`${d}=${r.model||'-'}[${gs}]`);
+  }
+  return parts.join(';');
+}
+
 let _biasFactor = null;    // 24h偏差比中位數（載入時設定）
 let _biasApplyOn = false;  // 偏差修正套用開關（顯示層，可隨時關閉）
 let _userFactor = 1.0;     // 使用者自訂倍率（顯示層）
 let _userFactorOn = false; // 自訂倍率套用開關
 const USER_FACTOR_MIN = 0.1, USER_FACTOR_MAX = 5.0;
 
-// 目前實際生效的預測倍率（自動偏差修正 × 自訂倍率，兩者可疊加）
-// ★ 所有預測值都經 getQpfArr()，故只要改這裡，地圖／圖表／ETR2／風險／左右狀態列／
-//   CSV／複製 全部自動連動——不要在別處再乘一次。
+// 目前實際生效的全域預測倍率（自動偏差修正 × 自訂倍率，兩者可疊加）
 function _qpfFactor(){
   let f = 1;
   if(_biasApplyOn && _biasFactor) f *= _biasFactor;
   if(_userFactorOn && _userFactor) f *= _userFactor;
   return f;
 }
-// 快取鍵用：把兩個倍率一起編碼（漏掉會讓快取吐出舊倍率的值）
+// 快取鍵：兩個全域倍率 ＋ 情境簽章
 function _factorKey(){
-  return (_biasApplyOn ? _biasFactor : 0) + '/' + (_userFactorOn ? _userFactor : 0);
+  return (_biasApplyOn ? _biasFactor : 0) + '/' + (_userFactorOn ? _userFactor : 0)
+       + '/' + _scnKey();
 }
 
 function getQpfArr(t, qpfField){
-  // 純CWA模式：有多少算多少，絕不以其他模式補值（官方值也不套任何倍率）
-  if(qpfField === 'qpf_cwa') return t.qpf_cwa || [];
-  const arr = t[qpfField] || t.qpf_15d || new Array(60).fill(0);
-  const f = _qpfFactor();
-  if(f !== 1){
-    // 合併後只乘一次、只四捨五入一次（分兩次乘會累積捨入誤差）
-    return arr.map(v => v==null ? v : Math.round(v*f*10)/10);
+  const scn = _scnActive();
+  // 純CWA模式：有多少算多少，絕不以其他模式補值。
+  // ★ 情境模式下例外：情境編輯器是「明確主觀」的工具，使用者指定的加成/倍率
+  //   會套用到當日所選的任何陣列（含 qpf_cwa）。但 CWA 值本質是色階級距，
+  //   調整後仍繼承該粗糙度——面板上有標示，不要當成精確值。
+  if(qpfField === 'qpf_cwa' && !scn) return t.qpf_cwa || [];
+  const base = t[qpfField] || t.qpf_15d || new Array(60).fill(0);
+  const gf = _qpfFactor();
+
+  if(!scn){
+    if(gf !== 1){
+      // 合併後只乘一次、只四捨五入一次（分兩次乘會累積捨入誤差）
+      return base.map(v => v==null ? v : Math.round(v*gf*10)/10);
+    }
+    return base;
   }
-  return arr;
+
+  const gk = _townGroupKey(t);
+  const len = Math.max(base.length, SCN_DAYS_MAX*4);
+  const out = new Array(len);
+  for(let s=0; s<len; s++){
+    const day = Math.floor(s/4);
+    const rule = (day < SCN_DAYS_MAX) ? _scnRule(day) : null;
+    let arr = base;
+    if(rule && rule.model && MODEL_FIELD[rule.model]){
+      arr = t[MODEL_FIELD[rule.model]] || base;
+    }
+    let v = arr[s];
+    if(v == null){ out[s] = null; continue; }
+    if(rule && rule.g){
+      const g = rule.g[gk] || rule.g['ALL'];
+      if(g){
+        v = (v + (g.add || 0)/4) * (g.mul == null ? 1 : g.mul);
+        if(v < 0) v = 0;                    // 加成可為負，但雨量不得為負
+      }
+    }
+    out[s] = Math.round(v * gf * 10)/10;
+  }
+  return out;
 }
 
 function _refreshAfterFactorChange(){
@@ -1178,6 +1294,195 @@ function nudgeUserFactor(d){
 function toggleBiasApply(){
   _biasApplyOn = !_biasApplyOn;
   _refreshAfterFactorChange();
+}
+
+// ── 情境編輯器 UI ────────────────────────────────────────
+const SCN_LS_KEY = 'rainfall_scenario_v1';
+function _scnDayLabel(day){
+  const b = BASE_TIME ? new Date(BASE_TIME) : new Date();
+  const d = new Date(b.getFullYear(), b.getMonth(), b.getDate() + day);
+  const wd = ['日','一','二','三','四','五','六'][d.getDay()];
+  return `${d.getMonth()+1}/${d.getDate()}（${wd}）` + (day===0 ? ' 今日' : '');
+}
+function _scnEnsure(day){
+  if(!_scnDays[day]) _scnDays[day] = {model:null, g:{}};
+  if(!_scnDays[day].g) _scnDays[day].g = {};
+  return _scnDays[day];
+}
+function scnSetModel(day, v){ _scnEnsure(day).model = v || null; scnSave(); _scnAfterEdit(); }
+function scnSetVal(day, gk, field, v){
+  const r = _scnEnsure(day);
+  if(!r.g[gk]) r.g[gk] = {add:0, mul:1};
+  let n = parseFloat(v);
+  if(!isFinite(n)) n = (field === 'mul') ? 1 : 0;
+  if(field === 'mul') n = Math.max(0, Math.min(10, Math.round(n*100)/100));
+  else                n = Math.max(-500, Math.min(500, Math.round(n*10)/10));
+  r.g[gk][field] = n;
+  scnSave(); _scnAfterEdit();
+}
+function scnClearDay(day){ delete _scnDays[day]; scnSave(); _scnAfterEdit(); renderScnModal(); }
+function scnClearAll(){
+  if(!confirm('清除所有日期的情境設定？')) return;
+  _scnDays = {}; scnSave(); _scnAfterEdit(); renderScnModal();
+}
+// 把某日某分署的設定套用到該分署兩種地形（省去重複輸入）
+function scnCopyToTerrain(day, district){
+  const r = _scnEnsure(day);
+  const src = r.g[district + '|山區'] || r.g[district + '|平地'];
+  if(!src) return;
+  SCN_TERRAIN.forEach(tr=>{ r.g[district+'|'+tr] = {add:src.add||0, mul:src.mul==null?1:src.mul}; });
+  scnSave(); _scnAfterEdit(); renderScnModal();
+}
+// 複製前一天的整日設定
+function scnCopyPrevDay(day){
+  if(day <= 0) return;
+  const prev = _scnDays[day-1];
+  if(!prev){ return; }
+  _scnDays[day] = JSON.parse(JSON.stringify(prev));
+  scnSave(); _scnAfterEdit(); renderScnModal();
+}
+function _scnAfterEdit(){
+  _updateFactorBtns();
+  if(_scnOn) _refreshAfterFactorChange();
+  renderScnSummary();
+}
+function toggleScenario(){
+  _scnOn = !_scnOn;
+  scnSave();
+  _refreshAfterFactorChange();
+  renderScnSummary();
+  renderScnModal();
+}
+function scnSave(){
+  try{
+    localStorage.setItem(SCN_LS_KEY, JSON.stringify({on:_scnOn, days:_scnDays}));
+  }catch(e){ console.warn('情境設定無法存入 localStorage：', e.message); }
+}
+function scnLoad(){
+  try{
+    const raw = localStorage.getItem(SCN_LS_KEY);
+    if(!raw) return;
+    const o = JSON.parse(raw);
+    if(o && typeof o === 'object'){
+      _scnOn = !!o.on;
+      _scnDays = (o.days && typeof o.days === 'object') ? o.days : {};
+    }
+  }catch(e){ console.warn('情境設定讀取失敗：', e.message); }
+}
+function scnExport(){
+  const blob = new Blob([JSON.stringify({
+    _note:'台灣降雨監測系統 情境設定（逐日×分署×地形）',
+    _exported: new Date().toISOString(), on:_scnOn, days:_scnDays
+  }, null, 1)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `情境設定_${fmtDT(new Date()).replace(/[\/\s:]/g,'')}.json`;
+  a.click();
+}
+function scnImport(input){
+  const f = input.files && input.files[0];
+  if(!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try{
+      const o = JSON.parse(r.result);
+      if(!o || typeof o !== 'object' || !o.days) throw new Error('格式不符（缺 days）');
+      _scnDays = o.days; _scnOn = !!o.on;
+      scnSave(); _refreshAfterFactorChange(); renderScnSummary(); renderScnModal();
+      console.log('情境設定已匯入');
+    }catch(e){ alert('匯入失敗：' + e.message); }
+    input.value = '';
+  };
+  r.readAsText(f);
+}
+function openScnModal(){
+  const m = document.getElementById('scn-modal');
+  if(m){ m.style.display = 'flex'; renderScnModal(); }
+}
+function closeScnModal(){
+  const m = document.getElementById('scn-modal');
+  if(m) m.style.display = 'none';
+}
+// 頂部提示：情境是否生效、影響哪幾天
+function renderScnSummary(){
+  const el = document.getElementById('scn-summary');
+  if(!el) return;
+  const days = [];
+  for(let d=0; d<SCN_DAYS_MAX; d++) if(_scnRule(d)) days.push(d);
+  const btn = document.getElementById('scn-btn');
+  if(btn){
+    btn.style.background  = (_scnOn && days.length) ? '#3a1a4a' : '';
+    btn.style.borderColor = (_scnOn && days.length) ? '#cc88ff' : '#555';
+  }
+  if(!days.length){ el.textContent = ''; return; }
+  el.innerHTML = _scnOn
+    ? `<span style="color:#cc88ff;font-weight:700" title="情境設定生效中：已設定 ${days.length} 天">
+        情境生效（${days.map(d=>_scnDayLabel(d).slice(0,5)).join('、')}）</span>`
+    : `<span style="color:#8a7a9a" title="已設定但未套用">情境已設定 ${days.length} 天（未套用）</span>`;
+}
+function renderScnModal(){
+  const body = document.getElementById('scn-body');
+  if(!body) return;
+  const MODEL_LABEL = {'':'（沿用上方選擇）', best:'綜合 ECMWF+GFS', ecmwf:'ECMWF IFS',
+    gfs:'NOAA GFS', icon:'DWD ICON', hi:'強降雨（系集上緣）', lo:'弱降雨（系集下緣）',
+    cwa:'CWA 官方 QPF'};
+  let h = `<div style="font-size:10px;color:#9ab8d8;margin-bottom:6px;line-height:1.6">
+    套用順序：<b>（模式值 ＋ 加成÷4）× 群組倍率 × 全域倍率</b>。
+    「加成」是<b>該日總量 mm</b>，平均分配到當日 4 個 6h 段——
+    模式報 0 的地區也會被加起來（乘法在此無效）。
+    地形以「是否有官方坡地警戒值」判定：159 個坡地警戒鄉鎮＝山區、其餘 209 個＝平地。
+    <span style="color:#e8a860">選 CWA 官方 QPF 的日期若加了調整，數值仍繼承色階級距的粗糙度。</span>
+  </div>`;
+  for(let day=0; day<SCN_DAYS_MAX; day++){
+    const r = _scnDays[day] || {};
+    const on = !!_scnRule(day);
+    h += `<div style="border:1px solid ${on?'#6a3a8a':'#2a3a4a'};border-radius:4px;
+      margin-bottom:5px;background:${on?'#1a1024':'#0d1520'}">
+      <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;
+        background:${on?'#2a1636':'#12202c'};border-radius:4px 4px 0 0">
+        <b style="font-size:11px;color:${on?'#cc88ff':'#8aa8c0'}">${_scnDayLabel(day)}</b>
+        <select onchange="scnSetModel(${day}, this.value)"
+          style="font-size:10px;background:#1a1a22;color:#ddd;border:1px solid #555;border-radius:3px;padding:1px 3px">`;
+    Object.keys(MODEL_LABEL).forEach(k=>{
+      h += `<option value="${k}" ${((r.model||'')===k)?'selected':''}>${MODEL_LABEL[k]}</option>`;
+    });
+    h += `</select>
+        ${day>0 ? `<button class="b" style="font-size:9px;padding:0 4px" onclick="scnCopyPrevDay(${day})" title="複製前一天的整日設定">↧前一天</button>` : ''}
+        <button class="b" style="font-size:9px;padding:0 4px" onclick="scnClearDay(${day})" title="清除本日設定">清除</button>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:10px">
+        <tr style="color:#7a92a8">
+          <th style="text-align:left;padding:1px 4px">分署／地形</th>
+          <th style="padding:1px 2px;width:64px" title="該日總量加成(mm)，平均分到4個6h段">加成 mm</th>
+          <th style="padding:1px 2px;width:56px" title="乘在（模式值＋加成）之上">倍率 ×</th>
+          <th style="width:26px"></th>
+        </tr>`;
+    DISTRICT_ORDER.forEach(d=>{
+      const dc = DISTRICT_COLOR[d] || '#aaccee';
+      SCN_TERRAIN.forEach((tr, ti)=>{
+        const gk = d + '|' + tr;
+        const g = (r.g||{})[gk] || {};
+        const add = g.add || 0, mul = (g.mul == null ? 1 : g.mul);
+        const dirty = (add !== 0) || (mul !== 1);
+        h += `<tr style="background:${dirty?'#241a30':'transparent'}">
+          <td style="padding:1px 4px;color:${ti===0?dc:'#8aa8c0'}">
+            ${ti===0 ? `<b>${d.replace('分署','')}</b>` : '　'} ${tr}</td>
+          <td style="padding:1px 2px"><input type="number" step="5" value="${add}"
+            onchange="scnSetVal(${day},'${gk}','add',this.value)"
+            style="width:58px;font-size:10px;background:#1a1a22;color:${add?'#ffb070':'#999'};
+            border:1px solid #555;border-radius:3px;padding:0 2px"></td>
+          <td style="padding:1px 2px"><input type="number" step="0.1" min="0" max="10" value="${mul}"
+            onchange="scnSetVal(${day},'${gk}','mul',this.value)"
+            style="width:50px;font-size:10px;background:#1a1a22;color:${mul!==1?'#8ac8f0':'#999'};
+            border:1px solid #555;border-radius:3px;padding:0 2px"></td>
+          <td style="padding:1px 2px">${ti===0 ? `<button class="b" style="font-size:9px;padding:0 3px"
+            onclick="scnCopyToTerrain(${day},'${d}')" title="把本列設定套到該分署山區＋平地">⇅</button>` : ''}</td>
+        </tr>`;
+      });
+    });
+    h += `</table></div>`;
+  }
+  body.innerHTML = h;
 }
 
 // 計算「以 seg 為基準時刻」的 ETR2（往前推7天，過去用觀測、未來用QPF）
@@ -2455,9 +2760,16 @@ async function tryLoadLive(){
         `<button class="b" onclick="nudgeUserFactor(0.1)" style="font-size:10px;padding:0 5px" title="倍率 +0.1">+</button>` +
         `<button id="ufac-btn" class="b" onclick="toggleUserFactor()" style="margin-left:4px;font-size:10px;padding:1px 6px" ` +
         `title="開關自訂倍率。與『套用修正』相乘，兩者都開時以合併倍率生效。">\u2715自訂倍率 \u00d7${_userFactor}</button>` +
-        `<span id="ufac-eff" style="font-size:9px;margin-left:5px;font-weight:700"></span>`;
+        `<span id="ufac-eff" style="font-size:9px;margin-left:5px;font-weight:700"></span>` +
+        `<button id="scn-btn" class="b" onclick="toggleScenario()" style="margin-left:6px;font-size:10px;padding:1px 6px" `+
+        `title="開關情境設定（逐日×分署×地形的模式／加成／倍率）。與全域倍率相乘。">◇情境</button>` +
+        `<button class="b" onclick="openScnModal()" style="font-size:10px;padding:1px 6px" `+
+        `title="開啟情境編輯器">編輯…</button>` +
+        `<span id="scn-summary" style="font-size:9px;margin-left:5px"></span>`;
     }
+    scnLoad();
     _updateFactorBtns();
+    renderScnSummary();
     // 系集比值失敗提示（強/弱降雨按鈕仍可按，但值=原始預測）
     if(d.ens_active === false){
       const hiBtn = document.getElementById('mHi'), loBtn = document.getElementById('mLo');
