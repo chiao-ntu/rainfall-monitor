@@ -1105,7 +1105,11 @@ function toggleSumSec(kind){
 //     這正是「模式沒報但我認為會下」的使用情境（乘法在此無效）。
 // ══════════════════════════════════════════════════════════
 const SCN_DAYS_MAX = 16;                  // 做滿 16 天（qpf_15d 的完整段數），避免有UI/無UI日期落差
-const SCN_TERRAIN = ['山區', '平地'];
+// 地形四分類（使用者訂定）：
+//   山區＝境內任一點海拔>1000m／淺山區＝最高800~1000m／
+//   沿海地區＝鄉鎮界臨海且不屬前兩類／平地＝其餘
+// 對照表 TOWN_ZONE 由 build_terrain_zones.py + apply_terrain_zones.py 產生並注入。
+const SCN_TERRAIN = ['山區', '淺山區', '沿海地區', '平地'];
 let _scnOn = false;
 let _scnDays = {};    // {dayIdx: {model: string|null, g: {groupKey: {add, mul}}}}
 let _scnOpenDay = {};  // {dayIdx: true} 展開狀態（預設全收合）
@@ -1115,10 +1119,28 @@ function _scnGroupKeys(){
   DISTRICT_ORDER.forEach(d=>SCN_TERRAIN.forEach(tr=>ks.push(d + '|' + tr)));
   return ks;
 }
-// 鄉鎮 → 群組鍵。地形以官方坡地警戒值有無判定（非地形學定義）
+// 鄉鎮 → 群組鍵（分署|地形）
+// ★ 地形一律查 TOWN_ZONE（海拔＋臨海判定）。
+//   舊版用 `alert_val > 0` 當山區判準是錯的：那個欄位的語意是「境內有土石流潛勢溪流」，
+//   不是「這個鄉鎮是山區」——臺東市、成功鎮、池上鄉、關山鎮都會被誤歸山區
+//   （臺東縣 14 山區 / 2 平地），使用者調「山區」時看到平地一起變色即為此故。
+function _townZone(t){
+  if(!t) return '平地';
+  const z = (typeof TOWN_ZONE !== 'undefined' && TOWN_ZONE)
+    ? TOWN_ZONE[(t.county||'') + (t.township||'')] : null;
+  if(z) return z;
+  // 尚未注入 TOWN_ZONE 時的退路：只用「有無坡地警戒值」粗分，並在 console 提醒一次。
+  if(!_townZoneWarned){
+    _townZoneWarned = true;
+    console.warn('尚未載入 TOWN_ZONE 地形分類，情境地形群組暫以坡地警戒值粗分；' +
+                 '請執行 build_terrain_zones.py + apply_terrain_zones.py');
+  }
+  return (t.alert_val > 0) ? '山區' : '平地';
+}
+let _townZoneWarned = false;
 function _townGroupKey(t){
   const d = COUNTY_TO_DISTRICT[t.county] || '其他';
-  return d + '|' + ((t.alert_val > 0) ? '山區' : '平地');
+  return d + '|' + _townZone(t);
 }
 // 該日規則（無設定回 null）
 function _scnRule(day){

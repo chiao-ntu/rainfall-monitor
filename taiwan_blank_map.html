@@ -78,7 +78,7 @@ body{font-family:sans-serif;background:#fff;display:flex;height:100vh;position:r
   <select id="level-select" onchange="setLevel(this.value)">
     <optgroup label="── 大 ──"><option value="county">縣市</option></optgroup>
     <optgroup label="── 中（特性分區×縣市）──"><option value="special">特性分區</option></optgroup>
-    <optgroup label="── 小 ──"><option value="town">鄉鎮市區</option></optgroup>
+    <optgroup label="── 小 ──"><option value="town" selected>鄉鎮市區</option></optgroup>
   </select>
   <div class="sect">色階（點選啟用）</div>
   <div id="palette"></div>
@@ -568,9 +568,9 @@ function toggleRosterPanel(){
   if(st) st.textContent = collapsed ? '◀' : '▶';
 }
 
-let activeColor=null, fillData={}, history=[], paintMode='county';
+let activeColor=null, fillData={}, history=[], paintMode='town';   // 預設塗色層級＝鄉鎮市區
 let _blurOn=false;  // 渲染（邊界漸層）開關
-let lastKeyType='C';  // 初始跟 paintMode 同步（county → C）
+let lastKeyType='T';  // ★ 必須跟 paintMode 同步（town → T），否則下拉顯示與實際塗色層級不一致
 
 const pal=document.getElementById('palette');
 COLORS.forEach(c=>{

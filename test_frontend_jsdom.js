@@ -548,8 +548,17 @@ if (need('getQpfArr') && need('_scnActive') && need('_townGroupKey')) {
   const flat= { county:'臺南市', township:'安南區', alert_val:0,
                 qpf_best:Array(40).fill(10), qpf_hi:Array(40).fill(30),
                 qpf_lo:Array(40).fill(4), qpf_cwa:Array(40).fill(8) };
+  // 注入四分類對照表（正式版由 apply_terrain_zones.py 產生）
+  setLex(`TOWN_ZONE = {'南投縣仁愛鄉':'山區','臺南市安南區':'沿海地區',
+                       '南投縣南投市':'平地','嘉義縣竹崎鄉':'淺山區'};`);
   chk('山區群組鍵', G._townGroupKey(mtn), '南投分署|山區');
-  chk('平地群組鍵', G._townGroupKey(flat), '臺南分署|平地');
+  chk('沿海群組鍵（安南區臨海）', G._townGroupKey(flat), '臺南分署|沿海地區');
+  chk('淺山區群組鍵', G._townGroupKey({county:'嘉義縣', township:'竹崎鄉'}), '南投分署|淺山區');
+  chk('平地群組鍵', G._townGroupKey({county:'南投縣', township:'南投市'}), '南投分署|平地');
+  chk('SCN_TERRAIN 為四分類', getLex('SCN_TERRAIN'), ['山區','淺山區','沿海地區','平地']);
+  // 表中沒有的鄉鎮 → 退路（不得爆掉）
+  const fb = G._townGroupKey({county:'南投縣', township:'不存在鄉', alert_val:0});
+  chk('未收錄鄉鎮走退路不爆', typeof fb === 'string' && fb.indexOf('|') > 0, true);
 
   setLex("forecastModel='best'; _userFactorOn=false; _biasApplyOn=false; _scnOn=false; _scnDays={};");
   chk('未啟用時 _scnActive=false', G._scnActive(), false);
@@ -558,7 +567,7 @@ if (need('getQpfArr') && need('_scnActive') && need('_townGroupKey')) {
   // 情境：第0天用強降雨、南投山區倍率1.5；第1天用弱降雨、臺南平地加成20mm
   setLex(`_scnOn = true; _scnDays = {
     0:{model:'hi', g:{'南投分署|山區':{add:0, mul:1.5}}},
-    1:{model:'lo', g:{'臺南分署|平地':{add:20, mul:1}}}
+    1:{model:'lo', g:{'臺南分署|沿海地區':{add:20, mul:1}}}
   };`);
   chk('_scnActive=true', G._scnActive(), true);
   const m = G.getQpfArr(mtn,'qpf_best'), f = G.getQpfArr(flat,'qpf_best');
@@ -566,15 +575,15 @@ if (need('getQpfArr') && need('_scnActive') && need('_townGroupKey')) {
   console.log(`   平地 day0(段0-3)=${f.slice(0,4)} day1(段4-7)=${f.slice(4,8)}`);
   chk('山區day0：強降雨30×1.5', m.slice(0,4), [45,45,45,45]);
   chk('山區day1：弱降雨4，未設群組不調整', m.slice(4,8), [4,4,4,4]);
-  chk('★平地day0：非目標群組不受影響（用強降雨原值）', f.slice(0,4), [30,30,30,30]);
-  chk('平地day1：弱降雨4＋20/4=9', f.slice(4,8), [9,9,9,9]);
+  chk('★沿海day0：非目標群組不受影響（用強降雨原值）', f.slice(0,4), [30,30,30,30]);
+  chk('沿海day1：弱降雨4＋20/4=9', f.slice(4,8), [9,9,9,9]);
   chk('未設定的第3天沿用全域模式(best)', m.slice(12,16), [10,10,10,10]);
 
   // 加成能讓模式報 0 的地區產生雨量（乘法做不到的事）
   const dry = { county:'臺南市', township:'安南區', alert_val:0, qpf_best:Array(40).fill(0) };
-  setLex(`_scnDays = {0:{model:null, g:{'臺南分署|平地':{add:40, mul:1}}}};`);
+  setLex(`_scnDays = {0:{model:null, g:{'臺南分署|沿海地區':{add:40, mul:1}}}};`);
   chk('模式報0＋加成40 → 每段10', G.getQpfArr(dry,'qpf_best').slice(0,4), [10,10,10,10]);
-  setLex(`_scnDays = {0:{model:null, g:{'臺南分署|平地':{add:0, mul:3}}}};`);
+  setLex(`_scnDays = {0:{model:null, g:{'臺南分署|沿海地區':{add:0, mul:3}}}};`);
   chk('模式報0×倍率3 仍為0（故需加成）', G.getQpfArr(dry,'qpf_best').slice(0,4), [0,0,0,0]);
 
   // 負加成不得產生負雨量
