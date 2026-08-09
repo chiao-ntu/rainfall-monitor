@@ -499,6 +499,44 @@ if (need('getQpfArr') && need('_qpfFactor') && need('setUserFactor')) {
   setLex('_userFactor = 1; _userFactorOn = false; _biasApplyOn = false;');
 }
 
+
+// ════════ 10. 自訂範圍超過 +72h 不得歸零（回歸測試）════════
+console.log('\n=== _spanAccum：超出逐時視窗（>+72h）仍須有值 ===');
+if (need('_spanAccum')) {
+  const t = {
+    county:'高雄市', township:'六龜區', alert_val:300,
+    obs_1h_p48: Array(48).fill(2), qpf_1h_p48: Array(48).fill(1),
+    qpf_best: Array(24).fill(12), qpf_1h: Array(96).fill(2),
+    daily_rain:[10,48,48,48,30,20,10,5,0,0,0,0,0,0,0],
+  };
+  setLex("forecastModel='best'; _userFactorOn=false; _biasApplyOn=false;");
+  const bars = G._hourlyBars(t);
+  const lastHourSeg = Math.floor((bars.hFrom + bars.vals.length - 1) / 6);
+  // 完全落在逐時視窗之外的未來段
+  const farA = lastHourSeg + 2, farB = lastHourSeg + 4;
+  const far = G._spanAccum(t, farA, farB);
+  console.log(`   逐時視窗至段 ${lastHourSeg}；取段 ${farA}~${farB}（全在視窗外）`);
+  console.log(`   total=${far.total} fc=${far.fc} coarseSegs=${far.coarseSegs}`);
+  if (!(far.total > 0)) fails.push('超出+72h 的自訂範圍歸零（舊 bug 未修）');
+  else console.log('  OK  超出逐時視窗仍以 6h QPF 計入（舊 bug 已修）');
+  chk('全在視窗外時 coarseSegs=段數', far.coarseSegs, farB - farA + 1);
+
+  // 跨越視窗邊界的段不得重複計算：拆兩半相加應等於整段
+  const wide = G._spanAccum(t, 0, farB);
+  const mid = lastHourSeg;
+  const p1 = G._spanAccum(t, 0, mid), p2 = G._spanAccum(t, mid + 1, farB);
+  const diff = Math.abs(wide.total - (p1.total + p2.total));
+  console.log(`   跨界: 整段=${wide.total}, 拆兩半相加=${(p1.total+p2.total).toFixed(1)}, 差=${diff.toFixed(2)}`);
+  if (diff > 0.6) fails.push(`跨逐時視窗邊界重複或漏算（差 ${diff.toFixed(2)}）`);
+  else console.log('  OK  跨界不重複、不漏算');
+
+  // 長範圍（接近 slider 上限）應單調不減
+  const r5 = G._spanAccum(t, 0, 19), r10 = G._spanAccum(t, 0, 39);
+  console.log(`   0~19段=${r5.total}, 0~39段=${r10.total}`);
+  if (!(r10.total >= r5.total)) fails.push('範圍加長後總量反而變少');
+  else console.log('  OK  範圍加長總量不減');
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

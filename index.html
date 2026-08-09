@@ -1903,46 +1903,58 @@ function _hourlyBars(t){
   return {vals, hFrom, nowIdx:48, nowH, pastObsN, estMask};
 }
 
-// ── 任意時間範圍累積（可跨「現在」）──────────────────────
+// ── 任意時間範圍累積（可跨「現在」，且不受逐時序列長度限制）──────
 // 自訂範圍專用：過去段用觀測、未來段用QPF，兩者相加。
-// ★ 直接沿用 _hourlyBars() 那條序列（過去48h官方逐時觀測＋缺值補齊＋未來QPF），
-//   所以自訂範圍的數字與 120 槽組體圖同源，切換不會出現兩個答案。
-// 超過48h以前的過去：只有日觀測，按重疊比例分攤（近似，回傳 approxDays 供標示）。
-// 回傳 {total, obs, fc, approxDays, hasNull}
+// 逐段處理，每段依可得資料選解析度（由細到粗，優先用最權威的）：
+//   A. 落在 _hourlyBars 視窗內（過去48h~未來72h）→ 用逐時值（與120槽組體圖同源）
+//   B. 未來且超出 72h → 用該 6h 段的 QPF（getQpfArr，含倍率）
+//   C. 過去且超出 48h → 用日觀測按重疊小時比例分攤（近似，approxDays 標示）
+// ★ 早期版本只做 A，B/C 一律計 0：自訂範圍一拉超過 +72h，之後的雨量整段消失
+//   （單日視窗不走本函式所以正常，是這個 bug 難察覺的原因）。
+// 回傳 {total, obs, fc, approxDays, hasNull, coarseSegs}
 function _spanAccum(t, sf, st){
-  const bars = _hourlyBars(t);                 // {vals, hFrom, nowH, estMask}
-  const nowH = bars.nowH, hFrom = bars.hFrom;
-  const hA = sf*6, hB = st*6+6;                // [hA, hB) 小時區間，h=距今天00時
-  let obs = 0, fc = 0, approxDays = 0, hasNull = false;
+  const bars = _hourlyBars(t);                 // {vals, hFrom, nowH}
+  const nowH = bars.nowH, hFrom = bars.hFrom, hTo = hFrom + bars.vals.length;  // [hFrom,hTo)
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const qa = getQpfArr(t, qpfField);
+  const dr = t.daily_rain || [];
+  let obs = 0, fc = 0, approxDays = 0, coarseSegs = 0, hasNull = false;
 
-  for(let h=hA; h<hB; h++){
-    if(h >= hFrom && h < hFrom + bars.vals.length){
+  for(let s = sf; s <= st; s++){
+    const hA = s*6, hB = s*6 + 6;
+    // A. 逐時可用的部分
+    let hourCovered = 0;
+    for(let h = Math.max(hA, hFrom); h < Math.min(hB, hTo); h++){
       const v = bars.vals[h - hFrom];
+      hourCovered++;
       if(v == null){ hasNull = true; continue; }
       if(h < nowH) obs += v; else fc += v;
-    }else if(h < hFrom){
-      // 48h 以前：只有日解析度，於下面整日處理，這裡先跳過
-    }else{
-      hasNull = true;                          // 超出預報範圍（>+72h）
     }
-  }
-  // 48h 以前的過去：以日觀測按重疊小時比例分攤
-  if(hA < hFrom){
-    const dr = t.daily_rain || [];
-    for(let d=1; d<dr.length; d++){
-      const dS = -24*d, dE = -24*d + 24;       // 該日的小時區間
-      const ovA = Math.max(hA, dS), ovB = Math.min(Math.min(hB, hFrom), dE);
-      if(ovB <= ovA) continue;
-      const dv = dr[d];
-      if(dv == null){ hasNull = true; continue; }
-      const frac = (ovB - ovA) / 24;
-      obs += dv * frac;
-      if(frac < 0.999) approxDays++;           // 非整日→分攤為近似
+    if(hourCovered === 6) continue;             // 本段已由逐時完全覆蓋
+    const restH = 6 - hourCovered;              // 尚未覆蓋的小時數
+
+    if(hB > hTo){
+      // B. 未來超出逐時視窗 → 用 6h 段 QPF，按未覆蓋小時比例取用
+      const v = qa[s];
+      if(v == null){ hasNull = true; }
+      else { fc += v * (restH/6); coarseSegs++; }
+    }else if(hA < hFrom){
+      // C. 過去超出逐時視窗 → 用日觀測分攤（僅分攤未被逐時覆蓋的小時）
+      const ovA = hA, ovB = Math.min(hB, hFrom);
+      for(let d = 1; d < dr.length; d++){
+        const dS = -24*d, dE = -24*d + 24;
+        const a = Math.max(ovA, dS), b = Math.min(ovB, dE);
+        if(b <= a) continue;
+        const dv = dr[d];
+        if(dv == null){ hasNull = true; continue; }
+        obs += dv * ((b - a) / 24);
+        approxDays++;
+      }
     }
   }
   return {total: Math.round((obs+fc)*10)/10,
           obs: Math.round(obs*10)/10, fc: Math.round(fc*10)/10,
-          approxDays, hasNull};
+          approxDays, coarseSegs, hasNull};
 }
 
 // 逐時 ETR2 序列（hFrom..hTo，h=距今天00的小時數，可負）——前綴和優化+觀測錨定+權重連續內插
@@ -4056,20 +4068,12 @@ function renderTyphoonLayer(){
   if(!showTyphoon) return;
   typhoonLayer = L.layerGroup().addTo(map);
 
-  // 100km 海警線＋經緯度虛線格網（參考 NCDR 呈現）。
-  // ★ 畫在逐颱風迴圈之外：沒有颱風時也要看得到判準線。
+  // 100km 海警線。★ 畫在逐颱風迴圈之外：沒有颱風時也要看得到判準線。
+  //   經緯度格網已移除——使用者反映會與海警線、暴風圈虛線混淆，增加誤判機率。
   _seaLineSegs().forEach(sg=>{
     L.polyline([sg[0], sg[1]], {color:'#e8e83a', weight:1.4, opacity:0.85,
       interactive:false}).addTo(typhoonLayer);
   });
-  for(let la=20; la<=28; la++){
-    L.polyline([[la,116],[la,126]], {color:'#8a8a6a', weight:0.6, opacity:0.45,
-      dashArray:'4,6', interactive:false}).addTo(typhoonLayer);
-  }
-  for(let lo=116; lo<=126; lo++){
-    L.polyline([[20,lo],[28,lo]], {color:'#8a8a6a', weight:0.6, opacity:0.45,
-      dashArray:'4,6', interactive:false}).addTo(typhoonLayer);
-  }
 
   const list = (window.TYPHOON_TRACK || []);
   if(!list.length){
@@ -4153,9 +4157,10 @@ function renderTyphoonLayer(){
         reach = `暴風圈邊緣距陸地 ${Math.round(pt.edge)} km`;
       }else{
         const ctys = _countiesInRadius(pt.lat, pt.lng, pt.r15);
+        // tooltip 是白底，原本的粉色（#ffb0b0）幾乎看不見 → 改深紅
         reach = ctys.length
-          ? `<b style="color:#ffb0b0">暴風圈已涵蓋：${ctys.join('、')}</b>`
-          : '<b style="color:#ffb0b0">暴風圈已觸及陸地</b>';
+          ? `<b style="color:#a00000">暴風圈已涵蓋：${ctys.join('、')}</b>`
+          : '<b style="color:#a00000">暴風圈已觸及陸地</b>';
       }
       const tip =
         `<div style="font-size:12px"><b>${n}. ${pt.label}</b><br>` +
@@ -4207,9 +4212,6 @@ function renderTyphoonLegend(){
       <div style="display:flex;align-items:center;gap:5px"><svg width="22" height="8">
         <line x1="0" y1="4" x2="22" y2="4" stroke="#c8c81a" stroke-width="1.8"/></svg>
         <span>100km 海警線</span></div>
-      <div style="display:flex;align-items:center;gap:5px"><svg width="22" height="8">
-        <line x1="0" y1="4" x2="22" y2="4" stroke="#8a8a6a" stroke-width="1"
-          stroke-dasharray="4,6"/></svg><span>經緯度格網（1°）</span></div>
     </div>
     <div style="font-weight:700;margin-bottom:2px">關鍵時間點（編號對應地圖徽章）</div>`;
   rows.forEach(([c,ic,txt])=>{
@@ -4599,8 +4601,48 @@ function downloadRangeCsv(){
 // 共用 CSV 下載（含 BOM 供 Excel 開啟中文）
 
 // ════════════════════════════════════════════════
-//  左側面板：颱風動態 / 土石流警戒 / 大規模崩塌
+//  警戒面板共用：依「分署 → 縣市」分組 + 可點擊 zoom
+//  ★ 與 ETR2% 警戒面板同一套呈現（DISTRICT_ORDER / COUNTY_TO_DISTRICT /
+//    focusTownship），避免各面板各自一套排版與分組邏輯。
 // ════════════════════════════════════════════════
+function _groupByDistrict(items){
+  // items: [{county, town, ...}] → {district: {county: [item...]}}
+  const by = {};
+  items.forEach(it=>{
+    const d = COUNTY_TO_DISTRICT[it.county] || '其他';
+    (by[d] = by[d] || {});
+    (by[d][it.county] = by[d][it.county] || []).push(it);
+  });
+  return by;
+}
+// 逐分署→逐縣市走訪（分署依官方順序、縣市依 rankOf 最大者優先）
+function _eachDistrict(by, rankOf, fn){
+  const order = DISTRICT_ORDER.concat(Object.keys(by).filter(d=>!DISTRICT_ORDER.includes(d)));
+  order.forEach(d=>{
+    const cMap = by[d];
+    if(!cMap) return;
+    const counties = Object.keys(cMap).sort((a,b)=>
+      Math.max(...cMap[b].map(rankOf)) - Math.max(...cMap[a].map(rankOf)));
+    fn(d, DISTRICT_COLOR[d] || '#aaccee', cMap, counties);
+  });
+}
+function _distHeaderHtml(d, col){
+  return `<div style="color:${col};font-size:10px;font-weight:700;padding:3px 2px;
+    border-bottom:1px solid ${col}55;background:#0d1f30">${d}</div>`;
+}
+function _countyHeaderHtml(county, n){
+  return `<div style="color:#8aa8c0;font-size:10px;padding:2px 0 1px 4px;
+    border-bottom:1px dashed #16314a">${county}
+    <span style="color:#5a7a90">(${n})</span></div>`;
+}
+// 可點擊定位的鄉鎮名（與 ETR2 面板同樣式）
+function _zoomSpan(county, town, label, col){
+  return `<span style="cursor:pointer;text-decoration:underline dotted;color:${col};
+    font-weight:700" onclick="focusTownship('${county}','${town}')"
+    title="點擊定位至 ${county}${town}">${label}</span>`;
+}
+
+
 function _tyRows(){
   const out = [];
   (window.TYPHOON_TRACK || []).forEach(ty=>{
@@ -4650,10 +4692,13 @@ function _heavyRainLine(){
     const d = hc[c] || {};
     const o = d.obs_max, f = d.fc_max;
     const parts = [];
-    if(o != null && o >= th) parts.push(`<span style="color:#ffd08a">觀測 ${Math.round(o)}mm</span>`);
-    if(f != null && f >= th) parts.push(`<span style="color:#8ac8f0">${WIN[d.fc_win]||'預測'} ${Math.round(f)}mm</span>`);
+    if(o != null && o >= th) parts.push(`<span style="color:#ffd08a">觀測 ${Math.round(o)}mm${d.obs_town?`(${d.obs_town})`:''}</span>`);
+    if(f != null && f >= th) parts.push(`<span style="color:#8ac8f0">${WIN[d.fc_win]||'預測'} ${Math.round(f)}mm${d.fc_town?`(${d.fc_town})`:''}</span>`);
     const peak = Math.max(o||0, f||0);
-    return {c, peak, html:`${c} ${parts.join('／')}`};
+    // 縣市名可點擊 → 定位至該縣市峰值所在鄉鎮（與 ETR2% 面板同樣的 zoom 行為）
+    const zt = ((o||0) >= (f||0) ? d.obs_town : d.fc_town) || '';
+    const label = zt ? _zoomSpan(c, zt, c, '#e8c8ff') : `<span style="font-weight:700">${c}</span>`;
+    return {c, peak, html:`${label} ${parts.join('／')}`};
   }).sort((a,b)=>b.peak-a.peak);
   return rows.map(r=>r.html).join('、');
 }
@@ -4880,45 +4925,96 @@ function updateDebrisPanel(){
     h += '<div style="color:#8a7a6a;font-size:10px">目前無達警戒或接近警戒之潛勢溪流</div>';
     body.innerHTML = h; return;
   }
-  // 依縣市→鄉鎮分組
-  const by = {};
-  hits.forEach(({no,d})=>{
-    const c = d.county||'', t = d.town||'';
-    (by[c] = by[c] || {}); (by[c][t] = by[c][t] || []).push({no,d});
-  });
-  Object.keys(by).forEach(c=>{
-    h += `<div style="color:#ffb070;font-weight:700;margin-top:4px">${c}</div>`;
-    Object.keys(by[c]).forEach(t=>{
-      h += `<div style="color:#e8c8a8;padding-left:5px">${t}</div>`;
-      by[c][t].forEach(({no,d})=>{
-        const stl = _alertStyleOf(d);
-        const tag = d.off_level==='r' ? '🔴' : d.off_level==='y' ? '🟡'
-                  : (d.est_red_fc || d.est_yellow_now) ? '◈' : '△';
-        const den = d.alert_adj ?? d.alert;
-        h += `<div style="padding-left:11px;font-size:10px;color:#d8c0a8">
-          ${tag} <span style="color:${stl.color};font-weight:700">${no}</span>
-          ${d.etr2}/${den}mm（<b style="color:${stl.color}">${(d.pct*100).toFixed(0)}%</b>）
-          <span style="color:${stl.color};font-size:9px">${stl.tag}</span>
-          ${d.adj_level ? `<span style="color:#ff9a6a;font-size:9px">▼${d.adj_mm}</span>` : ''}
-          ${d.vill ? `<span style="color:#9a8a7a">${d.vill}</span>` : ''}</div>`;
+  // 依分署 → 縣市 分組（與 ETR2% 警戒面板一致）
+  const rank = x => (_alertRank(x.d)*1000) + (x.d.pct||0)*100;
+  _eachDistrict(_groupByDistrict(hits.map(x=>({county:x.d.county||'', town:x.d.town||'', ...x}))),
+    rank, (d, dcol, cMap, counties)=>{
+    h += `<div style="margin-bottom:5px">` + _distHeaderHtml(d, dcol);
+    counties.forEach(county=>{
+      h += _countyHeaderHtml(county, cMap[county].length);
+      // 同縣市內再依鄉鎮分組，鄉鎮名可點擊定位
+      const byTown = {};
+      cMap[county].forEach(x=>{ (byTown[x.town] = byTown[x.town]||[]).push(x); });
+      Object.keys(byTown).sort((a,b)=>
+        Math.max(...byTown[b].map(rank)) - Math.max(...byTown[a].map(rank))
+      ).forEach(town=>{
+        const best = byTown[town].reduce((p,c)=>rank(c)>rank(p)?c:p);
+        const tcol = _alertStyleOf(best.d).color;
+        h += `<div style="padding:1px 2px 1px 8px;font-size:10px">
+          ${_zoomSpan(county, town, town, tcol)}
+          <span style="color:#7a8a9a">${byTown[town].length} 條</span></div>`;
+        byTown[town].sort((a,b)=>rank(b)-rank(a)).forEach(({no,d:dd})=>{
+          const stl = _alertStyleOf(dd);
+          const tag = dd.off_level==='r' ? '🔴' : dd.off_level==='y' ? '🟡'
+                    : (dd.est_red_fc || dd.est_yellow_now) ? '◈' : '△';
+          const den = dd.alert_adj ?? dd.alert;
+          h += `<div style="padding:0 2px 1px 18px;font-size:10px;color:#d8c0a8;line-height:1.45">
+            ${tag} <span style="color:${stl.color};font-weight:700">${no}</span>
+            ${dd.vill ? `<span style="color:#9a8a7a">${dd.vill}</span>` : ''}
+            <span style="color:${stl.color};font-size:9px">${stl.tag}</span><br>
+            <span style="padding-left:14px;color:#b0a090">ETR2 ${dd.etr2 ?? '—'}/${den ?? '—'}mm
+              （<b style="color:${stl.color}">${((dd.pct||0)*100).toFixed(0)}%</b>）
+              ${dd.adj_level ? `<span style="color:#ff9a6a" title="動態調降第${dd.adj_level}級">▼${dd.adj_mm}</span>` : ''}
+              ｜預測 ${dd.fc_etr2 ?? '—'}mm（QPF ${dd.qpf24 ?? '—'}）
+              ${dd.station ? `｜站 ${dd.station}` : ''}</span></div>`;
+        });
       });
     });
+    h += '</div>';
   });
   h += `<div style="font-size:9px;color:#8a7a6a;margin-top:4px">
-    🔴🟡＝水保署已發布之警戒；◈＝系統推估（依技術指引門檻，供發布決策參考）；△＝接近警戒。</div>`;
+    🔴🟡＝水保署已發布之警戒；◈＝系統推估（依技術指引門檻，供發布決策參考）；△＝接近警戒。
+    點鄉鎮名可定位。</div>`;
   body.innerHTML = h;
+}
+// 警戒優先序（官方紅5→官方黃4→推估紅3→推估黃2→入夜示警1→其他0），三個面板共用
+function _alertRank(a){
+  if(!a) return 0;
+  if(a.off_level === 'r') return 5;
+  if(a.off_level === 'y') return 4;
+  if(a.est_red_fc) return 3;
+  if(a.est_yellow_now) return 2;
+  if(a.night_warn) return 1;
+  return 0;
 }
 function copyDebrisPanel(btn){
   const hits = _debrisHits();
   if(!hits.length){ _copyRich(btn, '目前無達警戒之潛勢溪流', '目前無達警戒之潛勢溪流'); return; }
+  // ★ 依分署→縣市→鄉鎮整理（與 ETR2% 面板一致），並帶統計抬頭
+  const all = Object.values(window.DEBRIS_ALERTS || {});
+  const _om = window.OFFICIAL_ALERT_META || {};
+  const nR = all.filter(x=>x.off_level==='r').length, nY = all.filter(x=>x.off_level==='y').length;
+  const nEr = all.filter(x=>x.est_red_fc).length, nEy = all.filter(x=>x.est_yellow_now).length;
   let t = '', hs = '';
-  hits.forEach(({no,d})=>{
-    const stl = _alertStyleOf(d);
-    const den = d.alert_adj ?? d.alert;
-    const line = `${no}　${d.county}${d.town}${d.vill||''}　${stl.tag}　` +
-      `ETR2 ${d.etr2}/${den}mm（${(d.pct*100).toFixed(0)}%）` +
-      (d.adj_level ? `　動態調降第${d.adj_level}級 −${d.adj_mm}mm` : '');
-    t += line + '\n'; hs += `<div>${line}</div>`;
+  const add = (txt, html) => { t += txt + '\n'; hs += (html || `<div>${txt}</div>`); };
+  add(`【土石流警戒】${_om.ok ? `官方報別 ${_om.report_id||'—'}` : '★官方取用失敗'}` +
+      `　資料時間 ${_om.updated || '—'}`);
+  add(`官方現況：紅色 ${nR} 條、黃色 ${nY} 條（共 ${all.length} 條潛勢溪流）`);
+  add(`系統推估：未來24h可能達紅 ${nEr} 條、符合黃警發布標準 ${nEy} 條`);
+  add('');
+  const rank = x => (_alertRank(x.d)*1000) + (x.d.pct||0)*100;
+  _eachDistrict(_groupByDistrict(hits.map(x=>({county:x.d.county||'', town:x.d.town||'', ...x}))),
+    rank, (d, dcol, cMap, counties)=>{
+    add(`■ ${d}`, `<div style="font-weight:700;color:${dcol}">■ ${d}</div>`);
+    counties.forEach(county=>{
+      add(`　${county}（${cMap[county].length} 條）`);
+      const byTown = {};
+      cMap[county].forEach(x=>{ (byTown[x.town] = byTown[x.town]||[]).push(x); });
+      Object.keys(byTown).sort((a,b)=>
+        Math.max(...byTown[b].map(rank)) - Math.max(...byTown[a].map(rank))
+      ).forEach(town=>{
+        add(`　　${town}（${byTown[town].length} 條）`);
+        byTown[town].sort((a,b)=>rank(b)-rank(a)).forEach(({no,d:dd})=>{
+          const den = dd.alert_adj ?? dd.alert;
+          add(`　　　${no}${dd.vill?`（${dd.vill}）`:''}　${_alertStyleOf(dd).tag}　` +
+              `ETR2 ${dd.etr2 ?? '—'}/${den ?? '—'}mm（${((dd.pct||0)*100).toFixed(0)}%）` +
+              (dd.adj_level ? `　動態調降第${dd.adj_level}級 −${dd.adj_mm}mm` : '') +
+              `　預測 ${dd.fc_etr2 ?? '—'}mm（未來24hQPF ${dd.qpf24 ?? '—'}mm）` +
+              (dd.station ? `　參考站 ${dd.station}` : ''));
+        });
+      });
+    });
+    add('');
   });
   _copyRich(btn, t, hs);
 }
@@ -4956,13 +5052,17 @@ function downloadDebrisCsv(){
 // 大崩統一狀態：官方現況優先，其次系統推估。回傳 {rank, col, tag, isOfficial}
 // rank 用於排序：5 官方紅 / 4 官方黃 / 3 推估未來達紅 / 2 推估符合黃警標準 / 1 入夜前示警 / 0 其他
 function _lsState(a){
-  if(!a) return {rank:0, col:'#a0703a', tag:'—', isOfficial:false};
-  if(a.off_level === 'r') return {rank:5, col:'#ff2020', tag:'🔴官方紅色警戒', isOfficial:true};
-  if(a.off_level === 'y') return {rank:4, col:'#ffd400', tag:'🟡官方黃色警戒', isOfficial:true};
-  if(a.est_red_fc)      return {rank:3, col:'#ff8833', tag:'推估未來24h達紅', isOfficial:false};
-  if(a.est_yellow_now)  return {rank:2, col:'#e8c84a', tag:'推估符合黃警發布標準', isOfficial:false};
-  if(a.night_warn)      return {rank:1, col:'#c89a5a', tag:'入夜前示警', isOfficial:false};
-  return {rank:0, col:'#a0703a', tag:'未達標', isOfficial:false};
+  // rank 一律取自 _alertRank()，與土石流面板共用同一套優先序（勿另立一份）
+  const r = _alertRank(a);
+  const M = {
+    5:{col:'#ff2020', tag:'🔴官方紅色警戒', isOfficial:true},
+    4:{col:'#ffd400', tag:'🟡官方黃色警戒', isOfficial:true},
+    3:{col:'#ff8833', tag:'推估未來24h達紅', isOfficial:false},
+    2:{col:'#e8c84a', tag:'推估符合黃警發布標準', isOfficial:false},
+    1:{col:'#c89a5a', tag:'入夜前示警', isOfficial:false},
+    0:{col:'#a0703a', tag: a ? '未達標' : '—', isOfficial:false},
+  };
+  return Object.assign({rank:r}, M[r]);
 }
 function _lsPct(a){
   if(!a) return null;
@@ -4999,42 +5099,91 @@ function updateLandslidePanel(){
     h += `<div style="font-size:10px;color:#8a9a7a;padding:3px 0">目前無警戒區達警戒級別</div>`;
     body.innerHTML = h; return;
   }
-  let lastCounty = '';
-  rows.forEach(({no, a, i, st, pct})=>{
-    if(a.county !== lastCounty){
-      lastCounty = a.county;
-      h += `<div style="font-size:10px;font-weight:700;color:#d0b090;margin-top:4px;
-        border-bottom:1px solid #4a3a2a">${a.county}</div>`;
-    }
-    const den = a.alert_adj || a.alert;
-    const adj = (a.adj_level ? ` <span style="color:#ff9a6a" title="警戒基準值動態調降第${a.adj_level}級，調降${a.adj_mm}mm">▼${a.adj_mm}</span>` : '');
-    const srcNote = a.etr2_src && a.etr2_src !== 'exact'
-      ? ` <span style="color:#8a7a6a" title="ETR2 來源：${a.etr2_src_name||a.etr2_src}（非代表站精確值）">*</span>` : '';
-    h += `<div style="font-size:10px;color:#e0c8b0;padding:1px 0 1px 4px">
-      <span style="color:${st.col};font-weight:700">${no}</span>
-      <span style="color:#c8b09a">${a.town||''}${a.village||''}</span>
-      <span style="color:${st.col}">${st.tag}</span>
-      <span style="color:#b0a090">ETR2 ${a.etr2 ?? '—'}/${den ?? '—'}mm
-        （${pct != null ? pct.toFixed(0)+'%' : '—'}）${adj}${srcNote}</span>
-      ${i.Total_Res != null || i.Dw_count != null
-        ? `<span style="color:#9a8a7a">｜${i.Total_Res ?? i.Dw_count}戶</span>` : ''}
-    </div>`;
+  const rank = r => r.st.rank*1000 + (r.pct ?? 0);
+  _eachDistrict(_groupByDistrict(rows.map(r=>({county:r.a.county||'', town:r.a.town||'', ...r}))),
+    rank, (d, dcol, cMap, counties)=>{
+    h += `<div style="margin-bottom:5px">` + _distHeaderHtml(d, dcol);
+    counties.forEach(county=>{
+      h += _countyHeaderHtml(county, cMap[county].length);
+      const byTown = {};
+      cMap[county].forEach(x=>{ (byTown[x.town] = byTown[x.town]||[]).push(x); });
+      Object.keys(byTown).sort((a,b)=>
+        Math.max(...byTown[b].map(rank)) - Math.max(...byTown[a].map(rank))
+      ).forEach(town=>{
+        const best = byTown[town].reduce((p,c)=>rank(c)>rank(p)?c:p);
+        h += `<div style="padding:1px 2px 1px 8px;font-size:10px">
+          ${_zoomSpan(county, town, town, best.st.col)}
+          <span style="color:#7a8a9a">${byTown[town].length} 處</span></div>`;
+        byTown[town].sort((a,b)=>rank(b)-rank(a)).forEach(({no, a, i, st, pct})=>{
+          const den = a.alert_adj || a.alert;
+          const adj = a.adj_level
+            ? ` <span style="color:#ff9a6a" title="警戒基準值動態調降第${a.adj_level}級，調降${a.adj_mm}mm">▼${a.adj_mm}</span>` : '';
+          const srcNote = (a.etr2_src && a.etr2_src !== 'exact')
+            ? ` <span style="color:#8a7a6a" title="ETR2 來源：${a.etr2_src_name||a.etr2_src}（非代表站精確值）">*</span>` : '';
+          h += `<div style="padding:0 2px 1px 18px;font-size:10px;color:#e0c8b0;line-height:1.45">
+            <span style="color:${st.col};font-weight:700">${no}</span>
+            <span style="color:#c8b09a">${a.village||''}</span>
+            <span style="color:${st.col};font-size:9px">${st.tag}</span><br>
+            <span style="padding-left:8px;color:#b0a090">ETR2 ${a.etr2 ?? '—'}/${den ?? '—'}mm
+              （<b style="color:${st.col}">${pct != null ? pct.toFixed(0)+'%' : '—'}</b>）${adj}${srcNote}
+              ｜預測 ${a.fc_etr2 ?? '—'}mm（QPF ${a.qpf24 ?? '—'}）
+              ${(i.Total_Res != null || i.Dw_count != null) ? `｜${i.Total_Res ?? i.Dw_count}戶` : ''}
+              ${i.Risk ? `｜風險${i.Risk}` : ''}</span></div>`;
+        });
+      });
+    });
+    h += '</div>';
   });
   h += `<div style="font-size:9px;color:#8a7a6a;margin-top:4px">
     官方標示者為水保署已發布之警戒；「推估」為本系統依技術指引門檻研判，供發布決策參考。
-    標 * 者 ETR2 非取自官方代表站精確值。</div>`;
+    標 * 者 ETR2 非取自官方代表站精確值。點鄉鎮名可定位。</div>`;
   body.innerHTML = h;
 }
 function copyLandslidePanel(btn){
   const rows = _lsRows(true);
-  if(!rows.length){ _copyRich(btn, '目前無大規模崩塌警戒區達警戒級別', '目前無大規模崩塌警戒區達警戒級別'); return; }
+  const A = window.LANDSLIDE_ALERTS || {};
+  const _om = window.OFFICIAL_ALERT_META || {};
+  if(!rows.length){
+    _copyRich(btn, `【大規模崩塌警戒】共 ${Object.keys(A).length} 處警戒區，目前無達警戒級別`,
+                   `<div>【大規模崩塌警戒】共 ${Object.keys(A).length} 處警戒區，目前無達警戒級別</div>`);
+    return;
+  }
+  // ★ 依分署→縣市→鄉鎮整理（與 ETR2% 面板一致），並帶統計抬頭
+  const all = Object.values(A);
   let t = '', hs = '';
-  rows.forEach(({no, a, st, pct})=>{
-    const den = a.alert_adj || a.alert;
-    const line = `${no}　${a.county||''}${a.town||''}${a.village||''}　${st.tag}　` +
-      `ETR2 ${a.etr2 ?? '—'}/${den ?? '—'}mm（${pct != null ? pct.toFixed(0)+'%' : '—'}）` +
-      (a.adj_level ? `　動態調降${a.adj_mm}mm` : '');
-    t += line + '\n'; hs += `<div>${line}</div>`;
+  const add = (txt, html) => { t += txt + '\n'; hs += (html || `<div>${txt}</div>`); };
+  add(`【大規模崩塌警戒】${_om.ok ? `官方報別 ${_om.report_id||'—'}` : '★官方取用失敗'}` +
+      `　資料時間 ${_om.updated || '—'}`);
+  add(`官方現況：紅色 ${all.filter(x=>x.off_level==='r').length} 處、` +
+      `黃色 ${all.filter(x=>x.off_level==='y').length} 處（共 ${all.length} 處警戒區）`);
+  add(`系統推估：未來24h可能達紅 ${all.filter(x=>x.est_red_fc).length} 處、` +
+      `符合黃警發布標準 ${all.filter(x=>x.est_yellow_now).length} 處`);
+  add('');
+  const rank = r => r.st.rank*1000 + (r.pct ?? 0);
+  _eachDistrict(_groupByDistrict(rows.map(r=>({county:r.a.county||'', town:r.a.town||'', ...r}))),
+    rank, (d, dcol, cMap, counties)=>{
+    add(`■ ${d}`, `<div style="font-weight:700;color:${dcol}">■ ${d}</div>`);
+    counties.forEach(county=>{
+      add(`　${county}（${cMap[county].length} 處）`);
+      const byTown = {};
+      cMap[county].forEach(x=>{ (byTown[x.town] = byTown[x.town]||[]).push(x); });
+      Object.keys(byTown).sort((a,b)=>
+        Math.max(...byTown[b].map(rank)) - Math.max(...byTown[a].map(rank))
+      ).forEach(town=>{
+        add(`　　${town}（${byTown[town].length} 處）`);
+        byTown[town].sort((a,b)=>rank(b)-rank(a)).forEach(({no, a, i, st, pct})=>{
+          const den = a.alert_adj || a.alert;
+          add(`　　　${no}${a.village?`（${a.village}）`:''}　${st.tag}　` +
+              `ETR2 ${a.etr2 ?? '—'}/${den ?? '—'}mm（${pct != null ? pct.toFixed(0)+'%' : '—'}）` +
+              (a.adj_level ? `　動態調降第${a.adj_level}級 −${a.adj_mm}mm` : '') +
+              `　預測 ${a.fc_etr2 ?? '—'}mm（未來24hQPF ${a.qpf24 ?? '—'}mm）` +
+              ((i.Total_Res != null || i.Dw_count != null) ? `　保全 ${i.Total_Res ?? i.Dw_count} 戶` : '') +
+              (i.Risk ? `　風險 ${i.Risk}` : '') +
+              (a.etr2_src && a.etr2_src !== 'exact' ? `　※ETR2來源：${a.etr2_src_name||a.etr2_src}` : ''));
+        });
+      });
+    });
+    add('');
   });
   _copyRich(btn, t, hs);
 }
