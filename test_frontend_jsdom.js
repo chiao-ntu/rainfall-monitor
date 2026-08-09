@@ -359,19 +359,19 @@ if (need('_lsPct')) {
 // ════════ 6. 只列達警戒者 ════════
 console.log('\n=== _lsRows(onlyAlert) ===');
 if (need('_lsRows')) {
+  // ★ 用 TMAP 中不存在的鄉鎮，讓 _withEst 走「退回後端值」路徑，
+  //   才測得到排序本身；否則前端重算會覆寫 fixture 的 est_red_fc。
   G.LANDSLIDE_ALERTS = {
-    'A1': { county: '屏東縣', town: '霧臺鄉', off_level: 'r', etr2: 700, alert: 600 },
-    'A2': { county: '南投縣', town: '仁愛鄉', off_level: '', est_red_fc: true, etr2: 400, alert: 700 },
-    'A3': { county: '花蓮縣', town: '秀林鄉', off_level: '', etr2: 10, alert: 650 },
-    'A4': { county: '臺中市', town: '和平區', off_level: 'y', etr2: 300, alert: 600 },
+    'A1': { county: '測試縣', town: '甲鄉', off_level: 'r', etr2: 700, alert: 600 },
+    'A2': { county: '測試縣', town: '乙鄉', off_level: '', est_red_fc: true, etr2: 400, alert: 700 },
+    'A3': { county: '測試縣', town: '丙鄉', off_level: '', etr2: 10, alert: 650 },
+    'A4': { county: '測試縣', town: '丁鄉', off_level: 'y', etr2: 300, alert: 600 },
   };
   G._lsGeo = null;
   const all = G._lsRows(false), only = G._lsRows(true);
   chk('全部 4 筆', all.length, 4);
   chk('只列達警戒 3 筆（排除 A3）', only.length, 3);
-  chk('排序：官方紅在最前', only[0].no, 'A1');
-  chk('排序：官方黃次之', only[1].no, 'A4');
-  chk('排序：推估最後', only[2].no, 'A2');
+  chk('排序順序：官方紅→官方黃→推估', only.map(r=>r.no), ['A1','A4','A2']);
 }
 
 // ════════ 7. 海警線等值線與縣市涵蓋 ════════
@@ -662,6 +662,89 @@ if (need('_scnDayShort')) {
     if (!/^\d+\/\d+\([日一二三四五六]\)$/.test(G._scnDayShort(d))) bad.push(d);
   }
   chk('全 16 天標籤格式正確', bad, []);
+}
+
+
+// ════════ 13. 警戒清單共用版式（比照二次災害高風險區）════════
+console.log('\n=== _alertListText 版式 ===');
+if (need('_alertListText')) {
+  const items = [
+    {county:'南投縣', town:'信義鄉', id:'投縣DF185', rank:5000},
+    {county:'南投縣', town:'信義鄉', id:'投縣DF206', rank:4000},
+    {county:'臺東縣', town:'太麻里鄉', id:'東縣DF111', rank:5000},
+    {county:'臺東縣', town:'太麻里鄉', id:'東縣DF124', rank:4900},
+    {county:'臺東縣', town:'卑南鄉', id:'東縣DF049', rank:4800},
+    {county:'臺東縣', town:'卑南鄉', id:'東縣DF059', rank:4700},
+    {county:'臺東縣', town:'金峰鄉', id:'東縣DF076', rank:4600},
+  ];
+  const txt = G._alertListText(items);
+  console.log(txt.split('\n').map(l=>'   '+l).join('\n'));
+  chk('有分署標頭', /^【南投分署】$/m.test(txt), true);
+  chk('同鄉鎮編號合併於括號內',
+      /南投縣：信義鄉（投縣DF185、投縣DF206）/.test(txt), true);
+  chk('同縣市多鄉鎮以、分隔',
+      /臺東縣：太麻里鄉（東縣DF111、東縣DF124）、卑南鄉（東縣DF049、東縣DF059）、金峰鄉（東縣DF076）/.test(txt), true);
+  chk('分署順序依 DISTRICT_ORDER（南投在臺東前）',
+      txt.indexOf('【南投分署】') < txt.indexOf('【臺東分署】'), true);
+  // 每個縣市恰好一行
+  const lines = txt.trim().split('\n').filter(l=>l && !l.startsWith('【'));
+  chk('縣市行數 = 2', lines.length, 2);
+  chk('空清單回空字串', G._alertListText([]), '');
+}
+
+
+// ════════ 14. 推估前端重算：必須與 fetch_rainfall.py slope_est 一致 ════════
+console.log('\n=== _slopeEstJS 與後端 slope_est 門檻一致 ===');
+if (need('_slopeEstJS')) {
+  const S = G._slopeEstJS;
+  chk('警戒值350 → 門檻0.30', S(100,350,0).yellow_th, 0.30);
+  chk('警戒值400 → 門檻0.40', S(100,400,0).yellow_th, 0.40);
+  chk('警戒值1500 → 門檻0.40', S(100,1500,0).yellow_th, 0.40);
+  chk('實際80(<90) 預測+500 → 不符黃警', S(80,300,500).est_yellow_now, false);
+  chk('  但未來24h會達紅', S(80,300,500).est_red_fc, true);
+  chk('實際90(=30%) 預測+250 → 符合黃警', S(90,300,250).est_yellow_now, true);
+  chk('實際90 預測+100(合190) → 不符', S(90,300,100).est_yellow_now, false);
+  chk('  也不會達紅', S(90,300,100).est_red_fc, false);
+  chk('實際已達警戒值 → est_red_fc', S(300,300,0).est_red_fc, true);
+  chk('合計299.95<300 → false', S(299.9,300,0.05).est_red_fc, false);
+  chk('夜間QPF null → night_warn null', S(200,300,50,null).night_warn, null);
+  chk('200+120=320≥300 → true', S(200,300,50,120).night_warn, true);
+  chk('200+50=250<300 → false', S(200,300,50,50).night_warn, false);
+  ['etr2=null','alert=null','alert=0'].forEach((lbl,i)=>{
+    const r=[S(null,300,50),S(100,null,50),S(100,0,50)][i];
+    const bad=['est_yellow_now','est_red_fc','pct','fc_pct'].filter(k=>r[k]!==null);
+    chk(`${lbl} → 判定全 null`, bad, []);
+  });
+  chk('qpf24 null 視為 0', S(100,300,null).fc_etr2, 100);
+}
+
+console.log('\n=== 情境驅動推估（本輪核心）===');
+if (need('_withEst') && need('getQpfArr')) {
+  // 造一個鄉鎮進 TMAP，讓 _alertTown 找得到
+  setLex(`TMAP['臺東縣卑南鄉'] = {county:'臺東縣', township:'卑南鄉', alert_val:500,
+      etr2:100, etr2_alert:500, qpf_best:Array(64).fill(0)};
+      forecastModel='best'; _userFactorOn=false; _biasApplyOn=false; _scnOn=false; _scnDays={};`);
+  const a = {county:'臺東縣', town:'卑南鄉', alert:500, etr2:100,
+             off_level:'', est_red_fc:false, est_yellow_now:false, fc_etr2:100};
+  const noScn = G._withEst(a);
+  console.log(`   無情境: est_src=${noScn.est_src} qpf24=${noScn.qpf24} fc=${noScn.fc_etr2} red=${noScn.est_red_fc}`);
+  chk('無情境時前端重算生效', noScn.est_src, 'frontend');
+  chk('模式報0 → 不達紅', noScn.est_red_fc, false);
+
+  // 情境：臺東山區每日加成 2000mm → 未來24h 應遠超警戒值
+  setLex(`_scnOn = true; _scnDays = {0:{model:null,g:{'臺東分署|山區':{add:2000,mul:1}}},
+                                    1:{model:null,g:{'臺東分署|山區':{add:2000,mul:1}}}};`);
+  const withScn = G._withEst(a);
+  console.log(`   有情境: qpf24=${withScn.qpf24} fc=${withScn.fc_etr2} red=${withScn.est_red_fc} yellow=${withScn.est_yellow_now}`);
+  if (!(withScn.qpf24 > 500)) fails.push(`情境未反映到 qpf24（${withScn.qpf24}）`);
+  else console.log('  OK  情境已驅動未來24h QPF');
+  chk('情境使推估達紅', withScn.est_red_fc, true);
+  chk('官方現況欄位不被覆寫', withScn.off_level, '');
+
+  // 找不到鄉鎮 → 退回後端值並標記
+  const orphan = G._withEst({county:'不存在縣', town:'不存在鄉', alert:500, etr2:100});
+  chk('找不到鄉鎮 → est_src=backend', orphan.est_src, 'backend');
+  setLex('_scnOn=false; _scnDays={};');
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
