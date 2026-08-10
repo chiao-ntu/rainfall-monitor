@@ -761,6 +761,71 @@ if (need('_withEst') && need('getQpfArr')) {
   setLex('_scnOn=false; _scnDays={};');
 }
 
+
+// ════════ 15. 今天視窗 ETR2 必須含整日剩餘 QPF（本輪核心修正）════════
+console.log('\n=== 今天視窗 ETR2 反映情境／倍率 ===');
+if (need('getAccum') && need('calcEtr2AtSeg')) {
+  const t = { county:'高雄市', township:'六龜區', alert_val:250, etr2_alert:250,
+              etr2:67, etr2_pct:0.27,
+              qpf_best:Array(64).fill(0), daily_rain:Array(15).fill(0),
+              obs_1h_p48:Array(48).fill(0), qpf_1h_p48:Array(48).fill(0),
+              qpf_1h:Array(96).fill(0) };
+  setLex("forecastModel='best'; _userFactorOn=false; _biasApplyOn=false; _scnOn=false; _scnDays={};");
+  setLex("winKey='today'; segFrom=0; segTo=3; mode='rain';");
+  // ★ 把 BASE_TIME 設到「明天 00:00」，使 nowH 夾到 0、_nowSeg()=0，
+  //   這樣今天視窗才有「整日剩餘 QPF」可算；否則示範資料的 BASE_TIME 過舊，
+  //   nowH 會夾到 23、seg3 就等於「現在」，測不到要驗的路徑。
+  setLex(`{ const d = new Date(); d.setDate(d.getDate()+1); d.setHours(0,0,0,0);
+            BASE_TIME = d; }`);
+  console.log(`   _nowSeg()=${G._nowSeg()}（需為 0 才測得到整日剩餘）`);
+  const dry = G.getAccum(t, 'rain');
+  console.log(`   無雨: totalRain=${dry.totalRain} etrPct=${dry.etrPct}`);
+
+  // 情境：六龜區屬臺南分署，注入地形後給大量加成
+  setLex(`TOWN_ZONE = Object.assign(TOWN_ZONE||{}, {'高雄市六龜區':'山區'});
+          _scnOn = true;
+          _scnDays = {0:{model:null, g:{'臺南分署|山區':{add:2000, mul:1}}}};`);
+  const wet = G.getAccum(t, 'rain');
+  console.log(`   情境+2000mm/日: totalRain=${wet.totalRain} etrPct=${wet.etrPct}`);
+  if (!(wet.totalRain > dry.totalRain)) fails.push('情境未反映到今天視窗雨量');
+  else console.log('  OK  雨量已反映情境');
+  // ★ 關鍵：警戒值 250mm、雨量遠超 → ETR2% 不可能還停在 27%
+  if (!(wet.etrPct > 100)) fails.push(`今天視窗 ETR2% 未含整日 QPF（${wet.etrPct}%）`);
+  else console.log(`  OK  ETR2% 已含整日剩餘 QPF（${wet.etrPct}%）`);
+  if (!(wet.etrPct > dry.etrPct)) fails.push('ETR2% 未隨情境提高');
+
+  // getAccum 與 _summaryEtr（CSV/複製）必須一致
+  const se = G._summaryEtr(t);
+  console.log(`   getAccum.etrPct=${wet.etrPct} vs _summaryEtr=${se}`);
+  if (Math.abs(se - wet.etrPct) > 1.01) fails.push(`地圖與CSV的ETR2%不一致（${wet.etrPct} vs ${se}）`);
+  else console.log('  OK  地圖與 CSV 的 ETR2% 一致');
+  setLex("_scnOn=false; _scnDays={}; winKey='today'; segFrom=0; segTo=3;");
+}
+
+console.log('\n=== Ctrl+Z / Ctrl+Y 復原重做 ===');
+if (need('scnUndo') && need('scnRedo') && need('scnPushUndo')) {
+  setLex("_scnDays={}; _scnUndo=[]; _scnRedo=[]; _scnOn=false;");
+  setLex("scnPushUndo(); _scnDays={0:{model:'hi',g:{}}};");
+  setLex("scnPushUndo(); _scnDays={0:{model:'hi',g:{}},1:{model:'lo',g:{}}};");
+  chk('目前有兩天設定', Object.keys(getLex('_scnDays')).length, 2);
+  G.scnUndo();
+  chk('復原一步 → 一天', Object.keys(getLex('_scnDays')).length, 1);
+  G.scnUndo();
+  chk('再復原 → 空', Object.keys(getLex('_scnDays')).length, 0);
+  chk('已無可復原', G.scnUndo(), false);
+  G.scnRedo();
+  chk('重做一步 → 一天', Object.keys(getLex('_scnDays')).length, 1);
+  G.scnRedo();
+  chk('再重做 → 兩天', Object.keys(getLex('_scnDays')).length, 2);
+  chk('已無可重做', G.scnRedo(), false);
+  // ★ 新編輯必須清空重做堆疊（否則會跳回被岔開的歷史線）
+  G.scnUndo();
+  setLex("scnPushUndo(); _scnDays={5:{model:'gfs',g:{}}};");
+  chk('新編輯後 redo 堆疊清空', getLex('_scnRedo.length'), 0);
+  chk('新編輯後 Ctrl+Y 無效', G.scnRedo(), false);
+  setLex("_scnDays={}; _scnUndo=[]; _scnRedo=[];");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

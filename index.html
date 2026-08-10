@@ -1449,9 +1449,8 @@ function scnApplyAndClose(){
   closeScnModal();
 }
 
-const SCN_MODEL_LABEL = {'':'（沿用上方）', best:'綜合 ECMWF+GFS', ecmwf:'ECMWF IFS',
-  gfs:'NOAA GFS', icon:'DWD ICON', hi:'強降雨（系集上緣）', lo:'弱降雨（系集下緣）',
-  cwa:'CWA 官方（可再調整）'};
+const SCN_MODEL_LABEL = {'':'沿用上方', best:'綜合', ecmwf:'ECMWF', gfs:'GFS',
+  icon:'ICON', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'};
 
 function renderScnModal(){
   const body = document.getElementById('scn-body');
@@ -1497,16 +1496,18 @@ function renderScnModal(){
           const add = g.add || 0, mul = (g.mul == null ? 1 : g.mul);
           const dirty = (add !== 0) || (mul !== 1);
           const dis = '';
-          h += `<tr style="background:${dirty?'#2a1c38':'transparent'}">
+          h += `<tr data-bg="${dirty?'#2a1c38':'transparent'}" style="background:${dirty?'#2a1c38':'transparent'}">
             <td style="padding:0 3px;color:${ti===0?dc:'#8aa8c0'};white-space:nowrap"
-                title="${d}${tr}">${ti===0 ? `<b>${d}</b>${tr}` : `<span style="opacity:.55">${d}</span>${tr}`}</td>
+                title="${d}${tr}">${ti===0 ? `<b>${d}</b>${tr}` : tr}</td>
             <td style="padding:0 2px"><input type="number" step="10" value="${add}"${dis}
               onchange="scnSetVal(${day},'${gk}','add',this.value)"
-              style="width:54px;font-size:10px;background:#1a1a22;color:${add?'#ffb070':'#888'};
+              onfocus="_scnRowFocus(this,1)" onblur="_scnRowFocus(this,0)"
+              style="width:48px;font-size:10px;background:#1a1a22;color:${add?'#ffb070':'#888'};
               border:1px solid #555;border-radius:3px;padding:0 2px"></td>
             <td style="padding:0 2px"><input type="number" step="0.1" min="0" max="10" value="${mul}"${dis}
               onchange="scnSetVal(${day},'${gk}','mul',this.value)"
-              style="width:42px;font-size:10px;background:#1a1a22;color:${mul!==1?'#8ac8f0':'#888'};
+              onfocus="_scnRowFocus(this,1)" onblur="_scnRowFocus(this,0)"
+              style="width:40px;font-size:10px;background:#1a1a22;color:${mul!==1?'#8ac8f0':'#888'};
               border:1px solid #555;border-radius:3px;padding:0 2px"></td>
             <td style="padding:0 1px">${ti===0 ? `<button class="b" style="font-size:9px;padding:0 2px"
               onclick="scnCopyToTerrain(${day},'${d}')" title="套用到山區＋平地">⇅</button>` : ''}</td>
@@ -1545,18 +1546,17 @@ function scnToggleFold(){
 // ── Ctrl+Z 復原（情境設定專用的操作歷程）──
 // 每次改動前先把當時的 _scnDays 深拷貝入堆疊；Ctrl+Z 取回上一版。
 const SCN_UNDO_MAX = 50;
-let _scnUndo = [];
+let _scnUndo = [], _scnRedo = [];
 function scnPushUndo(){
   try{
     _scnUndo.push(JSON.stringify(_scnDays));
     if(_scnUndo.length > SCN_UNDO_MAX) _scnUndo.shift();
+    // ★ 新的編輯動作必須清空重做堆疊：否則 Ctrl+Y 會跳回一條已被岔開的歷史線。
+    _scnRedo.length = 0;
   }catch(e){}
 }
-function scnUndo(){
-  if(!_scnUndo.length){ return false; }
-  try{
-    _scnDays = JSON.parse(_scnUndo.pop());
-  }catch(e){ return false; }
+function _scnApplyState(json){
+  try{ _scnDays = JSON.parse(json); }catch(e){ return false; }
   scnSave();
   _updateFactorBtns();
   if(_scnOn) _refreshAfterFactorChange();
@@ -1564,13 +1564,46 @@ function scnUndo(){
   renderScnModal();
   return true;
 }
+function scnUndo(){
+  if(!_scnUndo.length) return false;
+  const cur = JSON.stringify(_scnDays);
+  const prev = _scnUndo.pop();
+  if(!_scnApplyState(prev)) return false;
+  _scnRedo.push(cur);                     // 當前狀態推入重做堆疊
+  if(_scnRedo.length > SCN_UNDO_MAX) _scnRedo.shift();
+  return true;
+}
+function scnRedo(){
+  if(!_scnRedo.length) return false;
+  const cur = JSON.stringify(_scnDays);
+  const next = _scnRedo.pop();
+  if(!_scnApplyState(next)) return false;
+  _scnUndo.push(cur);                     // 反向推回復原堆疊
+  if(_scnUndo.length > SCN_UNDO_MAX) _scnUndo.shift();
+  return true;
+}
 document.addEventListener('keydown', e=>{
-  if(!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || e.shiftKey) return;
+  if(!(e.ctrlKey || e.metaKey)) return;
   const m = document.getElementById('scn-modal');
   if(!m || m.style.display === 'none') return;      // 只在情境視窗開啟時接手
-  e.preventDefault();
-  if(!scnUndo()) console.log('情境設定：已無可復原的步驟');
+  const k = e.key.toLowerCase();
+  // Ctrl+Z 復原；Ctrl+Y 或 Ctrl+Shift+Z 重做
+  if(k === 'z' && !e.shiftKey){
+    e.preventDefault();
+    if(!scnUndo()) console.log('情境設定：已無可復原的步驟');
+  }else if(k === 'y' || (k === 'z' && e.shiftKey)){
+    e.preventDefault();
+    if(!scnRedo()) console.log('情境設定：已無可重做的步驟');
+  }
 });
+
+// 聚焦某列時整列高亮（避免在 6 分署×4 地形的表格中改錯列）
+function _scnRowFocus(el, on){
+  const tr = el && el.closest ? el.closest('tr') : null;
+  if(!tr) return;
+  tr.style.background = on ? '#3a2a58' : (tr.getAttribute('data-bg') || 'transparent');
+  tr.style.outline = on ? '1px solid #8a6ab0' : 'none';
+}
 
 // ── 彈窗拖曳（標題列）──
 (function(){
@@ -1813,9 +1846,14 @@ function getAccum(t){
       : Math.round((obsToday + rest)*10)/10;
     let etrPct = null;
     if(hasEtr){
-      // ETR2 是「當下狀態」而非期間累積：「今天」視窗顯示「現在」的 ETR2，
-      // 與官方警戒分析總表同一時間基準（未來演變請用未來6h段／逐日按鈕）。
-      const etr2 = calcEtr2AtSeg(t, _nowSeg(), qpfField);
+      // ★「今天」視窗的 ETR2 取**今日結束時（seg 3）**的值，而非現在值。
+      //   舊版寫 _nowSeg()：整日剩餘的 QPF 完全不進 ETR2，於是出現
+      //   「今日全天預估 772mm、警戒值 250mm，ETR2% 卻只有 27%」這種矛盾，
+      //   自訂倍率／情境加的雨也就看不到效果。
+      //   官方時間基準的現值仍在「現況觀測 → 今日ETR2%」呈現（走 getObsEtr，
+      //   錨定官方 etr2_pct），兩者分工明確，不會失去官方對齊。
+      //   同時也讓 getAccum 與 _summaryEtr（CSV/複製，用 segTo=3）一致。
+      const etr2 = calcEtr2AtSeg(t, segTo, qpfField);
       etrPct = Math.round(etr2/_etrDen(t)*1000)/10;
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
@@ -6258,7 +6296,7 @@ function toggleBlurRender(){
 </script>
 <!-- 情境編輯器：★必須放在 #map 之外，否則 Leaflet 會攔截滾輪事件導致無法捲動 -->
 <div id="scn-modal" style="display:none;position:fixed;z-index:3000;top:60px;left:60px;
-  width:392px;max-height:82vh;background:#0b1622;border:1px solid #4a3a6a;border-radius:6px;
+  width:330px;max-height:82vh;background:#0b1622;border:1px solid #4a3a6a;border-radius:6px;
   box-shadow:0 6px 24px rgba(0,0,0,.6);flex-direction:column">
   <div id="scn-drag" style="display:flex;align-items:center;gap:6px;padding:6px 9px;
     background:#1a1030;border-bottom:1px solid #4a3a6a;border-radius:6px 6px 0 0;cursor:move">

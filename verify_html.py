@@ -34,7 +34,9 @@ MUST = ['getAccum', 'setWin', 'onSlider', '_spanAccum', '_hourlyBars', '_futuHou
         'toggleLsbSection', 'calcEtr2AtSeg', '_etrDen', '_nowSeg', 'getQpfArr',
         'toggleTyphoonLegend', '_applyTyphoonLegendCollapse', '_summaryRain',
         '_inWarnScope', '_seaLineSegs', '_countiesInRadius', '_twGrid',
-        'downloadRangeCsv', 'toggleMapPanel']
+        'downloadRangeCsv', 'toggleMapPanel',
+        'scnUndo', 'scnRedo', 'scnPushUndo', '_scnApplyState', '_scnRowFocus',
+        'scnToggleFold', '_slopeEstJS', '_withEst', '_nowHourClamped', '_townZone']
 for fn in MUST:
     n = len(re.findall(r'^\s*(?:async\s+)?function\s+' + re.escape(fn) + r'\s*\(', s, re.M))
     if n == 0:
