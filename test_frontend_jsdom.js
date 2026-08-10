@@ -555,7 +555,8 @@ if (need('getQpfArr') && need('_scnActive') && need('_townGroupKey')) {
   chk('沿海群組鍵（安南區臨海）', G._townGroupKey(flat), '臺南分署|沿海地區');
   chk('淺山區群組鍵', G._townGroupKey({county:'嘉義縣', township:'竹崎鄉'}), '南投分署|淺山區');
   chk('平地群組鍵', G._townGroupKey({county:'南投縣', township:'南投市'}), '南投分署|平地');
-  chk('SCN_TERRAIN 為四分類', getLex('SCN_TERRAIN'), ['山區','淺山區','沿海地區','平地']);
+  chk('SCN_TERRAIN 四分類且順序為 山/淺山/平地/沿海', getLex('SCN_TERRAIN'),
+      ['山區','淺山區','平地','沿海地區']);
   // 表中沒有的鄉鎮 → 退路（不得爆掉）
   const fb = G._townGroupKey({county:'南投縣', township:'不存在鄉', alert_val:0});
   chk('未收錄鄉鎮走退路不爆', typeof fb === 'string' && fb.indexOf('|') > 0, true);
@@ -631,14 +632,18 @@ if (need('getQpfArr')) {
               qpf_best:Array(64).fill(10), qpf_cwa:Array(64).fill(8) };
   setLex("forecastModel='cwa'; _userFactor=3; _userFactorOn=true; _biasApplyOn=false;");
   setLex("_scnOn=true; _scnDays={0:{model:null,g:{'南投分署|山區':{add:200,mul:3}}}};");
-  chk('全域倍率+情境下 CWA 仍為原值', G.getQpfArr(t,'qpf_cwa').slice(0,4), [8,8,8,8]);
-  setLex("forecastModel='best'; _scnDays={0:{model:'cwa',g:{'南投分署|山區':{add:200,mul:3}}}};");
-  chk('情境中某日選 CWA → 該日不受調整', G.getQpfArr(t,'qpf_best').slice(0,4), [8,8,8,8]);
+  // 全域倍率不得套用於 CWA（即使情境啟用）；情境本身的加成/倍率則允許
+  chk('全域倍率不動 CWA（情境未設該群組時＝原值）',
+      G.getQpfArr(t,'qpf_cwa').slice(0,4), [174,174,174,174]);
+  // ★ 使用者後續改變決定（第7項）：情境編輯器中選 CWA 的日期**接受**加成／倍率，
+  //   因為實務上需要官方值當基礎再調整。但全域倍率仍不動 qpf_cwa（上一條已驗）。
+  setLex("forecastModel='best'; _userFactorOn=false; _scnDays={0:{model:'cwa',g:{'南投分署|山區':{add:200,mul:3}}}};");
+  chk('情境中選 CWA → 接受調整 (8+50)*3', G.getQpfArr(t,'qpf_best').slice(0,4), [174,174,174,174]);
   setLex("_scnDays={0:{model:'hi',g:{}},1:{model:'cwa',g:{'南投分署|山區':{add:200,mul:3}}}};");
   const mix = G.getQpfArr(Object.assign({qpf_hi:Array(64).fill(20)}, t), 'qpf_best');
-  console.log(`   day0(hi,×3全域)=${mix.slice(0,4)} day1(cwa)=${mix.slice(4,8)}`);
-  chk('非CWA日仍套全域倍率', mix.slice(0,1), [60]);
-  chk('CWA日不套任何倍率', mix.slice(4,8), [8,8,8,8]);
+  console.log(`   day0(hi,無群組)=${mix.slice(0,4)} day1(cwa,+200×3)=${mix.slice(4,8)}`);
+  chk('day0 強降雨原值', mix.slice(0,1), [20]);
+  chk('day1 CWA 亦受情境調整', mix.slice(4,8), [174,174,174,174]);
   setLex("_userFactorOn=false; _userFactor=1; _scnOn=false; _scnDays={};");
 }
 
