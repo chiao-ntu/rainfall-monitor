@@ -1226,7 +1226,12 @@ function getQpfArr(t, qpfField){
     //   注意這與「全域倍率不動官方值」並存：全域倍率仍不套用於 qpf_cwa（見函式開頭），
     //   只有情境編輯器這個「明確主觀」的工具可以調整它。
     if(rule && rule.g){
-      const g = rule.g[gk] || rule.g['ALL'];
+      // 查找順序：分署|地形 → 分署|全區 → 全域 ALL
+      // ★「分署|全區」是必要的：TOWN_ZONE 尚未產生時，_townZone() 的退路只會回
+      //   山區/平地，使用者若設「淺山區」「沿海地區」會一個鄉鎮都對不上，
+      //   看起來就像「只有部分鄉鎮有變化」。有全區列才能保證整個分署一起調。
+      const d = COUNTY_TO_DISTRICT[t.county] || '其他';
+      const g = rule.g[gk] || rule.g[d + '|全區'] || rule.g['ALL'];
       if(g){
         v = (v + (g.add || 0)/4) * (g.mul == null ? 1 : g.mul);
         if(v < 0) v = 0;                    // 加成可為負，但雨量不得為負
@@ -1341,7 +1346,8 @@ function scnClearAll(){
 // 把某日某分署的設定套用到該分署兩種地形（省去重複輸入）
 function scnCopyToTerrain(day, district){
   const r = _scnEnsure(day);
-  const src = SCN_TERRAIN.map(tr=>r.g[district+'|'+tr]).find(v=>v);
+  const src = r.g[district+'|全區']
+           || SCN_TERRAIN.map(tr=>r.g[district+'|'+tr]).find(v=>v);
   if(!src) return;
   scnPushUndo();
   SCN_TERRAIN.forEach(tr=>{ r.g[district+'|'+tr] = {add:src.add||0, mul:src.mul==null?1:src.mul}; });
@@ -1414,7 +1420,13 @@ function scnImport(input){
 function openScnModal(){
   const m = document.getElementById('scn-modal');
   if(!m) return;
+  // 已開啟 → 切換收合／展開；未開啟 → 開啟並展開
+  if(m.style.display === 'flex'){
+    scnToggleFold();
+    return;
+  }
   m.style.display = 'flex';
+  scnToggleFold(false);
   renderScnModal();
 }
 function closeScnModal(){
@@ -1442,15 +1454,30 @@ function scnToggleDay(day){
   _scnOpenDay[day] = !_scnOpenDay[day];
   renderScnModal();
 }
+// 「確定套用」只把數值套進地圖／圖表／狀態列，**不關閉視窗**
+// （使用者要能一邊看地圖變化一邊繼續調整）
 function scnApplyAndClose(){
   if(!_scnOn){ _scnOn = true; scnSave(); }
   _refreshAfterFactorChange();
   renderScnSummary();
-  closeScnModal();
+  const btn = document.getElementById('scn-apply');
+  if(btn){                                  // 給一個「已套用」的即時回饋
+    const old = btn.textContent;
+    btn.textContent = '已套用 ✓';
+    setTimeout(()=>{ btn.textContent = old; }, 1200);
+  }
 }
 
 const SCN_MODEL_LABEL = {'':'沿用上方', best:'綜合', ecmwf:'ECMWF', gfs:'GFS',
   icon:'ICON', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'};
+
+// TOWN_ZONE 未產生時，_townZone() 退路只會回「山區／平地」，
+// 因此「淺山區／沿海地區」兩列目前對不到任何鄉鎮——在 UI 上標記出來，
+// 不要讓使用者設了卻沒反應。
+function _zoneUnavail(tr){
+  if(tr === '全區' || tr === '山區' || tr === '平地') return false;
+  return !(typeof TOWN_ZONE !== 'undefined' && TOWN_ZONE && Object.keys(TOWN_ZONE).length);
+}
 
 function renderScnModal(){
   const body = document.getElementById('scn-body');
@@ -1483,22 +1510,24 @@ function renderScnModal(){
         </div>`;
       h += `<table style="width:100%;border-collapse:collapse;font-size:10px">
         <tr style="color:#7a92a8">
-          <th style="text-align:left;padding:0 3px">分署／地形</th>
+          <th style="text-align:left;padding:0 3px">分署／地形（全區＝該署所有鄉鎮）</th>
           <th style="padding:0 2px;width:58px" title="該日總量加成，平均分到當日4個6h段">加成mm/日</th>
           <th style="padding:0 2px;width:46px" title="乘在（模式值＋加成）之上">倍率×</th>
           <th style="width:20px"></th>
         </tr>`;
       DISTRICT_ORDER.forEach(d=>{
         const dc = DISTRICT_COLOR[d] || '#aaccee';
-        SCN_TERRAIN.forEach((tr, ti)=>{
+        ['全區'].concat(SCN_TERRAIN).forEach((tr, ti)=>{
           const gk = d + '|' + tr;
           const g = (r.g||{})[gk] || {};
           const add = g.add || 0, mul = (g.mul == null ? 1 : g.mul);
           const dirty = (add !== 0) || (mul !== 1);
           const dis = '';
           h += `<tr data-bg="${dirty?'#2a1c38':'transparent'}" style="background:${dirty?'#2a1c38':'transparent'}">
-            <td style="padding:0 3px;color:${ti===0?dc:'#8aa8c0'};white-space:nowrap"
-                title="${d}${tr}">${ti===0 ? `<b>${d}</b>${tr}` : tr}</td>
+            <td style="padding:0 3px;color:${ti===0?dc:(_zoneUnavail(tr)?'#6a6a72':'#8aa8c0')};
+                white-space:nowrap${ti===0?';font-weight:700':''}"
+                title="${d}${tr}${_zoneUnavail(tr)?'（尚無 TOWN_ZONE，此地形目前對不到任何鄉鎮）':''}"
+                >${ti===0 ? `<b>${d}</b>全區` : tr + (_zoneUnavail(tr) ? ' ⚠' : '')}</td>
             <td style="padding:0 2px"><input type="number" step="10" value="${add}"${dis}
               onchange="scnSetVal(${day},'${gk}','add',this.value)"
               onfocus="_scnRowFocus(this,1)" onblur="_scnRowFocus(this,0)"
@@ -1510,7 +1539,8 @@ function renderScnModal(){
               style="width:40px;font-size:10px;background:#1a1a22;color:${mul!==1?'#8ac8f0':'#888'};
               border:1px solid #555;border-radius:3px;padding:0 2px"></td>
             <td style="padding:0 1px">${ti===0 ? `<button class="b" style="font-size:9px;padding:0 2px"
-              onclick="scnCopyToTerrain(${day},'${d}')" title="套用到山區＋平地">⇅</button>` : ''}</td>
+              onclick="scnCopyToTerrain(${day},'${d}')"
+              title="把「全區」的數值複製到該署所有地形列">⇅</button>` : ''}</td>
           </tr>`;
         });
       });
@@ -1530,17 +1560,14 @@ function renderScnModal(){
 
 // ── 收合／展開（保留標題列可拖動；取代原本的 ✕ 關閉）──
 let _scnFolded = false;
-function scnToggleFold(){
-  _scnFolded = !_scnFolded;
+function scnToggleFold(force){
+  _scnFolded = (force === undefined) ? !_scnFolded : !!force;
   const body = document.getElementById('scn-body');
   const foot = document.getElementById('scn-foot');
-  const btn  = document.getElementById('scn-fold');
+  const ind  = document.getElementById('scn-fold-ind');
   if(body) body.style.display = _scnFolded ? 'none' : 'block';
   if(foot) foot.style.display = _scnFolded ? 'none' : 'flex';
-  if(btn){
-    btn.innerHTML = _scnFolded ? '&#9660;' : '&#9650;';
-    btn.title = _scnFolded ? '展開' : '收合（保留可拖動的標題列）';
-  }
+  if(ind)  ind.textContent = _scnFolded ? '▸' : '▾';
 }
 
 // ── Ctrl+Z 復原（情境設定專用的操作歷程）──
@@ -1607,20 +1634,31 @@ function _scnRowFocus(el, on){
 
 // ── 彈窗拖曳（標題列）──
 (function(){
-  let dx=0, dy=0, dragging=false;
+  let dx=0, dy=0, dragging=false, moved=false, downX=0, downY=0;
   document.addEventListener('mousedown', e=>{
     const bar = e.target.closest && e.target.closest('#scn-drag');
     if(!bar) return;
     if(e.target.closest('button,label,input,select')) return;   // 按鈕區不觸發拖曳
     const m = document.getElementById('scn-modal');
     if(!m) return;
-    dragging = true;
+    dragging = true; moved = false;
+    downX = e.clientX; downY = e.clientY;
     const r = m.getBoundingClientRect();
     dx = e.clientX - r.left; dy = e.clientY - r.top;
     e.preventDefault();
   });
+  // 點擊標題列＝收合／展開。★ 需與拖曳區分：位移超過 4px 視為拖曳，不收合，
+  //   否則每次移動視窗都會誤觸收合。
+  document.addEventListener('click', e=>{
+    const bar = e.target.closest && e.target.closest('#scn-drag');
+    if(!bar) return;
+    if(e.target.closest('button,label,input,select')) return;
+    if(moved){ moved = false; return; }
+    scnToggleFold();
+  });
   document.addEventListener('mousemove', e=>{
     if(!dragging) return;
+    if(Math.abs(e.clientX-downX) > 4 || Math.abs(e.clientY-downY) > 4) moved = true;
     const m = document.getElementById('scn-modal');
     if(!m) return;
     // 限制在視窗內，避免拖到看不見
@@ -6299,15 +6337,17 @@ function toggleBlurRender(){
   width:330px;max-height:82vh;background:#0b1622;border:1px solid #4a3a6a;border-radius:6px;
   box-shadow:0 6px 24px rgba(0,0,0,.6);flex-direction:column">
   <div id="scn-drag" style="display:flex;align-items:center;gap:6px;padding:6px 9px;
-    background:#1a1030;border-bottom:1px solid #4a3a6a;border-radius:6px 6px 0 0;cursor:move">
+    background:#1a1030;border-bottom:1px solid #4a3a6a;border-radius:6px 6px 0 0;cursor:move"
+    title="拖曳可移動；點擊可收合／展開">
+    <span id="scn-fold-ind" style="color:#8a7a9a;font-size:9px;pointer-events:none">▾</span>
     <b style="color:#cc88ff;font-size:12px;pointer-events:none">情境編輯器</b>
     <span id="scn-summary2" style="font-size:9px;pointer-events:none"></span>
     <span style="flex:1"></span>
     <button class="b" style="font-size:10px;padding:1px 6px" onclick="scnExport()" title="匯出 JSON">匯出</button>
     <label class="b" style="font-size:10px;padding:1px 6px;cursor:pointer" title="匯入 JSON">匯入
       <input type="file" accept="application/json" style="display:none" onchange="scnImport(this)"></label>
-    <button id="scn-fold" class="b" style="font-size:11px;padding:1px 7px"
-      onclick="scnToggleFold()" title="收合／展開（保留可拖動的標題列）">&#9650;</button>
+    <button class="b" style="font-size:11px;padding:1px 7px"
+      onclick="closeScnModal()" title="關閉情境編輯器（設定會保留）">&#10005;</button>
   </div>
   <div id="scn-body" style="overflow-y:auto;overflow-x:hidden;padding:6px 8px;flex:1"></div>
   <div id="scn-foot" style="display:flex;align-items:center;gap:6px;padding:6px 9px;
@@ -6316,7 +6356,7 @@ function toggleBlurRender(){
       onclick="scnClearAll()">全部清除</button>
     <span style="flex:1"></span>
     <button class="b" style="font-size:10px;padding:2px 10px;border-color:#4a8a5a;color:#8ae8a8"
-      onclick="scnApplyAndClose()">確定套用</button>
+      id="scn-apply" onclick="scnApplyAndClose()">確定套用</button>
   </div>
 </div>
 </body>

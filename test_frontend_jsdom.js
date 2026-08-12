@@ -826,6 +826,43 @@ if (need('scnUndo') && need('scnRedo') && need('scnPushUndo')) {
   setLex("_scnDays={}; _scnUndo=[]; _scnRedo=[];");
 }
 
+
+// ════════ 16. 「全區」群組必須覆蓋整個分署（本輪修正）════════
+console.log('\n=== 分署|全區 覆蓋所有鄉鎮 ===');
+if (need('getQpfArr') && need('_townGroupKey')) {
+  // TOWN_ZONE 清空 → _townZone() 退路只會回 山區/平地，
+  // 這正是「設了淺山區/沿海地區卻沒反應」的情境
+  setLex("TOWN_ZONE = {}; forecastModel='best'; _userFactorOn=false; _biasApplyOn=false;");
+  const mtn  = { county:'臺中市', township:'和平區', alert_val:600, qpf_best:Array(64).fill(10) };
+  const flat = { county:'臺中市', township:'西區',   alert_val:0,   qpf_best:Array(64).fill(10) };
+  const t2   = { county:'苗栗縣', township:'苗栗市', alert_val:0,   qpf_best:Array(64).fill(10) };
+
+  // 只設「淺山區」→ 退路對不到，應完全無效（記錄現況，說明為何需要全區）
+  setLex("_scnOn=true; _scnDays={0:{model:null,g:{'臺中分署|淺山區':{add:400,mul:1}}}};");
+  console.log(`   只設淺山區: 和平=${G.getQpfArr(mtn,'qpf_best')[0]} 西區=${G.getQpfArr(flat,'qpf_best')[0]}`);
+
+  // 改設「全區」→ 該分署所有鄉鎮都要生效
+  setLex("_scnDays={0:{model:null,g:{'臺中分署|全區':{add:400,mul:1}}}};");
+  const a = G.getQpfArr(mtn,'qpf_best')[0], b = G.getQpfArr(flat,'qpf_best')[0],
+        c = G.getQpfArr(t2,'qpf_best')[0];
+  console.log(`   設全區+400: 和平=${a} 西區=${b} 苗栗市=${c}（同署三鄉鎮）`);
+  chk('全區生效於山區鄉鎮 (10+100)', a, 110);
+  chk('全區生效於平地鄉鎮 (10+100)', b, 110);
+  chk('全區生效於同署他縣鄉鎮 (10+100)', c, 110);
+
+  // 他分署不受影響
+  const other = { county:'臺東縣', township:'卑南鄉', alert_val:500, qpf_best:Array(64).fill(10) };
+  chk('★他分署不受影響', G.getQpfArr(other,'qpf_best')[0], 10);
+
+  // 地形列優先於全區列
+  setLex("_scnDays={0:{model:null,g:{'臺中分署|全區':{add:400,mul:1},'臺中分署|山區':{add:0,mul:2}}}};");
+  const p1 = G.getQpfArr(mtn,'qpf_best')[0], p2 = G.getQpfArr(flat,'qpf_best')[0];
+  console.log(`   全區+400 與 山區×2 併存: 和平(山區)=${p1} 西區(平地)=${p2}`);
+  chk('山區列優先於全區列 (10*2)', p1, 20);
+  chk('未指定地形者仍吃全區 (10+100)', p2, 110);
+  setLex("_scnOn=false; _scnDays={};");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);
