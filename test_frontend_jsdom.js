@@ -923,6 +923,79 @@ if (need('getQpfArr') && need('getAccum') && need('calcEtr2AtSeg')) {
   setLex("_scnOn=false; _scnDays={};");
 }
 
+
+// ════════ 18. 全系統一致性：情境須貫穿 雨量／ETR2／警特報／風險／土石流推估 ════════
+console.log('\n=== 情境貫穿所有指標（本輪核心）===');
+if (need('getQpfArr') && need('_warnLevelAt') && need('calcRiskIndicator') && need('_withEst')) {
+  setLex(`TMAP['南投縣仁愛鄉'] = {county:'南投縣',township:'仁愛鄉',alert_val:700,etr2_alert:700,
+    etr2:50, etr2_pct:0.07, daily_rain:Array(15).fill(0), pop_6h:Array(28).fill(80),
+    qpf_best:Array(64).fill(2), qpf_ecmwf:Array(64).fill(2),
+    qpf_hi:Array(64).fill(3), qpf_lo:Array(64).fill(1), qpf_cwa:Array(64).fill(2),
+    warn_seg:Array(64).fill(0), maxh_best:Array(64).fill(1),
+    obs_1h_p48:Array(48).fill(0), qpf_1h_p48:Array(48).fill(0), qpf_1h:Array(96).fill(0)};
+    {const d=new Date(); d.setDate(d.getDate()+1); d.setHours(0,0,0,0); BASE_TIME=d;}
+    TOWN_ZONE={'南投縣仁愛鄉':'山區'}; _userFactorOn=false; _biasApplyOn=false;
+    winKey='today'; segFrom=0; segTo=3; mode='rain'; forecastModel='ecmwf';
+    _scnOn=false; _scnDays={};`);
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+
+  // 基線：微量雨 → 警特報 0、風險低、土石流推估未達
+  const w0 = G._warnLevelAt(t, 3), r0 = G.calcRiskIndicator(t, 3).R;
+  const a0 = { county:'南投縣', town:'仁愛鄉', alert:700, etr2:50, off_level:'' };
+  const e0 = G._withEst(a0);
+  console.log(`   基線: 警特報=${w0} 風險=${r0} 推估達紅=${e0.est_red_fc} ETR2=${e0.etr2_est}`);
+  chk('基線警特報為 0', w0, 0);
+  chk('基線推估未達紅', e0.est_red_fc, false);
+
+  // 情境：南投山區 加成 1200mm/日（每段 300mm）→ 必然超大豪雨、風險極高、推估達紅
+  setLex("_scnOn=true; _scnDays={0:{model:'ecmwf',g:{'南投分署|山區':{add:1200,mul:1}}}," +
+         "1:{model:'ecmwf',g:{'南投分署|山區':{add:1200,mul:1}}}};");
+  const q = G.getQpfArr(t, 'qpf_ecmwf');
+  chk('段值 = 2+1200/4', q.slice(0,4), [302,302,302,302]);
+
+  const w1 = G._warnLevelAt(t, 3);
+  console.log(`   情境後警特報級別=${w1}（0無/1大雨/2豪雨/3大豪雨/4超大豪雨）`);
+  if (!(w1 >= 3)) fails.push(`警特報未反映情境（級別 ${w1}，1200mm/日應達大豪雨以上）`);
+  else console.log('  OK  警特報已反映情境（不再被後端固定陣列蓋住）');
+
+  const r1 = G.calcRiskIndicator(t, 3).R;
+  console.log(`   情境後風險指標=${r1}`);
+  if (!(r1 > r0)) fails.push(`風險指標未反映情境（${r0} → ${r1}）`);
+  else console.log('  OK  風險指標已反映情境');
+
+  const e1 = G._withEst(a0);
+  console.log(`   情境後推估: ETR2=${e1.etr2_est}mm 達紅=${e1.est_red_fc} 來源=${e1.est_src}`);
+  if (!(e1.etr2_est > e0.etr2_est)) fails.push('土石流推估 ETR2 未反映情境');
+  else console.log('  OK  土石流／大崩推估已反映情境');
+  chk('推估達紅（1200mm/日 vs 700mm 警戒值）', e1.est_red_fc, true);
+  chk('官方現況欄位不被覆寫', e1.off_level, '');
+
+  // 推估必須隨選取時段改變（使用者第3點）
+  setLex("segTo=0;"); const eS0 = G._withEst(a0);
+  setLex("segTo=3;"); const eS3 = G._withEst(a0);
+  console.log(`   segTo=0 → ETR2=${eS0.etr2_est}mm；segTo=3 → ETR2=${eS3.etr2_est}mm`);
+  if (!(eS3.etr2_est > eS0.etr2_est)) fails.push('推估未隨選取時段改變');
+  else console.log('  OK  推估隨選取時段改變');
+  chk('段記錄正確', [eS0.etr2_seg, eS3.etr2_seg], [0, 3]);
+
+  // 顯示值與判定值同源（_lsPct 用 etr2_est）
+  const pct = G._lsPct(Object.assign({alert:700}, e1));
+  const expectPct = e1.etr2_est / 700 * 100;
+  if (Math.abs(pct - expectPct) > 0.1) fails.push(`顯示達成率與判定值不同源（${pct} vs ${expectPct}）`);
+  else console.log('  OK  面板顯示值與判定值同源');
+
+  // 切模式必須連動（強降雨 vs 弱降雨）
+  setLex("_scnDays={0:{model:'hi',g:{}},1:{model:'hi',g:{}}};");
+  const wHi = G.getQpfArr(t,'qpf_ecmwf')[0];
+  setLex("_scnDays={0:{model:'lo',g:{}},1:{model:'lo',g:{}}};");
+  const wLo = G.getQpfArr(t,'qpf_ecmwf')[0];
+  console.log(`   情境模式切換: 強降雨=${wHi} 弱降雨=${wLo}`);
+  chk('強降雨取 qpf_hi', wHi, 3);
+  chk('弱降雨取 qpf_lo', wLo, 1);
+
+  setLex("_scnOn=false; _scnDays={}; segTo=3;");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

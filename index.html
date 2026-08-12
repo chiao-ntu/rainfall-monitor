@@ -4159,7 +4159,7 @@ function renderDebrisLayer(){
     const tip =
       `<b>${no}</b>　${stl.tag}<br>${loc}` +
       (info.Name ? `<br>溪流：${info.Name}` : '') +
-      (a ? `<br>ETR2 <b>${a.etr2}</b> / 警戒值 <b>${a.alert_adj ?? a.alert}</b> mm（${(a.pct*100).toFixed(0)}%）` +
+      (a ? `<br>ETR2 <b>${a.etr2_est ?? a.etr2}</b> / 警戒值 <b>${a.alert_adj ?? a.alert}</b> mm（${((a.pct||0)*100).toFixed(0)}%）` +
            (a.adj_level ? `<br><span style="color:#ff9a6a">動態調降第${a.adj_level}級 −${a.adj_mm}mm（原 ${a.alert}mm）</span>` : '') +
            (a.qpf24 != null ? `<br>未來24h QPF ${a.qpf24} mm → 預測 ${a.fc_etr2} mm` : '') +
            `<br>近1/2/3h ${a.r1h ?? '—'}/${a.r2h ?? '—'}/${a.r3h ?? '—'} mm` +
@@ -4249,7 +4249,7 @@ function renderLandslideLayer(){
       `${cty}${twn}${vil}<br>` +
       `<b style="color:${col}">${st.tag}</b>` +
       (st.isOfficial && a.off_report ? `<span style="color:#888">（報別 ${a.off_report}）</span>` : '') + '<br>' +
-      (a ? `ETR2 <b>${a.etr2 ?? '—'}</b> / 警戒值 <b>${den ?? '—'}</b> mm` +
+      (a ? `ETR2 <b>${a.etr2_est ?? a.etr2 ?? '—'}</b> / 警戒值 <b>${den ?? '—'}</b> mm` +
            `（${pct != null ? pct.toFixed(0) : '—'}%）` +
            (a.adj_level ? `<br><span style="color:#ff9a6a">動態調降第${a.adj_level}級 −${a.adj_mm}mm</span>` : '') +
            `<br>預測ETR2 ${a.fc_etr2 ?? '—'} mm（未來24hQPF ${a.qpf24 ?? '—'} mm）` +
@@ -5531,7 +5531,7 @@ function updateDebrisPanel(){
       county: d.county||'', town: d.town||'', id: no,
       rank: _alertRank(d)*1000 + (d.pct||0)*100,
       tag: `${tag}${stl.tag}`, tagCol: stl.color,
-      detail: `ETR2 ${d.etr2 ?? '—'}/${den ?? '—'}mm（${((d.pct||0)*100).toFixed(0)}%）` +
+      detail: `ETR2 ${d.etr2_est ?? d.etr2 ?? '—'}/${den ?? '—'}mm（${((d.pct||0)*100).toFixed(0)}%）` +
         (d.adj_level ? `　▼${d.adj_mm}` : '') +
         `　預測 ${d.fc_etr2 ?? '—'}mm（QPF ${d.qpf24 ?? '—'}）` +
         (d.vill ? `　${d.vill}` : '') + (d.station ? `　站 ${d.station}` : ''),
@@ -5630,11 +5630,44 @@ function _withEst(a){
   const t = _alertTown(a);
   if(!t) return Object.assign({}, a, {est_src:'backend'});
   const alert = a.alert_adj ?? a.alert;
-  const q24 = _fcQpfHours(t, 24);
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+
+  // ★ 推估必須以「使用者選取的模式＋時段＋情境」為依據（使用者明訂）。
+  //   舊版用 a.etr2（後端寫死的官方現值）當分子，於是：
+  //     ‧ 切換時段不會改變推估（永遠是現在值）
+  //     ‧ 情境／倍率完全無效 → 面板恆為 0 條，與 ETR2%警戒面板數字打架
+  //   現改為 calcEtr2AtSeg(segTo)：與地圖著色、ETR2%面板、CSV 同一條路徑。
+  //   官方現況欄位（off_level/off_report）維持不動，雙軌架構不變。
+  let etr2Now = a.etr2;
+  const useSeg = (typeof segTo === 'number') ? segTo : _nowSeg();
+  const t_etr = calcEtr2AtSeg(t, useSeg, qpfField);
+  if(t_etr != null && isFinite(t_etr)) etr2Now = Math.round(t_etr*10)/10;
+
+  // 未來24h QPF：以選取時段之後起算（與 ETR2 基準時刻一致）
+  const q24 = _fcQpfFromSeg(t, useSeg, 24);
   const qn  = _fcQpfNight(t);
-  const e = _slopeEstJS(a.etr2, alert, q24, qn);
+  const e = _slopeEstJS(etr2Now, alert, q24, qn);
   if(e.pct == null) return Object.assign({}, a, {est_src:'backend'});
-  return Object.assign({}, a, e, {qpf24:q24, qpf_night:qn, est_src:'frontend'});
+  return Object.assign({}, a, e,
+    {etr2_est:etr2Now, etr2_seg:useSeg, qpf24:q24, qpf_night:qn, est_src:'frontend'});
+}
+// 自指定段之後起算 N 小時的 QPF（與 ETR2 的時間基準對齊）
+function _fcQpfFromSeg(t, seg, hours){
+  if(!t) return null;
+  const qa = getQpfArr(t, MODEL_FIELD[forecastModel] || 'qpf_best');
+  if(!qa || !qa.length) return null;
+  const hA = (Math.max(0, seg) + 1) * 6;          // 該段結束時刻
+  const hB = Math.min(hA + hours, qa.length*6);
+  let sum = 0, got = false;
+  for(let s=0; s<qa.length; s++){
+    const sA = s*6, sB = sA + 6;
+    const ov = Math.min(sB, hB) - Math.max(sA, hA);
+    if(ov <= 0) continue;
+    const v = qa[s];
+    if(v == null) continue;
+    sum += v * (ov/6); got = true;
+  }
+  return got ? Math.round(sum*10)/10 : null;
 }
 // 警戒優先序（官方紅5→官方黃4→推估紅3→推估黃2→入夜示警1→其他0），三個面板共用
 function _alertRank(a){
@@ -5718,8 +5751,11 @@ function _lsState(a){
 function _lsPct(a){
   if(!a) return null;
   const den = a.alert_adj || a.alert;
-  if(!den || a.etr2 == null) return null;
-  return a.etr2 / den * 100;
+  // ★ 顯示與判定必須同源：有前端重算值（etr2_est）時一律優先，
+  //   否則面板會顯示官方現值卻用重算值判定，看起來像資料不一致。
+  const e = (a.etr2_est != null) ? a.etr2_est : a.etr2;
+  if(!den || e == null) return null;
+  return e / den * 100;
 }
 function _lsRows(onlyAlert){
   const A = window.LANDSLIDE_ALERTS || {};
@@ -5756,7 +5792,7 @@ function updateLandslidePanel(){
       county: a.county||'', town: a.town||'', id: no,
       rank: st.rank*1000 + (pct ?? 0),
       tag: st.tag, tagCol: st.col,
-      detail: `ETR2 ${a.etr2 ?? '—'}/${den ?? '—'}mm（${pct != null ? pct.toFixed(0)+'%' : '—'}）` +
+      detail: `ETR2 ${a.etr2_est ?? a.etr2 ?? '—'}/${den ?? '—'}mm（${pct != null ? pct.toFixed(0)+'%' : '—'}）` +
         (a.adj_level ? `　▼${a.adj_mm}` : '') +
         `　預測 ${a.fc_etr2 ?? '—'}mm（QPF ${a.qpf24 ?? '—'}）` +
         (a.village ? `　${a.village}` : '') +
@@ -6009,7 +6045,11 @@ function _warnSegField(){
 function _warnLevelAt(t, seg){
   // 優先採用後端逐時精確掃描的警特報陣列（權威值，依所選模式取對應那份）。
   //   前端重算僅為後備；兩者分歧會造成「累積未達標卻顯示警報」的假陽性。
-  if(seg >= 0){
+  // ★ 但情境／全域倍率生效時必須跳過後端陣列：那是以原始 QPF 掃出來的固定值，
+  //   使用者把雨量放大數倍後，警特報級別若仍用後端值就永遠不會變（面板恆為空），
+  //   與地圖著色、ETR2%、土石流推估互相矛盾。此時一律走下方前端重算。
+  const _scnOverride = _scnActive() || _qpfFactor() !== 1;
+  if(seg >= 0 && !_scnOverride){
     const wf = _warnSegField();
     const ws = t[wf];
     if(Array.isArray(ws) && seg < ws.length && ws[seg] != null) return ws[seg];
