@@ -1699,10 +1699,19 @@ function _calcEtr2Raw(t, seg, qpfField){
         const obsToday = dailyObs[0] || 0;
         if(seg <= nowSeg){
           // 今天的過去/當前段：以觀測按時段比例折算（無逐段觀測的誠實近似）
-          rainVal = Math.round(obsToday * (seg+1)/(nowSeg+1) * 10)/10;
+          // ★ 但情境／倍率可能把該段 QPF 放大到遠超觀測；此時觀測折算會把使用者
+          //   明確指定的雨量整段吃掉。故取「觀測折算」與「該段QPF累積」較大者，
+          //   使情境設定不會在已過時段被靜默丟棄（無情境時 QPF 較小，行為不變）。
+          const obsPro = Math.round(obsToday * (seg+1)/(nowSeg+1) * 10)/10;
+          let qAcc = 0;
+          for(let s2=0; s2<=seg; s2++) qAcc += qpfArr[s2] || 0;
+          rainVal = Math.max(obsPro, Math.round(qAcc*10)/10);
         } else {
           // 觀測至今 + 未來段QPF
-          let acc = obsToday;
+          //   已過段同樣取 max(觀測, 該段QPF累積)，理由同上（情境放大不得被丟棄）
+          let qPast = 0;
+          for(let s2=0; s2<=nowSeg; s2++) qPast += qpfArr[s2] || 0;
+          let acc = Math.max(obsToday, qPast);
           for(let s=nowSeg+1; s<=seg; s++) acc += qpfArr[s]||0;
           rainVal = Math.round(acc*10)/10;
         }
@@ -1766,12 +1775,27 @@ function calcEtr2AtSeg(t, seg, qpfField){
     return _calcEtr2Raw(t, seg, qpfField);
   }
   const ns = _nowSeg();
-  if(seg === ns) return anchor;                    // 現在＝官方值（完全對齊）
+  const qpfArr = getQpfArr(t, qpfField);
+
+  // ★ 情境／倍率生效時，「已過時段」的 QPF 也代表使用者指定的雨量，
+  //   不能只把官方錨點當起點——否則今日已過的那幾段調整會完全看不到效果
+  //   （這正是「雨量破1500、ETR2% 卻不到100」的主因）。
+  //   作法：錨點加上「今日已過段（含現在段）被放大的超額部分」。
+  //   無情境時 adj 為 0，行為與原本完全一致。
+  let adj = 0;
+  if(_scnActive() || _qpfFactor() !== 1){
+    const baseArr = t[qpfField] || t.qpf_15d || [];
+    for(let s = 0; s <= ns; s++){
+      const over = (qpfArr[s] || 0) - (baseArr[s] || 0);
+      if(over > 0) adj += over;
+    }
+  }
+  const base = anchor + adj;
+  if(seg === ns) return base;                      // 現在＝官方值（＋情境超額）
 
   if(seg > ns){
-    // 未來：自官方錨點起，逐段「折減 + 加入該段QPF」
-    const qpfArr = getQpfArr(t, qpfField);
-    let e = anchor;
+    // 未來：自錨點起，逐段「折減 + 加入該段QPF」
+    let e = base;
     for(let s = ns + 1; s <= seg; s++){
       e = e * ETR2_DECAY_6H + (qpfArr[s] || 0);
     }
@@ -1781,7 +1805,7 @@ function calcEtr2AtSeg(t, seg, qpfField){
   // 過去：加法位移（保留 raw 的歷史形狀，於「現在」平滑接上官方錨點）
   const raw    = _calcEtr2Raw(t, seg, qpfField);
   const rawNow = _calcEtr2Raw(t, ns, qpfField);
-  const off    = anchor - rawNow;
+  const off    = base - rawNow;
   return Math.max(0, raw + off);
 }
 
@@ -1879,6 +1903,19 @@ function getAccum(t){
     const fu = _futuHourly(t);
     let rest = 0;
     for(let h=nowH+1; h<24; h++) rest += fu[h]||0;   // 現在整點已計入觀測（Now累積）
+    // ★ 一致性修正：rest 是逐時分配後的殘量，其總和可能與「段值扣掉已過段」有微小
+    //   落差（段內形狀縮放的捨入）；在情境／倍率把段值放大數十倍時，這個落差會被
+    //   等比放大成數十 mm，導致「日和 ≠ 4×段值」。故以段值為權威重算殘量：
+    //   完整未過的段直接取段值，現在所在的段按剩餘小時比例取。
+    let restSeg = 0;
+    for(let sg=0; sg<4; sg++){
+      const sA = sg*6, sB = sA + 6;
+      if(sB <= nowH + 1) continue;                   // 整段已過 → 由觀測涵蓋
+      const v = qpfArr[sg] || 0;
+      if(sA >= nowH + 1) restSeg += v;               // 整段未過 → 全取
+      else restSeg += v * (sB - (nowH + 1)) / 6;     // 跨越「現在」→ 按剩餘小時比例
+    }
+    rest = Math.round(restSeg * 10) / 10;
     const obsToday = (t.daily_rain && t.daily_rain[0]!=null) ? t.daily_rain[0] : 0;
     const totalRain = (forecastModel==='cwa' && qpfArr.length===0) ? null   // 純CWA無資料就是無資料
       : Math.round((obsToday + rest)*10)/10;

@@ -863,6 +863,66 @@ if (need('getQpfArr') && need('_townGroupKey')) {
   setLex("_scnOn=false; _scnDays={};");
 }
 
+
+// ════════ 17. 情境一致性總檢（雨量／ETR2／各時段皆須同源）════════
+console.log('\n=== 情境：段值 → 日和 → ETR2 一致性 ===');
+if (need('getQpfArr') && need('getAccum') && need('calcEtr2AtSeg')) {
+  setLex(`TMAP['南投縣仁愛鄉'] = {county:'南投縣',township:'仁愛鄉',alert_val:700,etr2_alert:700,
+    etr2:50, etr2_pct:0.07, daily_rain:Array(15).fill(0),
+    qpf_best:Array(64).fill(10), qpf_ecmwf:Array(64).fill(20),
+    qpf_hi:Array(64).fill(40), qpf_lo:Array(64).fill(5), qpf_cwa:Array(64).fill(30),
+    obs_1h_p48:Array(48).fill(0), qpf_1h_p48:Array(48).fill(0), qpf_1h:Array(96).fill(0)};
+    {const d=new Date(); d.setDate(d.getDate()+1); d.setHours(0,0,0,0); BASE_TIME=d;}
+    TOWN_ZONE={'南投縣仁愛鄉':'山區'}; _userFactorOn=false; _biasApplyOn=false;
+    winKey='today'; segFrom=0; segTo=3; mode='rain'; forecastModel='ecmwf';`);
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+  const ns = G._nowSeg();
+  chk('測試時鐘使 nowSeg=0', ns, 0);
+
+  setLex("_scnOn=true; _scnDays={0:{model:'ecmwf',g:{'南投分署|山區':{add:200,mul:4}}}};");
+  const q = G.getQpfArr(t, 'qpf_ecmwf');
+  chk('段值 = (20+200/4)*4', q.slice(0,4), [280,280,280,280]);
+
+  // 日和：段0扣掉已過的1小時（nowH=0）→ 280*5/6 + 3*280
+  const a = G.getAccum(t, 'rain');
+  const expect = Math.round((280*5/6 + 840)*10)/10;
+  console.log(`   totalRain=${a.totalRain} 期望=${expect}（段0扣已過1h）`);
+  if (Math.abs(a.totalRain - expect) > 0.2) fails.push(`日和與段值不一致（${a.totalRain} vs ${expect}）`);
+  else console.log('  OK  日和＝段值扣除已過時段（同源）');
+
+  // ETR2：情境把 QPF 放大數十倍，ETR2% 必須遠超 100%
+  console.log(`   etrPct=${a.etrPct}%（分母 700mm）`);
+  if (!(a.etrPct > 100)) fails.push(`ETR2% 未反映情境（${a.etrPct}%）`);
+  else console.log('  OK  ETR2% 已反映情境');
+
+  // 地圖(getAccum) 與 CSV(_summaryRain/_summaryEtr) 必須一致
+  const sr = G._summaryRain(t), se = G._summaryEtr(t);
+  if (Math.abs(sr - a.totalRain) > 0.2) fails.push(`地圖與CSV雨量不一致（${a.totalRain} vs ${sr}）`);
+  else console.log('  OK  地圖與 CSV 雨量一致');
+  if (Math.abs(se - a.etrPct) > 1.01) fails.push(`地圖與CSV ETR2%不一致（${a.etrPct} vs ${se}）`);
+  else console.log('  OK  地圖與 CSV ETR2% 一致');
+
+  // 已過時段的情境調整不得被觀測折算吃掉
+  const eNow = G.calcEtr2AtSeg(t, ns, 'qpf_ecmwf');
+  console.log(`   ETR2@現在=${Math.round(eNow)}mm（官方錨點 50mm ＋ 已過段情境超額）`);
+  if (!(eNow > 50)) fails.push('已過時段的情境調整被丟棄');
+  else console.log('  OK  已過時段的情境調整有計入');
+
+  // 未來段必須單調不減（有雨情況）
+  const e1 = G.calcEtr2AtSeg(t, 1, 'qpf_ecmwf'), e3 = G.calcEtr2AtSeg(t, 3, 'qpf_ecmwf');
+  console.log(`   ETR2 seg1=${Math.round(e1)} seg3=${Math.round(e3)}`);
+  if (!(e3 >= e1)) fails.push('未來段 ETR2 未單調上升');
+  else console.log('  OK  未來段 ETR2 隨降雨累加');
+
+  // 切模式必須改變結果（證明模式選擇有落實）
+  setLex("_scnDays={0:{model:'lo',g:{'南投分署|山區':{add:0,mul:1}}}};");
+  const qlo = G.getQpfArr(t, 'qpf_ecmwf');
+  chk('情境指定弱降雨 → 取 qpf_lo', qlo.slice(0,1), [5]);
+  setLex("_scnDays={0:{model:'hi',g:{'南投分署|山區':{add:0,mul:1}}}};");
+  chk('情境指定強降雨 → 取 qpf_hi', G.getQpfArr(t,'qpf_ecmwf').slice(0,1), [40]);
+  setLex("_scnOn=false; _scnDays={};");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);
