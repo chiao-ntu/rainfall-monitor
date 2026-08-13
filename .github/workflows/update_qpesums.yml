@@ -37,21 +37,29 @@ jobs:
       - name: Commit and push
         run: |
           set -e
-          if [ ! -f radar.json ]; then
-            echo "本次未產生 radar.json（雷達抓取失敗），跳過 commit"
+          # ★ 本步驟必須同時保住 radar.json 與 rain_hourly.json。
+          #   舊版在「radar.json 不存在就 exit 0」，且只 git add radar.json，
+          #   導致 rain_hourly.json 每小時寫了卻從未 commit——Actions runner 是
+          #   即用即棄的，沒 commit 就等於沒寫，逐時序列永遠停在 1 小時、暖機不會完成。
+          if [ ! -f radar.json ] && [ ! -f rain_hourly.json ] && [ ! -f etr2_now.json ]; then
+            echo "radar.json、rain_hourly.json、etr2_now.json 都不存在，跳過 commit"
             exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           BRANCH="${{ github.ref_name }}"
 
-          git add radar.json   # 雷達1h獨立檔（每小時刷新）
+          [ -f radar.json ]       && git add radar.json        # 雷達1h獨立檔（每小時刷新）
+          [ -f rain_hourly.json ] && git add rain_hourly.json  # 逐時雨量滾動序列 168h
+          [ -f etr2_now.json ]    && git add etr2_now.json     # ETR2 官方現值（鄉鎮級）
           [ -f qpesums_history.json ] && git add qpesums_history.json  # 若存在也一併（相容舊資料）
           if git diff --staged --quiet; then
             echo "無變更，跳過"
             exit 0
           fi
-          git commit -m "雷達1h：$(TZ='Asia/Taipei' date '+%Y-%m-%d %H:%M') TST [skip ci]"
+          SER=$(python -c "import json;d=json.load(open('rain_hourly.json'));print(len(d.get('hours',[])))" 2>/dev/null || echo '?')
+          ETRN=$(python -c "import json;print(json.load(open('etr2_now.json'))['n'])" 2>/dev/null || echo '?')
+          git commit -m "雷達1h＋逐時序列(${SER}h)＋ETR2官方現值(${ETRN}鄉鎮)：$(TZ='Asia/Taipei' date '+%Y-%m-%d %H:%M') TST [skip ci]"
 
           for i in 1 2 3 4 5; do
             if git push origin HEAD:"$BRANCH"; then
