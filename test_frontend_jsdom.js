@@ -549,13 +549,11 @@ if (need('getQpfArr') && need('_scnActive') && need('_townGroupKey')) {
                 qpf_best:Array(40).fill(10), qpf_hi:Array(40).fill(30),
                 qpf_lo:Array(40).fill(4), qpf_cwa:Array(40).fill(8) };
   // 注入四分類對照表（正式版由 apply_terrain_zones.py 產生）
-  setLex(`TOWN_ZONE = {'南投縣仁愛鄉':'山區','臺南市安南區':'沿海地區',
-                       '南投縣南投市':'平地','嘉義縣竹崎鄉':'淺山區'};`);
+
   chk('山區群組鍵', G._townGroupKey(mtn), '南投分署|山區');
   chk('沿海群組鍵（安南區臨海）', G._townGroupKey(flat), '臺南分署|沿海地區');
-  chk('淺山區群組鍵', G._townGroupKey({county:'嘉義縣', township:'竹崎鄉'}), '南投分署|淺山區');
-  chk('平地群組鍵', G._townGroupKey({county:'南投縣', township:'南投市'}), '南投分署|平地');
-  chk('SCN_TERRAIN 四分類且順序為 山/淺山/平地/沿海', getLex('SCN_TERRAIN'),
+  chk('平地群組鍵（南投市）', G._townGroupKey({county:'南投縣', township:'南投市'}), '南投分署|平地');
+  chk('SCN_TERRAIN 四分類（順序：山區/淺山區/平地/沿海地區）', getLex('SCN_TERRAIN'),
       ['山區','淺山區','平地','沿海地區']);
   // 表中沒有的鄉鎮 → 退路（不得爆掉）
   const fb = G._townGroupKey({county:'南投縣', township:'不存在鄉', alert_val:0});
@@ -782,9 +780,8 @@ if (need('getAccum') && need('calcEtr2AtSeg')) {
   console.log(`   無雨: totalRain=${dry.totalRain} etrPct=${dry.etrPct}`);
 
   // 情境：六龜區屬臺南分署，注入地形後給大量加成
-  setLex(`TOWN_ZONE = Object.assign(TOWN_ZONE||{}, {'高雄市六龜區':'山區'});
-          _scnOn = true;
-          _scnDays = {0:{model:null, g:{'臺南分署|山區':{add:2000, mul:1}}}};`);
+  setLex(`_scnOn = true;
+          _scnDays = {0:{model:null, g:{'臺南分署|淺山區':{add:2000, mul:1}}}};`);
   const wet = G.getAccum(t, 'rain');
   console.log(`   情境+2000mm/日: totalRain=${wet.totalRain} etrPct=${wet.etrPct}`);
   if (!(wet.totalRain > dry.totalRain)) fails.push('情境未反映到今天視窗雨量');
@@ -832,7 +829,7 @@ console.log('\n=== 分署|全區 覆蓋所有鄉鎮 ===');
 if (need('getQpfArr') && need('_townGroupKey')) {
   // TOWN_ZONE 清空 → _townZone() 退路只會回 山區/平地，
   // 這正是「設了淺山區/沿海地區卻沒反應」的情境
-  setLex("TOWN_ZONE = {}; forecastModel='best'; _userFactorOn=false; _biasApplyOn=false;");
+  setLex("forecastModel='best'; _userFactorOn=false; _biasApplyOn=false;");
   const mtn  = { county:'臺中市', township:'和平區', alert_val:600, qpf_best:Array(64).fill(10) };
   const flat = { county:'臺中市', township:'西區',   alert_val:0,   qpf_best:Array(64).fill(10) };
   const t2   = { county:'苗栗縣', township:'苗栗市', alert_val:0,   qpf_best:Array(64).fill(10) };
@@ -873,7 +870,7 @@ if (need('getQpfArr') && need('getAccum') && need('calcEtr2AtSeg')) {
     qpf_hi:Array(64).fill(40), qpf_lo:Array(64).fill(5), qpf_cwa:Array(64).fill(30),
     obs_1h_p48:Array(48).fill(0), qpf_1h_p48:Array(48).fill(0), qpf_1h:Array(96).fill(0)};
     {const d=new Date(); d.setDate(d.getDate()+1); d.setHours(0,0,0,0); BASE_TIME=d;}
-    TOWN_ZONE={'南投縣仁愛鄉':'山區'}; _userFactorOn=false; _biasApplyOn=false;
+    _userFactorOn=false; _biasApplyOn=false;
     winKey='today'; segFrom=0; segTo=3; mode='rain'; forecastModel='ecmwf';`);
   const t = getLex("TMAP['南投縣仁愛鄉']");
   const ns = G._nowSeg();
@@ -934,7 +931,7 @@ if (need('getQpfArr') && need('_warnLevelAt') && need('calcRiskIndicator') && ne
     warn_seg:Array(64).fill(0), maxh_best:Array(64).fill(1),
     obs_1h_p48:Array(48).fill(0), qpf_1h_p48:Array(48).fill(0), qpf_1h:Array(96).fill(0)};
     {const d=new Date(); d.setDate(d.getDate()+1); d.setHours(0,0,0,0); BASE_TIME=d;}
-    TOWN_ZONE={'南投縣仁愛鄉':'山區'}; _userFactorOn=false; _biasApplyOn=false;
+    _userFactorOn=false; _biasApplyOn=false;
     winKey='today'; segFrom=0; segTo=3; mode='rain'; forecastModel='ecmwf';
     _scnOn=false; _scnDays={};`);
   const t = getLex("TMAP['南投縣仁愛鄉']");
@@ -994,6 +991,176 @@ if (need('getQpfArr') && need('_warnLevelAt') && need('calcRiskIndicator') && ne
   chk('弱降雨取 qpf_lo', wLo, 1);
 
   setLex("_scnOn=false; _scnDays={}; segTo=3;");
+}
+
+
+// ════════ 19. 圖表與地圖必須同數（逐時ETR2序列 vs calcEtr2AtSeg）════════
+console.log('\n=== 圖表 ETR2 序列與地圖同源 ===');
+if (need('_etr2HourlySeries') && need('calcEtr2AtSeg') && need('_hourlyBars')) {
+  setLex(`TMAP['南投縣仁愛鄉'] = {county:'南投縣',township:'仁愛鄉',alert_val:700,etr2_alert:700,
+    etr2:50, etr2_pct:0.07, daily_rain:Array(15).fill(0),
+    qpf_best:Array(64).fill(2), qpf_ecmwf:Array(64).fill(2),
+    obs_1h_p48:Array(48).fill(0), qpf_1h_p48:Array(48).fill(0), qpf_1h:Array(96).fill(0)};
+    {const d=new Date(); d.setDate(d.getDate()+1); d.setHours(0,0,0,0); BASE_TIME=d;}
+    _userFactorOn=false; _biasApplyOn=false; forecastModel='ecmwf';
+    winKey='today'; segFrom=0; segTo=3; mode='rain';
+    _scnOn=true; _scnDays={0:{model:'ecmwf',g:{'南投分署|山區':{add:1200,mul:1}}},
+                           1:{model:'ecmwf',g:{'南投分署|山區':{add:1200,mul:1}}}};`);
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+  const den = 700;
+
+  // 圖表序列在「今日 23 時」的 ETR2 vs 地圖 calcEtr2AtSeg(seg 3)
+  const b = G._hourlyBars(t);
+  const es = G._etr2HourlySeries(t, b.hFrom, b.hFrom + 119);
+  // ★ 序列索引 = h - hFrom（hFrom 為 -48），先前寫 23 - hFrom 之外還誤以為 idx=23，
+  //   讀到的是兩天前的值，才會量出 0.13 的假落差。
+  const idx23 = 23 - b.hFrom;
+  const chartEtr = (idx23 >= 0 && idx23 < es.length) ? es[idx23]*den/100 : null;
+  const mapEtr = G.calcEtr2AtSeg(t, 3, 'qpf_ecmwf');
+  console.log(`   圖表@今日23時=${chartEtr==null?'—':Math.round(chartEtr)}mm` +
+              `（${chartEtr==null?'—':Math.round(chartEtr/den*100)}%）`);
+  console.log(`   地圖@seg3   =${Math.round(mapEtr)}mm（${Math.round(mapEtr/den*100)}%）`);
+  if (chartEtr == null) fails.push('圖表 ETR2 序列取不到今日值');
+  else {
+    // 兩者演算法不同（逐時 vs 逐段），容許 25% 差異；但不可差到數倍
+    const ratio = chartEtr / mapEtr;
+    console.log(`   比值=${ratio.toFixed(2)}（1.0 為完全一致，先前約 0.17 即六倍落差）`);
+    if (ratio < 0.75 || ratio > 1.33) fails.push(`圖表與地圖 ETR2 差異過大（比值 ${ratio.toFixed(2)}）`);
+    else console.log('  OK  圖表與地圖 ETR2 量級一致（不再有數倍落差）');
+  }
+  // 逐段核對：序列在各段末尾應貼近 calcEtr2AtSeg（同源的最強驗證）
+  let worst = 0, worstSeg = null;
+  for(let sg = 0; sg <= 7; sg++){
+    const h = sg*6 + 5;                            // 該段最後一小時
+    const idx = h - b.hFrom;
+    if(idx < 0 || idx >= es.length) continue;
+    const cv = es[idx]*den/100;
+    const mv = G.calcEtr2AtSeg(t, sg, 'qpf_ecmwf');
+    const d = Math.abs(cv - mv) / Math.max(1, mv);
+    if(d > worst){ worst = d; worstSeg = sg; }
+  }
+  console.log(`   逐段最大相對差=${(worst*100).toFixed(1)}%（seg ${worstSeg}）`);
+  if(worst > 0.15) fails.push(`圖表與地圖逐段不一致（最大差 ${(worst*100).toFixed(1)}%）`);
+  else console.log('  OK  圖表逐段貼合 calcEtr2AtSeg（同源）');
+
+  // 圖表序列在情境下必須遠超 100%
+  // ★ 只取「現在之後」的區段：過去 48h 是既定觀測，情境本來就不該改動它。
+  const futFrom = Math.max(0, 0 - b.hFrom);        // h=0（今日00時）在序列中的位置
+  const maxPct = Math.max(...es.slice(futFrom));
+  console.log(`   圖表序列最高 ETR2% = ${Math.round(maxPct)}%`);
+  if (!(maxPct > 100)) fails.push(`圖表 ETR2% 未反映情境（最高 ${Math.round(maxPct)}%）`);
+  else console.log('  OK  圖表 ETR2% 已反映情境');
+  setLex("_scnOn=false; _scnDays={};");
+}
+
+console.log('\n=== 地形分類已就緒（使用者指示 e：800m 二分）===');
+if (need('_townZone')) {
+  const tz = getLex('TOWN_ZONE');
+  const n = tz ? Object.keys(tz).length : 0;
+  console.log(`   TOWN_ZONE 筆數=${n}`);
+  // ★ 舊的位置型分類（北海岸／東北角／恆春半島／淺山／沿海）不得殘留
+  const legacy = Object.values(tz).filter(v=>!['山區','淺山區','沿海地區','平地'].includes(v));
+  chk('無殘留舊分類值', [...new Set(legacy)], []);
+  const cnt = {};
+  Object.values(tz).forEach(v=>{ cnt[v]=(cnt[v]||0)+1; });
+  console.log(`   四類統計=${JSON.stringify(cnt)}`);
+  if (!(n > 300)) fails.push(`TOWN_ZONE 未載入完整（${n} 筆）`);
+  else console.log('  OK  TOWN_ZONE 已內建（不再有「設了沒反應」的地形列）');
+  chk('SCN_TERRAIN 為四類', getLex('SCN_TERRAIN'), ['山區','淺山區','平地','沿海地區']);
+  // 已知山區/平地抽樣
+  [['南投縣仁愛鄉','山區'],['臺中市和平區','山區'],['嘉義縣阿里山鄉','山區'],
+   ['宜蘭縣大同鄉','山區'],['宜蘭縣南澳鄉','山區'],
+   ['臺北市大安區','平地'],['宜蘭縣宜蘭市','平地'],['宜蘭縣羅東鎮','平地'],
+   // 使用者逐一指定（東北角拆分、宜蘭調整）
+   ['新北市瑞芳區','淺山區'],['新北市貢寮區','淺山區'],['新北市雙溪區','淺山區'],
+   ['基隆市中正區','沿海地區'],['基隆市中山區','沿海地區'],
+   ['基隆市七堵區','淺山區'],['基隆市暖暖區','淺山區'],['基隆市安樂區','淺山區'],
+   ['宜蘭縣頭城鎮','淺山區'],['宜蘭縣礁溪鄉','淺山區'],['宜蘭縣冬山鄉','淺山區'],
+   ['宜蘭縣壯圍鄉','沿海地區'],['宜蘭縣五結鄉','沿海地區'],['宜蘭縣蘇澳鎮','沿海地區'],
+   ['宜蘭縣員山鄉','淺山區'],['宜蘭縣三星鄉','淺山區'],
+   // 北海岸／恆春半島併入沿海地區
+   ['新北市石門區','沿海地區'],['新北市金山區','沿海地區'],['新北市萬里區','沿海地區'],
+   ['新北市三芝區','沿海地區'],['屏東縣恆春鎮','沿海地區'],['屏東縣車城鄉','沿海地區'],
+   ['屏東縣滿州鄉','沿海地區'],['屏東縣枋山鄉','沿海地區']].forEach(([k,want])=>{
+    const got = tz[k];
+    const ok = got === want;
+    if(!ok) fails.push(`${k} 應為 ${want}，實為 ${got}`);
+    console.log(`   ${ok?'OK ':'!! '}${k} → ${got}`);
+  });
+}
+
+
+// ════════ 20. 單一計算層：所有呈現面必須回報同一組數字 ════════
+console.log('\n=== townMetrics 為唯一資料來源 ===');
+if (need('townMetrics') && need('getAccum') && need('_calcDistrictDaily') && need('_calcDistrictHyeto')) {
+  // 臺南分署山區 +500 ×3（使用者實際設定）
+  setLex(`TMAP['高雄市六龜區']={county:'高雄市',township:'六龜區',alert_val:250,etr2_alert:250,
+    etr2:67,etr2_pct:0.27,daily_rain:Array(15).fill(0),pop_6h:Array(28).fill(80),
+    qpf_best:Array(64).fill(2),qpf_ecmwf:Array(64).fill(2),
+    warn_seg:Array(64).fill(0),maxh_best:Array(64).fill(1),
+    obs_1h_p48:Array(48).fill(0),qpf_1h_p48:Array(48).fill(0),qpf_1h:Array(96).fill(0)};
+    {const d=new Date();d.setDate(d.getDate()+1);d.setHours(0,0,0,0);BASE_TIME=d;}
+    forecastModel='ecmwf'; _userFactorOn=false;_biasApplyOn=false;
+    winKey='today';segFrom=0;segTo=3;mode='rain';
+    _scnOn=true;_scnDays={0:{model:'ecmwf',g:{'臺南分署|淺山區':{add:500,mul:3}}},
+                          1:{model:'ecmwf',g:{'臺南分署|淺山區':{add:500,mul:3}}}};`);
+  const t = getLex("TMAP['高雄市六龜區']");
+  // 六龜區在四類分區下為「淺山區」（依既有人工分類轉換），測試依實際分類設定群組
+  chk('六龜區分類', G._townZone(t), '淺山區');
+
+  // 段值 (2+500/4)*3 = 381 → 日和 1524
+  const q = G.getQpfArr(t, 'qpf_ecmwf');
+  chk('段值 = (2+125)*3', q.slice(0,4), [381,381,381,381]);
+  const m = G.townMetrics(t, 3);
+  chk('townMetrics 日和 = 4*381', m.dayRain, 1524);
+  console.log(`   townMetrics: dayRain=${m.dayRain} etr2=${m.etr2}mm etrPct=${m.etrPct}% ` +
+              `warn=${m.warnLv} risk=${m.risk}`);
+
+  // ETR2%：1524mm 對 250mm 警戒值 → 必須遠超 400%
+  if (!(m.etrPct > 400)) fails.push(`townMetrics ETR2% 偏低（${m.etrPct}%）`);
+  else console.log('  OK  ETR2% 合乎 1524mm/250mm 的量級');
+
+  // 地圖(getAccum) 必須與 townMetrics 同數
+  const a = G.getAccum(t, 'rain');
+  console.log(`   getAccum: totalRain=${a.totalRain} etrPct=${a.etrPct}`);
+  if (Math.abs(a.etrPct - m.etrPct) > 1.01) fails.push(`地圖與 townMetrics ETR2% 不一致（${a.etrPct} vs ${m.etrPct}）`);
+  else console.log('  OK  地圖 ETR2% ＝ townMetrics');
+
+  // 逐日圖軸值必須含此鄉鎮的值（臺南分署 index）
+  const di = getLex('DISTRICT_ORDER').indexOf('臺南分署');
+  const dd = G._calcDistrictDaily('qpf_ecmwf');
+  const dayEtr = dd.etrRows[di][0], dayRain = dd.rainRows[di][0];
+  console.log(`   逐日圖臺南分署 day0: 雨量=${dayRain} ETR2%=${dayEtr}（軸上限 ${dd.maxEtr}）`);
+  // ★ 分署圖是「署內所有鄉鎮取最大」，故軸值 ≥ 單一鄉鎮值；不可要求相等。
+  if (dayEtr < Math.round(m.etrPct) - 1) fails.push(`逐日圖 ETR2% 低於該鄉鎮值（${dayEtr} < ${Math.round(m.etrPct)}）`);
+  else console.log(`  OK  逐日圖 ETR2% ≥ 六龜值（${dayEtr} ≥ ${Math.round(m.etrPct)}，署內取最大）`);
+  if (dayRain < m.dayRain - 0.2) fails.push(`逐日圖雨量低於 townMetrics（${dayRain} vs ${m.dayRain}）`);
+  else console.log('  OK  逐日圖雨量 ≥ townMetrics（分署取最大）');
+  // 軸上限必須容納最大值，否則圖面會被截斷（使用者看到 420 而非 568 的另一成因）
+  if (dd.maxEtr < dayEtr) fails.push(`逐日圖 ETR2 軸上限 ${dd.maxEtr} < 實際值 ${dayEtr}（圖面會截斷）`);
+  else console.log('  OK  ETR2 軸上限容納實際值（圖面不截斷）');
+
+  // 組體圖同樣核對
+  const hy = G._calcDistrictHyeto('qpf_ecmwf');
+  const hEtr = hy.etrRows[di][3];
+  console.log(`   組體圖臺南分署 seg3: ETR2%=${hEtr}（軸上限 ${hy.maxEtr}）`);
+  if (hEtr < Math.round(m.etrPct) - 1) fails.push(`組體圖 ETR2% 低於該鄉鎮值（${hEtr} < ${Math.round(m.etrPct)}）`);
+  else console.log(`  OK  組體圖 ETR2% ≥ 六龜值（${hEtr} ≥ ${Math.round(m.etrPct)}）`);
+  // 兩張圖必須彼此一致（同署同段）
+  chk('逐日圖與組體圖同段一致', dayEtr, hEtr);
+  if (hy.maxEtr < hEtr) fails.push(`組體圖 ETR2 軸上限 ${hy.maxEtr} < 實際值 ${hEtr}`);
+  else console.log('  OK  組體圖軸上限容納實際值');
+
+  // 快取必須隨情境失效（否則改設定後圖表沿用舊值）
+  const k1 = G._tmKey();
+  setLex("_scnDays={0:{model:'ecmwf',g:{'臺南分署|淺山區':{add:500,mul:5}}}};");
+  const k2 = G._tmKey();
+  chk('情境變動 → 計算層快取鍵改變', k1 !== k2, true);
+  const m2 = G.townMetrics(t, 3);
+  if (!(m2.dayRain > m.dayRain)) fails.push('快取未失效，townMetrics 沿用舊值');
+  else console.log(`  OK  快取正確失效（倍率3→5：${m.dayRain} → ${m2.dayRain}）`);
+
+  setLex("_scnOn=false;_scnDays={};");
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
