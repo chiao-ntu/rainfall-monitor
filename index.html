@@ -550,8 +550,9 @@ function showHyetograph(t, s, e){
 
   // 標題：站別資訊
   let title = `${s.name}（警戒值 ${hasAlert ? s.alert_val+'mm' : '—'}）｜過去：本站觀測｜未來：鄉鎮QPF（無站級預報）`;
-  if(s.etr2_pct != null) title += `｜本站ETR2%官方現值 ${Math.round(s.etr2_pct*1000)/10}%`
-      + (window.ETR2_NOW_TIME ? `（${window.ETR2_NOW_TIME}）` : '');
+  // ★ 這裡是「站級」ETR2%（來自 data.json 的站別資料），
+  //   etr2_now.json 只覆寫鄉鎮級 t.etr2_pct，故不可掛上官方現值的更新時間。
+  if(s.etr2_pct != null) title += `｜本站ETR2% ${Math.round(s.etr2_pct*1000)/10}%（主排程值）`;
   if(!hasStnObs) title += `｜未配對觀測，過去段以鄉鎮回算`;
   document.getElementById('station-pop-title').textContent = title;
 
@@ -2015,6 +2016,25 @@ function getAccum(t){
   return {totalRain: total, etrPct};
 }
 
+// 鄉鎮 tooltip／浮動視窗共用：官方現值一列（含資料時間）。
+// 與「預估」明確分開標示——兩者時間基準不同，混在一起最容易誤讀。
+function _etr2NowRow(t){
+  const v = getObsEtr(t);
+  if(v === null) return '';
+  const ts = _etr2NowLabel();
+  return `ETR2%官方現值：<b>${v.toFixed(0)}%</b>`
+       + (ts ? `<span style="opacity:.7;font-size:11px">（${ts}）</span>` : '')
+       + '<br>';
+}
+
+// ETR2 官方現值的資料時間標籤（每小時由 etr2_now.json 更新）。
+// 顯示成 MM/DD HH:MM；沒有時間就回空字串（呼叫端不顯示該欄）。
+function _etr2NowLabel(){
+  const raw = window.ETR2_NOW_TIME || '';
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  return m ? `${m[2]}/${m[3]} ${m[4]}:${m[5]}` : raw;
+}
+
 function getObsEtr(t){
   if(t.etr2_pct === null || t.etr2_pct === undefined) return null;
   return Math.round(t.etr2_pct * 1000) / 10;  // 轉成 %
@@ -2174,12 +2194,12 @@ function renderLayer(){
           const dayRain = totalRain;   // 與地圖著色同一權威值（getAccum，模式感知）
           tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
             `全天累積雨量：${dayRain!=null?dayRain+' mm':'—'}<br>`+
-            `ETR2%：${etrStr}<br>`+
+            `ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) +
             `風險指標：${riskIndicatorHtml(t,3)}`;
         } else if(winKey.startsWith('past')){
-          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>觀測累積雨量：${rainStr} ｜ ETR2%：${etrStr}<br>風險指標：${_windowRisk(t)}`;
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>觀測累積雨量：${rainStr} ｜ ETR2%：${etrStr}<br>`+ _etr2NowRow(t) + `風險指標：${_windowRisk(t)}`;
         } else {
-          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>預測累積雨量：${rainStr} ｜ ETR2%：${etrStr}<br>風險指標：${_windowRisk(t)}`;
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>預測累積雨量：${rainStr} ｜ ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) + `風險指標：${_windowRisk(t)}`;
         }
       }
       poly.bindTooltip(tooltipHtml, {sticky:true, opacity:.92});
@@ -2286,7 +2306,8 @@ function updateInfo(t){
       <div class="ir"><span class="l">今日觀測累積</span>${wv('', obsToday+' mm')}</div>
       <div class="ir"><span class="l">今日預測補足</span>${wv('', futureQpf2+' mm')}</div>
       <div class="ir"><span class="l">今日全天預估</span>${wv('', totalToday+' mm')}</div>
-      <div class="ir"><span class="l" title="水保署官方有效累積雨量比值（每小時更新）${window.ETR2_NOW_TIME?'　資料時間 '+window.ETR2_NOW_TIME:''}">ETR2%官方現值</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','無資料')}</div>
+      <div class="ir"><span class="l">ETR2%官方現值${window.ETR2_NOW_TIME
+        ? `<span style="color:#5a7a9a;font-weight:400;font-size:9px"> ${_etr2NowLabel()}</span>` : ''}</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','無資料')}</div>
     `;
   } else {
     const obsDayLabel = winKey.startsWith('past') ? '觀測累積雨量' : '累積雨量';
@@ -4078,7 +4099,8 @@ function showChartTooltip(evt, canvasId){
         const e=calcEtr2AtSeg(t,3,qpfField);
         ep=Math.round(e/_etrDen(t)*100);
       }
-      lines+=`ETR2%：${ep!=null?`<span style="color:${etrColorOf(ep)};font-weight:700">${ep}%</span>`:'<span style="color:#5a7a9a">—</span>'}<br>`;
+      lines+=`ETR2%（預估）：${ep!=null?`<span style="color:${etrColorOf(ep)};font-weight:700">${ep}%</span>`:'<span style="color:#5a7a9a">—</span>'}<br>`;
+      lines+=_etr2NowRow(t);
       lines+=`風險指標：${riskIndicatorHtml(t,3)}<br>`;
       tip.innerHTML=lines;
       tip.style.display='block';

@@ -1262,6 +1262,35 @@ console.log('\n=== ETR2%官方現值：標籤與時間戳 ===');
   chk('前端載入 etr2_now.json', /etr2_now\.json/.test(html), true);
 }
 
+
+// ════════ 23. 官方現值：畫面上必須看得到（不藏在 title 屬性）════════
+console.log('\n=== ETR2%官方現值 顯示與時間戳 ===');
+if (need('_etr2NowRow') && need('_etr2NowLabel')) {
+  setLex("window.ETR2_NOW_TIME = '2026-08-13T10:12';");
+  chk('時間格式化為 MM/DD HH:MM', G._etr2NowLabel(), '08/13 10:12');
+  setLex("window.ETR2_NOW_TIME = '';");
+  chk('無時間時回空字串', G._etr2NowLabel(), '');
+  setLex("window.ETR2_NOW_TIME = '2026-08-13T10:12';");
+
+  const t = { county:'高雄市', township:'桃源區', alert_val:250, etr2_pct:0.21 };
+  const row = G._etr2NowRow(t);
+  console.log(`   輸出：${row.replace(/<[^>]*>/g,'')}`);
+  chk('含「官方現值」字樣', /ETR2%官方現值/.test(row), true);
+  chk('含百分比數值', /21%/.test(row), true);
+  chk('★時間戳直接顯示於內容（非 title 屬性）', /08\/13 10:12/.test(row), true);
+  chk('不使用 title 屬性藏資訊', /title=/.test(row), false);
+  chk('無官方值時回空字串（不顯示空列）', G._etr2NowRow({county:'x',township:'y'}), '');
+
+  // 全檔檢查：官方現值不得只存在於 title 屬性裡
+  const html = fs.readFileSync('index.html', 'utf8');
+  const inTitleOnly = /title="[^"]*ETR2%官方現值/.test(html);
+  chk('全檔無「官方現值僅存於 title」的情形', inTitleOnly, false);
+  // 預估與官方值必須分開標示
+  chk('預估值明確標示「（預估）」', (html.match(/ETR2%（預估）/g)||[]).length >= 3, true);
+  // 站別彈窗不得冒充官方時間（站級值不由 etr2_now.json 覆寫）
+  chk('站別彈窗標示為主排程值', /本站ETR2% \$\{[^}]*\}%（主排程值）/.test(html), true);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);
