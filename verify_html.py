@@ -56,7 +56,10 @@ for tag in ['</html>', '</body>', '<div id="map"']:
 MUST_STR = ['TOWN_GEO', 'TYPHOON_TRACK', 'DEBRIS_ALERTS', 'typhoon-panel-body',
             'typhoon-legend-wrap', 'typhoon-legend-toggle', 'TW_WARN_EXCLUDE',
             'debris-panel-body', 'landslide-panel-body', 'typhoon-legend',
-            'cust-ctrl', 'slS', 'slE', '颱風動態', 'ETR2']
+            'cust-ctrl', 'slS', 'slE', '颱風動態', 'ETR2',
+            # 外援連結（漏掉會靜默消失，沒有其他檢查會抓到）
+            'data.jma.go.jp', 'metoc.navy.mil/jtwc', 'watch_rain_6weeks',
+            'plotrainonline', 'watch_wissdom_taiwan']
 for k in MUST_STR:
     if k not in s:
         fail.append(f'缺字串 {k}'); print(f'!! 缺字串 {k}')
