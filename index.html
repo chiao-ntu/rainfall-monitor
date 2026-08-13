@@ -753,7 +753,11 @@ function toggleEtrCounty(county){
 
 function _panelSeg(){
   // 跟當前選取的時間視窗一致
-  if(winKey === 'today') return _nowSeg();   // ETR2等當下量：今天＝現在（對齊官方）
+  // ★「今天」＝整日 00–24 時 → 取日末段 3（全系統統一定義）。
+  //   舊版回 _nowSeg()：ETR2%警戒面板顯示「現在段」，而地圖／土石流／逐日圖／組體圖
+  //   都用日末段，於是同一鄉鎮出現 321% vs 559% 兩個答案。
+  //   官方現值仍在右側「現況觀測 → 今日ETR2%」呈現（走 etr2_pct），分工明確。
+  if(winKey === 'today') return 3;
   if(winKey.startsWith('past')){ const n=parseInt(winKey.slice(4)); return -(n*4+1); }
   if(winKey.startsWith('day')){ const n=parseInt(winKey.slice(3)); return (n-1)*4+3; }
   if(winKey.startsWith('fut6_')){ const n=parseInt(winKey.slice(5)); return Math.floor(BASE_TIME.getHours()/6)+(n-1); }
@@ -1922,8 +1926,21 @@ function getAccum(t){
     }
     rest = Math.round(restSeg * 10) / 10;
     const obsToday = (t.daily_rain && t.daily_rain[0]!=null) ? t.daily_rain[0] : 0;
+    // ★ 已過時段：取 max(觀測, 該時段被調整後的QPF)。
+    //   情境／倍率把已過的段放大時，觀測（真實小雨）遠小於使用者指定的雨量，
+    //   若只用觀測，「全天累積」會只剩未過段的部分（實測 885.3 vs 整日 1510），
+    //   與逐日圖／組體圖／二次災害／右側「全天預估」全部打架。
+    //   無情境時 QPF 較小、仍以觀測為準，行為不變。
+    let qPast = 0;
+    for(let sg=0; sg<4; sg++){
+      const sA = sg*6, sB = sA + 6;
+      if(sA >= nowH + 1) break;                      // 只累計已過（含跨越）的部分
+      const v = qpfArr[sg] || 0;
+      qPast += (sB <= nowH + 1) ? v : v * ((nowH + 1) - sA) / 6;
+    }
+    const pastPart = Math.max(obsToday, Math.round(qPast*10)/10);
     const totalRain = (forecastModel==='cwa' && qpfArr.length===0) ? null   // 純CWA無資料就是無資料
-      : Math.round((obsToday + rest)*10)/10;
+      : Math.round((pastPart + rest)*10)/10;
     let etrPct = null;
     if(hasEtr){
       // ★「今天」視窗的 ETR2 取**今日結束時（seg 3）**的值，而非現在值。
@@ -2237,7 +2254,7 @@ function updateInfo(t){
       <div class="ir"><span class="l">今日觀測累積</span>${wv('', obsToday+' mm')}</div>
       <div class="ir"><span class="l">今日預測補足</span>${wv('', futureQpf2+' mm')}</div>
       <div class="ir"><span class="l">今日全天預估</span>${wv('', totalToday+' mm')}</div>
-      <div class="ir"><span class="l">今日ETR2%</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','無資料')}</div>
+      <div class="ir"><span class="l" title="水保署官方有效累積雨量比值（每小時更新）${window.ETR2_NOW_TIME?'　資料時間 '+window.ETR2_NOW_TIME:''}">ETR2%官方現值</span>${obsEtr!==null ? wv(wCls(obsEtr), obsEtr.toFixed(0)+'%') : wv('','無資料')}</div>
     `;
   } else {
     const obsDayLabel = winKey.startsWith('past') ? '觀測累積雨量' : '累積雨量';
@@ -3006,6 +3023,39 @@ async function tryLoadLive(){
         console.log('radar.json 載入：', _nr, '個鄉鎮雷達值，時間', _radarDt);
       }
     }catch(e){ console.warn('radar.json 載入失敗（不影響其他）：', e.message); }
+
+    // ── ETR2 官方現值：獨立讀 etr2_now.json（由每小時腳本寫）──
+    //   ETR2 每小時都在變，等主排程 6h 太慢；覆寫 t.etr2 / t.etr2_pct 兩個欄位，
+    //   讓「ETR2%官方現值」與所有以官方值為錨點的推算（calcEtr2AtSeg）一起變新。
+    window.ETR2_NOW_TIME = '';
+    try{
+      const er = await fetch('etr2_now.json?t='+Date.now());
+      if(er.ok){
+        const ed = await er.json();
+        const emap = ed.townships || {};
+        let _ne = 0, _nnew = 0;
+        for(const key in emap){
+          const t = TMAP[key];
+          if(!t) continue;
+          const rec = emap[key];
+          if(rec && rec.etr2 != null){
+            // 保留主排程的前期值供趨勢比較：官方值有更新才推進 etr2_prev
+            if(t.etr2 != null && Math.abs(t.etr2 - rec.etr2) > 0.05){
+              t.etr2_prev = t.etr2; _nnew++;
+            }
+            t.etr2 = rec.etr2;
+            if(rec.alert) t.etr2_alert = rec.alert;
+            t.etr2_pct = (rec.pct != null) ? rec.pct
+                       : (rec.alert ? rec.etr2/rec.alert : t.etr2_pct);
+            t.etr2_station = rec.station || t.etr2_station;
+            _ne++;
+          }
+        }
+        window.ETR2_NOW_TIME = ed.updated || '';
+        console.log('etr2_now.json 載入：', _ne, '個鄉鎮官方ETR2（其中', _nnew,
+                    '個較主排程更新），時間', window.ETR2_NOW_TIME);
+      }
+    }catch(e){ console.warn('etr2_now.json 載入失敗（沿用 data.json 的值）：', e.message); }
 
     // 雷達1h QPF 發布時間顯示
     const _rt = document.getElementById('radar-time');

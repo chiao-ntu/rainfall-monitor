@@ -880,12 +880,13 @@ if (need('getQpfArr') && need('getAccum') && need('calcEtr2AtSeg')) {
   const q = G.getQpfArr(t, 'qpf_ecmwf');
   chk('段值 = (20+200/4)*4', q.slice(0,4), [280,280,280,280]);
 
-  // 日和：段0扣掉已過的1小時（nowH=0）→ 280*5/6 + 3*280
+  // ★「今天」＝整日 00–24 時（全系統統一定義），故日和 = 4 × 段值，
+  //   不再扣除已過時段——已過段的情境調整同樣屬於使用者指定的雨量。
   const a = G.getAccum(t, 'rain');
-  const expect = Math.round((280*5/6 + 840)*10)/10;
-  console.log(`   totalRain=${a.totalRain} 期望=${expect}（段0扣已過1h）`);
+  const expect = 4 * 280;
+  console.log(`   totalRain=${a.totalRain} 期望=${expect}（整日 4 段和）`);
   if (Math.abs(a.totalRain - expect) > 0.2) fails.push(`日和與段值不一致（${a.totalRain} vs ${expect}）`);
-  else console.log('  OK  日和＝段值扣除已過時段（同源）');
+  else console.log('  OK  日和＝整日 4 段和（與逐日圖／組體圖同義）');
 
   // ETR2：情境把 QPF 放大數十倍，ETR2% 必須遠超 100%
   console.log(`   etrPct=${a.etrPct}%（分母 700mm）`);
@@ -1161,6 +1162,58 @@ if (need('townMetrics') && need('getAccum') && need('_calcDistrictDaily') && nee
   else console.log(`  OK  快取正確失效（倍率3→5：${m.dayRain} → ${m2.dayRain}）`);
 
   setLex("_scnOn=false;_scnDays={};");
+}
+
+
+// ════════ 21. 桃源區實例：所有面向必須收斂到同一組數字 ════════
+console.log('\n=== 「今天」視窗定義統一（桃源區實例）===');
+if (need('townMetrics') && need('getAccum') && need('_panelSeg')) {
+  // 重現使用者情境：段值 375/375.9/384/375，警戒值 250mm，現在 nowH=9
+  setLex(`TMAP['高雄市桃源區']={county:'高雄市',township:'桃源區',alert_val:250,etr2_alert:250,
+    etr2:52,etr2_pct:0.21,daily_rain:Array(15).fill(0),pop_6h:Array(28).fill(80),
+    qpf_best:[375,375.9,384,375].concat(Array(60).fill(0)),
+    qpf_ecmwf:[375,375.9,384,375].concat(Array(60).fill(0)),
+    warn_seg:Array(64).fill(0),maxh_best:Array(64).fill(60),
+    obs_1h_p48:Array(48).fill(0),qpf_1h_p48:Array(48).fill(0),qpf_1h:Array(96).fill(0)};
+    {const d=new Date(); d.setHours(9,30,0,0); BASE_TIME=new Date(d.getFullYear(),d.getMonth(),d.getDate(),0,0,0,0);}
+    forecastModel='ecmwf'; _userFactorOn=false;_biasApplyOn=false;_scnOn=false;_scnDays={};
+    winKey='today';segFrom=0;segTo=3;mode='rain';`);
+  const t = getLex("TMAP['高雄市桃源區']");
+  const nowSeg = G._nowSeg();
+  console.log(`   nowSeg=${nowSeg}　_panelSeg()=${G._panelSeg()}`);
+  chk('★「今天」視窗一律取日末段 3', G._panelSeg(), 3);
+
+  const dayTotal = 375 + 375.9 + 384 + 375;         // 1509.9
+  const m = G.townMetrics(t, 3);
+  const a = G.getAccum(t, 'rain');
+  console.log(`   townMetrics.dayRain=${m.dayRain}　getAccum.totalRain=${a.totalRain}　（整日和 ${dayTotal}）`);
+  chk('townMetrics 日和 = 段值總和', m.dayRain, Math.round(dayTotal*10)/10);
+  // ★ 地圖「全天累積雨量」必須等於整日和，不可只剩未過段
+  if (Math.abs(a.totalRain - dayTotal) > 2) {
+    fails.push(`地圖全天累積 ${a.totalRain} ≠ 整日和 ${dayTotal}（舊值約 885，只算未過段）`);
+  } else console.log('  OK  地圖全天累積 ＝ 整日和（不再只算未過段）');
+
+  // ETR2%：面板段與地圖段一致 → 百分比必須相同
+  const panelEtr = G.calcEtr2AtSeg(t, G._panelSeg(), 'qpf_ecmwf') / 250 * 100;
+  console.log(`   面板ETR2%=${Math.round(panelEtr)}　地圖ETR2%=${Math.round(a.etrPct)}　townMetrics=${Math.round(m.etrPct)}`);
+  if (Math.abs(panelEtr - a.etrPct) > 1.5) {
+    fails.push(`ETR2%警戒面板 ${Math.round(panelEtr)}% ≠ 地圖 ${Math.round(a.etrPct)}%（舊為 321 vs 559）`);
+  } else console.log('  OK  ETR2%警戒面板 ＝ 地圖 ＝ townMetrics（不再 321 vs 559）');
+
+  // 逐日圖 / 組體圖同段一致
+  const di = getLex('DISTRICT_ORDER').indexOf('臺南分署');
+  const dd = G._calcDistrictDaily('qpf_ecmwf');
+  const hy = G._calcDistrictHyeto('qpf_ecmwf');
+  console.log(`   逐日圖day0 ETR2%=${dd.etrRows[di][0]}　組體圖seg3 ETR2%=${hy.etrRows[di][3]}`);
+  chk('逐日圖與組體圖同段一致', dd.etrRows[di][0], hy.etrRows[di][3]);
+  if (dd.etrRows[di][0] < Math.round(m.etrPct) - 1) {
+    fails.push(`逐日圖 ETR2% 低於桃源值（${dd.etrRows[di][0]} < ${Math.round(m.etrPct)}）`);
+  } else console.log('  OK  逐日圖 ETR2% ≥ 桃源值（署內取最大）');
+
+  // 逐日圖雨量 ≥ 整日和
+  if (dd.rainRows[di][0] < dayTotal - 2) {
+    fails.push(`逐日圖雨量 ${dd.rainRows[di][0]} < 整日和 ${dayTotal}`);
+  } else console.log('  OK  逐日圖雨量 ≥ 整日和');
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`

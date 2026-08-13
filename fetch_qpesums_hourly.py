@@ -24,6 +24,12 @@ TOWNS_FILE   = "all_townships.json"
 #   本腳本每小時第12分執行，是全系統唯一的逐時序列來源。
 #   主腳本 fetch_rainfall.py 只讀不寫；兩支各寫各檔，永不搶寫。
 HOURLY_FILE   = "rain_hourly.json"
+# ── ETR2 官方現值（每小時更新，獨立檔）──────────────────
+#   ETR2 是官方權威現值且每小時都在變，等主排程 6 小時才更新太慢。
+#   本腳本本來就在抓水保署站級 STRT，只需再做「逐官方警戒單元→鄉鎮」聚合。
+#   寫獨立檔，與 radar.json 同策略：兩支 workflow 各寫各檔，永不搶寫 data.json。
+ETR2_FILE     = "etr2_now.json"
+SLOPE_WARN_FILE = "slope_warning_stations.json"
 OBS_URL       = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0002-001"
 SWCB_RAIN_URL = "https://246.ardswc.gov.tw/webService/GetDebrisRainData.ashx"
 KEEP_SERIES_HOURS = 168   # 保留7日＝官方有效累積雨量的前期降雨時段（α=0.7、7日）
@@ -316,6 +322,62 @@ def fetch_swcb_hourly():
     return out
 
 
+
+def write_etr2_now(swcb, now_tpe):
+    """由站級 ETR2 聚合成「鄉鎮→官方現值」，寫 etr2_now.json。
+
+    聚合方式與 fetch_rainfall.py 的 agg_obs 一致（勿另立一套）：
+      逐官方警戒單元取其代表站的 ETR2，單元百分比 = ETR2 / 該單元警戒值，
+      鄉鎮值取「百分比最高」的那個單元（最保守，不漏報）。
+    對站順序：原名 → 正規化名 → _stn_key 正規化。
+    """
+    if not swcb:
+        print("    無站級 ETR2，跳過 etr2_now.json")
+        return
+    if not os.path.exists(SLOPE_WARN_FILE):
+        print(f"    找不到 {SLOPE_WARN_FILE}，無法聚合鄉鎮 ETR2（跳過）")
+        return
+    try:
+        with open(SLOPE_WARN_FILE, encoding='utf-8') as f:
+            tw = json.load(f).get('townships', {})
+    except Exception as e:
+        print(f"    {SLOPE_WARN_FILE} 讀取失敗：{e}")
+        return
+
+    out, n_miss = {}, 0
+    for town, regions in tw.items():
+        best = None
+        for r in regions:
+            alert = r.get('alert')
+            if not alert or alert <= 0:
+                continue
+            v = None
+            for nm in (r.get('station'), r.get('station_norm'),
+                       _stn_key(r.get('station') or '')):
+                if nm and nm in swcb:
+                    v = swcb[nm]
+                    break
+            if v is None:
+                continue
+            pct = v / alert
+            if best is None or pct > best['pct']:
+                best = {'etr2': round(v, 1), 'alert': alert, 'pct': round(pct, 4),
+                        'station': r.get('station', ''), 'unit': r.get('village', '')}
+        if best:
+            out[town] = best
+        else:
+            n_miss += 1
+
+    payload = {'updated': now_tpe.strftime('%Y-%m-%dT%H:%M'),
+               'src': SWCB_RAIN_URL, 'townships': out, 'n': len(out)}
+    with open(ETR2_FILE, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, separators=(',', ':'))
+    top = sorted(out.items(), key=lambda kv: -kv[1]['pct'])[:3]
+    print(f"    已寫 {ETR2_FILE}：{len(out)} 鄉鎮有官方 ETR2"
+          + (f"、{n_miss} 鄉鎮對不到代表站" if n_miss else "")
+          + ("｜最高：" + "、".join(f"{k} {v['pct']*100:.0f}%" for k, v in top) if top else ""))
+
+
 def update_hourly_series(now_tpe):
     """把本小時的 CWA 時雨量與水保署 ETR2 併入 rain_hourly.json 滾動序列。
 
@@ -349,6 +411,8 @@ def update_hourly_series(now_tpe):
             return
         ser['cwa'][hour_key]  = {k: v['r1'] for k, v in cwa.items() if v.get('r1') is not None}
         ser['swcb'][hour_key] = swcb
+        # 同一次 API 結果順便產出鄉鎮級官方 ETR2 現值（不另外發請求）
+        write_etr2_now(swcb, now_tpe)
         ser['hours'] = sorted(set(ser['hours']) | {hour_key})
 
     # 修剪：只留最近 KEEP_SERIES_HOURS 小時
