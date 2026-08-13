@@ -34,6 +34,8 @@ MUST = ['getAccum', 'setWin', 'onSlider', '_spanAccum', '_hourlyBars', '_futuHou
         'toggleLsbSection', 'calcEtr2AtSeg', '_etrDen', '_nowSeg', 'getQpfArr',
         'toggleTyphoonLegend', '_applyTyphoonLegendCollapse', '_summaryRain',
         '_inWarnScope', '_seaLineSegs', '_countiesInRadius', '_twGrid',
+        'townMetrics', 'townToday', '_tmKey', '_etr2HourlySeries', '_calcDistrictDaily',
+        '_calcDistrictHyeto',
         'downloadRangeCsv', 'toggleMapPanel',
         'scnUndo', 'scnRedo', 'scnPushUndo', '_scnApplyState', '_scnRowFocus',
         'scnToggleFold', '_slopeEstJS', '_withEst', '_nowHourClamped', '_townZone']

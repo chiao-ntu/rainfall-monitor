@@ -550,7 +550,8 @@ function showHyetograph(t, s, e){
 
   // 標題：站別資訊
   let title = `${s.name}（警戒值 ${hasAlert ? s.alert_val+'mm' : '—'}）｜過去：本站觀測｜未來：鄉鎮QPF（無站級預報）`;
-  if(s.etr2_pct != null) title += `｜本站ETR2% ${Math.round(s.etr2_pct*1000)/10}%`;
+  if(s.etr2_pct != null) title += `｜本站ETR2%官方現值 ${Math.round(s.etr2_pct*1000)/10}%`
+      + (window.ETR2_NOW_TIME ? `（${window.ETR2_NOW_TIME}）` : '');
   if(!hasStnObs) title += `｜未配對觀測，過去段以鄉鎮回算`;
   document.getElementById('station-pop-title').textContent = title;
 
@@ -756,7 +757,8 @@ function _panelSeg(){
   // ★「今天」＝整日 00–24 時 → 取日末段 3（全系統統一定義）。
   //   舊版回 _nowSeg()：ETR2%警戒面板顯示「現在段」，而地圖／土石流／逐日圖／組體圖
   //   都用日末段，於是同一鄉鎮出現 321% vs 559% 兩個答案。
-  //   官方現值仍在右側「現況觀測 → 今日ETR2%」呈現（走 etr2_pct），分工明確。
+  //   官方現值仍在右側「現況觀測 → ETR2%官方現值」呈現（走 etr2_pct，每小時由
+//   etr2_now.json 更新），分工明確。
   if(winKey === 'today') return 3;
   if(winKey.startsWith('past')){ const n=parseInt(winKey.slice(4)); return -(n*4+1); }
   if(winKey.startsWith('day')){ const n=parseInt(winKey.slice(3)); return (n-1)*4+3; }
@@ -1253,6 +1255,22 @@ function getQpfArr(t, qpfField){
   return out;
 }
 
+// 安全呼叫：函式不存在或拋錯都在 console 明確報出（不得靜默吞掉）。
+//   ★ 這條的由來：舊版 try{ updateSummary(); }catch(e){} 把「函式不存在」
+//     吞成無事發生，導致該面板從未更新卻沒人察覺。
+function _safeCall(name, fn){
+  if(typeof fn !== 'function'){
+    if(!_safeCallWarned[name]){
+      _safeCallWarned[name] = true;
+      console.warn('[refresh] 找不到函式，該面板不會更新：', name);
+    }
+    return;
+  }
+  try{ fn(); }
+  catch(e){ console.error('[refresh] ' + name + ' 執行失敗：', e && e.message, e); }
+}
+const _safeCallWarned = {};
+
 function _refreshAfterFactorChange(){
   // ★ 圖表極值快取必須重置：否則逐日/組體圖的比例尺仍沿用舊倍率的極值
   NATIONWIDE_EXTREMES = null;
@@ -1260,12 +1278,26 @@ function _refreshAfterFactorChange(){
   withTransition(()=>{
     renderLayer(); renderLegend();
     if(selected) updateInfo(selected);
-    try{ updateAllDistrictCharts(); }catch(e){}
-    try{ _redrawZoom(); }catch(e){}
-    try{ updateSummary(); }catch(e){}
-    try{ updateDebrisPanel(); }catch(e){}
-    try{ updateLandslidePanel(); }catch(e){}
-    try{ updateTyphoonPanel(); }catch(e){}
+    // ★ 所有受「模式／倍率／情境」影響的面板與圖層都必須在此重繪。
+    //   舊版漏了 updateEtrAlertPanel / updateDisasterPanel / 兩個警戒圖層，
+    //   使用者必須手動點圖層按鈕才會更新；且 updateSummary 根本不存在
+    //   （正確名稱是 updateDistrictSummary），try{}catch{} 把 ReferenceError
+    //   吞掉，於是「看起來有呼叫、其實從沒執行」。
+    //   ⇒ 一律用 _safeCall 逐一呼叫並在 console 明確報錯，不再靜默失敗。
+    [
+      ['updateEtrAlertPanel',    updateEtrAlertPanel],      // ETR2%警戒
+      ['updateDisasterPanel',    typeof updateDisasterPanel === 'function' ? updateDisasterPanel : null],
+      ['updateDebrisPanel',      updateDebrisPanel],        // 土石流警戒
+      ['updateLandslidePanel',   updateLandslidePanel],     // 大規模崩塌
+      ['updateTyphoonPanel',     updateTyphoonPanel],       // 颱風動態
+      ['updateDistrictSummary',  updateDistrictSummary],    // 右側摘要四表
+      ['updateAllDistrictCharts',updateAllDistrictCharts],  // 分署逐日/組體圖
+      ['renderDebrisLayer',      typeof renderDebrisLayer === 'function' ? renderDebrisLayer : null],
+      ['renderLandslideLayer',   typeof renderLandslideLayer === 'function' ? renderLandslideLayer : null],
+      ['renderDisasterLayer',    typeof renderDisasterLayer === 'function' ? renderDisasterLayer : null],
+      ['renderTyphoonLayer',     typeof renderTyphoonLayer === 'function' ? renderTyphoonLayer : null],
+      ['_redrawZoom',            typeof _redrawZoom === 'function' ? _redrawZoom : null],
+    ].forEach(([name, fn])=>_safeCall(name, fn));
   });
   _updateFactorBtns();
 }
@@ -1947,7 +1979,7 @@ function getAccum(t){
       //   舊版寫 _nowSeg()：整日剩餘的 QPF 完全不進 ETR2，於是出現
       //   「今日全天預估 772mm、警戒值 250mm，ETR2% 卻只有 27%」這種矛盾，
       //   自訂倍率／情境加的雨也就看不到效果。
-      //   官方時間基準的現值仍在「現況觀測 → 今日ETR2%」呈現（走 getObsEtr，
+      //   官方時間基準的現值仍在「現況觀測 → ETR2%官方現值」呈現（走 getObsEtr，
       //   錨定官方 etr2_pct），兩者分工明確，不會失去官方對齊。
       //   同時也讓 getAccum 與 _summaryEtr（CSV/複製，用 segTo=3）一致。
       const etr2 = calcEtr2AtSeg(t, segTo, qpfField);

@@ -1216,6 +1216,52 @@ if (need('townMetrics') && need('getAccum') && need('_panelSeg')) {
   } else console.log('  OK  逐日圖雨量 ≥ 整日和');
 }
 
+
+// ════════ 22. 情境變更必須即時同步所有面板／圖層（不需手動點圖層）════════
+console.log('\n=== _refreshAfterFactorChange 覆蓋完整性 ===');
+if (need('_refreshAfterFactorChange') && need('_safeCall')) {
+  // 蒐集 refresh 實際會呼叫哪些函式：把每個目標函式包上探針
+  const targets = ['updateEtrAlertPanel','updateDebrisPanel','updateLandslidePanel',
+                   'updateTyphoonPanel','updateDistrictSummary','updateAllDistrictCharts',
+                   'renderLayer','renderLegend'];
+  const probe = '__refreshCalled';
+  setLex(`window.${probe} = {};`);
+  targets.forEach(fn=>{
+    setLex(`if (typeof ${fn} === 'function') {
+      const _o = ${fn};
+      ${fn} = function(){ window.${probe}['${fn}'] = true; try{ return _o.apply(this, arguments); }catch(e){} };
+    }`);
+  });
+  // 觸發一次情境刷新
+  setLex("_scnOn = true; _scnDays = {0:{model:'hi',g:{}}};");
+  setLex("_refreshAfterFactorChange();");
+  const called = getLex(`window.${probe}`) || {};
+  targets.forEach(fn=>{
+    const ok = !!called[fn];
+    if(!ok) fails.push(`情境刷新未呼叫 ${fn}（使用者需手動點圖層才會更新）`);
+    console.log(`   ${ok?'OK ':'!! '}${fn}`);
+  });
+  // ★ _safeCall 不得靜默：函式不存在要在 console 報出（不是拋錯中斷）
+  let threw = false;
+  try { setLex("_safeCall('__notExist__', undefined);"); } catch(e){ threw = true; }
+  chk('_safeCall 對不存在的函式不拋錯', threw, false);
+  setLex("_scnOn=false; _scnDays={};");
+}
+
+console.log('\n=== ETR2%官方現值：標籤與時間戳 ===');
+{
+  const html = fs.readFileSync('index.html', 'utf8');
+  const nNew = (html.match(/ETR2%官方現值/g) || []).length;
+  const nOld = (html.match(/>今日ETR2%</g) || []).length;
+  console.log(`   「ETR2%官方現值」出現 ${nNew} 次；殘留「今日ETR2%」標籤 ${nOld} 次`);
+  chk('無殘留舊標籤', nOld, 0);
+  if (!(nNew >= 2)) fails.push('官方現值標籤數過少，可能有遺漏未改名處');
+  else console.log('  OK  官方現值處皆已改名');
+  chk('標籤帶更新時間（ETR2_NOW_TIME）', /ETR2_NOW_TIME/.test(html), true);
+  // 前端必須讀 etr2_now.json
+  chk('前端載入 etr2_now.json', /etr2_now\.json/.test(html), true);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);
