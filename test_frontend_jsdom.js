@@ -1429,6 +1429,42 @@ if (need('_debrisHits') && need('_estWindowHours') && need('_lsRows')) {
   else console.log('  OK  清單成員隨情境變動');
 }
 
+
+// ════════ 26. 切換時段／模式必須重繪所有面板（不只地圖）════════
+console.log('\n=== setWin / setModel 觸發完整重繪 ===');
+if (need('setWin') && need('setModel')) {
+  const targets = ['updateEtrAlertPanel','updateDebrisPanel','updateLandslidePanel',
+                   'updateTyphoonPanel','updateDistrictSummary','renderLayer'];
+  const probe = '__winCalled';
+  targets.forEach(fn=>{
+    setLex(`if (typeof ${fn} === 'function' && !${fn}.__wrapped) {
+      const _o = ${fn};
+      ${fn} = function(){ (window.${probe}=window.${probe}||{})['${fn}']=true;
+        try{ return _o.apply(this, arguments); }catch(e){} };
+      ${fn}.__wrapped = true;
+    }`);
+  });
+
+  // setWin：切到未來6h段
+  setLex(`window.${probe} = {}; setWin('fut6_2');`);
+  const c1 = getLex(`window.${probe}`) || {};
+  targets.forEach(fn=>{
+    const ok = !!c1[fn];
+    if(!ok) fails.push(`setWin 未重繪 ${fn}（該面板不隨時段變動）`);
+    console.log(`   setWin  ${ok?'OK ':'!! '}${fn}`);
+  });
+
+  // setModel：切模式
+  setLex(`window.${probe} = {}; setModel('lo');`);
+  const c2 = getLex(`window.${probe}`) || {};
+  targets.forEach(fn=>{
+    const ok = !!c2[fn];
+    if(!ok) fails.push(`setModel 未重繪 ${fn}（該面板不隨模式變動）`);
+    console.log(`   setModel ${ok?'OK ':'!! '}${fn}`);
+  });
+  setLex("setModel('ecmwf'); setWin('today');");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

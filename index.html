@@ -3223,14 +3223,9 @@ function setModel(m){
   const el=document.getElementById(btnMap[m]); if(el) el.classList.add('on');
   const note = document.getElementById('model-src-note');
   if(note) note.textContent = MODEL_NOTE[m] || '';
-  withTransition(()=>{
-    hideNoData();
-    renderLayer();
-    renderLegend();
-    if(selected) updateInfo(selected);
-    try{ updateAllDistrictCharts(); }catch(e){}  // 摘要+分署圖跟隨模式切換
-    try{ _redrawZoom(); }catch(e){}              // 放大圖同步重繪
-  });
+  // ★ 同 setWin：切模式後左側四面板與警戒圖層也要依新模式重算
+  hideNoData();
+  _refreshAfterFactorChange();
 }
 
 function setMode(m){
@@ -3310,13 +3305,14 @@ function setWin(key){
     updateModelRowVisibility(false);   // 雷達不分模式
   }
 
-  withTransition(()=>{
-    hideNoData();
-    renderLayer(); renderLegend();
-    if(selected) updateInfo(selected);
-    try{ _redrawZoom(); }catch(e){}
-  });
-  setTimeout(()=>updateAllDistrictCharts(), 150);
+  // ★ 切換時間視窗後，左側四個面板（ETR2%警戒／二次災害／土石流／大崩）
+  //   與兩個警戒圖層都必須依新時段重算。
+  //   舊版只做 renderLayer/renderLegend，於是土石流與大崩永遠停在切換前的結果，
+  //   看起來像「不隨設定變動」——實際上計算是對的，只是沒被重繪。
+  //   直接沿用 _refreshAfterFactorChange（它已涵蓋全部面板與圖層，且有 _safeCall
+  //   逐一報錯），避免這裡再維護一份會漏掉的清單。
+  hideNoData();
+  _refreshAfterFactorChange();
 }
 
 function updateModelRowVisibility(show){
