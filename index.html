@@ -5869,6 +5869,18 @@ function _alertTown(a){
 }
 // 合併：官方現況欄位不動，est_* / fc_* 以前端重算值覆寫
 //   recalc=false（或找不到鄉鎮）時回傳後端原值，並標記 est_src
+// 推估的「預測視窗」時數：依選取的時間視窗決定，讓清單成員隨時段變動。
+//   ★ 為什麼必要：est_red_fc 的定義是「ETR2 ＋未來24h QPF ≥ 警戒值」，
+//     固定 24h 的話不論選哪一段都看到同一批雨，清單成員永遠不變（與時段脫鉤）。
+//     故未來段一律只看「該段結束為止」的雨；今天/過去仍用官方 24h 定義。
+function _estWindowHours(seg){
+  const ns = _nowSeg();
+  if(winKey && winKey.startsWith('fut6_')) return Math.max(6, (seg - ns + 1) * 6);
+  if(winKey && winKey.startsWith('day'))   return Math.max(6, (seg - ns + 1) * 6);
+  if(winKey === 'custom')                  return Math.max(6, (seg - ns + 1) * 6);
+  return 24;                                // today／past：官方 24h 定義
+}
+
 function _withEst(a){
   if(!a) return a;
   const t = _alertTown(a);
@@ -5887,8 +5899,8 @@ function _withEst(a){
   const t_etr = calcEtr2AtSeg(t, useSeg, qpfField);
   if(t_etr != null && isFinite(t_etr)) etr2Now = Math.round(t_etr*10)/10;
 
-  // 未來24h QPF：以選取時段之後起算（與 ETR2 基準時刻一致）
-  const q24 = _fcQpfFromSeg(t, useSeg, 24);
+  // 預測 QPF：視窗時數依選取時段決定（見 _estWindowHours），與 ETR2 基準時刻一致
+  const q24 = _fcQpfFromSeg(t, useSeg, _estWindowHours(useSeg));
   const qn  = _fcQpfNight(t);
   const e = _slopeEstJS(etr2Now, alert, q24, qn);
   if(e.pct == null) return Object.assign({}, a, {est_src:'backend'});

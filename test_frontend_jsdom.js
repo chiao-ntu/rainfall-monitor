@@ -1374,6 +1374,61 @@ console.log('\n=== 前瞻功能已移除 ===');
   chk('無殘留「前瞻提醒」字樣', /前瞻提醒/.test(html), false);
 }
 
+
+// ════════ 25. 警戒「清單成員」必須隨時段變動（不只數值）════════
+console.log('\n=== 土石流／大崩清單成員隨時段變動 ===');
+if (need('_debrisHits') && need('_estWindowHours') && need('_lsRows')) {
+  // 雨落在 seg5：未來6h(seg2)看不到、12h(seg3)之後才看得到
+  setLex(`TMAP['南投縣仁愛鄉']={county:'南投縣',township:'仁愛鄉',alert_val:700,etr2_alert:700,
+      etr2:70,etr2_pct:0.1,daily_rain:Array(15).fill(0),
+      qpf_best:[0,0,0,0,0,600].concat(Array(58).fill(0)),
+      qpf_ecmwf:[0,0,0,0,0,600].concat(Array(58).fill(0)),
+      qpf_lo:Array(64).fill(0),
+      obs_1h_p48:Array(48).fill(0),qpf_1h_p48:Array(48).fill(0),qpf_1h:Array(96).fill(0)};
+    {const d=new Date(); d.setHours(0,0,0,0); BASE_TIME=d;}
+    forecastModel='ecmwf'; _userFactorOn=false;_biasApplyOn=false;_scnOn=false;_scnDays={};
+    window.DEBRIS_ALERTS={'投縣DF001':{county:'南投縣',town:'仁愛鄉',vill:'',
+      alert:300,etr2:70,off_level:'',pct:0.23}};
+    window.LANDSLIDE_ALERTS={'投縣LL001':{county:'南投縣',town:'仁愛鄉',village:'',
+      alert:300,etr2:70,off_level:'',pct:0.23}};`);
+  const ns = G._nowSeg();
+  const counts = [];
+  for(let n=1; n<=4; n++){
+    const seg = ns + n - 1;
+    setLex(`winKey='fut6_${n}'; segFrom=${seg}; segTo=${seg};`);
+    const c = G._debrisHits().length, l = G._lsRows(true).length;
+    counts.push(c);
+    console.log(`   fut6_${n}(seg${seg}) 視窗${G._estWindowHours(seg)}h → 土石流 ${c} 條、大崩 ${l} 處`);
+    if(c !== l) fails.push(`同一鄉鎮的土石流(${c})與大崩(${l})判定不一致`);
+  }
+  // ★ 關鍵：前後段的清單成員必須不同（雨在 seg5，未來6h內不該達標）
+  if (counts[0] === counts[counts.length-1]) {
+    fails.push(`清單成員未隨時段變動（各段皆 ${counts[0]} 條）`);
+  } else console.log('  OK  清單成員隨時段變動（不再全時段相同）');
+  chk('未來6h內無雨 → 0 條', counts[0], 0);
+  chk('未來12h起 → 有達標', counts[1] > 0, true);
+
+  // 視窗時數：未來段依段距遞增，today 仍用官方 24h
+  chk('fut6_1 視窗 6h', G._estWindowHours(ns), 6);
+  chk('fut6_4 視窗 24h', G._estWindowHours(ns+3), 24);
+  setLex("winKey='today'; segFrom=0; segTo=3;");
+  chk('today 維持官方 24h 定義', G._estWindowHours(3), 24);
+
+  // 模式連動（弱降雨全 0 → 應無達標）
+  setLex("forecastModel='lo';");
+  chk('切弱降雨 → 0 條', G._debrisHits().length, 0);
+  setLex("forecastModel='ecmwf';");
+
+  // 情境連動
+  const before = G._debrisHits().length;
+  setLex("_scnOn=true; _scnDays={0:{model:'lo',g:{}},1:{model:'lo',g:{}}};");
+  const after = G._debrisHits().length;
+  setLex("_scnOn=false; _scnDays={};");
+  console.log(`   情境改用弱降雨：${before} → ${after} 條`);
+  if (after >= before && before > 0) fails.push('清單成員未隨情境變動');
+  else console.log('  OK  清單成員隨情境變動');
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);
