@@ -1291,6 +1291,90 @@ if (need('_etr2NowRow') && need('_etr2NowLabel')) {
   chk('站別彈窗標示為主排程值', /本站ETR2% \$\{[^}]*\}%（主排程值）/.test(html), true);
 }
 
+
+// ════════ 24. 未來 6h/12h 前瞻提醒 ════════
+console.log('\n=== 前瞻提醒（未來6/12h可能達標）===');
+if (need('_lookaheadEtr') && need('_segAfterHours') && need('_etrPctAfter')) {
+  // 造兩個鄉鎮：A 現在低但未來會衝高；B 全程低
+  setLex(`TMAP['南投縣仁愛鄉']={county:'南投縣',township:'仁愛鄉',alert_val:700,etr2_alert:700,
+      etr2:70,etr2_pct:0.1,daily_rain:Array(15).fill(0),
+      qpf_best:[0,0,0,600].concat(Array(60).fill(0)),
+      qpf_ecmwf:[0,0,0,600].concat(Array(60).fill(0)),
+      obs_1h_p48:Array(48).fill(0),qpf_1h_p48:Array(48).fill(0),qpf_1h:Array(96).fill(0)};
+    TMAP['南投縣南投市']={county:'南投縣',township:'南投市',alert_val:0};
+    {const d=new Date(); d.setHours(0,0,0,0); BASE_TIME=d;}
+    forecastModel='ecmwf'; _userFactorOn=false;_biasApplyOn=false;_scnOn=false;_scnDays={};
+    winKey='today';segFrom=0;segTo=3;mode='rain';
+    // ★ TOWNSHIPS 是 const，不可指派（第五次踩到詞法綁定）。
+    //   改為就地修改陣列內容：清空後放入測試鄉鎮。
+    TOWNSHIPS.length = 0;
+    TOWNSHIPS.push(TMAP['南投縣仁愛鄉'], TMAP['南投縣南投市']);`);
+
+  console.log(`   _segAfterHours(6)=${G._segAfterHours(6)}　(12)=${G._segAfterHours(12)}`);
+  if (!(G._segAfterHours(12) > G._segAfterHours(6))) fails.push('12h 的段須晚於 6h');
+  else console.log('  OK  12h 段晚於 6h 段');
+
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+  const p6 = G._etrPctAfter(t, 6), p12 = G._etrPctAfter(t, 12);
+  console.log(`   仁愛鄉：現在 10%　6h ${p6}%　12h ${p12}%`);
+  // ★ 12h 不必然大於 6h：雨停後 ETR2 依官方 0.7 日折減下降，這是正確行為。
+  //   此處只驗「兩個時距都算得出值，且都遠高於現在的 10%」。
+  console.log(`   （雨停後 ETR2 依 0.7 日折減下降，故 12h 可低於 6h）`);
+  if (!(p6 != null && p12 != null)) fails.push('6h/12h ETR2% 應皆可計算');
+  else if (!(p6 > 10 && p12 > 10)) fails.push('未來 ETR2% 應高於現在的 10%');
+  else console.log('  OK  6h/12h ETR2% 皆反映未來降雨');
+
+  const look = G._lookaheadEtr(70);
+  console.log(`   前瞻清單 ${look.length} 筆：${look.map(r=>`${r.town}(${r.firstH}h)`).join('、')}`);
+  chk('僅列出會達標者（南投市無警戒值應排除）', look.map(r=>r.town), ['仁愛鄉']);
+  // 6h 已達 95% → firstH 應為 6（最早達標時距）
+  chk('標記最早達標時距', look[0] && look[0].firstH, 6);
+
+  // ★ 已達標者不得重複出現在前瞻清單
+  setLex("TMAP['南投縣仁愛鄉'].etr2 = 700;");   // 現在就 100%
+  const look2 = G._lookaheadEtr(70);
+  chk('已達標者不重複列入前瞻', look2.length, 0);
+  setLex("TMAP['南投縣仁愛鄉'].etr2 = 70;");
+
+  // HTML 產出
+  const html = G._lookaheadHtml(look);
+  chk('前瞻區塊含標題', /前瞻提醒/.test(html), true);
+  chk('前瞻區塊標明非官方值', /非官方發布值/.test(html), true);
+  chk('空清單不產生區塊', G._lookaheadHtml([]), '');
+}
+
+if (need('_lookaheadAlerts') && need('_lookaheadAlertHtml')) {
+  // 土石流：現在未達、未來會達紅
+  // ★ 前瞻以「現在」為基準（不隨選取時段跳動）：
+  //   現在(seg0)無雨→未達；雨落在 seg3（+6~12h）→ 6h/12h 會達 → 應列入前瞻。
+  setLex(`TMAP['南投縣仁愛鄉'].qpf_ecmwf = [0,0,0,600].concat(Array(60).fill(0));
+          TMAP['南投縣仁愛鄉'].qpf_best  = [0,0,0,600].concat(Array(60).fill(0));
+          {const d=new Date(); d.setHours(0,0,0,0); BASE_TIME=d;}
+          winKey='today'; segFrom=0; segTo=3;`);
+  const entries = [['投縣DF001', {county:'南投縣', town:'仁愛鄉', alert:300, etr2:70, off_level:''}]];
+  const rows = G._lookaheadAlerts(entries);
+  console.log(`   土石流前瞻 ${rows.length} 筆` +
+    (rows.length ? `：${rows[0].id} ${rows[0].firstH}h內可能達${rows[0].lv==='red'?'紅':'黃'}` : ''));
+  if (!rows.length) fails.push('土石流前瞻未偵測到未來達標');
+  else {
+    console.log('  OK  土石流前瞻偵測到未來達標');
+    chk('標明達標等級', ['red','yellow'].includes(rows[0].lv), true);
+  }
+  // 已發布官方警戒者不得列入
+  const entries2 = [['投縣DF002', {county:'南投縣', town:'仁愛鄉', alert:300, etr2:70, off_level:'r'}]];
+  chk('官方已發布者不列入前瞻', G._lookaheadAlerts(entries2).length, 0);
+  // ★ 前瞻結果不得因切換檢視時段而改變（以「現在」為基準）
+  setLex("segTo = 1;");
+  const rowsA = G._lookaheadAlerts(entries).length;
+  setLex("segTo = 3;");
+  const rowsB = G._lookaheadAlerts(entries).length;
+  chk('前瞻不隨選取時段改變', rowsA, rowsB);
+
+  const h = G._lookaheadAlertHtml(rows, '條');
+  chk('土石流前瞻區塊標明非官方值', /非官方發布值/.test(h), true);
+  chk('空清單不產生區塊', G._lookaheadAlertHtml([], '條'), '');
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

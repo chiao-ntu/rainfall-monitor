@@ -819,6 +819,133 @@ function _etrHistHtml(curSet){
   return h;
 }
 
+// ══════════════════════════════════════════════════════════
+//  未來 6h／12h 預警（前瞻提醒）
+//  ★ 依「使用者當前選取的模式／情境／倍率」推算——與面板其他數字同源，
+//    一律經 calcEtr2AtSeg（唯一權威），不另立公式。
+//  ★ 時間基準：以「現在」為起點往後推 6h／12h（≠ 選取視窗），
+//    因為這是「接下來會不會出事」的提醒，不隨檢視時段跳動。
+// ══════════════════════════════════════════════════════════
+const LOOKAHEAD_HOURS = [6, 12];
+// 由現在起 +h 小時所落在的段（段長 6h，向上取整＝該時刻已完成的段）
+function _segAfterHours(h){
+  const nowH = (typeof _nowHourClamped === 'function') ? _nowHourClamped()
+             : Math.max(0, Math.min(23.999, (Date.now()-SEG_EPOCH().getTime())/36e5));
+  return Math.min(63, Math.ceil((nowH + h) / 6) - 1);
+}
+// 某鄉鎮在未來 h 小時後的 ETR2%（依當前模式／情境／倍率）
+function _etrPctAfter(t, h){
+  if(!t || !(t.alert_val > 0)) return null;
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const e = calcEtr2AtSeg(t, _segAfterHours(h), qpfField);
+  const den = _etrDen(t);
+  return (e == null || !den) ? null : Math.round(e / den * 100);
+}
+// 產出「現在未達門檻、但未來 6h/12h 會達」的清單
+//   thPct：門檻百分比（ETR2%警戒用 70）
+//   回傳 [{t, county, town, nowPct, h6, h12, firstH}]，依最早達標時間與嚴重度排序
+function _lookaheadEtr(thPct){
+  const out = [];
+  // ★ 以「現在」為基準（非選取時段）——與土石流／大崩前瞻一致。
+  const nowSeg = _nowSeg();
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  TOWNSHIPS.forEach(t=>{
+    if(!t.alert_val || t.alert_val <= 0) return;
+    const den = _etrDen(t);
+    if(!den) return;
+    const nowPct = Math.round(calcEtr2AtSeg(t, nowSeg, qpfField) / den * 100);
+    if(nowPct >= thPct) return;                    // 已達標者由主清單呈現，不重複
+    const h6 = _etrPctAfter(t, 6), h12 = _etrPctAfter(t, 12);
+    const firstH = (h6 != null && h6 >= thPct) ? 6
+                 : (h12 != null && h12 >= thPct) ? 12 : null;
+    if(firstH == null) return;
+    out.push({t, county:t.county, town:t.township, nowPct, h6, h12, firstH});
+  });
+  return out.sort((a,b)=> (a.firstH - b.firstH)
+    || (Math.max(b.h6||0, b.h12||0) - Math.max(a.h6||0, a.h12||0)));
+}
+// 土石流／大崩的前瞻：現在未達警戒級別，但未來 6/12h 依技術指引門檻可能發布
+//   alerts：DEBRIS_ALERTS 或 LANDSLIDE_ALERTS 的值陣列（含 county/town/alert）
+//   回傳 [{county, town, id, nowRank, h6, h12, firstH, lv6, lv12}]
+function _lookaheadAlerts(entries){
+  const out = [];
+  const nowSeg = _nowSeg();
+  const qf0 = MODEL_FIELD[forecastModel] || 'qpf_best';
+  entries.forEach(([no, a0])=>{
+    const a = a0;
+    // ★ 前瞻一律以「現在」為基準，不用 _withEst（它吃選取時段）。
+    //   理由：這是「接下來會不會出事」的預警，不該隨使用者檢視哪一段而跳動；
+    //   若用選取時段，選「今天」時主清單的推估已看到日末，前瞻會恆為空。
+    //   排除條件也改用「現在」：官方已發布、或現在就已達門檻者不重複列入。
+    const t = _alertTown(a);
+    if(!t) return;
+    const den = a.alert_adj ?? a.alert;
+    if(!den || den <= 0) return;
+    if(a.off_level === 'r' || a.off_level === 'y') return;   // 官方已發布
+    // ★ 排除條件只看「現在的實際有效累積雨量是否已達警戒值」，
+    //   **不可**用 est_red_fc／est_yellow_now：那兩個本身就含「＋未來24h QPF」，
+    //   會把 6/12h 內才達標的案例全部吃掉，導致前瞻清單恆為空。
+    const eNow = calcEtr2AtSeg(t, nowSeg, qf0);
+    if(eNow != null && isFinite(eNow) && eNow >= den) return;  // 現在實際已達 → 非「前瞻」
+    const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+    const res = {};
+    LOOKAHEAD_HOURS.forEach(h=>{
+      const sg = _segAfterHours(h);
+      const e  = calcEtr2AtSeg(t, sg, qpfField);
+      if(e == null || !isFinite(e)) { res['h'+h] = null; return; }
+      // 依技術指引：黃＝達門檻比例且加預測超過警戒值；紅＝有效累積雨量達警戒值
+      const q24 = _fcQpfFromSeg(t, sg, 24) || 0;
+      const est = _slopeEstJS(e, den, q24, null);
+      res['h'+h]  = Math.round(e / den * 100);
+      res['lv'+h] = est.est_red_fc ? 'red' : (est.est_yellow_now ? 'yellow' : null);
+    });
+    const firstH = res.lv6 ? 6 : (res.lv12 ? 12 : null);
+    if(firstH == null) return;
+    out.push({county:a.county||'', town:a.town||'', id:no,
+              h6:res.h6, h12:res.h12, lv6:res.lv6, lv12:res.lv12, firstH,
+              lv: firstH === 6 ? res.lv6 : res.lv12});
+  });
+  return out.sort((a,b)=> (a.firstH - b.firstH)
+    || ((b.lv === 'red' ? 1 : 0) - (a.lv === 'red' ? 1 : 0))
+    || (Math.max(b.h6||0, b.h12||0) - Math.max(a.h6||0, a.h12||0)));
+}
+// 土石流／大崩前瞻區塊 HTML
+function _lookaheadAlertHtml(rows, unit){
+  if(!rows.length) return '';
+  const items = rows.map(r=>({
+    county:r.county, town:r.town, id:r.id,
+    rank:(24 - r.firstH) * 1000 + (r.lv === 'red' ? 500 : 0) + Math.max(r.h6||0, r.h12||0),
+    tag:`${r.firstH}h內可能達${r.lv === 'red' ? '紅' : '黃'}`,
+    tagCol: r.lv === 'red' ? '#ff8833' : '#e8c84a',
+    detail:`ETR2% 預估　6h ${r.h6 ?? '—'}%　12h ${r.h12 ?? '—'}%`,
+  }));
+  return `<div style="margin-top:5px;border-top:1px dashed #4a3a2a;padding-top:4px">
+      <div style="font-size:10px;font-weight:700;color:#ff9a4a">
+        ⏱ 前瞻提醒：未來 6/12h 可能發布警戒（${rows.length} ${unit}）</div>
+      <div style="font-size:9px;color:#8a7a6a;margin-bottom:2px">
+        依目前模式／情境推算之技術指引門檻，非官方發布值</div>
+    </div>` + _alertListHtml(items);
+}
+
+// 前瞻區塊的 HTML（分署→縣市→鄉鎮，與主清單同版式）
+function _lookaheadHtml(rows, opt){
+  if(!rows.length) return '';
+  const o = opt || {};
+  const items = rows.map(r=>({
+    county:r.county, town:r.town, id:r.town,
+    rank:(24 - r.firstH) * 1000 + Math.max(r.h6||0, r.h12||0),
+    tag:`${r.firstH}h內`, tagCol: r.firstH === 6 ? '#ff9a4a' : '#e8c84a',
+    detail: o.detail ? o.detail(r)
+          : `現在 ${r.nowPct}% → 6h ${r.h6 ?? '—'}%、12h ${r.h12 ?? '—'}%`,
+  }));
+  return `<div style="margin-top:5px;border-top:1px dashed #2a4a6a;padding-top:4px">
+      <div style="font-size:10px;font-weight:700;color:#ff9a4a">
+        ⏱ 前瞻提醒：未來 6/12h 可能達標（${rows.length}）</div>
+      <div style="font-size:9px;color:#7a8a9a;margin-bottom:2px">
+        依目前模式／情境推算，非官方發布值</div>
+    </div>` + _alertListHtml(items);
+}
+
 function updateEtrAlertPanel(){
   const body = document.getElementById('etr-panel-body');
   if(!body) return;
@@ -850,9 +977,12 @@ function updateEtrAlertPanel(){
   const curSet = new Set();
   Object.values(byDistrict).forEach(cMap=>Object.entries(cMap).forEach(([c,items])=>items.forEach(x=>curSet.add(c+'|'+x.township))));
 
+  // 前瞻提醒：現在未達 70%、但未來 6/12h 可能達標者
+  const _look = _lookaheadEtr(70);
+
   if(!Object.keys(byDistrict).length){
     body.innerHTML = '<div style="color:#3a6080;font-size:10px;padding:4px 0">目前無達70%以上</div>'
-      + _etrHistHtml(curSet);
+      + _lookaheadHtml(_look) + _etrHistHtml(curSet);
     _prevEtrSet = curSet;
     return;
   }
@@ -888,7 +1018,7 @@ function updateEtrAlertPanel(){
     });
     h += '</div>';
   });
-  body.innerHTML = h + _etrHistHtml(curSet);
+  body.innerHTML = h + _lookaheadHtml(_look) + _etrHistHtml(curSet);
   _prevEtrSet = curSet;
 }
 function toggleSidebar(){
@@ -5706,6 +5836,8 @@ function updateDebrisPanel(){
         (d.vill ? `　${d.vill}` : '') + (d.station ? `　站 ${d.station}` : ''),
     };
   }), '🔴🟡＝水保署已發布之警戒；◈＝系統推估；△＝接近警戒。點鄉鎮名可定位。');
+  // 前瞻提醒：現在未達級別、未來 6/12h 可能發布
+  h += _lookaheadAlertHtml(_lookaheadAlerts(Object.entries(window.DEBRIS_ALERTS || {})), '條');
   body.innerHTML = h;
 }
 // ══════════════════════════════════════════════════════════
@@ -5971,6 +6103,7 @@ function updateLandslidePanel(){
     };
   }), '官方標示者為水保署已發布之警戒；「推估」為系統依技術指引門檻研判。' +
       '標 ※ 者 ETR2 非取自代表站精確值。點鄉鎮名可定位。');
+  h += _lookaheadAlertHtml(_lookaheadAlerts(Object.entries(window.LANDSLIDE_ALERTS || {})), '處');
   body.innerHTML = h;
 }
 function copyLandslidePanel(btn){
