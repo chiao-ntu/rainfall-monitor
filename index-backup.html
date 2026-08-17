@@ -766,7 +766,8 @@ function _panelSeg(){
   if(winKey === 'today') return 3;
   if(winKey.startsWith('past')){ const n=parseInt(winKey.slice(4)); return -(n*4+1); }
   if(winKey.startsWith('day')){ const n=parseInt(winKey.slice(3)); return (n-1)*4+3; }
-  if(winKey.startsWith('fut6_')){ const n=parseInt(winKey.slice(5)); return Math.floor(BASE_TIME.getHours()/6)+(n-1); }
+  // ★ 與 buildFuture6hBtns 的起點一致（皆用 _nowSeg），否則按鈕文字與取值段錯開
+  if(winKey.startsWith('fut6_')){ const n=parseInt(winKey.slice(5)); return _nowSeg()+(n-1); }
   if(winKey === 'custom') return segTo;
   return 3;
 }
@@ -818,6 +819,17 @@ function _etrHistHtml(curSet){
   h += '</div>';
   return h;
 }
+
+// 由現在起 +h 小時所落在的段（段長 6h，向上取整＝該時刻已完成的段）
+// 某鄉鎮在未來 h 小時後的 ETR2%（依當前模式／情境／倍率）
+// 產出「現在未達門檻、但未來 6h/12h 會達」的清單
+//   thPct：門檻百分比（ETR2%警戒用 70）
+//   回傳 [{t, county, town, nowPct, h6, h12, firstH}]，依最早達標時間與嚴重度排序
+//   alerts：DEBRIS_ALERTS 或 LANDSLIDE_ALERTS 的值陣列（含 county/town/alert）
+//   回傳 [{county, town, id, nowRank, h6, h12, firstH, lv6, lv12}]
+// 土石流／大崩前瞻區塊 HTML
+
+// 前瞻區塊的 HTML（分署→縣市→鄉鎮，與主清單同版式）
 
 function updateEtrAlertPanel(){
   const body = document.getElementById('etr-panel-body');
@@ -2297,7 +2309,8 @@ function updateInfo(t){
   document.getElementById('sec-obs').style.display = 'block';
   if(winKey === 'today'){
     const obsToday = (t.daily_rain && t.daily_rain[0]) || 0;
-    const currentSeg2 = Math.floor(BASE_TIME.getHours() / 6);
+    // ★ 「今日預測補足」＝自現在所在段起到今日結束（用 _nowSeg，非 BASE_TIME）
+    const currentSeg2 = _nowSeg();
     const qpfField2 = MODEL_FIELD[forecastModel] || 'qpf_best';
     const qpfArr2 = getQpfArr(t, qpfField2);
     let futureQpf2 = 0;
@@ -3210,14 +3223,9 @@ function setModel(m){
   const el=document.getElementById(btnMap[m]); if(el) el.classList.add('on');
   const note = document.getElementById('model-src-note');
   if(note) note.textContent = MODEL_NOTE[m] || '';
-  withTransition(()=>{
-    hideNoData();
-    renderLayer();
-    renderLegend();
-    if(selected) updateInfo(selected);
-    try{ updateAllDistrictCharts(); }catch(e){}  // 摘要+分署圖跟隨模式切換
-    try{ _redrawZoom(); }catch(e){}              // 放大圖同步重繪
-  });
+  // ★ 同 setWin：切模式後左側四面板與警戒圖層也要依新模式重算
+  hideNoData();
+  _refreshAfterFactorChange();
 }
 
 function setMode(m){
@@ -3278,7 +3286,9 @@ function setWin(key){
   } else if(key.startsWith('fut6_')){
     const n = parseInt(key.slice(5));  // 1~8，代表未來第n個6h段
     // seg 為日曆日對齊（seg 0=今天00-06），未來時段需從「現在所在的6h段」起算
-    const currentSeg = Math.floor(BASE_TIME.getHours() / 6);
+    // ★ 必須與 buildFuture6hBtns／_panelSeg 用同一個起點（_nowSeg），三者不一致
+    //   會導致「按鈕寫的時段」與「實際取值的段」錯開。
+    const currentSeg = _nowSeg();
     segFrom = currentSeg + (n-1); segTo = currentSeg + (n-1);
     const btn=document.getElementById('bfut6_'+n); if(btn) btn.classList.add('on');
     updateModelRowVisibility(true);
@@ -3295,13 +3305,14 @@ function setWin(key){
     updateModelRowVisibility(false);   // 雷達不分模式
   }
 
-  withTransition(()=>{
-    hideNoData();
-    renderLayer(); renderLegend();
-    if(selected) updateInfo(selected);
-    try{ _redrawZoom(); }catch(e){}
-  });
-  setTimeout(()=>updateAllDistrictCharts(), 150);
+  // ★ 切換時間視窗後，左側四個面板（ETR2%警戒／二次災害／土石流／大崩）
+  //   與兩個警戒圖層都必須依新時段重算。
+  //   舊版只做 renderLayer/renderLegend，於是土石流與大崩永遠停在切換前的結果，
+  //   看起來像「不隨設定變動」——實際上計算是對的，只是沒被重繪。
+  //   直接沿用 _refreshAfterFactorChange（它已涵蓋全部面板與圖層，且有 _safeCall
+  //   逐一報錯），避免這裡再維護一份會漏掉的清單。
+  hideNoData();
+  _refreshAfterFactorChange();
 }
 
 function updateModelRowVisibility(show){
@@ -3368,7 +3379,11 @@ function buildFuture6hBtns(){
   if(!c) return;
   c.innerHTML = '';
   ALL_DYNAMIC_BTN_IDS = ALL_DYNAMIC_BTN_IDS.filter(id=>!id.startsWith('bfut6_'));
-  const curSeg = Math.floor(BASE_TIME.getHours() / 6);
+  // ★ 起點以「現在」決定，而非 BASE_TIME（資料基準時間）。
+  //   BASE_TIME 是 6h 排程的整點，資料跑了幾小時後 BASE_TIME 仍停在舊段，
+  //   第一顆按鈕會是「已經過去的那一段」（例：資料 18:00、現在 23:00 →
+  //   第一顆是 18-24時，其中 5 小時已成過去）。改用 _nowSeg() 起算才是真「未來」。
+  const curSeg = _nowSeg();
   for(let n=1; n<=8; n++){
     const btn = document.createElement('button');
     btn.className = 'b';
@@ -5342,6 +5357,39 @@ function _eachDistrict(by, rankOf, fn){
 //   HTML：【分署】→ 縣市 → 鄉鎮（粗體可點擊定位）→ 該鎮各編號逐列明細
 //   文字：【分署】換行，縣市：鄉鎮（編號、編號）、鄉鎮（編號）…
 //   items: [{county, town, id, rank, tag, tagCol, detail}]
+// 警戒清單的趨勢資訊：相較「前一段」的 ETR2% 變化與達標數增減。
+//   ★ 隨選取時段／模式／情境變動——因為它一律走 calcEtr2AtSeg（唯一權威）。
+//   prevMap：{縣市鄉鎮: 前一段的達標數}，由呼叫端以同一套判定算出。
+function _alertTrend(a, prevMap){
+  const t = _alertTown(a);
+  const den = a.alert_adj ?? a.alert;
+  const out = {arrow:'', prevCount: null, pct:null, prevPct:null};
+  if(prevMap) out.prevCount = prevMap[(a.county||'') + (a.town||'')] ?? null;
+  if(!t || !den) return out;
+  const qf = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const seg = (typeof segTo === 'number') ? segTo : _nowSeg();
+  const cur = calcEtr2AtSeg(t, seg, qf);
+  const prv = calcEtr2AtSeg(t, seg - 1, qf);
+  if(cur == null || prv == null || !isFinite(cur) || !isFinite(prv)) return out;
+  out.pct = Math.round(cur / den * 100);
+  out.prevPct = Math.round(prv / den * 100);
+  const d = out.pct - out.prevPct;
+  // 與 ETR2%警戒面板一致：上升紅▲、下降綠▼、持平不顯示
+  if(d > 0) out.arrow = `<span style="color:#ff5544;font-size:9px" title="較前一時段 +${d}%">▲${d}%</span>`;
+  else if(d < 0) out.arrow = `<span style="color:#44dd88;font-size:9px" title="較前一時段 ${d}%">▼${-d}%</span>`;
+  return out;
+}
+// 算出「前一段」各鄉鎮的達標數，供增減比較
+function _prevCountMap(entries, judge){
+  const m = {};
+  entries.forEach(([no, a0])=>{
+    if(!judge(a0)) return;
+    const k = (a0.county||'') + (a0.town||'');
+    m[k] = (m[k] || 0) + 1;
+  });
+  return m;
+}
+
 function _alertListHtml(items, footer){
   let h = '';
   _eachDistrict(_groupByDistrict(items), x=>x.rank, (d, dcol, cMap, counties)=>{
@@ -5356,8 +5404,16 @@ function _alertListHtml(items, footer){
       ).forEach(town=>{
         const list = byTown[town].sort((a,b)=>b.rank-a.rank);
         const tcol = list[0].tagCol || '#e8c8a8';
+        // 鄉鎮列：達標數 ＋ 相較前期的增減 ＋ ETR2% 趨勢箭頭（與 ETR2%警戒面板同概念）
+        const tr = list[0].trend || {};
+        const dN = (tr.prevCount != null) ? (list.length - tr.prevCount) : null;
+        const dTag = (dN == null || dN === 0) ? ''
+          : `<span style="color:${dN>0?'#ff7a5a':'#7ae8a8'};font-size:9px">
+              ${dN>0?'▲+':'▼'}${Math.abs(dN)}</span>`;
         h += `<div style="padding:1px 0 0 8px;font-size:10px">
-          ${_zoomSpan(county, town, town, tcol)}</div>`;
+          ${_zoomSpan(county, town, town, tcol)}
+          <span style="color:#7a8a9a;font-size:9px">${list.length}</span>${dTag}
+          ${tr.arrow || ''}</div>`;
         list.forEach(x=>{
           h += `<div style="padding:0 0 1px 16px;font-size:10px;color:#d8c8b8;line-height:1.45">
             <span style="color:${x.tagCol};font-weight:700">${x.id}</span>
@@ -5691,18 +5747,33 @@ function updateDebrisPanel(){
     h += '<div style="color:#8a7a6a;font-size:10px">目前無達警戒或接近警戒之潛勢溪流</div>';
     body.innerHTML = h; return;
   }
+  // 前一段的達標數（用同一套判定），供鄉鎮列顯示增減
+  const _prevSeg = (typeof segTo === 'number' ? segTo : _nowSeg()) - 1;
+  const _prevMap = _prevCountMap(Object.entries(window.DEBRIS_ALERTS || {}), a0=>{
+    const t0 = _alertTown(a0), den0 = a0.alert_adj ?? a0.alert;
+    if(!t0 || !den0) return false;
+    const e0 = calcEtr2AtSeg(t0, _prevSeg, MODEL_FIELD[forecastModel] || 'qpf_best');
+    if(e0 == null || !isFinite(e0)) return false;
+    const q0 = _fcQpfFromSeg(t0, _prevSeg, 24) || 0;
+    const s0 = _slopeEstJS(e0, den0, q0, null);
+    return !!(a0.off_level === 'r' || a0.off_level === 'y' || s0.est_red_fc || s0.est_yellow_now);
+  });
   h += _alertListHtml(hits.map(({no,d})=>{
     const stl = _alertStyleOf(d);
     const den = d.alert_adj ?? d.alert;
     const tag = d.off_level==='r' ? '🔴' : d.off_level==='y' ? '🟡'
               : (d.est_red_fc || d.est_yellow_now) ? '◈' : '△';
+    const tr = _alertTrend(d, _prevMap);
     return {
       county: d.county||'', town: d.town||'', id: no,
       rank: _alertRank(d)*1000 + (d.pct||0)*100,
-      tag: `${tag}${stl.tag}`, tagCol: stl.color,
-      detail: `ETR2 ${d.etr2_est ?? d.etr2 ?? '—'}/${den ?? '—'}mm（${((d.pct||0)*100).toFixed(0)}%）` +
+      tag: `${tag}${stl.tag}`, tagCol: stl.color, trend: tr,
+      detail: `ETR2 ${d.etr2_est ?? d.etr2 ?? '—'}/${den ?? '—'}mm` +
+        `（${tr.prevPct != null ? tr.prevPct + '%→' : ''}<b>${((d.pct||0)*100).toFixed(0)}%</b>）` +
         (d.adj_level ? `　▼${d.adj_mm}` : '') +
-        `　預測 ${d.fc_etr2 ?? '—'}mm（QPF ${d.qpf24 ?? '—'}）` +
+        `　預測ETR2 ${d.fc_etr2 ?? '—'}mm` +
+        (den && d.fc_etr2 != null ? `（${Math.round(d.fc_etr2/den*100)}%）` : '') +
+        `　QPF ${d.qpf24 ?? '—'}mm` +
         (d.vill ? `　${d.vill}` : '') + (d.station ? `　站 ${d.station}` : ''),
     };
   }), '🔴🟡＝水保署已發布之警戒；◈＝系統推估；△＝接近警戒。點鄉鎮名可定位。');
@@ -5794,6 +5865,18 @@ function _alertTown(a){
 }
 // 合併：官方現況欄位不動，est_* / fc_* 以前端重算值覆寫
 //   recalc=false（或找不到鄉鎮）時回傳後端原值，並標記 est_src
+// 推估的「預測視窗」時數：依選取的時間視窗決定，讓清單成員隨時段變動。
+//   ★ 為什麼必要：est_red_fc 的定義是「ETR2 ＋未來24h QPF ≥ 警戒值」，
+//     固定 24h 的話不論選哪一段都看到同一批雨，清單成員永遠不變（與時段脫鉤）。
+//     故未來段一律只看「該段結束為止」的雨；今天/過去仍用官方 24h 定義。
+function _estWindowHours(seg){
+  const ns = _nowSeg();
+  if(winKey && winKey.startsWith('fut6_')) return Math.max(6, (seg - ns + 1) * 6);
+  if(winKey && winKey.startsWith('day'))   return Math.max(6, (seg - ns + 1) * 6);
+  if(winKey === 'custom')                  return Math.max(6, (seg - ns + 1) * 6);
+  return 24;                                // today／past：官方 24h 定義
+}
+
 function _withEst(a){
   if(!a) return a;
   const t = _alertTown(a);
@@ -5812,8 +5895,8 @@ function _withEst(a){
   const t_etr = calcEtr2AtSeg(t, useSeg, qpfField);
   if(t_etr != null && isFinite(t_etr)) etr2Now = Math.round(t_etr*10)/10;
 
-  // 未來24h QPF：以選取時段之後起算（與 ETR2 基準時刻一致）
-  const q24 = _fcQpfFromSeg(t, useSeg, 24);
+  // 預測 QPF：視窗時數依選取時段決定（見 _estWindowHours），與 ETR2 基準時刻一致
+  const q24 = _fcQpfFromSeg(t, useSeg, _estWindowHours(useSeg));
   const qn  = _fcQpfNight(t);
   const e = _slopeEstJS(etr2Now, alert, q24, qn);
   if(e.pct == null) return Object.assign({}, a, {est_src:'backend'});
@@ -5955,15 +6038,29 @@ function updateLandslidePanel(){
     h += `<div style="font-size:10px;color:#8a9a7a;padding:3px 0">目前無警戒區達警戒級別</div>`;
     body.innerHTML = h; return;
   }
+  const _prevSegL = (typeof segTo === 'number' ? segTo : _nowSeg()) - 1;
+  const _prevMapL = _prevCountMap(Object.entries(window.LANDSLIDE_ALERTS || {}), a0=>{
+    const t0 = _alertTown(a0), den0 = a0.alert_adj ?? a0.alert;
+    if(!t0 || !den0) return false;
+    const e0 = calcEtr2AtSeg(t0, _prevSegL, MODEL_FIELD[forecastModel] || 'qpf_best');
+    if(e0 == null || !isFinite(e0)) return false;
+    const q0 = _fcQpfFromSeg(t0, _prevSegL, 24) || 0;
+    const s0 = _slopeEstJS(e0, den0, q0, null);
+    return !!(a0.off_level === 'r' || a0.off_level === 'y' || s0.est_red_fc || s0.est_yellow_now);
+  });
   h += _alertListHtml(rows.map(({no, a, i, st, pct})=>{
     const den = a.alert_adj || a.alert;
+    const tr = _alertTrend(a, _prevMapL);
     return {
       county: a.county||'', town: a.town||'', id: no,
       rank: st.rank*1000 + (pct ?? 0),
-      tag: st.tag, tagCol: st.col,
-      detail: `ETR2 ${a.etr2_est ?? a.etr2 ?? '—'}/${den ?? '—'}mm（${pct != null ? pct.toFixed(0)+'%' : '—'}）` +
+      tag: st.tag, tagCol: st.col, trend: tr,
+      detail: `ETR2 ${a.etr2_est ?? a.etr2 ?? '—'}/${den ?? '—'}mm` +
+        `（${tr.prevPct != null ? tr.prevPct + '%→' : ''}<b>${pct != null ? pct.toFixed(0)+'%' : '—'}</b>）` +
         (a.adj_level ? `　▼${a.adj_mm}` : '') +
-        `　預測 ${a.fc_etr2 ?? '—'}mm（QPF ${a.qpf24 ?? '—'}）` +
+        `　預測ETR2 ${a.fc_etr2 ?? '—'}mm` +
+        (den && a.fc_etr2 != null ? `（${Math.round(a.fc_etr2/den*100)}%）` : '') +
+        `　QPF ${a.qpf24 ?? '—'}mm` +
         (a.village ? `　${a.village}` : '') +
         ((i.Total_Res != null || i.Dw_count != null) ? `　保全${i.Total_Res ?? i.Dw_count}戶` : '') +
         (i.Risk ? `　風險${i.Risk}` : '') +
