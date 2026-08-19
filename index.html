@@ -95,7 +95,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <h1><a href="https://line.me/ti/p/HbFX9e8KFH" target="_blank" rel="noopener"
       style="color:inherit;text-decoration:none">台灣降雨監測系統</a></h1>
     <div class="sub"><a href="https://line.me/ti/p/HbFX9e8KFH" target="_blank" rel="noopener"
-      style="color:#5ad88a;text-decoration:none">臺大天災中心</a></div>
+      style="color:#5ad88a;text-decoration:none">臺大天災中心</a><span
+      style="color:#8aa8c0;font-weight:400">　林得恩　許博超　周貝珊</span></div>
   </div>
   <span class="tag time" id="base-tag"></span>
 </div>
@@ -139,7 +140,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
         style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
       <button class="b"    id="bTyphoon" onclick="toggleTyphoonLayer()"
-        style="border-color:#8a3a9a;color:#c88ae8">🌀 颱風動態</button>
+        style="border-color:#8a3a9a;color:#c88ae8">🌀 颱風/TD動態</button>
       <button class="b"    id="bDebris" onclick="toggleDebrisLayer()"
         style="border-color:#b06010;color:#ffa050">⛰ 土石流警戒</button>
       <button class="b"    id="bLandslide" onclick="toggleLandslideLayer()"
@@ -273,7 +274,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div id="lsb-ty-sec" style="display:flex;flex-direction:column;flex:0 0 auto;min-height:0;border-top:2px solid #4a2a5a;overflow:hidden">
       <div onclick="toggleLsbSection('typhoon')" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
         border-bottom:1px solid #4a2a5a;background:#1e0f2a;flex-shrink:0;cursor:pointer">
-        <span style="font-weight:700;color:#c88ae8;font-size:11px"><span id="lsb-typhoon-arrow">▸</span> 🌀 <span id="lsb-typhoon-title">颱風動態</span></span>
+        <span style="font-weight:700;color:#c88ae8;font-size:11px"><span id="lsb-typhoon-arrow">▸</span> 🌀 颱風/TD動態</span>
         <span style="display:flex;gap:4px;align-items:center">
           <button onclick="event.stopPropagation();copyTyphoonPanel(this)"
             style="font-size:9px;padding:1px 5px;background:#241030;color:#d0a8e8;border:1px solid #5a3a6a;border-radius:3px;cursor:pointer">複製</button>
@@ -5465,8 +5466,13 @@ function _zoomSpan(county, town, label, col){
 
 function _tyRows(){
   const out = [];
+  const now = Date.now();
   (window.TYPHOON_TRACK || []).forEach(ty=>{
     const c = ty.current || {};
+    // ★ 同警報單：颱風已消散後，最後一筆路徑資料仍會留在 data.json，
+    //   若不過濾，面板會持續顯示上一個颱風。以觀測時間判定新舊。
+    const tm = Date.parse(ty.time || c.time || '');
+    if(isFinite(tm) && (now - tm) > TY_WARN_MAX_AGE_H * 3600e3) return;
     out.push({ty, cur:c, fut:(ty.forecast||[])});
   });
   return out;
@@ -5476,7 +5482,30 @@ function _tyFmt(d){
   return `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ` +
          `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
-function _tyWarnList(){ return (window.TYPHOON_WARN || []); }
+// 有效的颱風警報單：濾掉過期資料。
+//   ★ 為什麼需要：data.json 每 6 小時更新，若颱風已遠離而 CWA 停止發布，
+//     最後一份警報單會一直留在檔案裡，面板便持續顯示上一個颱風的資訊，
+//     在下一個系統生成時極易誤判。
+//   判準（依序）：
+//     1. 警報單自帶 expires（官方失效時間）→ 已過即不顯示，最準確。
+//     2. 無 expires 時，以 effective（發布時間）距今超過 TY_WARN_MAX_AGE_H 小時者不顯示。
+//   時間解析失敗一律保留（寧可多顯示，不可因解析錯誤而漏掉有效警報）。
+const TY_WARN_MAX_AGE_H = 48;
+function _tyWarnList(){
+  const all = window.TYPHOON_WARN || [];
+  const now = Date.now();
+  return all.filter(w=>{
+    const exp = w && w.expires ? Date.parse(w.expires) : NaN;
+    if(isFinite(exp)) return exp >= now;              // 官方失效時間為準
+    const eff = w && w.effective ? Date.parse(w.effective) : NaN;
+    if(!isFinite(eff)) return true;                   // 無法判定 → 保留
+    return (now - eff) <= TY_WARN_MAX_AGE_H * 3600e3;
+  });
+}
+// 被濾掉的過期警報單數量（供介面說明，避免使用者以為資料遺失）
+function _tyWarnStale(){
+  return (window.TYPHOON_WARN || []).length - _tyWarnList().length;
+}
 
 // 四個警報時間：官方已發布者以警報單為準，未發布者用幾何推估（明確標示）
 function _tyAlertTimes(ty){
@@ -5529,32 +5558,7 @@ const TY_TIME_STYLE = {
   '預計解除陸警時間': '#e8845a', '預計解除海警時間': '#6aa8e8',
 };
 
-// 面板／圖層標題：依目前系統實際強度顯示，升格為颱風後自動改為「颱風動態」。
-//   無警報且無系統 → 「颱風動態」（預設）
-//   有系統但為熱帶性低壓 → 「TD動態」
-//   已達輕颱以上或已發布警報 → 「颱風動態」
-function _tyTitleWord(){
-  const warns = _tyWarnList();
-  if(warns && warns.length) return '颱風動態';
-  const rows = _tyRows();
-  if(!rows.length) return '颱風動態';
-  // 現在或預報期間任一時刻達輕颱（17.2 m/s）即以颱風稱之
-  const anyTy = rows.some(({ty, cur, fut})=>{
-    if((cur && cur.ws != null && cur.ws >= 17.2)) return true;
-    return (fut || []).some(f=>f.ws != null && f.ws >= 17.2);
-  });
-  return anyTy ? '颱風動態' : 'TD動態';
-}
-function _applyTyTitle(){
-  const word = _tyTitleWord();
-  const el = document.getElementById('lsb-typhoon-title');
-  if(el) el.textContent = word;
-  const btn = document.getElementById('bTyphoon');
-  if(btn) btn.textContent = '🌀 ' + word;
-}
-
 function updateTyphoonPanel(){
-  _applyTyTitle();                      // 標題隨強度切換（TD動態／颱風動態）
   const body = document.getElementById('typhoon-panel-body');
   if(!body) return;
   const warns = _tyWarnList();
