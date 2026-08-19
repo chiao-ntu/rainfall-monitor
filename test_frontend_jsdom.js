@@ -1378,14 +1378,20 @@ console.log('\n=== 前瞻功能已移除 ===');
 // ════════ 25. 警戒「清單成員」必須隨時段變動（不只數值）════════
 console.log('\n=== 土石流／大崩清單成員隨時段變動 ===');
 if (need('_debrisHits') && need('_estWindowHours') && need('_lsRows')) {
-  // 雨落在 seg5：未來6h(seg2)看不到、12h(seg3)之後才看得到
-  setLex(`TMAP['南投縣仁愛鄉']={county:'南投縣',township:'仁愛鄉',alert_val:700,etr2_alert:700,
+  // ★ 雨的位置必須相對於 _nowSeg() 佈置，不可寫死段索引：
+  //   BASE_TIME 設為今日 00 時後，_nowSeg() 仍取決於執行當下的時鐘，
+  //   寫死 seg5 會讓測試在一天中的不同時間得到不同結果（曾因此誤判為程式回歸）。
+  setLex(`{const d=new Date(); d.setHours(0,0,0,0); BASE_TIME=d;}`);
+  const _ns0 = G._nowSeg();
+  setLex(`{
+    const q = Array(64).fill(0);
+    q[` + (_ns0 + 3) + `] = 600;          // 雨落在「現在起第4段」（+18~24h）
+    TMAP['南投縣仁愛鄉']={county:'南投縣',township:'仁愛鄉',alert_val:700,etr2_alert:700,
       etr2:70,etr2_pct:0.1,daily_rain:Array(15).fill(0),
-      qpf_best:[0,0,0,0,0,600].concat(Array(58).fill(0)),
-      qpf_ecmwf:[0,0,0,0,0,600].concat(Array(58).fill(0)),
-      qpf_lo:Array(64).fill(0),
+      qpf_best:q.slice(), qpf_ecmwf:q.slice(), qpf_lo:Array(64).fill(0),
       obs_1h_p48:Array(48).fill(0),qpf_1h_p48:Array(48).fill(0),qpf_1h:Array(96).fill(0)};
-    {const d=new Date(); d.setHours(0,0,0,0); BASE_TIME=d;}
+  }`);
+  setLex(`
     forecastModel='ecmwf'; _userFactorOn=false;_biasApplyOn=false;_scnOn=false;_scnDays={};
     window.DEBRIS_ALERTS={'投縣DF001':{county:'南投縣',town:'仁愛鄉',vill:'',
       alert:300,etr2:70,off_level:'',pct:0.23}};
@@ -1463,6 +1469,52 @@ if (need('setWin') && need('setModel')) {
     console.log(`   setModel ${ok?'OK ':'!! '}${fn}`);
   });
   setLex("setModel('ecmwf'); setWin('today');");
+}
+
+
+// ════════ 27. TD／颱風動態：標題與內容 ════════
+console.log('\n=== TD 階段面板內容與標題 ===');
+if (need('_tyTitleWord') && need('updateTyphoonPanel')) {
+  // 無系統
+  setLex("window.TYPHOON_WARN = []; window.TYPHOON_TRACK = [];");
+  chk('無系統時標題為颱風動態', G._tyTitleWord(), '颱風動態');
+
+  // TD：風速 15 m/s，預報也未達輕颱
+  setLex(`window.TYPHOON_TRACK = [{name_zh:'', name_en:'', ty_no:'',
+    current:{lat:20.5, lng:125.3, ws:15, gust:23, p:1000, r15:80, r25:0},
+    forecast:[{fh:24, lat:21.5, lng:123.0, ws:16, r15:90, r70:120},
+              {fh:48, lat:22.5, lng:121.0, ws:16, r15:90, r70:180}]}];`);
+  chk('★TD 階段標題為 TD動態', G._tyTitleWord(), 'TD動態');
+
+  // 面板內容：TD 也須有完整資訊
+  setLex("document.body.insertAdjacentHTML('beforeend','<div id=\\'typhoon-panel-body\\'></div>');");
+  G.updateTyphoonPanel();
+  const html = getLex("document.getElementById('typhoon-panel-body').innerHTML") || '';
+  const plain = html.replace(/<[^>]*>/g, ' ');
+  console.log('   面板摘要：' + plain.replace(/\s+/g,' ').slice(0, 150));
+  chk('顯示強度分級', /熱帶低壓/.test(plain), true);
+  chk('無名稱時以「熱帶性低氣壓」呈現', /熱帶性低氣壓/.test(plain), true);
+  chk('無編號時標示「未編號」', /未編號/.test(plain), true);
+  chk('★顯示中心位置', /125\.3/.test(plain), true);
+  chk('★顯示風速', /15/.test(plain), true);
+  chk('★顯示氣壓', /1000/.test(plain), true);
+  chk('★顯示預報路徑（先前 TD 完全沒有）', /\+24h/.test(plain), true);
+  chk('★顯示雨勢較大地區', /雨勢較大地區/.test(plain), true);
+  chk('標示尚未發布警報', /尚未發布颱風警報/.test(plain), true);
+
+  // 升格輕颱 → 標題自動改回颱風動態
+  setLex("window.TYPHOON_TRACK[0].current.ws = 20;");
+  chk('★升格輕颱後標題為颱風動態', G._tyTitleWord(), '颱風動態');
+  // 現在仍是 TD、但預報將增強 → 亦以颱風稱之
+  setLex("window.TYPHOON_TRACK[0].current.ws = 15; window.TYPHOON_TRACK[0].forecast[1].ws = 25;");
+  chk('預報將增強為颱風 → 標題為颱風動態', G._tyTitleWord(), '颱風動態');
+  // 已發布警報 → 一律颱風動態
+  setLex(`window.TYPHOON_TRACK[0].forecast[1].ws = 16;
+          window.TYPHOON_WARN = [{headline:'海上颱風警報', warn_kind:'SEA', sections:[]}];`);
+  chk('已發布警報 → 標題為颱風動態', G._tyTitleWord(), '颱風動態');
+  setLex("window.TYPHOON_WARN = []; window.TYPHOON_TRACK = [];");
+  // 還原共用狀態，避免影響其他測試（本測試曾動到面板 DOM 與時間視窗）
+  setLex("winKey='today'; segFrom=0; segTo=3; forecastModel='ecmwf';");
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
