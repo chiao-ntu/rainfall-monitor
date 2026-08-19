@@ -95,7 +95,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <h1><a href="https://line.me/ti/p/HbFX9e8KFH" target="_blank" rel="noopener"
       style="color:inherit;text-decoration:none">台灣降雨監測系統</a></h1>
     <div class="sub"><a href="https://line.me/ti/p/HbFX9e8KFH" target="_blank" rel="noopener"
-      style="color:#5ad88a;text-decoration:none">臺大天災中心 林得恩 許博超 周貝珊</a></div>
+      style="color:#5ad88a;text-decoration:none">臺大天災中心</a><span
+      style="color:#8aa8c0;font-weight:400">　<a
+      href="https://www.facebook.com/profile.php?id=100063488689600&amp;locale=zh_TW"
+      target="_blank" rel="noopener" style="color:#8aa8c0;text-decoration:none"
+      onmouseover="this.style.textDecoration='underline'"
+      onmouseout="this.style.textDecoration='none'">林得恩</a>　<a
+      href="https://line.me/ti/p/HbFX9e8KFH"
+      target="_blank" rel="noopener" style="color:#8aa8c0;text-decoration:none"
+      onmouseover="this.style.textDecoration='underline'"
+      onmouseout="this.style.textDecoration='none'">許博超</a>　<a
+      href="https://www.facebook.com/profile.php?id=100047634052574&amp;locale=zh_TW"
+      target="_blank" rel="noopener" style="color:#8aa8c0;text-decoration:none"
+      onmouseover="this.style.textDecoration='underline'"
+      onmouseout="this.style.textDecoration='none'">周貝珊</a></span></div>
   </div>
   <span class="tag time" id="base-tag"></span>
 </div>
@@ -139,7 +152,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
         style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
       <button class="b"    id="bTyphoon" onclick="toggleTyphoonLayer()"
-        style="border-color:#8a3a9a;color:#c88ae8">🌀 颱風動態</button>
+        style="border-color:#8a3a9a;color:#c88ae8">🌀 颱風/TD動態</button>
       <button class="b"    id="bDebris" onclick="toggleDebrisLayer()"
         style="border-color:#b06010;color:#ffa050">⛰ 土石流警戒</button>
       <button class="b"    id="bLandslide" onclick="toggleLandslideLayer()"
@@ -273,7 +286,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div id="lsb-ty-sec" style="display:flex;flex-direction:column;flex:0 0 auto;min-height:0;border-top:2px solid #4a2a5a;overflow:hidden">
       <div onclick="toggleLsbSection('typhoon')" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;
         border-bottom:1px solid #4a2a5a;background:#1e0f2a;flex-shrink:0;cursor:pointer">
-        <span style="font-weight:700;color:#c88ae8;font-size:11px"><span id="lsb-typhoon-arrow">▸</span> 🌀 颱風動態</span>
+        <span style="font-weight:700;color:#c88ae8;font-size:11px"><span id="lsb-typhoon-arrow">▸</span> 🌀 颱風/TD動態</span>
         <span style="display:flex;gap:4px;align-items:center">
           <button onclick="event.stopPropagation();copyTyphoonPanel(this)"
             style="font-size:9px;padding:1px 5px;background:#241030;color:#d0a8e8;border:1px solid #5a3a6a;border-radius:3px;cursor:pointer">複製</button>
@@ -5465,8 +5478,15 @@ function _zoomSpan(county, town, label, col){
 
 function _tyRows(){
   const out = [];
+  const now = Date.now();
   (window.TYPHOON_TRACK || []).forEach(ty=>{
     const c = ty.current || {};
+    // ★ 同警報單：颱風已消散後，最後一筆路徑資料仍會留在 data.json，
+    //   若不過濾，面板會持續顯示上一個颱風。以最新一筆觀測時間判定新舊。
+    //   欄位為 current.t（後端 fetch_typhoon_track 取自 AnalysisData.Fix.DateTime）；
+    //   先前誤用 ty.time——該欄位不存在，Date.parse 回 NaN，過濾等同從未生效。
+    const tm = Date.parse(c.t || ty.time || '');
+    if(isFinite(tm) && (now - tm) > TY_WARN_MAX_AGE_H * 3600e3) return;
     out.push({ty, cur:c, fut:(ty.forecast||[])});
   });
   return out;
@@ -5476,7 +5496,30 @@ function _tyFmt(d){
   return `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ` +
          `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
-function _tyWarnList(){ return (window.TYPHOON_WARN || []); }
+// 有效的颱風警報單：濾掉過期資料。
+//   ★ 為什麼需要：data.json 每 6 小時更新，若颱風已遠離而 CWA 停止發布，
+//     最後一份警報單會一直留在檔案裡，面板便持續顯示上一個颱風的資訊，
+//     在下一個系統生成時極易誤判。
+//   判準（依序）：
+//     1. 警報單自帶 expires（官方失效時間）→ 已過即不顯示，最準確。
+//     2. 無 expires 時，以 effective（發布時間）距今超過 TY_WARN_MAX_AGE_H 小時者不顯示。
+//   時間解析失敗一律保留（寧可多顯示，不可因解析錯誤而漏掉有效警報）。
+const TY_WARN_MAX_AGE_H = 48;
+function _tyWarnList(){
+  const all = window.TYPHOON_WARN || [];
+  const now = Date.now();
+  return all.filter(w=>{
+    const exp = w && w.expires ? Date.parse(w.expires) : NaN;
+    if(isFinite(exp)) return exp >= now;              // 官方失效時間為準
+    const eff = w && w.effective ? Date.parse(w.effective) : NaN;
+    if(!isFinite(eff)) return true;                   // 無法判定 → 保留
+    return (now - eff) <= TY_WARN_MAX_AGE_H * 3600e3;
+  });
+}
+// 被濾掉的過期警報單數量（供介面說明，避免使用者以為資料遺失）
+function _tyWarnStale(){
+  return (window.TYPHOON_WARN || []).length - _tyWarnList().length;
+}
 
 // 四個警報時間：官方已發布者以警報單為準，未發布者用幾何推估（明確標示）
 function _tyAlertTimes(ty){
@@ -5589,19 +5632,55 @@ function updateTyphoonPanel(){
     }
   });
 
-  // 無警報但有活動中颱風
+  // 無警報但有活動中系統（熱帶性低氣壓／尚未發布警報之颱風）
+  //   ★ TD 階段官方多半尚未命名、無編號，故名稱與編號須有 fallback，
+  //     且仍應完整呈現路徑、強度與雨勢資訊——不可因「未發布警報」而少給資訊。
   if(!warns.length){
-    rows.forEach(({ty, cur})=>{
+    rows.forEach(({ty, cur, fut})=>{
       const it = _tyIntensity(cur.ws);
-      h += `<div style="border-left:3px solid ${it.color};padding:3px 6px;margin-bottom:4px">
-        <div style="font-weight:700;color:#e8c8ff;font-size:11px">${ty.name_zh}
-          <span style="color:#9a8aaa;font-weight:400">${ty.name_en}　編號${ty.ty_no}</span></div>
-        <div style="color:${it.color};font-size:10px">${it.name}
-          <span style="color:#8a7a9a">　尚未發布颱風警報</span></div>
-        <div style="font-size:10px;color:#c8b8d8;line-height:1.5">
-          中心 ${cur.lat ?? '—'}N / ${cur.lng ?? '—'}E<br>
-          風速 <b>${cur.ws ?? '—'}</b> m/s（陣風 ${cur.gust ?? '—'}）｜氣壓 <b>${cur.p ?? '—'}</b> hPa<br>
-          七級風半徑 ${cur.r15 ?? '—'} km｜十級風半徑 ${cur.r25 ?? '—'} km</div></div>`;
+      const nm = ty.name_zh || ty.name_en || '熱帶性低氣壓';
+      // ★ TD 階段官方仍有編號，惟欄位不同：颱風為 CwaTyNo（ty_no）、
+      //   熱帶性低壓為 CwaTdNo（td_no）。先前只讀 ty_no，故 TD 恆顯示「未編號」。
+      const noTxt = ty.ty_no ? `颱風編號 ${ty.ty_no}`
+                  : (ty.td_no ? `熱帶性低壓編號 ${ty.td_no}` : '未編號');
+      const sub = [ty.name_zh && ty.name_en ? ty.name_en : '', noTxt]
+                  .filter(Boolean).join('　');
+      h += `<div style="background:${it.color}22;border-left:3px solid ${it.color};
+        padding:4px 6px;border-radius:0 3px 3px 0;margin-bottom:4px">
+        <div style="font-weight:700;color:${it.color};font-size:12px">${it.name}
+          <span style="font-size:10px;font-weight:400;color:#8a7a9a">尚未發布颱風警報</span></div>
+        <div style="font-size:11px;color:#e8c8ff;font-weight:700;margin-top:1px">${nm}
+          <span style="color:#9a8aaa;font-weight:400">　${sub}</span></div>
+        <div style="font-size:10px;color:#b8a8c8;margin-top:1px">
+          資料時間 ${(cur.t || '').replace('T',' ').slice(0,16) || '—'}
+          <span style="color:#7a6a8a">（中央氣象署颱風路徑資料）</span></div>
+      </div>
+        <div style="${SEC}">目前強度與位置</div>
+        <div style="font-size:10px;color:#c8b8d8;line-height:1.55">
+          中心位置：${cur.lat ?? '—'}N / ${cur.lng ?? '—'}E<br>
+          近中心最大風速：<b>${cur.ws ?? '—'}</b> m/s
+            ${cur.ws != null ? `（約 ${Math.round(cur.ws*3.6)} km/h）` : ''}
+            ｜瞬間最大陣風：<b>${cur.gust ?? '—'}</b> m/s<br>
+          中心氣壓：<b>${cur.p ?? '—'}</b> hPa<br>
+          七級風暴風半徑：${cur.r15 ?? '—'} km｜十級風暴風半徑：${cur.r25 ?? '—'} km
+        </div>`;
+      // 預報路徑（TD 階段同樣有預報點，先前完全沒呈現）
+      if(fut && fut.length){
+        h += `<div style="${SEC}">預報路徑（中央氣象署）</div>`;
+        fut.slice(0, 6).forEach(f=>{
+          const fi = _tyIntensity(f.ws);
+          h += `<div style="font-size:10px;color:#c8b8d8;line-height:1.5">
+            <span style="color:#8ab8d8">+${f.fh}h</span>
+            ${f.lat ?? '—'}N/${f.lng ?? '—'}E
+            <span style="color:${fi.color}">${fi.name}</span>
+            <span style="color:#9a8aaa">${f.ws ?? '—'}m/s
+            ${f.r15 != null ? `／七級 ${f.r15}km` : ''}
+            ${f.r70 != null ? `／70%機率半徑 ${f.r70}km` : ''}</span></div>`;
+        });
+      }
+      // 雨勢較大地區（與有警報時一致，TD 也需要）
+      h += `<div style="${SEC}">雨勢較大地區（日累積≥${th}mm）</div>
+        <div style="font-size:10px;color:#c8b8d8;line-height:1.5">${_heavyRainLine()}</div>`;
       h += `<div style="${SEC}">警報時間（系統依預報路徑推估）</div>`;
       _tyAlertTimes(ty).forEach(([k, v])=>{
         const c = TY_TIME_STYLE[k] || '#8ab8d8';

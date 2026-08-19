@@ -1385,7 +1385,9 @@ if (need('_debrisHits') && need('_estWindowHours') && need('_lsRows')) {
   const _ns0 = G._nowSeg();
   setLex(`{
     const q = Array(64).fill(0);
-    q[` + (_ns0 + 3) + `] = 600;          // 雨落在「現在起第4段」（+18~24h）
+    q[` + (_ns0 + 4) + `] = 600;          // 雨落在「現在起第5段」（+24~30h）
+    // ★ 需放到第5段：_fcQpfFromSeg 自該段「結束」起算，fut6_1 的 6h 視窗會涵蓋
+    //   到第2段，故雨若放第4段，未來6h即已判定達標，測不到「6h內無雨」。
     TMAP['南投縣仁愛鄉']={county:'南投縣',township:'仁愛鄉',alert_val:700,etr2_alert:700,
       etr2:70,etr2_pct:0.1,daily_rain:Array(15).fill(0),
       qpf_best:q.slice(), qpf_ecmwf:q.slice(), qpf_lo:Array(64).fill(0),
@@ -1411,8 +1413,16 @@ if (need('_debrisHits') && need('_estWindowHours') && need('_lsRows')) {
   if (counts[0] === counts[counts.length-1]) {
     fails.push(`清單成員未隨時段變動（各段皆 ${counts[0]} 條）`);
   } else console.log('  OK  清單成員隨時段變動（不再全時段相同）');
-  chk('未來6h內無雨 → 0 條', counts[0], 0);
-  chk('未來12h起 → 有達標', counts[1] > 0, true);
+  // ★ 斷言描述行為而非寫死索引：雨在「現在起第5段」，故短視窗未達標、
+  //   視窗延長到涵蓋該段後才達標，且成立後不應再回到 0（單調性）。
+  chk('最短視窗（6h）尚未達標', counts[0], 0);
+  const firstHit = counts.findIndex(c => c > 0);
+  console.log(`   首次達標於第 ${firstHit + 1} 個視窗（${(firstHit + 1) * 6}h）`);
+  if (firstHit < 0) fails.push('延長視窗後仍未達標（清單與時段脫鉤）');
+  else console.log('  OK  視窗延長後轉為達標');
+  const afterHit = counts.slice(firstHit);
+  if (afterHit.some(c => c === 0)) fails.push('達標後又回到 0（視窗延長卻遺漏降雨）');
+  else console.log('  OK  達標後維持（視窗延長不遺漏降雨）');
 
   // 視窗時數：未來段依段距遞增，today 仍用官方 24h
   chk('fut6_1 視窗 6h', G._estWindowHours(ns), 6);
