@@ -60,6 +60,8 @@ MUST_STR = ['TOWN_GEO', 'TYPHOON_TRACK', 'DEBRIS_ALERTS', 'typhoon-panel-body',
             'cust-ctrl', 'slS', 'slE', '颱風動態', 'ETR2',
             # 外援連結（漏掉會靜默消失，沒有其他檢查會抓到）
             'data.jma.go.jp', 'metoc.navy.mil/jtwc', 'watch_rain_6weeks',
+            # 作者連結（漏掉會靜默消失）
+            '100063488689600', '100047634052574', '林得恩', '許博超', '周貝珊',
             'plotrainonline', 'watch_wissdom_taiwan']
 for k in MUST_STR:
     if k not in s:

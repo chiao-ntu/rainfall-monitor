@@ -1477,8 +1477,8 @@ console.log('\n=== TD 階段面板內容 ===');
 if (need('updateTyphoonPanel')) {
   const future = new Date(Date.now() + 4*3600e3).toISOString();
   setLex("window.TYPHOON_WARN = [];" +
-    "window.TYPHOON_TRACK = [{name_zh:'', name_en:'', ty_no:'', time:'" + new Date().toISOString() + "'," +
-    "current:{lat:20.5, lng:125.3, ws:15, gust:23, p:1000, r15:80, r25:0}," +
+    "window.TYPHOON_TRACK = [{name_zh:'', name_en:'', ty_no:'', td_no:'20'," +
+    "current:{t:'" + new Date().toISOString() + "', lat:20.5, lng:125.3, ws:15, gust:23, p:1000, r15:80, r25:0}," +
     "forecast:[{fh:24, lat:21.5, lng:123.0, ws:16, r15:90, r70:120}," +
     "{fh:48, lat:22.5, lng:121.0, ws:16, r15:90, r70:180}]}];" +
     "document.body.insertAdjacentHTML('beforeend','<div id=\\'typhoon-panel-body\\'></div>');");
@@ -1488,7 +1488,10 @@ if (need('updateTyphoonPanel')) {
   console.log('   面板摘要：' + plain.replace(/\s+/g,' ').slice(0, 130));
   chk('顯示強度分級', /熱帶低壓/.test(plain), true);
   chk('無名稱時以「熱帶性低氣壓」呈現', /熱帶性低氣壓/.test(plain), true);
-  chk('無編號時標示「未編號」', /未編號/.test(plain), true);
+  // ★ TD 階段官方有編號（CwaTdNo），不應顯示「未編號」
+  chk('★TD 顯示熱帶性低壓編號', /熱帶性低壓編號 20/.test(plain), true);
+  chk('不再誤標「未編號」', /未編號/.test(plain), false);
+  chk('顯示資料時間', /資料時間/.test(plain), true);
   chk('顯示中心位置', /125\.3/.test(plain), true);
   chk('顯示氣壓', /1000/.test(plain), true);
   chk('顯示預報路徑', /\+24h/.test(plain), true);
@@ -1516,11 +1519,11 @@ if (need('_tyWarnList') && need('_tyRows')) {
   setLex(`window.TYPHOON_WARN = [{headline:'海上颱風警報', effective:'壞掉的時間', sections:[]}];`);
   chk('時間無法解析 → 保留', G._tyWarnList().length, 1);
   // 5) 颱風路徑同樣過濾
-  setLex("window.TYPHOON_WARN = []; window.TYPHOON_TRACK = [{name_zh:'舊颱風', time:'" +
-         iso(-72) + "', current:{lat:20,lng:125,ws:30}, forecast:[]}];");
+  setLex("window.TYPHOON_WARN = []; window.TYPHOON_TRACK = [{name_zh:'舊颱風', current:{t:'" +
+         iso(-72) + "', lat:20,lng:125,ws:30}, forecast:[]}];");
   chk('★逾 48h 的舊颱風路徑不顯示', G._tyRows().length, 0);
-  setLex("window.TYPHOON_TRACK = [{name_zh:'現有颱風', time:'" + iso(-3) +
-         "', current:{lat:20,lng:125,ws:30}, forecast:[]}];");
+  setLex("window.TYPHOON_TRACK = [{name_zh:'現有颱風', current:{t:'" + iso(-3) +
+         "', lat:20,lng:125,ws:30}, forecast:[]}];");
   chk('近期颱風路徑正常顯示', G._tyRows().length, 1);
   setLex("window.TYPHOON_WARN = []; window.TYPHOON_TRACK = [];");
   setLex("winKey='today'; segFrom=0; segTo=3; forecastModel='ecmwf';");

@@ -96,7 +96,19 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       style="color:inherit;text-decoration:none">台灣降雨監測系統</a></h1>
     <div class="sub"><a href="https://line.me/ti/p/HbFX9e8KFH" target="_blank" rel="noopener"
       style="color:#5ad88a;text-decoration:none">臺大天災中心</a><span
-      style="color:#8aa8c0;font-weight:400">　林得恩　許博超　周貝珊</span></div>
+      style="color:#8aa8c0;font-weight:400">　<a
+      href="https://www.facebook.com/profile.php?id=100063488689600&amp;locale=zh_TW"
+      target="_blank" rel="noopener" style="color:#8aa8c0;text-decoration:none"
+      onmouseover="this.style.textDecoration='underline'"
+      onmouseout="this.style.textDecoration='none'">林得恩</a>　<a
+      href="https://line.me/ti/p/HbFX9e8KFH"
+      target="_blank" rel="noopener" style="color:#8aa8c0;text-decoration:none"
+      onmouseover="this.style.textDecoration='underline'"
+      onmouseout="this.style.textDecoration='none'">許博超</a>　<a
+      href="https://www.facebook.com/profile.php?id=100047634052574&amp;locale=zh_TW"
+      target="_blank" rel="noopener" style="color:#8aa8c0;text-decoration:none"
+      onmouseover="this.style.textDecoration='underline'"
+      onmouseout="this.style.textDecoration='none'">周貝珊</a></span></div>
   </div>
   <span class="tag time" id="base-tag"></span>
 </div>
@@ -5470,8 +5482,10 @@ function _tyRows(){
   (window.TYPHOON_TRACK || []).forEach(ty=>{
     const c = ty.current || {};
     // ★ 同警報單：颱風已消散後，最後一筆路徑資料仍會留在 data.json，
-    //   若不過濾，面板會持續顯示上一個颱風。以觀測時間判定新舊。
-    const tm = Date.parse(ty.time || c.time || '');
+    //   若不過濾，面板會持續顯示上一個颱風。以最新一筆觀測時間判定新舊。
+    //   欄位為 current.t（後端 fetch_typhoon_track 取自 AnalysisData.Fix.DateTime）；
+    //   先前誤用 ty.time——該欄位不存在，Date.parse 回 NaN，過濾等同從未生效。
+    const tm = Date.parse(c.t || ty.time || '');
     if(isFinite(tm) && (now - tm) > TY_WARN_MAX_AGE_H * 3600e3) return;
     out.push({ty, cur:c, fut:(ty.forecast||[])});
   });
@@ -5625,8 +5639,12 @@ function updateTyphoonPanel(){
     rows.forEach(({ty, cur, fut})=>{
       const it = _tyIntensity(cur.ws);
       const nm = ty.name_zh || ty.name_en || '熱帶性低氣壓';
-      const sub = [ty.name_zh && ty.name_en ? ty.name_en : '',
-                   ty.ty_no ? `編號${ty.ty_no}` : '未編號'].filter(Boolean).join('　');
+      // ★ TD 階段官方仍有編號，惟欄位不同：颱風為 CwaTyNo（ty_no）、
+      //   熱帶性低壓為 CwaTdNo（td_no）。先前只讀 ty_no，故 TD 恆顯示「未編號」。
+      const noTxt = ty.ty_no ? `颱風編號 ${ty.ty_no}`
+                  : (ty.td_no ? `熱帶性低壓編號 ${ty.td_no}` : '未編號');
+      const sub = [ty.name_zh && ty.name_en ? ty.name_en : '', noTxt]
+                  .filter(Boolean).join('　');
       h += `<div style="background:${it.color}22;border-left:3px solid ${it.color};
         padding:4px 6px;border-radius:0 3px 3px 0;margin-bottom:4px">
         <div style="font-weight:700;color:${it.color};font-size:12px">${it.name}
@@ -5634,7 +5652,7 @@ function updateTyphoonPanel(){
         <div style="font-size:11px;color:#e8c8ff;font-weight:700;margin-top:1px">${nm}
           <span style="color:#9a8aaa;font-weight:400">　${sub}</span></div>
         <div style="font-size:10px;color:#b8a8c8;margin-top:1px">
-          資料時間 ${ty.time || (window.BASE_TIME_STR || '—')}
+          資料時間 ${(cur.t || '').replace('T',' ').slice(0,16) || '—'}
           <span style="color:#7a6a8a">（中央氣象署颱風路徑資料）</span></div>
       </div>
         <div style="${SEC}">目前強度與位置</div>
