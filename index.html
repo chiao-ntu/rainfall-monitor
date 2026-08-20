@@ -2614,7 +2614,11 @@ function _spanAccum(t, sf, st){
 // ══════════════════════════════════════════════════════════
 let _tmCache = new Map(), _tmCacheKey = '';
 function _tmKey(){
-  return (forecastModel||'') + '|' + _factorKey() + '|' + (window._dataGenAt || '');
+  // ★ 必須含 BASE_TIME：本層的段值與 ETR2 皆以其為時間基準。
+  //   BASE_TIME 初始為示範值、載入 data.json 後才更新，
+  //   若快取鍵不含它，載入前算出的結果會被沿用（與 _tyKeyPoints 同一類錯誤）。
+  return (forecastModel||'') + '|' + _factorKey() + '|' + (window._dataGenAt || '')
+       + '|' + (typeof BASE_TIME !== 'undefined' && BASE_TIME ? +BASE_TIME : 0);
 }
 function townMetrics(t, seg){
   if(!t) return null;
@@ -3192,6 +3196,11 @@ async function tryLoadLive(){
     }
 
     BASE_TIME = new Date(d.base_time);
+    // ★ 時間基準變動 → 主動清空以 BASE_TIME 為基準的快取（雙保險：
+    //   即使某個快取鍵日後漏掉 BASE_TIME，這裡也能確保不沿用舊時間的結果）
+    try{ _tyKpCache.clear(); }catch(e){}
+    try{ _tmCache = new Map(); _tmCacheKey = ''; }catch(e){}
+    try{ _distCache.clear(); }catch(e){}
     NATIONWIDE_EXTREMES = null;   // 重置極值快取，讓下次繪圖重新計算
     DAILY_CHART_EXTREMES = null;
     const src = d.source || '';
@@ -4694,8 +4703,13 @@ function _tyKeyPoints(ty){
   //   僅用編號＋時間＋預報點數會讓「座標不同但點數相同」的兩份資料撞鍵，
   //   回傳前一份的結果（測試中即因此出現錯誤的解除判定）。
   //   故將現在位置與各預報點的關鍵欄位一併納入。
+  //   ★★ 亦須含 BASE_TIME：本函式以 BASE_TIME 將預報時距(fh)換算為實際時刻。
+  //   BASE_TIME 初始為硬編碼的示範值（2025/6/26），data.json 載入後才更新；
+  //   若快取鍵不含它，載入前算出的關鍵時間點會被永久沿用，面板與地圖
+  //   便一直顯示 6/27 之類的舊日期（強度、位置、路徑因不經本函式而正常）。
   const c = ty.current || {};
   const ck = [ty.ty_no||'', ty.td_no||'', c.t||'', c.lat, c.lng, c.ws, c.r15, c.r25,
+    (typeof BASE_TIME !== 'undefined' && BASE_TIME ? +BASE_TIME : 0),
     (ty.forecast||[]).map(f=>[f.fh,f.lat,f.lng,f.ws,f.r15,f.r25].join(',')).join(';')].join('|');
   const hit = _tyKpCache.get(ck);
   if(hit) return hit;

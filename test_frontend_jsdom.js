@@ -1561,6 +1561,43 @@ if (need('_tyWarnList') && need('_tyRows')) {
   setLex("winKey='today'; segFrom=0; segTo=3; forecastModel='ecmwf';");
 }
 
+
+// ════════ 28. 快取不得沿用舊 BASE_TIME 的結果 ════════
+console.log('\n=== BASE_TIME 變動後快取須失效 ===');
+if (need('_tyKeyPoints') && need('townMetrics')) {
+  const ty = {ty_no:'13', current:{t:'2026-08-19T00:00:00+08:00', lat:26.9, lng:126.6,
+    ws:40, p:950, r15:280, r25:90},
+    forecast:[{fh:24, lat:25.5, lng:124.0, ws:38, r15:280, r25:90},
+              {fh:48, lat:24.0, lng:121.5, ws:33, r15:250, r25:80},
+              {fh:72, lat:23.0, lng:118.0, ws:20, r15:150, r25:0}]};
+  setLex("window.__ty = " + JSON.stringify(ty) + ";");
+  // 第一次：BASE_TIME 設為 A 日
+  setLex("{const d=new Date(2026,0,10,0,0,0); BASE_TIME=d;} _tyKpCache.clear();");
+  const kpA = G._tyKeyPoints(getLex('window.__ty'));
+  const tA = kpA.points.length ? kpA.points[0].time.getTime() : null;
+  // 第二次：BASE_TIME 改為 B 日（模擬 data.json 載入後更新）
+  setLex("{const d=new Date(2026,5,20,0,0,0); BASE_TIME=d;}");
+  const kpB = G._tyKeyPoints(getLex('window.__ty'));
+  const tB = kpB.points.length ? kpB.points[0].time.getTime() : null;
+  console.log(`   BASE_TIME=1/10 → ${tA ? new Date(tA).toLocaleDateString('zh-TW') : '—'}`);
+  console.log(`   BASE_TIME=6/20 → ${tB ? new Date(tB).toLocaleDateString('zh-TW') : '—'}`);
+  if (tA == null || tB == null) fails.push('關鍵時間點未產生，無法驗證快取失效');
+  else if (tA === tB) fails.push('★BASE_TIME 變動後仍沿用舊快取（面板會顯示過期日期）');
+  else console.log('  OK  BASE_TIME 變動後關鍵時間點隨之更新');
+
+  // townMetrics 亦同
+  setLex(`TMAP['南投縣仁愛鄉']={county:'南投縣',township:'仁愛鄉',alert_val:700,etr2_alert:700,
+      etr2:70,etr2_pct:0.1,daily_rain:Array(15).fill(0),
+      qpf_best:Array(64).fill(5), qpf_ecmwf:Array(64).fill(5),
+      obs_1h_p48:Array(48).fill(0),qpf_1h_p48:Array(48).fill(0),qpf_1h:Array(96).fill(0)};
+    forecastModel='ecmwf'; _scnOn=false; _userFactorOn=false; _biasApplyOn=false;`);
+  const k1 = G._tmKey();
+  setLex("{const d=new Date(2026,7,1,0,0,0); BASE_TIME=d;}");
+  const k2 = G._tmKey();
+  chk('★_tmKey 隨 BASE_TIME 改變', k1 !== k2, true);
+  setLex("window.TYPHOON_TRACK=[]; window.TYPHOON_WARN=[];");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);
