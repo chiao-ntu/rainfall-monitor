@@ -4591,12 +4591,43 @@ function _twGrid(){
   _twGridCache = g;
   return g;
 }
+// 距離查詢快取：颱風路徑逐時內插會對相近座標重複查詢
+const _distCache = new Map();
+// 稀疏取樣的海岸點（每 24 點取 1），用於遠距離的快速上界估計
+let _twCoarseCache = null;
+function _twLandCoarse(){
+  if(_twCoarseCache) return _twCoarseCache;
+  _twCoarseCache = _twLandPts().filter((p,i)=>i % 24 === 0);
+  return _twCoarseCache;
+}
 function _distToTaiwanKm(lat, lng){
   const pts = _twLandPts();
   if(!pts.length) return null;
+  // ★ 快取鍵取小數 2 位（約 1km），對 100km 判準線之精度綽綽有餘。
+  //   實測本函式曾佔切換總時間 76.9%：_tyKeyPoints 對最多 97 個內插點各查一次，
+  //   而面板與圖層重繪又各呼叫數次，等於同一批座標被反覆計算。
+  const ck = lat.toFixed(2) + ',' + lng.toFixed(2);
+  const hit = _distCache.get(ck);
+  if(hit !== undefined) return hit;
+  const r0 = _distToTaiwanKmRaw(lat, lng);
+  if(_distCache.size > 20000) _distCache.clear();   // 上限保護
+  _distCache.set(ck, r0);
+  return r0;
+}
+function _distToTaiwanKmRaw(lat, lng){
+  const pts = _twLandPts();
   const g = _twGrid();
   const ci = Math.floor(lat/_TW_CELL), cj = Math.floor(lng/_TW_CELL);
   let best = Infinity;
+  // ★ 遠海座標（颱風多在此）空間索引幾乎失效：環搜尋要擴張數十環才碰到陸地，
+  //   期間每一環都在掃空格。故先用「粗篩」求一個上界：對稀疏取樣的點集算最小距離，
+  //   再以該上界限制環搜尋半徑，避免無謂的空環擴張。
+  const coarse = _twLandCoarse();
+  for(let i=0;i<coarse.length;i++){
+    const d = _kmBetween(lat, lng, coarse[i][0], coarse[i][1]);
+    if(d < best) best = d;
+  }
+  // 粗篩已給出上界 best；真值不會比 best 更大，故環搜尋只需覆蓋 best 對應的範圍
   for(let r=0; r<200; r++){
     // 環 r 之外的格子，最近可能距離至少 (r-1)*格寬；已優於此則可停止
     if(best < Infinity && (r-1)*_TW_CELL_MIN_KM > best) break;
@@ -4644,7 +4675,26 @@ function _tyInterp(ty){
   out.push(nodes[nodes.length-1]);
   return out;
 }
+// _tyKeyPoints 結果快取：面板、圖層、複製、CSV 都會呼叫，
+// 但同一份颱風資料的關鍵時間點是固定的，重算純屬浪費。
+const _tyKpCache = new Map();
 function _tyKeyPoints(ty){
+  if(!ty) return {points:[], times:{}};
+  // ★ 快取鍵必須涵蓋「會改變結果的所有輸入」：
+  //   僅用編號＋時間＋預報點數會讓「座標不同但點數相同」的兩份資料撞鍵，
+  //   回傳前一份的結果（測試中即因此出現錯誤的解除判定）。
+  //   故將現在位置與各預報點的關鍵欄位一併納入。
+  const c = ty.current || {};
+  const ck = [ty.ty_no||'', ty.td_no||'', c.t||'', c.lat, c.lng, c.ws, c.r15, c.r25,
+    (ty.forecast||[]).map(f=>[f.fh,f.lat,f.lng,f.ws,f.r15,f.r25].join(',')).join(';')].join('|');
+  const hit = _tyKpCache.get(ck);
+  if(hit) return hit;
+  const r = _tyKeyPointsRaw(ty);
+  if(_tyKpCache.size > 50) _tyKpCache.clear();
+  _tyKpCache.set(ck, r);
+  return r;
+}
+function _tyKeyPointsRaw(ty){
   const path = _tyInterp(ty);
   if(!path.length) return {points:[], times:{}};
   const base = BASE_TIME ? new Date(BASE_TIME) : new Date();
