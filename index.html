@@ -4577,7 +4577,10 @@ function _kmBetween(la1, lo1, la2, lo2){
 // 讓最近點查詢由 O(9495) 降到 O(附近數十點)，這樣「距離場」可以用**完整點集**計算，
 // 不必為了速度稀疏取樣——等值線才會真的等於警報判定用的那條線。
 const _TW_CELL = 0.25;                       // 度；緯向≈27.8km、經向≈24.7km(27°N)
-const _TW_CELL_MIN_KM = 24;                  // 保守下界（用於環搜尋的剪枝，不可高估）
+const _TW_CELL_MIN_KM = 24;
+// 格子對角線長度上界（0.25°）：緯向 27.8km、經向 27.8km（低緯度較長）→ 對角約 40km。
+// 用於由「距離上界」保守推算可跳過的環數；取偏大值可確保不會跳過含最近點的環。
+const _TW_CELL_MAX_KM = 40;                  // 保守下界（用於環搜尋的剪枝，不可高估）
 let _twGridCache = null;
 function _twGrid(){
   if(_twGridCache) return _twGridCache;
@@ -4619,16 +4622,23 @@ function _distToTaiwanKmRaw(lat, lng){
   const g = _twGrid();
   const ci = Math.floor(lat/_TW_CELL), cj = Math.floor(lng/_TW_CELL);
   let best = Infinity;
-  // ★ 遠海座標（颱風多在此）空間索引幾乎失效：環搜尋要擴張數十環才碰到陸地，
-  //   期間每一環都在掃空格。故先用「粗篩」求一個上界：對稀疏取樣的點集算最小距離，
-  //   再以該上界限制環搜尋半徑，避免無謂的空環擴張。
+  // ★ 遠海座標（颱風多在此）空間索引幾乎失效：環搜尋要擴張數十環才碰到陸地。
+  //   加速作法：先以稀疏點集求一個「起始上界」startR，讓環搜尋能直接從
+  //   對應的環數開始，而非從 r=0 逐環空掃。
+  //   ⚠ 絕不可用該上界去縮短中止條件：中止條件必須以「實際已掃到的 best」
+  //     為準。曾誤用粗篩值當 best，導致迴圈在掃到真正最近點前就中止，
+  //     遠海距離偏大、颱風警報時間全部錯誤。
   const coarse = _twLandCoarse();
+  let ub = Infinity;
   for(let i=0;i<coarse.length;i++){
     const d = _kmBetween(lat, lng, coarse[i][0], coarse[i][1]);
-    if(d < best) best = d;
+    if(d < ub) ub = d;
   }
-  // 粗篩已給出上界 best；真值不會比 best 更大，故環搜尋只需覆蓋 best 對應的範圍
-  for(let r=0; r<200; r++){
+  // 由上界推得可安全跳過的環數：距離 ub 以內的陸地必落在此環數之外的機率為零，
+  // 故從 startR 起掃即可（保守減 2 環，確保不漏）。
+  const startR = (ub === Infinity) ? 0
+    : Math.max(0, Math.floor(ub / _TW_CELL_MAX_KM) - 2);
+  for(let r=startR; r<200; r++){
     // 環 r 之外的格子，最近可能距離至少 (r-1)*格寬；已優於此則可停止
     if(best < Infinity && (r-1)*_TW_CELL_MIN_KM > best) break;
     let touched = false;

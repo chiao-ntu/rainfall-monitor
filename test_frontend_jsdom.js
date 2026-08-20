@@ -186,6 +186,28 @@ if (need('_distToTaiwanKm') && need('_tyKeyPoints')) {
   if (!(dMatsu < 5)) fails.push('馬祖未納入點集');
   if (dKinmen < 5 && dMatsu < 5) console.log('  OK  金門、馬祖已納入100km判準範圍');
 
+  // ★ 隨機全域比對：手選點無法涵蓋剪枝邊界。
+  //   曾因「用粗篩上界當中止條件」而剪掉真正最近點，遠海距離偏大、
+  //   颱風警報時間全錯，而 8 個手選點恰好全部避開該情形。
+  {
+    let seed = 42; const rnd = ()=>{ seed = (seed*1103515245+12345) & 0x7fffffff; return seed/0x7fffffff; };
+    let worst = 0, worstAt = null;
+    for (let k = 0; k < 120; k++) {
+      const la = 18 + rnd()*14, lo = 112 + rnd()*18;
+      let bf = Infinity;
+      for (let i = 0; i < pts.length; i++) {
+        const d = G._kmBetween(la, lo, pts[i][0], pts[i][1]); if (d < bf) bf = d;
+      }
+      const f = G._distToTaiwanKm(la, lo);
+      const d = Math.abs(f - bf);
+      if (d > worst) { worst = d; worstAt = [la.toFixed(2), lo.toFixed(2), f.toFixed(1), bf.toFixed(1)]; }
+    }
+    console.log(`   隨機 120 點全域比對，最大誤差 ${worst.toFixed(4)}km` +
+      (worstAt ? `（最差 ${worstAt[0]},${worstAt[1]}：${worstAt[2]} vs ${worstAt[3]}）` : ''));
+    if (worst > 0.01) fails.push(`距離函式全域精度有損（最大誤差 ${worst.toFixed(3)}km）`);
+    else console.log('  OK  全域精度無損（剪枝未剪掉最近點）');
+  }
+
   // 與暴力解逐一比對（確認未因剪枝剪掉真正最近點）
   const cases = [[26.9,126.6,'白海豚8/7'],[25.0,122.5,'東北角外海'],[23.5,121.0,'島內'],[22.0,120.3,'高雄外海']];
   let exact = true;
