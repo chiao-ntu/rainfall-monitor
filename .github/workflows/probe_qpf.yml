@@ -18,4 +18,4 @@ jobs:
       - name: Run probe
         env:
           CWA_KEY: ${{  secrets.CWA_API_KEY  }}
-        run: python probe_qpf.py
+        run: python probe_d0047.py
