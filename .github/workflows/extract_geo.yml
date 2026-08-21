@@ -1,0 +1,25 @@
+name: Extract Town Geo
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install requests
+
+      - name: Extract
+        run: python extract_town_geo.py
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: town-geo
+          path: town_geo.json
