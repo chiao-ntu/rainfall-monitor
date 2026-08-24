@@ -308,7 +308,7 @@ def fetch_swcb_hourly():
             if attempt == 2: return {}
             time.sleep(3)
     if not isinstance(data, list): return {}
-    out = {}
+    out, clash = {}, {}
     for row in data:
         if not isinstance(row, dict): continue
         for nk, vk in (('STName1', 'STRT1'), ('STName2', 'STRT2')):
@@ -316,9 +316,32 @@ def fetch_swcb_hourly():
             try: v = float(row.get(vk))
             except (TypeError, ValueError): continue
             if not nm: continue
+            # 原名為權威鍵：同名同站，值理應相同；若不同則記錄以便查核
+            if nm in out and abs(out[nm] - v) > 0.05:
+                clash[nm] = (out[nm], v)
             out[nm] = v
-            out.setdefault(_stn_key(nm), v)
-    print(f"    {len(out)} 個站名鍵（含正規化鍵）")
+    # ★ 正規化鍵只在「不會撞名」時才建立。
+    #   全臺有 6 組站去尾字母後同名但屬不同機關、不同地點：
+    #     武陵/武陵w、關山/關山w、南庄/南庄w、外大坪/外大坪w、寒溪/寒溪s、雙溪/雙溪tp
+    #   舊版無條件 setdefault(_stn_key(nm), v)，使兩站塌成同一鍵，
+    #   對站時可能取到「另一個同名站」的 ETR2 —— 臺中和平區（武陵）即因此
+    #   出現本系統破百、水保署官網個位數的重大落差。
+    norm_owner = {}
+    for nm in list(out.keys()):
+        k = _stn_key(nm)
+        if k == nm or not k: continue
+        norm_owner.setdefault(k, set()).add(nm)
+    n_norm = 0
+    for k, owners in norm_owner.items():
+        if k in out: continue                 # 正規化名本身就是一個實際站名 → 不可覆蓋
+        if len(owners) > 1: continue          # ★ 撞名 → 不建立正規化鍵，寧可對不到也不可對錯
+        out[k] = out[next(iter(owners))]; n_norm += 1
+    skipped = sum(1 for k, o in norm_owner.items() if len(o) > 1 or k in out)
+    print(f"    {len(out)} 個站名鍵（正規化鍵 {n_norm} 個，"
+          f"因撞名或與實際站名衝突而略過 {skipped} 個）")
+    if clash:
+        print(f"    ⚠ {len(clash)} 個站名於不同溪流回傳不同 ETR2（取最後一筆）："
+              + "、".join(f"{k}({a}→{b})" for k, (a, b) in list(clash.items())[:5]))
     return out
 
 

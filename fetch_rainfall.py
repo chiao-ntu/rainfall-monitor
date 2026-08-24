@@ -158,11 +158,26 @@ def fetch_swcb_etr2():
         for nk, vk in [('STName1','STRT1'), ('STName2','STRT2')]:
             nm = (row.get(nk) or '').strip(); v = num(row.get(vk))
             if not nm or v is None: continue
-            st_val[nm] = v
-            st_val.setdefault(_stn_key(nm), v)
+            st_val[nm] = v                      # 原名為權威鍵
             if _cty and _twn:
                 SWCB_STN_LOC.setdefault((_cty, _twn), {})[nm] = v
-    print(f"    水保署ETR2：{len(data)} 條潛勢溪流、{len(st_val)} 個站名鍵、"
+    # ★ 正規化鍵僅在不撞名時建立（與 fetch_qpesums_hourly.py 同一規則）。
+    #   全臺有 6 組站去尾字母後同名但屬不同機關、不同地點（武陵/武陵w、
+    #   關山/關山w、南庄/南庄w、外大坪/外大坪w、寒溪/寒溪s、雙溪/雙溪tp）。
+    #   舊版無條件 setdefault 會讓兩站塌成一鍵，對站時可能取到另一站的 ETR2。
+    _owner = {}
+    for nm in list(st_val.keys()):
+        k = _stn_key(nm)
+        if k == nm or not k: continue
+        _owner.setdefault(k, set()).add(nm)
+    _n_norm = 0
+    for k, owners in _owner.items():
+        if k in st_val: continue
+        if len(owners) > 1: continue            # 撞名 → 不建立，寧可對不到也不對錯
+        st_val[k] = st_val[next(iter(owners))]; _n_norm += 1
+    print(f"    水保署ETR2：{len(data)} 條潛勢溪流、{len(st_val)} 個站名鍵"
+          f"（正規化鍵 {_n_norm} 個，撞名略過 "
+          f"{sum(1 for k,o in _owner.items() if len(o)>1)} 個）、"
           f"{len(SWCB_STN_LOC)} 個鄉鎮位置索引")
     return st_val
 
@@ -464,22 +479,26 @@ def hourly_metrics(ser, meta, station_names):
 def apply_dynamic_adj(alert, r3h, r2h):
     """警戒基準值動態調整機制（技術指引三-(三)-3）。
 
-      一級：近3h>200mm → 原值≤400 調降100；原值≥450 調降150
-      二級：近3h>150mm → 原值≤400 調降 50；原值≥450 調降100
-      三級：近2h>100mm → 原值≤400 調降 50；原值≥450 維持不變
+      一級：近3h ≥200mm → 原值≤400 調降100；原值≥450 調降150
+      二級：近3h ≥150mm → 原值≤400 調降 50；原值≥450 調降100
+      三級：近2h ≥100mm → 原值≤400 調降 50；原值≥450 維持不變
     取最先成立者（一級優先）。回傳 (調整後警戒值, 級別, 調降量)。
     r3h/r2h 為 None（序列不足）→ 不調整並回級別 None，前端顯示「資料不足」。
+
+    ★ 門檻為「大於等於」：依水保署系統註3之原文（3hr累積雨量>=200mm）。
+      本函式原以嚴格大於實作，恰為 200.0mm 時官方會調降而系統不會；
+      防災判定於邊界值應從寬，故對齊官方寫法。
     """
     if not alert or alert <= 0: return alert, None, 0
     if r3h is None and r2h is None: return alert, None, 0
     lo = alert <= 400
-    if r3h is not None and r3h > 200:
+    if r3h is not None and r3h >= 200:
         d = 100 if lo else 150
         return max(0, alert - d), 1, d
-    if r3h is not None and r3h > 150:
+    if r3h is not None and r3h >= 150:
         d = 50 if lo else 100
         return max(0, alert - d), 2, d
-    if r2h is not None and r2h > 100:
+    if r2h is not None and r2h >= 100:
         d = 50 if lo else 0
         return max(0, alert - d), 3, d
     return alert, 0, 0      # 0 = 已判定且無需調整（區別於 None = 無法判定）
