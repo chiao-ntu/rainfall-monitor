@@ -290,9 +290,12 @@ def fetch_cwa_hourly():
 
 
 def fetch_swcb_hourly():
-    """水保署土石流參考雨量站 API：取 STRT（官方有效累積雨量 ETR2）。
-    此 API 只給累積量、不給時雨量，故 ETR2 逐時序列由本快照的差分推得。
-    回傳 {站名: ETR2}；失敗回 {}。"""
+    """水保署土石流參考雨量站 API：取 STRT 並換算為 ETR2(mm)。
+
+    ★★ STRT **直接就是有效累積雨量（毫米）**，切勿做任何比例換算。
+       實測佐證：曾誤乘 AlertValue，全臺 ETR2% 變成數千至上萬
+       （宜蘭南澳 13163%），恰為放大約警戒值倍數，證明原值即為毫米。
+    回傳 {站名: ETR2(mm)}；失敗回 {}。"""
     print("抓取水保署參考雨量站 ETR2...")
     for attempt in range(3):
         try:
@@ -308,7 +311,7 @@ def fetch_swcb_hourly():
             if attempt == 2: return {}
             time.sleep(3)
     if not isinstance(data, list): return {}
-    out = {}
+    out, clash = {}, {}
     for row in data:
         if not isinstance(row, dict): continue
         for nk, vk in (('STName1', 'STRT1'), ('STName2', 'STRT2')):
@@ -316,9 +319,32 @@ def fetch_swcb_hourly():
             try: v = float(row.get(vk))
             except (TypeError, ValueError): continue
             if not nm: continue
+            # 原名為權威鍵：同名同站，值理應相同；若不同則記錄以便查核
+            if nm in out and abs(out[nm] - v) > 0.05:
+                clash[nm] = (out[nm], v)
             out[nm] = v
-            out.setdefault(_stn_key(nm), v)
-    print(f"    {len(out)} 個站名鍵（含正規化鍵）")
+    # ★ 正規化鍵只在「不會撞名」時才建立。
+    #   全臺有 6 組站去尾字母後同名但屬不同機關、不同地點：
+    #     武陵/武陵w、關山/關山w、南庄/南庄w、外大坪/外大坪w、寒溪/寒溪s、雙溪/雙溪tp
+    #   舊版無條件 setdefault(_stn_key(nm), v)，使兩站塌成同一鍵，
+    #   對站時可能取到「另一個同名站」的 ETR2 —— 臺中和平區（武陵）即因此
+    #   出現本系統破百、水保署官網個位數的重大落差。
+    norm_owner = {}
+    for nm in list(out.keys()):
+        k = _stn_key(nm)
+        if k == nm or not k: continue
+        norm_owner.setdefault(k, set()).add(nm)
+    n_norm = 0
+    for k, owners in norm_owner.items():
+        if k in out: continue                 # 正規化名本身就是一個實際站名 → 不可覆蓋
+        if len(owners) > 1: continue          # ★ 撞名 → 不建立正規化鍵，寧可對不到也不可對錯
+        out[k] = out[next(iter(owners))]; n_norm += 1
+    skipped = sum(1 for k, o in norm_owner.items() if len(o) > 1 or k in out)
+    print(f"    {len(out)} 個站名鍵（正規化鍵 {n_norm} 個，"
+          f"因撞名或與實際站名衝突而略過 {skipped} 個）")
+    if clash:
+        print(f"    ⚠ {len(clash)} 個站名於不同溪流回傳不同 ETR2（取最後一筆）："
+              + "、".join(f"{k}({a}→{b})" for k, (a, b) in list(clash.items())[:5]))
     return out
 
 
@@ -367,6 +393,19 @@ def write_etr2_now(swcb, now_tpe):
             out[town] = best
         else:
             n_miss += 1
+
+    # ★ 量級防呆：ETR2% 理論上極少超過 300%（達 100% 即發布紅色警戒）。
+    #   曾因誤把 STRT 當比值再乘警戒值，全臺變成數千至上萬 %，
+    #   而該錯誤在單站數值上不易察覺。此處主動攔下並拒寫，避免污染前端。
+    _over = {k: round(v['pct']*100) for k, v in out.items() if v['pct'] > 3.0}
+    if _over:
+        top = sorted(_over.items(), key=lambda kv: -kv[1])[:5]
+        print(f"    ★ 異常：{len(_over)} 個鄉鎮 ETR2% 超過 300%（"
+              + "、".join(f"{k} {v}%" for k, v in top) + "）")
+        if len(_over) > max(5, len(out) * 0.2):
+            print("    ★★ 逾兩成鄉鎮異常，判定為單位或換算錯誤，不寫入 "
+                  f"{ETR2_FILE}（保留前一份，避免污染前端）")
+            return
 
     payload = {'updated': now_tpe.strftime('%Y-%m-%dT%H:%M'),
                'src': SWCB_RAIN_URL, 'townships': out, 'n': len(out)}

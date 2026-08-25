@@ -21,42 +21,44 @@ class R:
     def __init__(s, o): s.status_code = 200; s.content = json.dumps(o).encode()
 
 
-# ★ STRT 為 0~1 的達成比值，非毫米：ETR2(mm) = STRT × AlertValue
-# 兩個「武陵」：氣象署武陵 比值0.10（350×0.10=35mm）、水利署武陵w 比值0.95
+# ★ STRT 直接就是毫米
+# 兩個「武陵」：氣象署武陵 35mm、水利署武陵w 380mm
 DATA = [
     {"County": "臺中市", "Town": "和平區", "AlertValue": 350,
-     "STName1": "武陵",  "STRT1": 0.10, "STName2": "德基", "STRT2": 0.05},
+     "STName1": "武陵",  "STRT1": 35.0, "STName2": "德基", "STRT2": 12.0},
     {"County": "宜蘭縣", "Town": "大同鄉", "AlertValue": 400,
-     "STName1": "武陵w", "STRT1": 0.95, "STName2": "土場", "STRT2": 0.05},
+     "STName1": "武陵w", "STRT1": 380.0, "STName2": "土場", "STRT2": 20.0},
     # 不撞名者：正規化鍵應正常建立
     {"County": "南投縣", "Town": "仁愛鄉", "AlertValue": 400,
-     "STName1": "廬山國小s", "STRT1": 0.11, "STName2": "奧萬大", "STRT2": 0.075},
+     "STName1": "廬山國小s", "STRT1": 44.0, "STName2": "奧萬大", "STRT2": 30.0},
 ]
 
 H.requests = types.SimpleNamespace(get=lambda *a, **k: R(DATA))
 out = H.fetch_swcb_hourly()
 
-print('=== STRT 語意：比值×警戒值 = 毫米（依官方 API 文件範例）===')
-DOC = [{"County":"新北市","Town":"五股區","DebrisNO":"新北DF021","AlertValue":500,
-        "STName1":"社子","STRT1":0.05882449,"STName2":"關渡","STRT2":0.6567714}]
+print('=== STRT 語意：直接為毫米，不可做比例換算 ===')
+# ★ 曾誤將 STRT 乘上 AlertValue，導致全臺 ETR2% 破萬（宜蘭南澳 13163%）。
+#   此處以「量級合理性」把關：任一鄉鎮 ETR2% 不應超過 300%。
+DOC = [{"County":"宜蘭縣","Town":"南澳鄉","DebrisNO":"宜縣DF001","AlertValue":350,
+        "STName1":"南澳","STRT1":120.0,"STName2":"金洋","STRT2":80.0}]
 H.requests = types.SimpleNamespace(get=lambda *a, **k: R(DOC))
 doc = H.fetch_swcb_hourly()
-chk('社子 = 0.0588×500', doc.get('社子'), 29.4)
-chk('關渡 = 0.6568×500', doc.get('關渡'), 328.4)
-print(f"  （若誤當毫米，關渡達成率將為 {0.6567714/500*100:.4f}% —— 明顯荒謬）")
+chk('STRT 原樣即毫米（南澳 120mm）', doc.get('南澳'), 120.0)
+chk('STRT 原樣即毫米（金洋 80mm）', doc.get('金洋'), 80.0)
+print(f"  達成率 = 120/350 = {120/350*100:.0f}%（若誤乘警戒值會是 {120*350/350:.0f}00% 以上）")
 H.requests = types.SimpleNamespace(get=lambda *a, **k: R(DATA))
 out = H.fetch_swcb_hourly()
 
 print('=== 撞名站不得建立正規化鍵 ===')
-chk('武陵 = 0.10×350', out.get('武陵'), 35.0)
-chk('武陵w = 0.95×400', out.get('武陵w'), 380.0)
+chk('武陵 35mm', out.get('武陵'), 35.0)
+chk('武陵w 380mm', out.get('武陵w'), 380.0)
 # ★ 關鍵：正規化鍵「武陵」若被 武陵w 覆蓋，和平區就會拿到 380 而非 5
 chk('★正規化鍵未被另一站污染', out.get('武陵'), 35.0)
 
 print('\n=== 不撞名者仍建立正規化鍵（對站能力不受損）===')
-chk('廬山國小s = 0.11×400', out.get('廬山國小s'), 44.0)
+chk('廬山國小s 44mm', out.get('廬山國小s'), 44.0)
 chk('廬山國小（正規化）可對到', out.get('廬山國小'), 44.0)
-chk('奧萬大 = 0.075×400', out.get('奧萬大'), 30.0)
+chk('奧萬大 30mm', out.get('奧萬大'), 30.0)
 
 print('\n=== 聚合後的鄉鎮值 ===')
 # 用真實警戒表驗證和平區
@@ -81,6 +83,28 @@ if os.path.exists(slope):
     os.chdir(cwd); shutil.rmtree(tmp, ignore_errors=True)
 else:
     print('  （找不到 slope_warning_stations.json，略過聚合驗證）')
+
+print('\n=== 量級防呆：單位錯誤時拒寫檔 ===')
+if os.path.exists(slope):
+    import shutil, tempfile
+    from datetime import datetime
+    tmp2 = tempfile.mkdtemp(); cwd2 = os.getcwd()
+    shutil.copy(slope, tmp2); os.chdir(tmp2)
+    H.SLOPE_WARN_FILE = 'slope_warning_stations.json'; H.ETR2_FILE = 'etr2_now.json'
+    # 先寫一份正常的
+    H.write_etr2_now({'武陵': 35.0}, datetime(2026, 8, 20, 10, 0))
+    ok_exists = os.path.exists('etr2_now.json')
+    before = io.open('etr2_now.json', encoding='utf-8').read() if ok_exists else ''
+    # 再餵入「誤乘警戒值」的錯誤資料（全臺破萬%）
+    bad = {}
+    tw = json.load(io.open('slope_warning_stations.json', encoding='utf-8'))['townships']
+    for regs in tw.values():
+        for r in regs:
+            bad[r['station']] = r['alert'] * 100.0        # 模擬放大 100 倍
+    H.write_etr2_now(bad, datetime(2026, 8, 20, 11, 0))
+    after = io.open('etr2_now.json', encoding='utf-8').read() if os.path.exists('etr2_now.json') else ''
+    chk('★異常量級時不覆寫檔案（保留前一份）', after, before)
+    os.chdir(cwd2); shutil.rmtree(tmp2, ignore_errors=True)
 
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)
