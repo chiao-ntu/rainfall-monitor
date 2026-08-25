@@ -21,30 +21,42 @@ class R:
     def __init__(s, o): s.status_code = 200; s.content = json.dumps(o).encode()
 
 
-# 兩個「武陵」：氣象署武陵 ETR2=5mm，水利署武陵w ETR2=380mm
+# ★ STRT 為 0~1 的達成比值，非毫米：ETR2(mm) = STRT × AlertValue
+# 兩個「武陵」：氣象署武陵 比值0.10（350×0.10=35mm）、水利署武陵w 比值0.95
 DATA = [
-    {"County": "臺中市", "Town": "和平區", "STName1": "武陵",  "STRT1": 5.0,
-     "STName2": "德基",   "STRT2": 12.0},
-    {"County": "宜蘭縣", "Town": "大同鄉", "STName1": "武陵w", "STRT1": 380.0,
-     "STName2": "土場",   "STRT2": 20.0},
+    {"County": "臺中市", "Town": "和平區", "AlertValue": 350,
+     "STName1": "武陵",  "STRT1": 0.10, "STName2": "德基", "STRT2": 0.05},
+    {"County": "宜蘭縣", "Town": "大同鄉", "AlertValue": 400,
+     "STName1": "武陵w", "STRT1": 0.95, "STName2": "土場", "STRT2": 0.05},
     # 不撞名者：正規化鍵應正常建立
-    {"County": "南投縣", "Town": "仁愛鄉", "STName1": "廬山國小s", "STRT1": 44.0,
-     "STName2": "奧萬大",    "STRT2": 30.0},
+    {"County": "南投縣", "Town": "仁愛鄉", "AlertValue": 400,
+     "STName1": "廬山國小s", "STRT1": 0.11, "STName2": "奧萬大", "STRT2": 0.075},
 ]
 
 H.requests = types.SimpleNamespace(get=lambda *a, **k: R(DATA))
 out = H.fetch_swcb_hourly()
 
+print('=== STRT 語意：比值×警戒值 = 毫米（依官方 API 文件範例）===')
+DOC = [{"County":"新北市","Town":"五股區","DebrisNO":"新北DF021","AlertValue":500,
+        "STName1":"社子","STRT1":0.05882449,"STName2":"關渡","STRT2":0.6567714}]
+H.requests = types.SimpleNamespace(get=lambda *a, **k: R(DOC))
+doc = H.fetch_swcb_hourly()
+chk('社子 = 0.0588×500', doc.get('社子'), 29.4)
+chk('關渡 = 0.6568×500', doc.get('關渡'), 328.4)
+print(f"  （若誤當毫米，關渡達成率將為 {0.6567714/500*100:.4f}% —— 明顯荒謬）")
+H.requests = types.SimpleNamespace(get=lambda *a, **k: R(DATA))
+out = H.fetch_swcb_hourly()
+
 print('=== 撞名站不得建立正規化鍵 ===')
-chk('武陵（原名）取得自己的值', out.get('武陵'), 5.0)
-chk('武陵w（原名）取得自己的值', out.get('武陵w'), 380.0)
+chk('武陵 = 0.10×350', out.get('武陵'), 35.0)
+chk('武陵w = 0.95×400', out.get('武陵w'), 380.0)
 # ★ 關鍵：正規化鍵「武陵」若被 武陵w 覆蓋，和平區就會拿到 380 而非 5
-chk('★正規化鍵未被另一站污染', out.get('武陵'), 5.0)
+chk('★正規化鍵未被另一站污染', out.get('武陵'), 35.0)
 
 print('\n=== 不撞名者仍建立正規化鍵（對站能力不受損）===')
-chk('廬山國小s 原名', out.get('廬山國小s'), 44.0)
+chk('廬山國小s = 0.11×400', out.get('廬山國小s'), 44.0)
 chk('廬山國小（正規化）可對到', out.get('廬山國小'), 44.0)
-chk('奧萬大 無尾碼不需正規化', out.get('奧萬大'), 30.0)
+chk('奧萬大 = 0.075×400', out.get('奧萬大'), 30.0)
 
 print('\n=== 聚合後的鄉鎮值 ===')
 # 用真實警戒表驗證和平區
@@ -56,12 +68,12 @@ if os.path.exists(slope):
     H.SLOPE_WARN_FILE = 'slope_warning_stations.json'; H.ETR2_FILE = 'etr2_now.json'
     from datetime import datetime
     # 和平區 11 個單元，只給武陵有值（5mm / 警戒值350 = 1.4%）
-    H.write_etr2_now({'武陵': 5.0, '武陵w': 380.0}, datetime(2026, 8, 20, 10, 0))
+    H.write_etr2_now({'武陵': 35.0, '武陵w': 380.0}, datetime(2026, 8, 20, 10, 0))
     d = json.load(io.open('etr2_now.json', encoding='utf-8'))
     hp = d['townships'].get('臺中市和平區')
     print('  臺中市和平區:', json.dumps(hp, ensure_ascii=False) if hp else '（無）')
     if hp:
-        chk('★和平區取到武陵的 5mm 而非武陵w 的 380mm', hp['etr2'], 5.0)
+        chk('★和平區取到武陵的 35mm 而非武陵w 的 380mm', hp['etr2'], 35.0)
         pct = hp['pct'] * 100
         print(f"  ETR2% = {pct:.1f}%（若誤用武陵w 會是 {380/hp['alert']*100:.0f}%）")
         if pct > 50: fails.append(f'和平區 ETR2% 仍異常偏高（{pct:.1f}%）')

@@ -124,7 +124,18 @@ def fetch_debris_alerts():
 
 def fetch_swcb_etr2():
     """抓水保署土石流參考雨量站 API → 回傳「站名 → ETR2(mm)」對照表。
-    STRT = 該站有效累積雨量（官方同源）。含原名與正規化名兩種鍵以利對站。
+
+    ★★ STRT 的語意（依官方 API 文件範例）：
+        {"DebrisNO":"新北DF021","AlertValue":500,
+         "STName1":"社子","STRT1":0.05882449,"STName2":"關渡","STRT2":0.6567714}
+       STRT 是 **0~1 的「達成比值」**（ETR2 ÷ 該溪流警戒值），不是毫米數。
+       以上例驗證：0.6567714 × 500 = 328mm（達成率 65.7%），合理；
+       若當成 mm 則達成率僅 0.13%，明顯荒謬。
+       ⚠ 本函式原將 STRT 誤當毫米，導致下游計算全錯（臺中和平區
+         官網 33%、本系統卻顯示 119%）。故此處一律換算為毫米：
+             ETR2(mm) = STRT × AlertValue（該筆溪流自己的警戒值）
+       同一站可能出現在多條警戒值不同的溪流中，換算後的毫米值應一致；
+       若不一致則記錄警告以便查核。
     副作用：同時填充模組級 SWCB_STN_LOC（(縣市,鄉鎮) → {站名: ETR2}），
       供大崩代表站找不到時「同鄉鎮／同縣市相似名」替代之用——這樣模糊比對
       有地理範圍約束，不會把「大武」誤配到隔縣的「大武山」。
@@ -152,12 +163,18 @@ def fetch_swcb_etr2():
         return {}
     st_val = {}
     SWCB_STN_LOC.clear()
+    _mm_clash = {}
     for row in data:
         _cty = (row.get('County') or '').strip()
         _twn = (row.get('Town') or '').strip()
+        _av = num(row.get('AlertValue'))
+        if not _av or _av <= 0: continue        # 無警戒值無法換算比值→毫米
         for nk, vk in [('STName1','STRT1'), ('STName2','STRT2')]:
-            nm = (row.get(nk) or '').strip(); v = num(row.get(vk))
-            if not nm or v is None: continue
+            nm = (row.get(nk) or '').strip(); ratio = num(row.get(vk))
+            if not nm or ratio is None: continue
+            v = round(ratio * _av, 1)           # ★ 比值 × 該溪流警戒值 = ETR2(mm)
+            if nm in st_val and abs(st_val[nm] - v) > 1.0:
+                _mm_clash[nm] = (st_val[nm], v)
             st_val[nm] = v                      # 原名為權威鍵
             if _cty and _twn:
                 SWCB_STN_LOC.setdefault((_cty, _twn), {})[nm] = v
@@ -175,6 +192,9 @@ def fetch_swcb_etr2():
         if k in st_val: continue
         if len(owners) > 1: continue            # 撞名 → 不建立，寧可對不到也不對錯
         st_val[k] = st_val[next(iter(owners))]; _n_norm += 1
+    if _mm_clash:
+        print(f"    ⚠ {len(_mm_clash)} 個站換算後毫米值不一致（取最後一筆）："
+              + "、".join(f"{k}({a}→{b})" for k, (a, b) in list(_mm_clash.items())[:5]))
     print(f"    水保署ETR2：{len(data)} 條潛勢溪流、{len(st_val)} 個站名鍵"
           f"（正規化鍵 {_n_norm} 個，撞名略過 "
           f"{sum(1 for k,o in _owner.items() if len(o)>1)} 個）、"

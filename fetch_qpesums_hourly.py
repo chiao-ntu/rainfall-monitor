@@ -290,9 +290,13 @@ def fetch_cwa_hourly():
 
 
 def fetch_swcb_hourly():
-    """水保署土石流參考雨量站 API：取 STRT（官方有效累積雨量 ETR2）。
-    此 API 只給累積量、不給時雨量，故 ETR2 逐時序列由本快照的差分推得。
-    回傳 {站名: ETR2}；失敗回 {}。"""
+    """水保署土石流參考雨量站 API：取 STRT 並換算為 ETR2(mm)。
+
+    ★★ STRT 是 **0~1 的達成比值**（ETR2 ÷ 該溪流警戒值），不是毫米數。
+       官方 API 文件範例：AlertValue=500、STRT2=0.6567714
+       → ETR2 = 0.657 × 500 = 328mm（達成率 65.7%）。
+       原將其誤當毫米，使下游全部算錯（和平區官網 33%、本系統 119%）。
+    回傳 {站名: ETR2(mm)}；失敗回 {}。"""
     print("抓取水保署參考雨量站 ETR2...")
     for attempt in range(3):
         try:
@@ -311,11 +315,15 @@ def fetch_swcb_hourly():
     out, clash = {}, {}
     for row in data:
         if not isinstance(row, dict): continue
+        try: av = float(row.get('AlertValue'))
+        except (TypeError, ValueError): continue
+        if av <= 0: continue                       # 無警戒值無法由比值換算毫米
         for nk, vk in (('STName1', 'STRT1'), ('STName2', 'STRT2')):
             nm = (row.get(nk) or '').strip()
-            try: v = float(row.get(vk))
+            try: ratio = float(row.get(vk))
             except (TypeError, ValueError): continue
             if not nm: continue
+            v = round(ratio * av, 1)               # ★ 比值 × 該溪流警戒值 = ETR2(mm)
             # 原名為權威鍵：同名同站，值理應相同；若不同則記錄以便查核
             if nm in out and abs(out[nm] - v) > 0.05:
                 clash[nm] = (out[nm], v)
