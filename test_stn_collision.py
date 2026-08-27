@@ -136,5 +136,57 @@ if os.path.exists(slope):
     chk('★異常量級時不覆寫檔案（保留前一份）', after, before)
     os.chdir(cwd2); shutil.rmtree(tmp2, ignore_errors=True)
 
+
+print('\n=== 稽核實測：5 個高風險鄉鎮必須取到正確的站 ===')
+# ★ 2026-08-27 全臺稽核實測結果（30 個同名多站、5 個鄉鎮舊法接錯）
+#   下列資料重現該 5 例的關鍵結構，確保地理對站能正確區分。
+AUDIT = [
+ # 關山：三個 STID，關山鎮與海端鄉各有自己的「關山」單元
+ {"County":"臺東縣","Town":"關山鎮","AlertValue":500,
+  "STID1":"C1O880","STName1":"關山","STRT1":139.0,
+  "STID2":"81S570","STName2":"月眉國小s","STRT2":139.0},
+ {"County":"臺東縣","Town":"海端鄉","AlertValue":450,
+  "STID1":"C0S890","STName1":"關山","STRT1":153.9,
+  "STID2":"81S900","STName2":"加拿國小s","STRT2":153.9},
+ {"County":"高雄市","Town":"六龜區","AlertValue":250,
+  "STID1":"01O760","STName1":"關山","STRT1":254.0,      # ← 舊法會用這個覆蓋上面兩個
+  "STID2":"C1V340","STName2":"大津","STRT2":386.8},
+ # 大坑：臺中北屯/潭子 與 花蓮壽豐 同名
+ {"County":"臺中市","Town":"北屯區","AlertValue":500,
+  "STID1":"C0F970","STName1":"大坑","STRT1":89.5,
+  "STID2":"C0F970","STName2":"大坑","STRT2":89.5},
+ {"County":"花蓮縣","Town":"壽豐鄉","AlertValue":400,
+  "STID1":"C0T9E0","STName1":"大坑","STRT1":152.5,      # ← 舊法會用這個覆蓋臺中
+  "STID2":"C0T870","STName2":"鯉魚潭","STRT2":224.6},
+]
+H.requests = types.SimpleNamespace(get=lambda *a, **k: R(AUDIT))
+au = H.fetch_swcb_hourly()
+chk('關山對應多 STID → 不建站名鍵', au.get('關山'), None)
+chk('大坑對應多 STID → 不建站名鍵', au.get('大坑'), None)
+chk('地理索引：關山鎮的關山', H.SWCB_BY_LOC.get(('臺東縣','關山鎮','關山')), 139.0)
+chk('地理索引：海端鄉的關山', H.SWCB_BY_LOC.get(('臺東縣','海端鄉','關山')), 153.9)
+chk('地理索引：六龜區的關山', H.SWCB_BY_LOC.get(('高雄市','六龜區','關山')), 254.0)
+chk('地理索引：北屯區的大坑', H.SWCB_BY_LOC.get(('臺中市','北屯區','大坑')), 89.5)
+chk('地理索引：壽豐鄉的大坑', H.SWCB_BY_LOC.get(('花蓮縣','壽豐鄉','大坑')), 152.5)
+
+if os.path.exists(slope):
+    import shutil, tempfile
+    from datetime import datetime
+    tmp4 = tempfile.mkdtemp(); cwd4 = os.getcwd()
+    shutil.copy(slope, tmp4); os.chdir(tmp4)
+    H.SLOPE_WARN_FILE = 'slope_warning_stations.json'; H.ETR2_FILE = 'etr2_now.json'
+    H.write_etr2_now(au, datetime(2026, 8, 27, 12, 0))
+    dd4 = json.load(io.open('etr2_now.json', encoding='utf-8'))['townships']
+    for town, want_pct, want_mm in [('臺東縣關山鎮', 27.8, 139.0),
+                                    ('臺東縣海端鄉', 34.2, 153.9),
+                                    ('臺中市北屯區', 17.9, 89.5)]:
+        r4 = dd4.get(town)
+        got = round(r4['pct']*100, 1) if r4 else None
+        ok = got is not None and abs(got - want_pct) < 0.6
+        if not ok: fails.append(f'{town} ETR2% {got} ≠ 稽核值 {want_pct}')
+        print(f"  {'OK ' if ok else '!! '}{town}: {got}%（稽核 {want_pct}%）"
+              + (f" 站={r4['station']}" if r4 else ''))
+    os.chdir(cwd4); shutil.rmtree(tmp4, ignore_errors=True)
+
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)
