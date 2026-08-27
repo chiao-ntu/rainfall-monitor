@@ -30,6 +30,8 @@ HOURLY_FILE   = "rain_hourly.json"
 #   寫獨立檔，與 radar.json 同策略：兩支 workflow 各寫各檔，永不搶寫 data.json。
 ETR2_FILE     = "etr2_now.json"
 SLOPE_WARN_FILE = "slope_warning_stations.json"
+# (縣市, 鄉鎮, 站名) → ETR2(mm)：由 fetch_swcb_hourly 填充，供聚合精準對站
+SWCB_BY_LOC = {}
 OBS_URL       = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0002-001"
 SWCB_RAIN_URL = "https://246.ardswc.gov.tw/webService/GetDebrisRainData.ashx"
 KEEP_SERIES_HOURS = 168   # 保留7日＝官方有效累積雨量的前期降雨時段（α=0.7、7日）
@@ -311,18 +313,52 @@ def fetch_swcb_hourly():
             if attempt == 2: return {}
             time.sleep(3)
     if not isinstance(data, list): return {}
-    out, clash = {}, {}
+    # ★★ 以 STID（測站唯一代號）為主鍵，站名僅作備援。
+    #   全臺有同名不同站的情形，例如「武陵」：
+    #     臺中和平 STID=A0F010（STRT 33.7，警戒值350）
+    #     臺東延平 STID=01S130（STRT 162 ，警戒值450）
+    #   舊版以站名為鍵，臺東的值覆蓋臺中，使和平區 ETR2 憑空放大數倍
+    #   （官網 51mm/14%，本系統卻顯示 305mm/87%）。
+    #   STRT 本身即為有效累積雨量（毫米），不需任何比例換算。
+    by_id, by_name, name_ids = {}, {}, {}
     for row in data:
         if not isinstance(row, dict): continue
+        for ik, nk, vk in (('STID1', 'STName1', 'STRT1'), ('STID2', 'STName2', 'STRT2')):
+            nm = (row.get(nk) or '').strip()
+            sid = (row.get(ik) or '').strip()
+            try: v = float(row.get(vk))
+            except (TypeError, ValueError): continue
+            if not nm and not sid: continue
+            if sid: by_id[sid] = v
+            if nm:
+                name_ids.setdefault(nm, set()).add(sid or nm)
+                by_name[nm] = v
+    # ★ 地理索引：(縣市, 鄉鎮, 站名) → 值。
+    #   警戒表只有站名沒有 STID，故聚合時以「該鄉鎮自己的那筆」為準，
+    #   同名站便由地理位置自然區分（臺中武陵 vs 臺東武陵）。
+    global SWCB_BY_LOC
+    SWCB_BY_LOC = {}
+    for row in data:
+        if not isinstance(row, dict): continue
+        cty = (row.get('County') or '').strip()
+        twn = (row.get('Town') or '').strip()
+        if not cty or not twn: continue
         for nk, vk in (('STName1', 'STRT1'), ('STName2', 'STRT2')):
             nm = (row.get(nk) or '').strip()
             try: v = float(row.get(vk))
             except (TypeError, ValueError): continue
-            if not nm: continue
-            # 原名為權威鍵：同名同站，值理應相同；若不同則記錄以便查核
-            if nm in out and abs(out[nm] - v) > 0.05:
-                clash[nm] = (out[nm], v)
-            out[nm] = v
+            if nm: SWCB_BY_LOC[(cty, twn, nm)] = v
+
+    out, clash = {}, {}
+    out.update(by_id)                       # STID 鍵（權威）
+    # 站名鍵：僅在該名稱全臺對應唯一 STID 時才建立，避免跨縣市覆蓋
+    n_amb = 0
+    for nm, ids in name_ids.items():
+        if len(ids) > 1:
+            n_amb += 1
+            clash[nm] = tuple(sorted(ids))[:2]
+            continue
+        out[nm] = by_name[nm]
     # ★ 正規化鍵只在「不會撞名」時才建立。
     #   全臺有 6 組站去尾字母後同名但屬不同機關、不同地點：
     #     武陵/武陵w、關山/關山w、南庄/南庄w、外大坪/外大坪w、寒溪/寒溪s、雙溪/雙溪tp
@@ -330,7 +366,8 @@ def fetch_swcb_hourly():
     #   對站時可能取到「另一個同名站」的 ETR2 —— 臺中和平區（武陵）即因此
     #   出現本系統破百、水保署官網個位數的重大落差。
     norm_owner = {}
-    for nm in list(out.keys()):
+    for nm in list(by_name.keys()):
+        if nm not in out: continue          # 同名多站者已排除，不建正規化鍵
         k = _stn_key(nm)
         if k == nm or not k: continue
         norm_owner.setdefault(k, set()).add(nm)
@@ -343,8 +380,8 @@ def fetch_swcb_hourly():
     print(f"    {len(out)} 個站名鍵（正規化鍵 {n_norm} 個，"
           f"因撞名或與實際站名衝突而略過 {skipped} 個）")
     if clash:
-        print(f"    ⚠ {len(clash)} 個站名於不同溪流回傳不同 ETR2（取最後一筆）："
-              + "、".join(f"{k}({a}→{b})" for k, (a, b) in list(clash.items())[:5]))
+        print(f"    ⚠ {n_amb} 個站名對應多個 STID（已改用 STID 區分，不建站名鍵）："
+              + "、".join(f"{k}{list(v)}" for k, v in list(clash.items())[:4]))
     return out
 
 
@@ -378,11 +415,18 @@ def write_etr2_now(swcb, now_tpe):
             if not alert or alert <= 0:
                 continue
             v = None
-            for nm in (r.get('station'), r.get('station_norm'),
-                       _stn_key(r.get('station') or '')):
-                if nm and nm in swcb:
-                    v = swcb[nm]
+            # ★ 先用 (縣市,鄉鎮,站名) 精準對站——同名站由地理位置區分，
+            #   避免臺東「武陵」的值被套用到臺中和平區的「武陵」。
+            for nm in (r.get('station'), r.get('station_norm')):
+                if nm and (town[:3], town[3:], nm) in SWCB_BY_LOC:
+                    v = SWCB_BY_LOC[(town[:3], town[3:], nm)]
                     break
+            if v is None:
+                for nm in (r.get('station'), r.get('station_norm'),
+                           _stn_key(r.get('station') or '')):
+                    if nm and nm in swcb:
+                        v = swcb[nm]
+                        break
             if v is None:
                 continue
             pct = v / alert

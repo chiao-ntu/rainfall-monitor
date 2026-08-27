@@ -22,7 +22,9 @@ SWCB_LSVAL_URL   = "https://246.ardswc.gov.tw/WebService/GetLSCountyTownAlertVal
 SWCB_EOCINFO_URL = "https://246.ardswc.gov.tw/webService/GetIDisasterInfo.ashx"   # 應變小組開設
 HEAVY_RAIN_COUNTY_TH = 150.0   # 「雨勢較大地區」縣市門檻：任一鄉鎮日累積達此值即納入
 HOURLY_FILE = "rain_hourly.json"   # 由 fetch_qpesums_hourly.py 每小時寫入（本腳本只讀）
-SWCB_STN_LOC = {}   # (縣市,鄉鎮) → {站名: ETR2}；由 fetch_swcb_etr2() 填充
+SWCB_STN_LOC = {}
+# (縣市, 鄉鎮, 站名) → ETR2(mm)：同名站以地理位置區分
+SWCB_BY_LOC = {}   # (縣市,鄉鎮) → {站名: ETR2}；由 fetch_swcb_etr2() 填充
 # 代表站對站層級的可讀名稱（log 與前端共用語彙）
 _LS_TIER_NAME = {'exact': '代表站精確', 'norm': '代表站正規化',
                  'near_town': '同鄉鎮相似站', 'near_county': '同縣市相似站',
@@ -158,21 +160,37 @@ def fetch_swcb_etr2():
         return {}
     st_val = {}
     SWCB_STN_LOC.clear()
+    SWCB_BY_LOC.clear()
+    _name_ids = {}
     for row in data:
         _cty = (row.get('County') or '').strip()
         _twn = (row.get('Town') or '').strip()
-        for nk, vk in [('STName1','STRT1'), ('STName2','STRT2')]:
+        for ik, nk, vk in [('STID1','STName1','STRT1'), ('STID2','STName2','STRT2')]:
             nm = (row.get(nk) or '').strip(); v = num(row.get(vk))
-            if not nm or v is None: continue
-            st_val[nm] = v                      # 原名為權威鍵
-            if _cty and _twn:
-                SWCB_STN_LOC.setdefault((_cty, _twn), {})[nm] = v
+            sid = (row.get(ik) or '').strip()
+            if v is None or (not nm and not sid): continue
+            if sid: st_val[sid] = v             # ★ STID 為權威鍵（唯一識別）
+            if nm:
+                _name_ids.setdefault(nm, set()).add(sid or nm)
+                if _cty and _twn:
+                    SWCB_BY_LOC[(_cty, _twn, nm)] = v
+                    SWCB_STN_LOC.setdefault((_cty, _twn), {})[nm] = v
+    # ★ 站名鍵僅在該名稱全臺對應唯一 STID 時建立。
+    #   實例：「武陵」有臺中和平 A0F010（33.7mm）與臺東延平 01S130（162mm）兩站，
+    #   以站名為鍵會讓臺東的值覆蓋臺中，使和平區 ETR2% 由 10% 暴增至 46%。
+    _n_amb = 0
+    for nm, ids in _name_ids.items():
+        if len(ids) > 1: _n_amb += 1
+    for nm, ids in _name_ids.items():
+        if len(ids) > 1: continue
+        sid = next(iter(ids))
+        if sid in st_val: st_val[nm] = st_val[sid]
     # ★ 正規化鍵僅在不撞名時建立（與 fetch_qpesums_hourly.py 同一規則）。
     #   全臺有 6 組站去尾字母後同名但屬不同機關、不同地點（武陵/武陵w、
     #   關山/關山w、南庄/南庄w、外大坪/外大坪w、寒溪/寒溪s、雙溪/雙溪tp）。
     #   舊版無條件 setdefault 會讓兩站塌成一鍵，對站時可能取到另一站的 ETR2。
     _owner = {}
-    for nm in list(st_val.keys()):
+    for nm in [k for k in _name_ids if len(_name_ids[k]) == 1 and k in st_val]:
         k = _stn_key(nm)
         if k == nm or not k: continue
         _owner.setdefault(k, set()).add(nm)
@@ -181,9 +199,9 @@ def fetch_swcb_etr2():
         if k in st_val: continue
         if len(owners) > 1: continue            # 撞名 → 不建立，寧可對不到也不對錯
         st_val[k] = st_val[next(iter(owners))]; _n_norm += 1
-    print(f"    水保署ETR2：{len(data)} 條潛勢溪流、{len(st_val)} 個站名鍵"
-          f"（正規化鍵 {_n_norm} 個，撞名略過 "
-          f"{sum(1 for k,o in _owner.items() if len(o)>1)} 個）、"
+    print(f"    水保署ETR2：{len(data)} 條潛勢溪流、{len(st_val)} 個鍵"
+          f"（STID＋唯一站名；正規化鍵 {_n_norm} 個，"
+          f"同名多站 {_n_amb} 個改以 STID/地理區分）、"
           f"{len(SWCB_STN_LOC)} 個鄉鎮位置索引")
     return st_val
 
@@ -833,7 +851,15 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                 # ① 官方值優先（水保署 API）
                 ev = None; src = None
                 if swcb_etr2:
-                    ev = swcb_etr2.get(stn)
+                    # ★ 先以 (縣市, 鄉鎮, 站名) 精準對站：同名站由地理位置區分。
+                    #   「武陵」在臺中和平(33.7mm)與臺東延平(162mm)各有一站，
+                    #   僅用站名會取到錯的那個，使和平區 ETR2% 由 10% 暴增至 46%。
+                    _c, _t = td['county'], td['township']
+                    for _nm in (stn, reg.get('station_norm')):
+                        if _nm and (_c, _t, _nm) in SWCB_BY_LOC:
+                            ev = SWCB_BY_LOC[(_c, _t, _nm)]; break
+                    if ev is None:
+                        ev = swcb_etr2.get(stn)
                     if ev is None:
                         ev = swcb_etr2.get(reg.get('station_norm') or _stn_key(stn))
                     if ev is None:

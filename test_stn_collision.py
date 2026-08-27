@@ -36,16 +36,47 @@ DATA = [
 H.requests = types.SimpleNamespace(get=lambda *a, **k: R(DATA))
 out = H.fetch_swcb_hourly()
 
-print('=== STRT 語意：直接為毫米，不可做比例換算 ===')
-# ★ 曾誤將 STRT 乘上 AlertValue，導致全臺 ETR2% 破萬（宜蘭南澳 13163%）。
-#   此處以「量級合理性」把關：任一鄉鎮 ETR2% 不應超過 300%。
-DOC = [{"County":"宜蘭縣","Town":"南澳鄉","DebrisNO":"宜縣DF001","AlertValue":350,
-        "STName1":"南澳","STRT1":120.0,"STName2":"金洋","STRT2":80.0}]
-H.requests = types.SimpleNamespace(get=lambda *a, **k: R(DOC))
-doc = H.fetch_swcb_hourly()
-chk('STRT 原樣即毫米（南澳 120mm）', doc.get('南澳'), 120.0)
-chk('STRT 原樣即毫米（金洋 80mm）', doc.get('金洋'), 80.0)
-print(f"  達成率 = 120/350 = {120/350*100:.0f}%（若誤乘警戒值會是 {120*350/350:.0f}00% 以上）")
+slope = '/mnt/user-data/uploads/slope_warning_stations.json'
+print('=== 真實資料：同名不同站必須以地理位置區分 ===')
+# ★ 使用者於 2026-08-26 自 API 實抓的原始資料（節錄）
+REAL = [
+ {"County":"臺中市","Town":"和平區","Vill":"平等里","DebrisNO":"中市DF037","AlertValue":350,
+  "STID1":"A0F010","STName1":"武陵","STRT1":33.726505,
+  "STID2":"C0F9Z0","STName2":"雪山東峰","STRT2":82.583374},
+ {"County":"臺中市","Town":"和平區","Vill":"平等里","DebrisNO":"中市DF038","AlertValue":350,
+  "STID1":"A0F010","STName1":"武陵","STRT1":33.726505,
+  "STID2":"C0F9Z0","STName2":"雪山東峰","STRT2":82.583374},
+ {"County":"臺東縣","Town":"延平鄉","Vill":"武陵村","DebrisNO":"東縣DF028","AlertValue":450,
+  "STID1":"01S130","STName1":"武陵","STRT1":162,
+  "STID2":"C0SA40","STName2":"瑞和","STRT2":0},
+]
+H.requests = types.SimpleNamespace(get=lambda *a, **k: R(REAL))
+rl = H.fetch_swcb_hourly()
+chk('STRT 即毫米，不做換算（臺中武陵 STID）', rl.get('A0F010'), 33.726505)
+chk('臺東武陵 STID 各自獨立', rl.get('01S130'), 162.0)
+chk('★同名多站 → 不建立站名鍵（避免覆蓋）', rl.get('武陵'), None)
+chk('唯一站名仍可用站名對到', rl.get('雪山東峰'), 82.583374)
+chk('地理索引：臺中和平的武陵', H.SWCB_BY_LOC.get(('臺中市','和平區','武陵')), 33.726505)
+chk('地理索引：臺東延平的武陵', H.SWCB_BY_LOC.get(('臺東縣','延平鄉','武陵')), 162.0)
+
+print('\n=== 聚合：和平區必須取 33.7 而非 162 ===')
+if os.path.exists(slope):
+    import shutil, tempfile
+    from datetime import datetime
+    tmp3 = tempfile.mkdtemp(); cwd3 = os.getcwd()
+    shutil.copy(slope, tmp3); os.chdir(tmp3)
+    H.SLOPE_WARN_FILE = 'slope_warning_stations.json'; H.ETR2_FILE = 'etr2_now.json'
+    H.write_etr2_now(rl, datetime(2026, 8, 26, 12, 0))
+    dd = json.load(io.open('etr2_now.json', encoding='utf-8'))
+    hp3 = dd['townships'].get('臺中市和平區')
+    print('  和平區:', json.dumps(hp3, ensure_ascii=False) if hp3 else '（無）')
+    if hp3:
+        chk('★和平區 ETR2 取臺中武陵 33.7', round(hp3['etr2'], 1), 33.7)
+        pct3 = hp3['pct'] * 100
+        print(f"  ETR2% = {pct3:.1f}%（誤用臺東 162 會是 {162/350*100:.0f}%）")
+        if pct3 > 30: fails.append(f'和平區 ETR2% 仍偏高（{pct3:.1f}%）')
+        else: print('  OK  與官網量級一致')
+    os.chdir(cwd3); shutil.rmtree(tmp3, ignore_errors=True)
 H.requests = types.SimpleNamespace(get=lambda *a, **k: R(DATA))
 out = H.fetch_swcb_hourly()
 
@@ -62,7 +93,6 @@ chk('奧萬大 30mm', out.get('奧萬大'), 30.0)
 
 print('\n=== 聚合後的鄉鎮值 ===')
 # 用真實警戒表驗證和平區
-slope = '/mnt/user-data/uploads/slope_warning_stations.json'
 if os.path.exists(slope):
     import shutil, tempfile
     tmp = tempfile.mkdtemp(); cwd = os.getcwd()
