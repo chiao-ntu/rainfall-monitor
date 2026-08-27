@@ -37,6 +37,7 @@ MUST = ['getAccum', 'setWin', 'onSlider', '_spanAccum', '_hourlyBars', '_futuHou
         'townMetrics', 'townToday', '_tmKey',
         '_etr2NowRow', '_etr2NowLabel', '_safeCall',
         'toggleTownNameLayer', 'renderTownNameLayer', 'setTownNameScope',
+        'toggleTySec', '_tySecKey', '_tySecOpenHtml', '_tySecClose',
         '_townCentroid', '_buildTownNameScope', '_tyWarnList', '_tyWarnStale', '_tyWarnList', '_tyWarnStale', '_etr2HourlySeries', '_calcDistrictDaily',
         '_calcDistrictHyeto',
         'downloadRangeCsv', 'toggleMapPanel',

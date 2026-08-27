@@ -5192,6 +5192,17 @@ function renderTownNameLayer(){
   (TOWN_GEO.features||[]).forEach(f=>{
     const p = f.properties || {};
     if(!all && p.COUNTYNAME !== townNameScope) return;
+    // 鄉鎮市區界：比縣市界細、顏色更淡，只描邊不填色，
+    // 且不攔截滑鼠事件（interactive:false），以免蓋住底下鄉鎮的點選與 tooltip。
+    const g = f.geometry;
+    const polys = g ? (g.type === 'Polygon' ? [g.coordinates]
+                     : g.type === 'MultiPolygon' ? g.coordinates : []) : [];
+    polys.forEach(poly=>{
+      const ring = (poly[0] || []).map(c=>[c[1], c[0]]);
+      if(ring.length < 3) return;
+      L.polyline(ring.concat([ring[0]]), {color:'#9ab8d0', weight:0.6, opacity:0.45,
+        fill:false, interactive:false}).addTo(townNameLayer);
+    });
     const ll = _townCentroid(f);
     if(!ll) return;
     const nm = p.TOWNNAME || '';
@@ -5202,7 +5213,9 @@ function renderTownNameLayer(){
       iconSize:[0,0], iconAnchor:[0,0]}), interactive:false}).addTo(townNameLayer);
     n++;
   });
-  console.log(`鄉鎮市區名稱：${n} 個（${all ? '全臺' : townNameScope}，zoom ${z}）`);
+  console.log(`鄉鎮市區名稱＋界線：${n} 個（${all ? '全臺' : townNameScope}，zoom ${z}）`);
+  // 界線畫完後把縣市界拉回上層，維持「縣市界較粗、鄉鎮界較細」的層次
+  try{ if(typeof countyBorder !== 'undefined' && countyBorder) countyBorder.bringToFront(); }catch(e){}
 }
 
 function toggleDisasterLayer(){
@@ -5761,6 +5774,32 @@ const TY_TIME_STYLE = {
   '預計解除陸警時間': '#e8845a', '預計解除海警時間': '#6aa8e8',
 };
 
+// ── 颱風／TD 區塊收合 ──────────────────────────────
+//   每個系統（颱風或TD）各自一個可收合區塊，避免多個系統並存時
+//   資訊過長而看錯。收合狀態以「系統識別」為鍵，重繪後保留。
+const _tySecOpen = {};          // {key: true/false}；未設定者預設展開
+function _tySecKey(w, ty){
+  if(w) return 'W|' + (w.ty_no || w.name_zh || w.headline || '');
+  if(ty) return 'T|' + (ty.ty_no || ty.td_no || ty.name_zh || ty.name_en || '');
+  return '?';
+}
+function toggleTySec(key){
+  _tySecOpen[key] = (_tySecOpen[key] === false);   // undefined/true → false；false → true
+  updateTyphoonPanel();
+}
+// 產生可收合區塊的頭尾；title 為標題列文字（已含 HTML）
+function _tySecOpenHtml(key, titleHtml, col){
+  const open = _tySecOpen[key] !== false;
+  return `<div style="background:${col}22;border-left:3px solid ${col};
+      padding:4px 6px;border-radius:0 3px 3px 0;margin-bottom:4px;cursor:pointer"
+      onclick="toggleTySec('${key.replace(/'/g, "\\'")}')"
+      title="點擊${open ? '收合' : '展開'}此系統的詳細資訊">
+      <span style="color:#9ab8d8;font-size:9px">${open ? '▾' : '▸'}</span>
+      ${titleHtml}</div>`
+    + `<div style="display:${open ? 'block' : 'none'}">`;
+}
+function _tySecClose(){ return '</div>'; }
+
 function updateTyphoonPanel(){
   const body = document.getElementById('typhoon-panel-body');
   if(!body) return;
@@ -5777,19 +5816,18 @@ function updateTyphoonPanel(){
   warns.forEach(w=>{
     const isLand = /陸上/.test(w.severity_level || w.headline || '');
     const col = isLand ? '#ff6a5a' : '#f5a623';
-    // 標題列
-    h += `<div style="background:${col}22;border-left:3px solid ${col};padding:4px 6px;
-      border-radius:0 3px 3px 0;margin-bottom:4px">
-      <div style="font-weight:700;color:${col};font-size:12px">
-        ${w.severity_level || w.headline || '颱風警報'}
-        ${w.report_no ? `<span style="font-size:10px;font-weight:400">第${w.report_no}報</span>` : ''}</div>
+    const _k = _tySecKey(w, null);
+    // 標題列（可點擊收合）
+    h += _tySecOpenHtml(_k, `
+      <span style="font-weight:700;color:${col};font-size:12px">
+        ${w.severity_level || w.headline || '颱風警報'}${w.report_no
+          ? `<span style="font-size:10px;font-weight:400">第${w.report_no}報</span>` : ''}</span>
       <div style="font-size:11px;color:#e8c8ff;font-weight:700;margin-top:1px">
         ${w.name_zh || ''}${w.name_en ? `<span style="color:#9a8aaa;font-weight:400"> ${w.name_en}</span>` : ''}
         ${w.ty_no ? `<span style="color:#9a8aaa;font-weight:400">　編號 ${w.ty_no}</span>` : ''}</div>
       <div style="font-size:10px;color:#b8a8c8;margin-top:1px">
         發布 ${(w.effective||'').replace('T',' ').slice(0,16) || '—'}
-        <span style="color:#7a6a8a">${w.sender||'中央氣象署'}</span></div>
-    </div>`;
+        <span style="color:#7a6a8a">${w.sender||'中央氣象署'}</span></div>`, col);
 
     // 雨勢較大地區
     h += `<div style="${SEC}">雨勢較大地區（日累積≥${th}mm）</div>
@@ -5819,6 +5857,7 @@ function updateTyphoonPanel(){
       h += `<div style="font-size:9px;color:#7a6a8a;margin-top:2px">
         官方警戒區域：${w.areas.join('、')}</div>`;
     }
+    h += _tySecClose();
   });
 
   // 無警報但有活動中系統（熱帶性低氣壓／尚未發布警報之颱風）
@@ -5834,16 +5873,16 @@ function updateTyphoonPanel(){
                   : (ty.td_no ? `熱帶性低壓編號 ${ty.td_no}` : '未編號');
       const sub = [ty.name_zh && ty.name_en ? ty.name_en : '', noTxt]
                   .filter(Boolean).join('　');
-      h += `<div style="background:${it.color}22;border-left:3px solid ${it.color};
-        padding:4px 6px;border-radius:0 3px 3px 0;margin-bottom:4px">
-        <div style="font-weight:700;color:${it.color};font-size:12px">${it.name}
-          <span style="font-size:10px;font-weight:400;color:#8a7a9a">尚未發布颱風警報</span></div>
+      const _kt = _tySecKey(null, ty);
+      h += _tySecOpenHtml(_kt, `
+        <span style="font-weight:700;color:${it.color};font-size:12px">${it.name}
+          <span style="font-size:10px;font-weight:400;color:#8a7a9a">尚未發布颱風警報</span></span>
         <div style="font-size:11px;color:#e8c8ff;font-weight:700;margin-top:1px">${nm}
           <span style="color:#9a8aaa;font-weight:400">　${sub}</span></div>
         <div style="font-size:10px;color:#b8a8c8;margin-top:1px">
           資料時間 ${(cur.t || '').replace('T',' ').slice(0,16) || '—'}
-          <span style="color:#7a6a8a">（中央氣象署颱風路徑資料）</span></div>
-      </div>
+          <span style="color:#7a6a8a">（中央氣象署颱風路徑資料）</span></div>`, it.color)
+        + `
         <div style="${SEC}">目前強度與位置</div>
         <div style="font-size:10px;color:#c8b8d8;line-height:1.55">
           中心位置：${cur.lat ?? '—'}N / ${cur.lng ?? '—'}E<br>
@@ -5870,6 +5909,7 @@ function updateTyphoonPanel(){
       // 雨勢較大地區（與有警報時一致，TD 也需要）
       h += `<div style="${SEC}">雨勢較大地區（日累積≥${th}mm）</div>
         <div style="font-size:10px;color:#c8b8d8;line-height:1.5">${_heavyRainLine()}</div>`;
+      h += _tySecClose();
       h += `<div style="${SEC}">警報時間（系統依預報路徑推估）</div>`;
       _tyAlertTimes(ty).forEach(([k, v])=>{
         const c = TY_TIME_STYLE[k] || '#8ab8d8';

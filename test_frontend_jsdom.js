@@ -1687,6 +1687,49 @@ if (need('toggleTownNameLayer') && need('_townCentroid') && need('setTownNameSco
   chk('第一項為 ALL', first, 'ALL');
 }
 
+
+// ════════ 31. 颱風區塊收合 ＋ 鄉鎮界線 ════════
+console.log('\n=== 颱風／TD 區塊收合 ===');
+if (need('toggleTySec') && need('_tySecKey') && need('updateTyphoonPanel')) {
+  setLex("document.body.insertAdjacentHTML('beforeend','<div id=\"typhoon-panel-body\"></div>');");
+  setLex("window.TYPHOON_WARN = []; window.TYPHOON_TRACK = [{name_zh:'', ty_no:'', td_no:'20'," +
+    "current:{t:'" + new Date().toISOString() + "', lat:20.5, lng:125.3, ws:15, gust:23, p:1000, r15:80, r25:0}," +
+    "forecast:[{fh:24, lat:21.5, lng:123.0, ws:16, r15:90, r70:120}]}];");
+  G.updateTyphoonPanel();
+  const html1 = getLex("document.getElementById('typhoon-panel-body').innerHTML") || '';
+  chk('預設展開（▾）', /▾/.test(html1), true);
+  chk('展開時內容可見', /display:block/.test(html1), true);
+  chk('標題列可點擊收合', /toggleTySec\(/.test(html1), true);
+
+  // 收合後：內容隱藏、箭頭改變，但標題仍在
+  const key = G._tySecKey(null, getLex('window.TYPHOON_TRACK[0]'));
+  console.log(`   區塊鍵 = ${key}`);
+  G.toggleTySec(key);
+  const html2 = getLex("document.getElementById('typhoon-panel-body').innerHTML") || '';
+  chk('★收合後內容隱藏', /display:none/.test(html2), true);
+  chk('收合後箭頭為 ▸', /▸/.test(html2), true);
+  chk('收合後標題仍在（TD 編號）', /熱帶性低壓編號 20/.test(html2), true);
+
+  // 再點一次應展開；且狀態在重繪後保留
+  G.toggleTySec(key);
+  const html3 = getLex("document.getElementById('typhoon-panel-body').innerHTML") || '';
+  chk('再點展開', /display:block/.test(html3), true);
+  G.toggleTySec(key);
+  G.updateTyphoonPanel();                       // 重繪
+  const html4 = getLex("document.getElementById('typhoon-panel-body').innerHTML") || '';
+  chk('★收合狀態於重繪後保留', /display:none/.test(html4), true);
+  setLex("window.TYPHOON_TRACK = []; window.TYPHOON_WARN = [];");
+}
+
+console.log('\n=== 鄉鎮市區界線 ===');
+{
+  const html = fs.readFileSync('index.html', 'utf8');
+  chk('名稱圖層會畫界線', /鄉鎮市區界：比縣市界細/.test(html), true);
+  chk('界線不攔截滑鼠事件', /color:'#9ab8d0'[\s\S]{0,120}interactive:false/.test(html), true);
+  chk('界線比縣市界細（weight 0.6）', /color:'#9ab8d0', weight:0\.6/.test(html), true);
+  chk('繪後把縣市界拉回上層', /countyBorder\.bringToFront/.test(html), true);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);
