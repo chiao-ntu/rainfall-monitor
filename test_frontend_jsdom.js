@@ -1643,6 +1643,50 @@ if (need('calcRiskIndicator')) {
   else console.log(`  OK  下修有下限，ETR2 155% 仍保有 R=${dry.R}`);
 }
 
+
+// ════════ 30. 鄉鎮市區名稱圖層 ════════
+console.log('\n=== 鄉鎮市區名稱圖層 ===');
+if (need('toggleTownNameLayer') && need('_townCentroid') && need('setTownNameScope')) {
+  // 形心必須落在該鄉鎮的經緯度範圍內
+  const f = getLex('TOWN_GEO.features[0]');
+  const c = G._townCentroid(f);
+  console.log(`   ${f.properties.COUNTYNAME}${f.properties.TOWNNAME} 形心 = ` +
+              `${c ? c.map(v=>v.toFixed(3)).join(', ') : '—'}`);
+  if (!c) fails.push('形心計算失敗');
+  else {
+    // 與該 feature 的 bounds 比對
+    let laMin=99,laMax=-99,loMin=999,loMax=-999;
+    const g=f.geometry;
+    const polys = g.type==='Polygon'?[g.coordinates]:g.coordinates;
+    polys.forEach(p=>(p[0]||[]).forEach(pt=>{
+      laMin=Math.min(laMin,pt[1]); laMax=Math.max(laMax,pt[1]);
+      loMin=Math.min(loMin,pt[0]); loMax=Math.max(loMax,pt[0]);
+    }));
+    const inside = c[0]>=laMin && c[0]<=laMax && c[1]>=loMin && c[1]<=loMax;
+    chk('形心落在該鄉鎮範圍內', inside, true);
+  }
+  // 全臺 368 個都算得出形心（不得有 null）
+  const bad = getLex(`(function(){let n=0;
+    TOWN_GEO.features.forEach(f=>{ if(!_townCentroid(f)) n++; }); return n;})()`);
+  chk('★全部鄉鎮都有形心（無 null）', bad, 0);
+
+  // 範圍切換
+  G.setTownNameScope('臺中市');
+  chk('範圍設為臺中市', getLex('townNameScope'), '臺中市');
+  G.setTownNameScope('ALL');
+  chk('範圍設回全臺', getLex('townNameScope'), 'ALL');
+
+  // 下拉選單內容
+  setLex(`document.body.insertAdjacentHTML('beforeend',
+    '<select id="townNameScope"></select><button id="bTownName"></button>');
+    _buildTownNameScope();`);
+  const nOpt = getLex("document.getElementById('townNameScope').options.length");
+  console.log(`   下拉選單 ${nOpt} 個選項（全臺 + 22 縣市 = 23）`);
+  chk('選單含全臺與各縣市', nOpt, 23);
+  const first = getLex("document.getElementById('townNameScope').options[0].value");
+  chk('第一項為 ALL', first, 'ALL');
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

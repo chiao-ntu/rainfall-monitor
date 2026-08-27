@@ -149,6 +149,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bEtr"   onclick="setMode('etr')" style="border-color:#3a8a5a;color:#7ee8a8">ETR2%</button>
       <button class="b"    id="bRisk"  onclick="setMode('risk')" style="border-color:#3a8a5a;color:#7ee8a8">風險指標</button>
       <button class="b"    id="bWarn"  onclick="setMode('warn')" style="border-color:#3a8a5a;color:#7ee8a8">警特報</button>
+      <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
+        style="border-color:#1a4060;color:#8ac8e8" title="在地圖上顯示鄉鎮市區名稱">🏷 鄉鎮市區</button>
+      <select id="townNameScope" onchange="setTownNameScope(this.value)"
+        title="選擇要顯示名稱的範圍"
+        style="display:none;font-size:10px;background:#061220;color:#8ac8e8;
+        border:1px solid #1a4060;border-radius:3px;padding:2px 3px;margin-right:3px"></select>
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
         style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
       <button class="b"    id="bTyphoon" onclick="toggleTyphoonLayer()"
@@ -5101,6 +5107,102 @@ function _applyTyphoonLegendCollapse(){
 function toggleTyphoonLegend(){
   _tyLegendCollapsed = !_tyLegendCollapsed;
   _applyTyphoonLegendCollapse();
+}
+
+// ══════════════════════════════════════════════════════════
+//  鄉鎮市區名稱圖層
+//  可選「全臺」或單一縣市；以 Leaflet divIcon 於各鄉鎮形心標註名稱。
+//  ★ 全臺 368 個標籤在小比例尺下會重疊難讀，故：
+//    - 全臺模式僅在 zoom ≥ 9 時顯示，並隨縮放調整字級
+//    - 選定縣市時一律顯示（該縣市鄉鎮數少，不致擁擠）
+// ══════════════════════════════════════════════════════════
+let showTownName = false, townNameLayer = null, townNameScope = 'ALL';
+
+function _townCentroid(f){
+  // 取最大環的頂點平均值作為標註位置（比 bounds 中心更貼近實際區域）
+  const g = f.geometry; if(!g) return null;
+  const polys = g.type === 'Polygon' ? [g.coordinates]
+              : g.type === 'MultiPolygon' ? g.coordinates : [];
+  let best = null, bestN = 0;
+  polys.forEach(poly=>{
+    const ring = poly[0] || [];
+    if(ring.length > bestN){ bestN = ring.length; best = ring; }
+  });
+  if(!best || !best.length) return null;
+  let sx = 0, sy = 0;
+  best.forEach(c=>{ sx += c[0]; sy += c[1]; });
+  return [sy/best.length, sx/best.length];
+}
+
+function _buildTownNameScope(){
+  const sel = document.getElementById('townNameScope');
+  if(!sel || sel.options.length) return;
+  const cs = [...new Set((TOWN_GEO.features||[]).map(f=>(f.properties||{}).COUNTYNAME))]
+             .filter(Boolean).sort();
+  sel.innerHTML = `<option value="ALL">全臺（${cs.length} 縣市）</option>`
+    + cs.map(c=>`<option value="${c}">${c}</option>`).join('');
+  sel.value = townNameScope;
+}
+
+function setTownNameScope(v){
+  townNameScope = v || 'ALL';
+  renderTownNameLayer();
+}
+
+// 縮放後重繪：字級隨縮放調整，且全臺模式在放大後才出現
+//   以 debounce 避免連續縮放時反覆重建 368 個標籤
+let _tnTimer = null;
+function _bindTownNameZoom(){
+  if(_bindTownNameZoom.done || typeof map === 'undefined' || !map) return;
+  _bindTownNameZoom.done = true;
+  map.on('zoomend', ()=>{
+    if(!showTownName) return;
+    clearTimeout(_tnTimer);
+    _tnTimer = setTimeout(renderTownNameLayer, 150);
+  });
+}
+
+function toggleTownNameLayer(){
+  _bindTownNameZoom();
+  showTownName = !showTownName;
+  const btn = document.getElementById('bTownName');
+  const sel = document.getElementById('townNameScope');
+  if(btn) btn.classList.toggle('on', showTownName);
+  if(sel){
+    _buildTownNameScope();
+    sel.style.display = showTownName ? '' : 'none';
+  }
+  renderTownNameLayer();
+}
+
+function renderTownNameLayer(){
+  if(townNameLayer){ map.removeLayer(townNameLayer); townNameLayer = null; }
+  if(!showTownName || typeof TOWN_GEO === 'undefined') return;
+  const z = map.getZoom();
+  const all = (townNameScope === 'ALL');
+  // 全臺模式在低縮放時標籤會糊成一片，故設下限並提示
+  if(all && z < 9){
+    if(typeof showToast === 'function')
+      showToast('鄉鎮市區名稱：請放大地圖（或改選單一縣市）');
+    return;
+  }
+  const fs = all ? (z >= 11 ? 11 : z >= 10 ? 10 : 9) : (z >= 10 ? 12 : 11);
+  townNameLayer = L.layerGroup().addTo(map);
+  let n = 0;
+  (TOWN_GEO.features||[]).forEach(f=>{
+    const p = f.properties || {};
+    if(!all && p.COUNTYNAME !== townNameScope) return;
+    const ll = _townCentroid(f);
+    if(!ll) return;
+    const nm = p.TOWNNAME || '';
+    L.marker(ll, {icon: L.divIcon({className:'', html:
+      `<div style="font-size:${fs}px;font-weight:700;color:#fff;white-space:nowrap;
+        text-shadow:0 0 3px #000,0 0 2px #000,0 0 1px #000;
+        transform:translate(-50%,-50%);pointer-events:none">${nm}</div>`,
+      iconSize:[0,0], iconAnchor:[0,0]}), interactive:false}).addTo(townNameLayer);
+    n++;
+  });
+  console.log(`鄉鎮市區名稱：${n} 個（${all ? '全臺' : townNameScope}，zoom ${z}）`);
 }
 
 function toggleDisasterLayer(){
