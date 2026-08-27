@@ -5118,20 +5118,85 @@ function toggleTyphoonLegend(){
 // ══════════════════════════════════════════════════════════
 let showTownName = false, townNameLayer = null, townNameScope = 'ALL';
 
+// 射線法：點是否在環內（環為 [lng,lat] 陣列）
+function _ptInRing(x, y, ring){
+  let inside = false;
+  for(let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+    const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+    if(((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+// 點到環（線段集合）的最短距離，單位為「度」，僅供比較大小用
+function _ptRingDist(x, y, ring){
+  let best = Infinity;
+  for(let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+    const x1 = ring[j][0], y1 = ring[j][1], x2 = ring[i][0], y2 = ring[i][1];
+    const dx = x2 - x1, dy = y2 - y1;
+    const L2 = dx*dx + dy*dy;
+    let t = L2 ? ((x - x1)*dx + (y - y1)*dy) / L2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const ex = x1 + t*dx - x, ey = y1 + t*dy - y;
+    const d = Math.sqrt(ex*ex + ey*ey);
+    if(d < best) best = d;
+  }
+  return best;
+}
+// 標註位置：取「多邊形內距離邊界最遠的點」（pole of inaccessibility 近似）。
+// ★ 為何不用頂點平均：彎曲或狹長的鄉鎮（番路、太麻里、枋山、恆春、八里、
+//   新莊、旗津共 7 個）其平均值會落在區域外，標籤看起來就標錯地方。
+//   作法：先用最大環的 bounds 建格點，篩出在環內者，取離邊界最遠的；
+//   再於該點附近做一次細化，取得更置中的位置。
+// 形心快取：極點演算法全臺 368 個約需 3 秒，但結果只取決於靜態行政區界，
+// 算一次即可。不快取的話每次縮放重繪都要重算，會造成明顯卡頓。
+const _tcCache = new Map();
 function _townCentroid(f){
-  // 取最大環的頂點平均值作為標註位置（比 bounds 中心更貼近實際區域）
+  const _ck = ((f.properties||{}).COUNTYNAME || '') + ((f.properties||{}).TOWNNAME || '');
+  if(_ck && _tcCache.has(_ck)) return _tcCache.get(_ck);
+  const r = _townCentroidRaw(f);
+  if(_ck) _tcCache.set(_ck, r);
+  return r;
+}
+function _townCentroidRaw(f){
   const g = f.geometry; if(!g) return null;
   const polys = g.type === 'Polygon' ? [g.coordinates]
               : g.type === 'MultiPolygon' ? g.coordinates : [];
-  let best = null, bestN = 0;
+  let ring = null, bestN = 0;
   polys.forEach(poly=>{
-    const ring = poly[0] || [];
-    if(ring.length > bestN){ bestN = ring.length; best = ring; }
+    const r = poly[0] || [];
+    if(r.length > bestN){ bestN = r.length; ring = r; }
   });
-  if(!best || !best.length) return null;
-  let sx = 0, sy = 0;
-  best.forEach(c=>{ sx += c[0]; sy += c[1]; });
-  return [sy/best.length, sx/best.length];
+  if(!ring || ring.length < 3) return null;
+
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  ring.forEach(c=>{
+    if(c[0] < x0) x0 = c[0]; if(c[0] > x1) x1 = c[0];
+    if(c[1] < y0) y0 = c[1]; if(c[1] > y1) y1 = c[1];
+  });
+  const scan = (ax0, ax1, ay0, ay1, n)=>{
+    const sx = (ax1 - ax0) / n, sy = (ay1 - ay0) / n;
+    let bx = null, by = null, bd = -1;
+    for(let i = 0; i <= n; i++){
+      const x = ax0 + i*sx;
+      for(let j = 0; j <= n; j++){
+        const y = ay0 + j*sy;
+        if(!_ptInRing(x, y, ring)) continue;
+        const d = _ptRingDist(x, y, ring);
+        if(d > bd){ bd = d; bx = x; by = y; }
+      }
+    }
+    return (bx == null) ? null : [bx, by, bd, sx, sy];
+  };
+  let r1 = scan(x0, x1, y0, y1, 24);
+  if(!r1){
+    // 極細長者格點可能全落在外 → 退回頂點平均（至少不會回 null）
+    let sx = 0, sy = 0;
+    ring.forEach(c=>{ sx += c[0]; sy += c[1]; });
+    return [sy/ring.length, sx/ring.length];
+  }
+  // 在最佳格點鄰域細化一次，讓位置更置中
+  const r2 = scan(r1[0] - r1[3], r1[0] + r1[3], r1[1] - r1[4], r1[1] + r1[4], 8) || r1;
+  return [r2[1], r2[0]];
 }
 
 function _buildTownNameScope(){
@@ -5800,6 +5865,31 @@ function _tySecOpenHtml(key, titleHtml, col){
 }
 function _tySecClose(){ return '</div>'; }
 
+// 關鍵時間點區塊（編號與地圖徽章一致）
+//   ★ 這是**本系統依 CWA 預報路徑推估**的結果，非官方發布值：
+//     逐小時內插路徑 → 算「暴風圈邊緣距陸地」→ 觸及 100km／陸地的時刻 →
+//     依慣例往前推 24h／18h 當發布時機。官方實際發布另納入強度趨勢、
+//     路徑不確定性與警戒區範圍研判，故與官方不同屬正常。
+function _tyKeyPointsHtml(ty, SEC){
+  const kp = _tyKeyPoints(ty);
+  if(!(kp.points||[]).length) return '';
+  let h = `<div style="${SEC}">關鍵時間點
+    <span style="font-weight:400;color:#8a7a9a">（本系統推估，非官方發布值；編號對應地圖徽章）</span></div>`;
+  kp.points.forEach((pt, idx)=>{
+    const st = TY_KIND_STYLE[pt.kind] || TY_KIND_STYLE.grade;
+    const it = _tyIntensity(pt.ws);
+    h += `<div style="display:flex;gap:5px;align-items:baseline;font-size:10px;
+      line-height:1.5;padding:1px 0">
+      <span style="flex:0 0 15px;height:15px;border-radius:50%;background:${st.color};
+        color:#fff;font-weight:700;text-align:center;line-height:15px;font-size:9px">${idx+1}</span>
+      <span style="flex:0 0 62px;color:#d8c8e8">${_tyFmt(pt.time)}</span>
+      <span style="flex:1;color:#c8b8d8">${pt.label}
+        <span style="color:#8a7a9a">${it.name}／七級 ${pt.r15==null?'—':Math.round(pt.r15)}km</span></span>
+    </div>`;
+  });
+  return h;
+}
+
 function updateTyphoonPanel(){
   const body = document.getElementById('typhoon-panel-body');
   if(!body) return;
@@ -5828,6 +5918,9 @@ function updateTyphoonPanel(){
       <div style="font-size:10px;color:#b8a8c8;margin-top:1px">
         發布 ${(w.effective||'').replace('T',' ').slice(0,16) || '—'}
         <span style="color:#7a6a8a">${w.sender||'中央氣象署'}</span></div>`, col);
+
+    // ★ 關鍵時間點緊接標題，方便閱讀（使用者指定）
+    h += _tyKeyPointsHtml((window.TYPHOON_TRACK||[])[0] || {}, SEC);
 
     // 雨勢較大地區
     h += `<div style="${SEC}">雨勢較大地區（日累積≥${th}mm）</div>
@@ -5883,6 +5976,7 @@ function updateTyphoonPanel(){
           資料時間 ${(cur.t || '').replace('T',' ').slice(0,16) || '—'}
           <span style="color:#7a6a8a">（中央氣象署颱風路徑資料）</span></div>`, it.color)
         + `
+        ` + _tyKeyPointsHtml(ty, SEC) + `
         <div style="${SEC}">目前強度與位置</div>
         <div style="font-size:10px;color:#c8b8d8;line-height:1.55">
           中心位置：${cur.lat ?? '—'}N / ${cur.lng ?? '—'}E<br>
@@ -5920,25 +6014,6 @@ function updateTyphoonPanel(){
       });
     });
   }
-
-  // 關鍵時間點：編號與地圖徽章一致
-  (window.TYPHOON_TRACK||[]).forEach(ty=>{
-    const kp = _tyKeyPoints(ty);
-    if(!(kp.points||[]).length) return;
-    h += `<div style="${SEC}">關鍵時間點（編號對應地圖徽章）</div>`;
-    kp.points.forEach((pt, idx)=>{
-      const st = TY_KIND_STYLE[pt.kind] || TY_KIND_STYLE.grade;
-      const it = _tyIntensity(pt.ws);
-      h += `<div style="display:flex;gap:5px;align-items:baseline;font-size:10px;
-        line-height:1.5;padding:1px 0">
-        <span style="flex:0 0 15px;height:15px;border-radius:50%;background:${st.color};
-          color:#fff;font-weight:700;text-align:center;line-height:15px;font-size:9px">${idx+1}</span>
-        <span style="flex:0 0 62px;color:#d8c8e8">${_tyFmt(pt.time)}</span>
-        <span style="flex:1;color:#c8b8d8">${pt.label}
-          <span style="color:#8a7a9a">${it.name}／七級 ${pt.r15==null?'—':Math.round(pt.r15)}km</span></span>
-      </div>`;
-    });
-  });
 
   body.innerHTML = h;
 }

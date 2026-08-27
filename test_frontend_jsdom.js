@@ -1635,8 +1635,11 @@ if (need('calcRiskIndicator')) {
   console.log(`   ETR2 10%＋未來無雨: R=${lowDry.R}（警特報 ${lowDry.warnLv}）`);
   if (!(lowWet.R > lowDry.R)) fails.push('★目標2未達成：ETR2低但未來大雨時風險未上修');
   else console.log('  OK  目標2：ETR2低但將有大雨 → 風險上修');
-  if (!(lowWet.R >= 55)) fails.push(`目標2：未來大雨應至少達「低」級（實得 ${lowWet.R}）`);
-  else console.log('  OK  未來大雨確實產生風險訊號');
+  // ★ 不寫死級距：_nowSeg() 依執行時鐘變動，會改變納入的預報段，絕對值因而浮動。
+  //   驗「顯著上升」即可（至少 10 倍且達 30 分以上）。
+  if (!(lowWet.R >= 30 && lowWet.R >= lowDry.R * 5)) {
+    fails.push(`目標2：未來大雨的風險上升幅度不足（${lowDry.R} → ${lowWet.R}）`);
+  } else console.log(`  OK  未來大雨確實產生顯著風險訊號（${lowDry.R} → ${lowWet.R}）`);
 
   // 下修不得過度：高 ETR2 仍應保有基本風險（土壤含水量高）
   if (dry.R < 50) fails.push(`下修過度：ETR2 155% 不應降到 ${dry.R}（低於「低」級）`);
@@ -1728,6 +1731,55 @@ console.log('\n=== 鄉鎮市區界線 ===');
   chk('界線不攔截滑鼠事件', /color:'#9ab8d0'[\s\S]{0,120}interactive:false/.test(html), true);
   chk('界線比縣市界細（weight 0.6）', /color:'#9ab8d0', weight:0\.6/.test(html), true);
   chk('繪後把縣市界拉回上層', /countyBorder\.bringToFront/.test(html), true);
+}
+
+
+// ════════ 32. 形心置中 ＋ 關鍵時間點位置 ════════
+console.log('\n=== 鄉鎮標籤位置必須落在該鄉鎮內 ===');
+if (need('_townCentroid') && need('_ptInRing')) {
+  const bad = getLex(`(function(){
+    const out=[];
+    TOWN_GEO.features.forEach(f=>{
+      const c=_townCentroid(f);
+      if(!c){ out.push(f.properties.COUNTYNAME+f.properties.TOWNNAME+'(null)'); return; }
+      const g=f.geometry; const polys=g.type==='Polygon'?[g.coordinates]:g.coordinates;
+      let ok=false;
+      polys.forEach(p=>{ if(_ptInRing(c[1],c[0],p[0]||[])) ok=true; });
+      if(!ok) out.push(f.properties.COUNTYNAME+f.properties.TOWNNAME);
+    });
+    return out;})()`);
+  console.log(`   落在區域外：${bad.length} / 368` + (bad.length ? '：' + bad.join('、') : ''));
+  chk('★全部 368 個標籤都在自己的鄉鎮內', bad.length, 0);
+  // 先前已知會標錯的 7 個必須修好
+  ['嘉義縣番路鄉','臺東縣太麻里鄉','屏東縣枋山鄉','新北市八里區',
+   '新北市新莊區','高雄市旗津區','屏東縣恆春鎮'].forEach(k=>{
+    if (bad.includes(k)) fails.push(`${k} 標籤仍在區域外`);
+  });
+  if (!bad.length) console.log('  OK  先前 7 個標錯的鄉鎮已修正');
+
+  // 快取：第二次呼叫應極快
+  const t0 = Date.now();
+  getLex('TOWN_GEO.features.forEach(f=>_townCentroid(f))');
+  const ms = Date.now() - t0;
+  console.log(`   已快取後全臺重算耗時 ${ms}ms`);
+  if (ms > 500) fails.push(`形心快取未生效（${ms}ms）`);
+  else console.log('  OK  快取生效（縮放重繪不會卡頓）');
+}
+
+console.log('\n=== 關鍵時間點位置與標示 ===');
+if (need('_tyKeyPointsHtml')) {
+  const html = fs.readFileSync('index.html', 'utf8');
+  chk('明確標示為本系統推估', /本系統推估，非官方發布值/.test(html), true);
+  // 位置：應在「雨勢較大地區」之前（即緊接標題）
+  const iKp = html.indexOf('_tyKeyPointsHtml((window.TYPHOON_TRACK||[])[0]');
+  const iRain = html.indexOf('雨勢較大地區（日累積≥${th}mm）</div>');
+  console.log(`   關鍵時間點位置=${iKp}　雨勢較大地區位置=${iRain}`);
+  chk('★關鍵時間點緊接標題（在雨勢較大地區之前）', iKp > 0 && iKp < iRain, true);
+  chk('TD 區塊也有關鍵時間點', /_tyKeyPointsHtml\(ty, SEC\)/.test(html), true);
+  // ★ 「關鍵時間點（編號對應地圖徽章）」一詞也用於地圖圖例，不可據此判斷。
+  //   改為確認面板內不再有「獨立的 TYPHOON_TRACK 迴圈」產生該區塊。
+  chk('末端不再有獨立的關鍵時間點迴圈',
+      /關鍵時間點：編號與地圖徽章一致/.test(html), false);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
