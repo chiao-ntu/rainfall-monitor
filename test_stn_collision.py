@@ -188,5 +188,29 @@ if os.path.exists(slope):
               + (f" 站={r4['station']}" if r4 else ''))
     os.chdir(cwd4); shutil.rmtree(tmp4, ignore_errors=True)
 
+
+print('\n=== 已知同名站清單須與實測一致 ===')
+amb_file = '/home/claude/ambiguous_stations.json'
+if not os.path.exists(amb_file):
+    amb_file = 'ambiguous_stations.json'
+if os.path.exists(amb_file):
+    ref = json.load(io.open(amb_file, encoding='utf-8'))
+    names = ref['ambiguous_names']
+    print(f"  已知同名多站：{len(names)} 個（2026-08-27 全臺稽核實測）")
+    chk('清單筆數為 30', len(names), 30)
+    chk('關山對應 3 個 STID', len(names.get('關山', [])), 3)
+    chk('武陵含臺中 A0F010', 'A0F010' in names.get('武陵', []), True)
+    chk('武陵含臺東 01S130', '01S130' in names.get('武陵', []), True)
+    # 已知接錯站的鄉鎮：虛增幅度需與紀錄一致
+    for m in ref['_known_mismatched_townships']:
+        gap = round(m['oldway_pct'] - m['correct_pct'], 1)
+        print(f"  {m['township']}：正確 {m['correct_pct']}%、"
+              f"舊法 {m['oldway_pct']}%（虛增 {gap}%）站={m['station']}")
+        if gap <= 0:
+            fails.append(f"{m['township']} 舊法未虛增，紀錄可能有誤")
+    chk('已知受影響鄉鎮為 5 個', len(ref['_known_mismatched_townships']), 5)
+else:
+    print('  （找不到 ambiguous_stations.json，略過）')
+
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)

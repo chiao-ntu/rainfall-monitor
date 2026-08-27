@@ -382,6 +382,12 @@ def fetch_swcb_hourly():
     if clash:
         print(f"    ⚠ {n_amb} 個站名對應多個 STID（已改用 STID 區分，不建站名鍵）："
               + "、".join(f"{k}{list(v)}" for k, v in list(clash.items())[:4]))
+    # ★ 退步偵測：2026-08-27 全臺稽核實測共 30 個同名多站。
+    #   若本次偵測數明顯偏低，代表 STID 解析或對站邏輯出了問題
+    #   （例如 API 欄位改名導致 STID 讀不到，退回站名對站 → 又會互相覆蓋）。
+    if data and n_amb < 20:
+        print(f"    ★ 警告：僅偵測到 {n_amb} 個同名多站（實測基準為 30 個）。"
+              "STID 可能未正確讀取，對站結果恐失真，請檢查 API 欄位。")
     return out
 
 
