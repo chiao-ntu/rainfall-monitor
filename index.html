@@ -5161,10 +5161,20 @@ function _townCentroidRaw(f){
   const g = f.geometry; if(!g) return null;
   const polys = g.type === 'Polygon' ? [g.coordinates]
               : g.type === 'MultiPolygon' ? g.coordinates : [];
-  let ring = null, bestN = 0;
+  // ★ 取「面積最大」的環，不可用頂點數。
+  //   高雄旗津區含東沙(#15, 23點)與本島(#16, 23點)兩個環，頂點數相同，
+  //   以 > 比較時先出現的東沙勝出，標籤便跑到南海去了（本島反而沒有標籤）。
+  //   面積才是「主體」的正確判準。
+  let ring = null, bestA = -1;
   polys.forEach(poly=>{
     const r = poly[0] || [];
-    if(r.length > bestN){ bestN = r.length; ring = r; }
+    if(r.length < 3) return;
+    let a = 0;                                  // 鞋帶公式（取絕對值，不管繞向）
+    for(let i = 0, j = r.length - 1; i < r.length; j = i++){
+      a += (r[j][0] * r[i][1]) - (r[i][0] * r[j][1]);
+    }
+    a = Math.abs(a) / 2;
+    if(a > bestA){ bestA = a; ring = r; }
   });
   if(!ring || ring.length < 3) return null;
 
@@ -5271,11 +5281,16 @@ function renderTownNameLayer(){
     const ll = _townCentroid(f);
     if(!ll) return;
     const nm = p.TOWNNAME || '';
+    // ★ 置中：iconSize 為 [0,0] 時 Leaflet 以左上角定位，內層 transform 會被
+    //   divIcon 的容器樣式干擾，導致文字偏左或偏右。改用固定寬度的容器 +
+    //   text-align:center + iconAnchor 取容器中心，才能真正對齊標註點。
+    const _w = Math.max(48, nm.length * fs + 8), _h = fs + 4;
     L.marker(ll, {icon: L.divIcon({className:'', html:
-      `<div style="font-size:${fs}px;font-weight:700;color:#fff;white-space:nowrap;
+      `<div style="width:${_w}px;height:${_h}px;line-height:${_h}px;text-align:center;
+        font-size:${fs}px;font-weight:700;color:#fff;white-space:nowrap;
         text-shadow:0 0 3px #000,0 0 2px #000,0 0 1px #000;
-        transform:translate(-50%,-50%);pointer-events:none">${nm}</div>`,
-      iconSize:[0,0], iconAnchor:[0,0]}), interactive:false}).addTo(townNameLayer);
+        pointer-events:none">${nm}</div>`,
+      iconSize:[_w, _h], iconAnchor:[_w/2, _h/2]}), interactive:false}).addTo(townNameLayer);
     n++;
   });
   console.log(`鄉鎮市區名稱＋界線：${n} 個（${all ? '全臺' : townNameScope}，zoom ${z}）`);
@@ -5873,6 +5888,11 @@ function _tySecClose(){ return '</div>'; }
 function _tyKeyPointsHtml(ty, SEC){
   const kp = _tyKeyPoints(ty);
   if(!(kp.points||[]).length) return '';
+  // ★ 保守呈現（使用者指定）：只有「暴風圈確實觸及」時才列出關鍵時間點。
+  //   純強度升降階、或全程未觸及 100km 海域者不顯示，避免產生大量
+  //   看似有資訊、實則與臺灣無關的空白列。
+  const touch = kp.points.filter(p=>p.kind !== 'grade');
+  if(!touch.length) return '';
   let h = `<div style="${SEC}">關鍵時間點
     <span style="font-weight:400;color:#8a7a9a">（本系統推估，非官方發布值；編號對應地圖徽章）</span></div>`;
   kp.points.forEach((pt, idx)=>{
@@ -5919,7 +5939,29 @@ function updateTyphoonPanel(){
         發布 ${(w.effective||'').replace('T',' ').slice(0,16) || '—'}
         <span style="color:#7a6a8a">${w.sender||'中央氣象署'}</span></div>`, col);
 
-    // ★ 關鍵時間點緊接標題，方便閱讀（使用者指定）
+    // ══ 第一段：官方資料（中央氣象署警報單原文）══
+    //   使用者指定的呈現順序：先官方、後推估，兩段以標頭明確分隔，
+    //   避免把系統推估誤讀為官方發布內容。
+    h += `<div style="font-size:10px;font-weight:700;color:#ffd08a;
+      background:#3a2a10;padding:2px 5px;border-radius:3px;margin:6px 0 3px">
+      ① 官方資料（中央氣象署警報單）</div>`;
+    (w.sections||[]).forEach(sec=>{
+      h += `<div style="margin-bottom:3px">
+        <div style="font-size:10px;font-weight:700;color:#9ab8d8">${sec.title}</div>
+        <div style="font-size:10px;color:#c8b8d8;line-height:1.55;padding-left:5px;
+          border-left:1px solid #3a2a4a">${sec.value}</div></div>`;
+    });
+    if((w.areas||[]).length){
+      h += `<div style="font-size:9px;color:#7a6a8a;margin-top:2px">
+        官方警戒區域：${w.areas.join('、')}</div>`;
+    }
+
+    // ══ 第二段：本系統推估 ══
+    h += `<div style="font-size:10px;font-weight:700;color:#8ac8f0;
+      background:#0e2a3a;padding:2px 5px;border-radius:3px;margin:8px 0 3px">
+      ② 本系統推估（非官方發布值）</div>`;
+
+    // 關鍵時間點（僅在暴風圈確實觸及時顯示）
     h += _tyKeyPointsHtml((window.TYPHOON_TRACK||[])[0] || {}, SEC);
 
     // 雨勢較大地區
@@ -5938,18 +5980,6 @@ function updateTyphoonPanel(){
         <span style="flex:1;color:${done ? '#8ae8a8' : '#d8c8e8'}">${v}</span></div>`;
     });
 
-    // 官方原文段落：標題獨立一行，內文縮排，段間留白
-    h += `<div style="${SEC}">颱風警報單原文（中央氣象署）</div>`;
-    (w.sections||[]).forEach(s=>{
-      h += `<div style="margin-bottom:3px">
-        <div style="font-size:10px;font-weight:700;color:#9ab8d8">${s.title}</div>
-        <div style="font-size:10px;color:#c8b8d8;line-height:1.55;padding-left:5px;
-          border-left:1px solid #3a2a4a">${s.value}</div></div>`;
-    });
-    if((w.areas||[]).length){
-      h += `<div style="font-size:9px;color:#7a6a8a;margin-top:2px">
-        官方警戒區域：${w.areas.join('、')}</div>`;
-    }
     h += _tySecClose();
   });
 

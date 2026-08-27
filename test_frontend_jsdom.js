@@ -1750,6 +1750,12 @@ if (need('_townCentroid') && need('_ptInRing')) {
     return out;})()`);
   console.log(`   落在區域外：${bad.length} / 368` + (bad.length ? '：' + bad.join('、') : ''));
   chk('★全部 368 個標籤都在自己的鄉鎮內', bad.length, 0);
+  // ★ 旗津區含東沙(南海)與本島兩環，頂點數相同；須取面積大者（本島）
+  const qj = getLex(`(function(){
+    const f=TOWN_GEO.features.find(x=>x.properties.TOWNNAME==='旗津區');
+    return f ? _townCentroid(f) : null;})()`);
+  console.log(`   旗津區標籤：${qj ? qj.map(v=>v.toFixed(3)).join(', ') : '—'}`);
+  chk('★旗津標籤在本島而非東沙', !!(qj && qj[0] > 22 && qj[1] > 120), true);
   // 先前已知會標錯的 7 個必須修好
   ['嘉義縣番路鄉','臺東縣太麻里鄉','屏東縣枋山鄉','新北市八里區',
    '新北市新莊區','高雄市旗津區','屏東縣恆春鎮'].forEach(k=>{
@@ -1771,10 +1777,16 @@ if (need('_tyKeyPointsHtml')) {
   const html = fs.readFileSync('index.html', 'utf8');
   chk('明確標示為本系統推估', /本系統推估，非官方發布值/.test(html), true);
   // 位置：應在「雨勢較大地區」之前（即緊接標題）
-  const iKp = html.indexOf('_tyKeyPointsHtml((window.TYPHOON_TRACK||[])[0]');
-  const iRain = html.indexOf('雨勢較大地區（日累積≥${th}mm）</div>');
-  console.log(`   關鍵時間點位置=${iKp}　雨勢較大地區位置=${iRain}`);
-  chk('★關鍵時間點緊接標題（在雨勢較大地區之前）', iKp > 0 && iKp < iRain, true);
+  const iOff = html.indexOf('① 官方資料（中央氣象署警報單）');
+  const iEst = html.indexOf('② 本系統推估（非官方發布值）');
+  const iKp  = html.indexOf('_tyKeyPointsHtml((window.TYPHOON_TRACK||[])[0]');
+  console.log(`   ①官方=${iOff}　②推估=${iEst}　關鍵時間點=${iKp}`);
+  chk('★官方資料段在推估段之前', iOff > 0 && iOff < iEst, true);
+  chk('★關鍵時間點屬於推估段', iKp > iEst, true);
+  chk('保守顯示：未觸及時不列出', /const touch = kp\.points\.filter/.test(html), true);
+  // 旗津：取面積最大環而非頂點最多
+  chk('環選取依面積（旗津東沙問題）', /let ring = null, bestA = -1/.test(html), true);
+  chk('標籤置中（iconAnchor 取容器中心）', /iconAnchor:\[_w\/2, _h\/2\]/.test(html), true);
   chk('TD 區塊也有關鍵時間點', /_tyKeyPointsHtml\(ty, SEC\)/.test(html), true);
   // ★ 「關鍵時間點（編號對應地圖徽章）」一詞也用於地圖圖例，不可據此判斷。
   //   改為確認面板內不再有「獨立的 TYPHOON_TRACK 迴圈」產生該區塊。
