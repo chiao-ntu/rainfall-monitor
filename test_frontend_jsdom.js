@@ -1598,6 +1598,51 @@ if (need('_tyKeyPoints') && need('townMetrics')) {
   setLex("window.TYPHOON_TRACK=[]; window.TYPHOON_WARN=[];");
 }
 
+
+// ════════ 29. 風險指標：須隨未來雨量上修／下修 ════════
+console.log('\n=== 風險指標的兩個實務目標 ===');
+if (need('calcRiskIndicator')) {
+  const mk = (etr2, alert, futQpf) => ({
+    county:'高雄市', township:'六龜區', alert_val:alert, etr2_alert:alert,
+    etr2, etr2_pct: etr2/alert, daily_rain:Array(15).fill(0),
+    pop_6h:Array(28).fill(50),
+    qpf_best:Array(64).fill(futQpf), qpf_ecmwf:Array(64).fill(futQpf),
+    warn_seg:Array(64).fill(0), maxh_best:Array(64).fill(futQpf/6),
+    obs_1h_p48:Array(48).fill(0), qpf_1h_p48:Array(48).fill(0), qpf_1h:Array(96).fill(0),
+  });
+  setLex("forecastModel='ecmwf'; _scnOn=false; _userFactorOn=false; _biasApplyOn=false;" +
+         "winKey='today'; segFrom=0; segTo=3; mode='rain';" +
+         "{const d=new Date(); d.setHours(0,0,0,0); BASE_TIME=d;}");
+
+  // ★目標1：ETR2% 高（155%）但未來幾乎無雨 → 風險應下修
+  const dry = G.calcRiskIndicator(mk(386.8, 250, 0.2), 3);
+  console.log(`   ETR2 155%＋未來無雨: R=${dry.R}（E_proj=${dry.E_proj} → E_adj=${dry.E_adj}，係數 ${dry.fRain}，未來24h ${dry.q24}mm）`);
+  if (!(dry.E_adj < dry.E_proj)) fails.push('★目標1未達成：ETR2高但無雨時風險未下修');
+  else console.log('  OK  目標1：雨停折減中 → 風險下修');
+  chk('下修係數為下限 0.55', dry.fRain, 0.55);
+
+  // 同樣 ETR2%，但未來持續大雨 → 不應下修
+  const wet = G.calcRiskIndicator(mk(386.8, 250, 30), 3);
+  console.log(`   ETR2 155%＋未來大雨: R=${wet.R}（係數 ${wet.fRain}，未來24h ${wet.q24}mm）`);
+  chk('持續降雨時係數為 1（不下修）', wet.fRain, 1);
+  if (!(wet.R > dry.R)) fails.push('持續降雨的風險應高於雨停');
+  else console.log('  OK  同一 ETR2%，有雨風險高於無雨');
+
+  // ★目標2：ETR2% 低但未來大雨 → 風險應上修（由警特報路徑拉高）
+  const lowWet = G.calcRiskIndicator(mk(25, 250, 60), 3);   // ETR2 僅10%，但每段60mm
+  const lowDry = G.calcRiskIndicator(mk(25, 250, 0.2), 3);
+  console.log(`   ETR2 10%＋未來大雨: R=${lowWet.R}（警特報 ${lowWet.warnLv}）`);
+  console.log(`   ETR2 10%＋未來無雨: R=${lowDry.R}（警特報 ${lowDry.warnLv}）`);
+  if (!(lowWet.R > lowDry.R)) fails.push('★目標2未達成：ETR2低但未來大雨時風險未上修');
+  else console.log('  OK  目標2：ETR2低但將有大雨 → 風險上修');
+  if (!(lowWet.R >= 55)) fails.push(`目標2：未來大雨應至少達「低」級（實得 ${lowWet.R}）`);
+  else console.log('  OK  未來大雨確實產生風險訊號');
+
+  // 下修不得過度：高 ETR2 仍應保有基本風險（土壤含水量高）
+  if (dry.R < 50) fails.push(`下修過度：ETR2 155% 不應降到 ${dry.R}（低於「低」級）`);
+  else console.log(`  OK  下修有下限，ETR2 155% 仍保有 R=${dry.R}`);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

@@ -6607,8 +6607,36 @@ function calcRiskIndicator(t, seg){
   const I_warn  = WARN_SCORE[warnLv];
   const I_now   = WARN_SCORE[_warnLevelAt(t, s)];
 
+  // ── 未來 24h 降雨量（決定 ETR2 路徑的可信度）────────────
+  //   使用者實務指出兩個必要行為：
+  //     (1) ETR2% 偏高但未來雨量低 → 風險應下修（雨已停、正在折減，
+  //         如六龜 155%、來義 107% 係前幾日累積，官方並未發布警戒）
+  //     (2) ETR2% 偏低但未來雨量高 → 風險應上修（尚未累積但即將發生）
+  //   故對 ETR2 路徑加一個「未來雨量調節係數」，強度路徑不受影響
+  //   （警特報本身即代表未來降雨，不需再調節）。
+  let q24 = 0, hasQ = false;
+  for(let k = s + 1; k <= s + 4 && k < qa.length; k++){
+    const v = qa[k];
+    if(v != null){ q24 += v; hasQ = true; }
+  }
+  // 調節係數：未來 24h 累積雨量對照「該地警戒值」的比例。
+  //   ≥30% 警戒值 → 1.00（雨勢足以持續累積，ETR2 全額計入）
+  //   ≤ 5% 警戒值 → 0.55（幾無降雨，ETR2 僅部分計入，反映折減中）
+  //   中間線性內插。下限 0.55 而非更低，因高 ETR2 本身仍代表土壤含水量高。
+  const den = _etrDen(t) || 0;
+  let fRain = 1;
+  if(hasQ && den > 0){
+    const ratio = q24 / den;
+    const lo = 0.05, hi = 0.30;
+    const u = Math.max(0, Math.min(1, (ratio - lo) / (hi - lo)));
+    fRain = 0.55 + 0.45 * u;
+  }
+  const E_adj = (E_proj == null) ? null : Math.round(E_proj * fRain);
+
   const R_now = Math.max(E_now ?? 0, I_now);
-  const R     = Math.max(E_proj ?? 0, I_warn);
+  //   ★ 取 max：ETR2 路徑經雨量調節後下修，但強度路徑（警特報）不受影響，
+  //     故「ETR2 低、未來雨大」時仍由 I_warn 拉高風險——目標 (2) 由此達成。
+  const R     = Math.max(E_adj ?? 0, I_warn);
 
   // 趨勢（±5 死區）
   const dR = R - R_now;
@@ -6623,7 +6651,8 @@ function calcRiskIndicator(t, seg){
   else if(R >= 50){ level=1; name='低'; color='#00FF00'; }
   else { level=0; name='未達標'; color='#8899aa'; }
 
-  return {R, R_now, level, name, color, arrow, arrowColor, warnLv, E_now, E_proj};
+  return {R, R_now, level, name, color, arrow, arrowColor, warnLv,
+          E_now, E_proj, E_adj, fRain: Math.round(fRain*100)/100, q24: Math.round(q24*10)/10};
 }
 
 // 顯示用：風險指標＋趨勢箭頭 HTML
