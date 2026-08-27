@@ -1,0 +1,120 @@
+name: ETR2 對站稽核
+
+# 手動觸發為主：這是查核工具，不需定期執行。
+# 需要時到 Actions 分頁按「Run workflow」即可。
+on:
+  workflow_dispatch:
+    inputs:
+      commit_result:
+        description: '是否把稽核結果 commit 進 repo（audit/ 目錄）'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+# 與其他 workflow 分開，避免同時 push 衝突
+concurrency:
+  group: audit-etr2
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run audit
+        run: python audit_etr2_stations.py
+
+      # 稽核結果一律留成 artifact（保留 30 天），不必 commit 就能下載
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etr2-audit-${{ github.run_number }}
+          path: |
+            audit_etr2.csv
+            audit_etr2_summary.json
+          retention-days: 30
+
+      # 把重點摘要放到 Actions 的執行摘要頁，不用下載檔案就看得到
+      - name: Write job summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import io, json, os
+          try:
+              d = json.load(io.open('audit_etr2_summary.json', encoding='utf-8'))
+          except Exception as e:
+              print('無摘要可讀：', e); raise SystemExit(0)
+          L = []
+          L.append('## ETR2 對站稽核結果\n')
+          L.append(f"- 稽核時間：{d['checked_at']}")
+          L.append(f"- 潛勢溪流：{d['n_streams']} 筆")
+          L.append(f"- 鄉鎮：{d['n_townships']} 個（對不到站 {d['n_unmatched']} 個）")
+          L.append(f"- 同名多站：{len(d['ambiguous_names'])} 個站名")
+          L.append(f"- **兩法不一致（舊版接錯站）：{len(d['mismatched'])} 個鄉鎮**\n")
+
+          if d['mismatched']:
+              L.append('### 舊版會接錯站的鄉鎮\n')
+              L.append('| 鄉鎮 | 正確% | 舊法% | 代表站 | 正確STID | 舊法STID |')
+              L.append('|---|---:|---:|---|---|---|')
+              for m in d['mismatched']:
+                  L.append(f"| {m['township']} | {m['correct_pct']} | {m['oldway_pct']} "
+                           f"| {m['station']} | {m['correct_stid']} | {m['oldway_stid']} |")
+              L.append('')
+
+          if d['ambiguous_names']:
+              L.append('### 同名對應多個測站（需以 STID／地理位置區分）\n')
+              L.append('| 站名 | STID |')
+              L.append('|---|---|')
+              for n, ids in d['ambiguous_names'].items():
+                  L.append(f"| {n} | {' , '.join(ids)} |")
+              L.append('')
+
+          L.append('### ETR2% 前 40 名（請與水保署官網逐一核對）\n')
+          L.append('| 鄉鎮 | ETR2% | ETR2(mm) | 警戒值 | 代表站 | STID |')
+          L.append('|---|---:|---:|---:|---|---|')
+          for r in d['top40']:
+              L.append(f"| {r['township']} | {r['pct']} | {r['mm']} | {r['alert']} "
+                       f"| {r['station']} | {r['stid']} |")
+
+          with io.open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as f:
+              f.write('\n'.join(L) + '\n')
+          print('已寫入 job summary')
+          PY
+
+      - name: Commit results (optional)
+        if: ${{ github.event.inputs.commit_result == 'true' }}
+        run: |
+          set -e
+          mkdir -p audit
+          TS=$(TZ='Asia/Taipei' date '+%Y%m%d_%H%M')
+          cp audit_etr2.csv          "audit/audit_etr2_${TS}.csv"
+          cp audit_etr2_summary.json "audit/audit_etr2_${TS}.json"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add audit/
+          if git diff --staged --quiet; then
+            echo "無變更，跳過"; exit 0
+          fi
+          git commit -m "ETR2 對站稽核：$(TZ='Asia/Taipei' date '+%Y-%m-%d %H:%M') TST [skip ci]"
+          for i in 1 2 3; do
+            git push origin HEAD:"${{ github.ref_name }}" && exit 0
+            git fetch origin "${{ github.ref_name }}"
+            git rebase -X ours "origin/${{ github.ref_name }}" || { git rebase --abort || true; }
+          done
+          echo "push 失敗" >&2; exit 1
