@@ -1794,6 +1794,63 @@ if (need('_tyKeyPointsHtml')) {
       /關鍵時間點：編號與地圖徽章一致/.test(html), false);
 }
 
+
+// ════════ 33. 多颱風排序、預設收合、地圖全顯示 ════════
+console.log('\n=== 多系統：排序與預設收合 ===');
+if (need('_tyRows') && need('_tyUrgency') && need('updateTyphoonPanel')) {
+  const iso = new Date().toISOString();
+  // A：遠離臺灣（東方外海）；B：即將侵臺（暴風圈會觸陸）
+  setLex("window.TYPHOON_WARN = []; window.TYPHOON_TRACK = [" +
+    "{name_zh:'遠方颱風', ty_no:'20', current:{t:'" + iso + "', lat:25.0, lng:140.0, ws:35, r15:150, r25:50}," +
+    " forecast:[{fh:24, lat:26.0, lng:143.0, ws:35, r15:150, r25:50}," +
+    "           {fh:48, lat:27.0, lng:146.0, ws:30, r15:120, r25:0}]}," +
+    "{name_zh:'侵臺颱風', ty_no:'21', current:{t:'" + iso + "', lat:22.0, lng:124.0, ws:40, r15:250, r25:80}," +
+    " forecast:[{fh:24, lat:23.0, lng:121.5, ws:38, r15:250, r25:80}," +
+    "           {fh:48, lat:24.0, lng:119.0, ws:30, r15:180, r25:0}]}];");
+  const rows = G._tyRows();
+  console.log(`   排序後：${rows.map(r=>r.ty.name_zh).join(' → ')}`);
+  chk('★越先影響臺灣者排越前', rows[0].ty.name_zh, '侵臺颱風');
+  const u0 = G._tyUrgency(rows[0].ty), u1 = G._tyUrgency(rows[1].ty);
+  console.log(`   急迫度：${rows[0].ty.name_zh}=${u0}　${rows[1].ty.name_zh}=${u1}`);
+  if (!(u0 < u1)) fails.push('急迫度排序不正確');
+
+  // 預設收合：第一個展開、其餘收合
+  // ★ _tySecOpen 是 const 物件：不可指派，只能清空內容（詞法綁定陷阱）
+  setLex("for (const k in _tySecOpen) delete _tySecOpen[k];" +
+    "document.body.insertAdjacentHTML('beforeend','<div id=\"typhoon-panel-body\"></div>');");
+  G.updateTyphoonPanel();
+  const html = getLex("document.getElementById('typhoon-panel-body').innerHTML") || '';
+  const nOpen = (html.match(/display:block/g) || []).length;
+  const nShut = (html.match(/display:none/g) || []).length;
+  console.log(`   展開 ${nOpen} 個、收合 ${nShut} 個`);
+  chk('★僅第一個預設展開', nOpen, 1);
+  chk('★其餘預設收合', nShut, 1);
+  // 第一個展開的應是侵臺颱風
+  const iFirst = html.indexOf('侵臺颱風'), iSecond = html.indexOf('遠方颱風');
+  chk('侵臺颱風排在前', iFirst > 0 && iFirst < iSecond, true);
+
+  // 地圖：不受面板收合影響，全部系統都畫
+  const src = fs.readFileSync('index.html', 'utf8');
+  const iLayer = src.indexOf('function renderTyphoonLayer');
+  const layerSrc = src.slice(iLayer, iLayer + 900);
+  chk('★地圖畫全部系統（不看收合狀態）', /_tySecOpen/.test(layerSrc), false);
+  chk('地圖直接用 TYPHOON_TRACK', /const list = \(window\.TYPHOON_TRACK \|\| \[\]\)/.test(layerSrc), true);
+
+  setLex("window.TYPHOON_TRACK = []; window.TYPHOON_WARN = [];" +
+         "for (const k in _tySecOpen) delete _tySecOpen[k];");
+}
+
+console.log('\n=== 颱風資料每小時更新 ===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('前端載入 typhoon_now.json', /typhoon_now\.json/.test(src), true);
+  chk('載入後清除關鍵時間點快取', /_tyKpCache\.clear\(\)[\s\S]{0,80}關鍵時間點重算/.test(src), true);
+  const py = fs.readFileSync('fetch_qpesums_hourly.py', 'utf8');
+  chk('每小時腳本會寫 typhoon_now.json', /TYPHOON_FILE\s*=\s*"typhoon_now\.json"/.test(py), true);
+  chk('沿用主腳本解析（不複製實作）', /import fetch_rainfall as FR/.test(py), true);
+  chk('兩項皆失敗才跳過', /兩項皆失敗，保留前一份/.test(py), true);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

@@ -3150,6 +3150,22 @@ async function tryLoadLive(){
       }
     }catch(e){ console.warn('etr2_now.json 載入失敗（沿用 data.json 的值）：', e.message); }
 
+    // ── 颱風動態：獨立讀 typhoon_now.json（由每小時腳本寫）──
+    //   颱風變化快，主排程 6 小時太慢；此檔每小時更新，覆寫 data.json 的兩個欄位。
+    window.TYPHOON_NOW_TIME = '';
+    try{
+      const tr = await fetch('typhoon_now.json?t='+Date.now());
+      if(tr.ok){
+        const td = await tr.json();
+        if(Array.isArray(td.typhoon_track)) window.TYPHOON_TRACK = td.typhoon_track;
+        if(Array.isArray(td.typhoon_warn))  window.TYPHOON_WARN  = td.typhoon_warn;
+        window.TYPHOON_NOW_TIME = td.updated || '';
+        try{ _tyKpCache.clear(); }catch(e){}      // 時間基準／資料更新 → 關鍵時間點重算
+        console.log('typhoon_now.json 載入：', (td.typhoon_track||[]).length, '個系統、',
+                    (td.typhoon_warn||[]).length, '份警報單，時間', window.TYPHOON_NOW_TIME);
+      }
+    }catch(e){ console.warn('typhoon_now.json 載入失敗（沿用 data.json 的值）：', e.message); }
+
     // 雷達1h QPF 發布時間顯示
     const _rt = document.getElementById('radar-time');
     if(_rt){
@@ -5758,6 +5774,25 @@ function _zoomSpan(county, town, label, col){
 }
 
 
+// 影響臺灣的急迫程度：數字越小越優先（排序用）。
+//   依序考量：暴風圈已觸及陸地 > 已進 100km 海域 > 預報將觸及（越早越前）
+//   > 皆未觸及者，以「暴風圈邊緣距陸地的最小值」比較。
+function _tyUrgency(ty){
+  try{
+    const kp = _tyKeyPoints(ty);
+    const pts = (kp.points||[]).filter(p=>p.kind !== 'grade');
+    const land = pts.find(p=>p.kind === 'land_on');
+    const sea  = pts.find(p=>p.kind === 'sea_on');
+    // 已觸及者（fh<=0 代表現在就在範圍內）最優先
+    if(land) return -100000 + land.fh;
+    if(sea)  return -50000 + sea.fh;
+    // 未觸及：取路徑上「暴風圈邊緣距陸地」的最小值當急迫度
+    let best = Infinity;
+    (kp.path||[]).forEach(p=>{ if(p.edge != null && p.edge < best) best = p.edge; });
+    return isFinite(best) ? best : 99999;
+  }catch(e){ return 99999; }
+}
+
 function _tyRows(){
   const out = [];
   const now = Date.now();
@@ -5771,6 +5806,8 @@ function _tyRows(){
     if(isFinite(tm) && (now - tm) > TY_WARN_MAX_AGE_H * 3600e3) return;
     out.push({ty, cur:c, fut:(ty.forecast||[])});
   });
+  // ★ 越先影響臺灣者排越前面（使用者指定）
+  out.sort((a, b)=>_tyUrgency(a.ty) - _tyUrgency(b.ty));
   return out;
 }
 function _tyFmt(d){
@@ -5868,8 +5905,10 @@ function toggleTySec(key){
   updateTyphoonPanel();
 }
 // 產生可收合區塊的頭尾；title 為標題列文字（已含 HTML）
-function _tySecOpenHtml(key, titleHtml, col){
-  const open = _tySecOpen[key] !== false;
+function _tySecOpenHtml(key, titleHtml, col, idx){
+  // ★ 預設只展開第一個（最先影響臺灣者），其餘自動收合，
+  //   避免多個系統並存時資訊過長；使用者手動切換後以其選擇為準。
+  const open = (_tySecOpen[key] === undefined) ? (idx === 0) : (_tySecOpen[key] !== false);
   return `<div style="background:${col}22;border-left:3px solid ${col};
       padding:4px 6px;border-radius:0 3px 3px 0;margin-bottom:4px;cursor:pointer"
       onclick="toggleTySec('${key.replace(/'/g, "\\'")}')"
@@ -5923,7 +5962,7 @@ function updateTyphoonPanel(){
   const SEC = 'font-size:10px;font-weight:700;color:#8ab8d8;margin:6px 0 2px';
   let h = '';
 
-  warns.forEach(w=>{
+  warns.forEach((w, _wi)=>{
     const isLand = /陸上/.test(w.severity_level || w.headline || '');
     const col = isLand ? '#ff6a5a' : '#f5a623';
     const _k = _tySecKey(w, null);
@@ -5937,7 +5976,7 @@ function updateTyphoonPanel(){
         ${w.ty_no ? `<span style="color:#9a8aaa;font-weight:400">　編號 ${w.ty_no}</span>` : ''}</div>
       <div style="font-size:10px;color:#b8a8c8;margin-top:1px">
         發布 ${(w.effective||'').replace('T',' ').slice(0,16) || '—'}
-        <span style="color:#7a6a8a">${w.sender||'中央氣象署'}</span></div>`, col);
+        <span style="color:#7a6a8a">${w.sender||'中央氣象署'}</span></div>`, col, _wi);
 
     // ══ 第一段：官方資料（中央氣象署警報單原文）══
     //   使用者指定的呈現順序：先官方、後推估，兩段以標頭明確分隔，
@@ -5987,7 +6026,7 @@ function updateTyphoonPanel(){
   //   ★ TD 階段官方多半尚未命名、無編號，故名稱與編號須有 fallback，
   //     且仍應完整呈現路徑、強度與雨勢資訊——不可因「未發布警報」而少給資訊。
   if(!warns.length){
-    rows.forEach(({ty, cur, fut})=>{
+    rows.forEach(({ty, cur, fut}, _ti)=>{
       const it = _tyIntensity(cur.ws);
       const nm = ty.name_zh || ty.name_en || '熱帶性低氣壓';
       // ★ TD 階段官方仍有編號，惟欄位不同：颱風為 CwaTyNo（ty_no）、
@@ -6004,7 +6043,7 @@ function updateTyphoonPanel(){
           <span style="color:#9a8aaa;font-weight:400">　${sub}</span></div>
         <div style="font-size:10px;color:#b8a8c8;margin-top:1px">
           資料時間 ${(cur.t || '').replace('T',' ').slice(0,16) || '—'}
-          <span style="color:#7a6a8a">（中央氣象署颱風路徑資料）</span></div>`, it.color)
+          <span style="color:#7a6a8a">（中央氣象署颱風路徑資料）</span></div>`, it.color, _ti)
         + `
         ` + _tyKeyPointsHtml(ty, SEC) + `
         <div style="${SEC}">目前強度與位置</div>

@@ -29,6 +29,12 @@ HOURLY_FILE   = "rain_hourly.json"
 #   本腳本本來就在抓水保署站級 STRT，只需再做「逐官方警戒單元→鄉鎮」聚合。
 #   寫獨立檔，與 radar.json 同策略：兩支 workflow 各寫各檔，永不搶寫 data.json。
 ETR2_FILE     = "etr2_now.json"
+# ── 颱風資料（每小時更新，獨立檔）──────────────────────
+#   颱風動態變化快，等主排程 6 小時才更新對應變判讀太慢。
+#   ★ 不複製一份解析程式：直接沿用 fetch_rainfall.py 的 fetch_typhoon_track /
+#     fetch_typhoon_warning，確保兩處永遠同一套解析邏輯（欄位大小寫、
+#     警報單段落結構等都很容易改一邊漏一邊）。
+TYPHOON_FILE  = "typhoon_now.json"
 SLOPE_WARN_FILE = "slope_warning_stations.json"
 # (縣市, 鄉鎮, 站名) → ETR2(mm)：由 fetch_swcb_hourly 填充，供聚合精準對站
 SWCB_BY_LOC = {}
@@ -467,6 +473,52 @@ def write_etr2_now(swcb, now_tpe):
           + ("｜最高：" + "、".join(f"{k} {v['pct']*100:.0f}%" for k, v in top) if top else ""))
 
 
+def write_typhoon_now(now_tpe):
+    """每小時更新颱風路徑與警報單，寫 typhoon_now.json。
+
+    直接呼叫主腳本的解析函式，避免兩份實作分歧。
+    主腳本匯入失敗時（例如檔案不在同目錄）僅印警告並跳過，不影響雨量流程。
+    """
+    try:
+        import fetch_rainfall as FR
+    except Exception as e:
+        print(f"    無法匯入 fetch_rainfall（跳過颱風更新）：{e}")
+        return
+    try:
+        track = FR.fetch_typhoon_track()
+    except Exception as e:
+        print(f"    颱風路徑抓取失敗：{e}"); track = None
+    try:
+        warn = FR.fetch_typhoon_warning()
+    except Exception as e:
+        print(f"    颱風警報單抓取失敗：{e}"); warn = None
+
+    # ★ 兩者皆失敗才跳過；只有一項失敗仍寫入另一項，並保留前一份的失敗項，
+    #   避免「暫時抓不到」讓畫面上的颱風整個消失。
+    if track is None and warn is None:
+        print("    颱風資料兩項皆失敗，保留前一份 typhoon_now.json")
+        return
+    prev = {}
+    if os.path.exists(TYPHOON_FILE):
+        try:
+            with open(TYPHOON_FILE, encoding='utf-8') as f:
+                prev = json.load(f) or {}
+        except Exception:
+            prev = {}
+    if track is None: track = prev.get('typhoon_track') or []
+    if warn  is None: warn  = prev.get('typhoon_warn') or []
+
+    payload = {'updated': now_tpe.strftime('%Y-%m-%dT%H:%M'),
+               'typhoon_track': track, 'typhoon_warn': warn}
+    with open(TYPHOON_FILE, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, separators=(',', ':'))
+    names = "、".join((t.get('name_zh') or t.get('name_en') or
+                      (f"TD{t.get('td_no')}" if t.get('td_no') else '未命名'))
+                     for t in track) or '無'
+    print(f"    已寫 {TYPHOON_FILE}：{len(track)} 個系統（{names}）、"
+          f"{len(warn)} 份警報單")
+
+
 def update_hourly_series(now_tpe):
     """把本小時的 CWA 時雨量與水保署 ETR2 併入 rain_hourly.json 滾動序列。
 
@@ -502,6 +554,7 @@ def update_hourly_series(now_tpe):
         ser['swcb'][hour_key] = swcb
         # 同一次 API 結果順便產出鄉鎮級官方 ETR2 現值（不另外發請求）
         write_etr2_now(swcb, now_tpe)
+
         ser['hours'] = sorted(set(ser['hours']) | {hour_key})
 
     # 修剪：只留最近 KEEP_SERIES_HOURS 小時
@@ -583,6 +636,13 @@ def main():
         update_hourly_series(now)
     except Exception as e:
         print(f"    逐時快照失敗（不影響 radar.json）：{e}")
+
+    # ── 颱風路徑與警報單（每小時更新，獨立於雨量流程成敗）──
+    print("颱風動態更新...")
+    try:
+        write_typhoon_now(now)
+    except Exception as e:
+        print(f"    颱風更新失敗（不影響其他資料）：{e}")
 
 
 if __name__ == '__main__':
