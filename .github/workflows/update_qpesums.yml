@@ -41,8 +41,9 @@ jobs:
           #   舊版在「radar.json 不存在就 exit 0」，且只 git add radar.json，
           #   導致 rain_hourly.json 每小時寫了卻從未 commit——Actions runner 是
           #   即用即棄的，沒 commit 就等於沒寫，逐時序列永遠停在 1 小時、暖機不會完成。
-          if [ ! -f radar.json ] && [ ! -f rain_hourly.json ] && [ ! -f etr2_now.json ]; then
-            echo "radar.json、rain_hourly.json、etr2_now.json 都不存在，跳過 commit"
+          if [ ! -f radar.json ] && [ ! -f rain_hourly.json ] \
+             && [ ! -f etr2_now.json ] && [ ! -f typhoon_now.json ]; then
+            echo "四份每小時資料都不存在，跳過 commit"
             exit 0
           fi
           git config user.name  "github-actions[bot]"
@@ -52,6 +53,7 @@ jobs:
           [ -f radar.json ]       && git add radar.json        # 雷達1h獨立檔（每小時刷新）
           [ -f rain_hourly.json ] && git add rain_hourly.json  # 逐時雨量滾動序列 168h
           [ -f etr2_now.json ]    && git add etr2_now.json     # ETR2 官方現值（鄉鎮級）
+          [ -f typhoon_now.json ] && git add typhoon_now.json  # 颱風路徑＋警報單（每小時）
           [ -f qpesums_history.json ] && git add qpesums_history.json  # 若存在也一併（相容舊資料）
           if git diff --staged --quiet; then
             echo "無變更，跳過"
@@ -59,7 +61,8 @@ jobs:
           fi
           SER=$(python -c "import json;d=json.load(open('rain_hourly.json'));print(len(d.get('hours',[])))" 2>/dev/null || echo '?')
           ETRN=$(python -c "import json;print(json.load(open('etr2_now.json'))['n'])" 2>/dev/null || echo '?')
-          git commit -m "雷達1h＋逐時序列(${SER}h)＋ETR2官方現值(${ETRN}鄉鎮)：$(TZ='Asia/Taipei' date '+%Y-%m-%d %H:%M') TST [skip ci]"
+          TYN=$(python -c "import json;print(len(json.load(open('typhoon_now.json'))['typhoon_track']))" 2>/dev/null || echo '?')
+          git commit -m "雷達1h＋逐時序列(${SER}h)＋ETR2(${ETRN}鄉鎮)＋颱風(${TYN}系統)：$(TZ='Asia/Taipei' date '+%Y-%m-%d %H:%M') TST [skip ci]"
 
           for i in 1 2 3 4 5; do
             if git push origin HEAD:"$BRANCH"; then
