@@ -975,10 +975,11 @@ def fetch_pop_county(county, ep_code, is_3day):
             #   ★ 整份 F-D0047 規格**沒有陣風欄位**（已核對官方產品說明文件
             #     F-D0047-001_093.pdf），鄉鎮級只有平均風。陣風另由
             #     「颱風警報期間各地區風力預測」提供，且僅警報期間有值。
+            #   ★ 不以 ElementName 比對（其實際字串未經證實，猜錯就整批無資料）。
+            #     改為掃描所有元素，看 ElementValue 內是否含 WindSpeed／BeaufortScale
+            #     這兩個「值欄位名」——官方文件已明列，比元素名稱可靠。
             wsegs = []
             for we in we_list:
-                en = we.get('ElementName', we.get('elementName',''))
-                if en not in ('風速', '最大風速'): continue
                 for t in we.get('Time', we.get('time',[])):
                     start = t.get('StartTime', t.get('startTime',
                             t.get('DataTime',  t.get('dataTime',''))))
@@ -986,7 +987,10 @@ def fetch_pop_county(county, ep_code, is_3day):
                     ev    = t.get('ElementValue', t.get('elementValue',[{}]))
                     if isinstance(ev, list): ev = ev[0] if ev else {}
                     ws = bf = None
-                    for k in ('WindSpeed', 'windSpeed', 'Value', 'value'):
+                    # ★ 只認 WindSpeed／BeaufortScale 這兩個專屬鍵。
+                    #   絕不可退回通用的 'Value'：那會把同一位置的溫度、濕度、
+                    #   降雨機率等其他元素的數值誤當成風速。
+                    for k in ('WindSpeed', 'windSpeed'):
                         c = ev.get(k)
                         if c not in (None, '', ' '):
                             try: ws = float(c)
@@ -1000,8 +1004,26 @@ def fetch_pop_county(county, ep_code, is_3day):
                             except (TypeError, ValueError): bf = None
                             break
                     if ws is None and bf is None: continue
+                    # ★ 逐 3 小時資料只有 DataTime（時間點），無 EndTime。
+                    #   若 end 等於 start，前端「落在區間內」的判斷會永遠不成立，
+                    #   導致取不到當前時段的風力。故補上該筆的有效區間長度。
+                    if end == start and start:
+                        try:
+                            from datetime import datetime as _dt, timedelta as _td
+                            _t = _dt.fromisoformat(start)
+                            end = (_t + _td(hours=(3 if is_3day else 12))).isoformat()
+                        except Exception:
+                            pass
                     wsegs.append({'start':start, 'end':end, 'ws':ws, 'bf':bf})
-            if wsegs: WIND_FCST.setdefault(county, {})[name] = wsegs
+            # 同一時段可能被多個元素重複掃到，依 start 去重（保留有 bf 者）
+            if wsegs:
+                dedup = {}
+                for w in wsegs:
+                    k = w['start']
+                    if k not in dedup or (dedup[k].get('bf') is None and w.get('bf') is not None):
+                        dedup[k] = w
+                WIND_FCST.setdefault(county, {})[name] = sorted(
+                    dedup.values(), key=lambda x: x.get('start') or '')
     except Exception as e:
         pass
     return pop_map

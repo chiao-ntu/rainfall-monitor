@@ -153,9 +153,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <select id="windKind" onchange="setWindKind(this.value)"
         style="display:none;font-size:10px;background:#061220;color:#7ee8a8;
         border:1px solid #3a8a5a;border-radius:3px;padding:2px 3px;margin-right:3px">
-        <option value="mean">平均風（氣象署）</option>
-        <option value="gust">陣風（颱風警報期間）</option>
-        <option value="gust_est">推估陣風（系統推估）</option>
+        <option value="mean">平均風</option>
+        <option value="gust">陣風</option>
+        <option value="gust_est">陣風推估</option>
       </select>
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
         style="border-color:#1a4060;color:#8ac8e8">🏷 鄉鎮市區</button>
@@ -3042,10 +3042,8 @@ function renderLegend(){
            : mode==='warn' ? WARN_MAP_SCALE
            : mode==='wind' ? WIND_SCALE
            : RISK_SCALE;
-  const WIND_SRC_NAME = {mean:'平均風', gust:'陣風（官方）', gust_est:'陣風（推估）'};
   const titles = { rain: isFuture6h ? '降雨強度' : '累積雨量(mm)', etr: 'ETR2%',
-                   risk: '風險指標', warn: '警特報預估',
-                   wind: '蒲福風級｜' + (WIND_SRC_NAME[windKind] || '') };
+                   risk: '風險指標', warn: '警特報預估', wind: '蒲福風級' };
   const titleText = titles[mode] || '';
 
   // 強度分級用描述性文字，不顯示數字範圍
@@ -5511,7 +5509,7 @@ function drawWindHourChart(t){
 
 function _windTipHtml(t){
   const w = _windOf(t);
-  const nm = {mean:'平均風', gust:'陣風（官方）', gust_est:'陣風（推估）'}[windKind] || '';
+  const nm = {mean:'平均風', gust:'陣風', gust_est:'陣風推估'}[windKind] || '';
   if(w.bf == null){
     return `${nm}：<span style="color:#8a9aaa">無資料</span>` +
       (windKind === 'gust'

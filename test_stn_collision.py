@@ -212,5 +212,34 @@ if os.path.exists(amb_file):
 else:
     print('  （找不到 ambiguous_stations.json，略過）')
 
+
+print('\n=== 風力預報擷取（F-D0047）===')
+# ★ 不以 ElementName 比對（實際字串未經證實），改認 WindSpeed/BeaufortScale 值鍵
+import fetch_rainfall as FR
+SAMPLE = {"records":{"Locations":[{"Location":[{
+  "LocationName":"仁愛鄉",
+  "WeatherElement":[
+    {"ElementName":"溫度","Time":[
+      {"DataTime":"2026-08-30T12:00:00+08:00","ElementValue":[{"Temperature":"22"}]}]},
+    {"ElementName":"風速","Time":[
+      {"DataTime":"2026-08-30T12:00:00+08:00",
+       "ElementValue":[{"WindSpeed":"12","BeaufortScale":"6"}]},
+      {"DataTime":"2026-08-30T15:00:00+08:00",
+       "ElementValue":[{"WindSpeed":"18","BeaufortScale":"8"}]}]}]}]}]}}
+class _R:
+    status_code = 200
+    def json(self): return SAMPLE
+    def raise_for_status(self): pass
+FR.requests = types.SimpleNamespace(get=lambda *a, **k: _R())
+FR.WIND_FCST.clear()
+FR.fetch_pop_county('南投縣', 'F-D0047-055', True)
+w = FR.WIND_FCST.get('南投縣', {}).get('仁愛鄉', [])
+chk('抓到兩段風力', len(w), 2)
+chk('風速正確', [x['ws'] for x in w], [12.0, 18.0])
+chk('蒲福風級正確', [x['bf'] for x in w], [6, 8])
+chk('★溫度未被誤當風速', all(x['ws'] in (12.0, 18.0) for x in w), True)
+chk('★逐3小時已補區間結束時間', w[0]['end'] != w[0]['start'], True)
+print(f"  區間：{w[0]['start'][11:16]} → {w[0]['end'][11:16]}")
+
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)

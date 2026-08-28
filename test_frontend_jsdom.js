@@ -1968,6 +1968,10 @@ if (need('_bfColor') && need('_wsToBf') && need('_windOf') && need('setWindKind'
   chk('推估陣風標示非官方', /系統推估值，非氣象署發布/.test(html), true);
   chk('官方陣風標示尺度差異', /警戒地區尺度，非鄉鎮尺度/.test(html), true);
   chk('下拉選單三個選項', /value="mean"[\s\S]{0,400}value="gust"[\s\S]{0,400}value="gust_est"/.test(html), true);
+  // ★ 介面不得出現內部來源說明（使用者指定：對判圖無益）
+  chk('選單無「氣象署」字樣', /<option value="mean">平均風（氣象署）/.test(html), false);
+  chk('選單用「陣風推估」', /<option value="gust_est">陣風推估<\/option>/.test(html), true);
+  chk('圖例標題不帶來源', /wind: '蒲福風級｜'/.test(html), false);
 }
 
 
@@ -2012,7 +2016,7 @@ if (need('getAccum') && need('_windOf') && need('_syncWindKindUI')) {
   chk('鄉鎮市區下拉無 title', /id="townNameScope"[^>]*title=/.test(html), false);
 
   // 圖例
-  chk('圖例支援風力', /wind: '蒲福風級｜'/.test(html), true);
+  chk('圖例支援風力', /wind: '蒲福風級'/.test(html), true);
 
   // ★ 隨時段變動：切到較晚時段應取到 9 級那段
   setLex("winKey='fut6_2';");
