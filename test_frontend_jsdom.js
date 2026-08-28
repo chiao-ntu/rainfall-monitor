@@ -2206,6 +2206,70 @@ if (need('_windSeries') && need('_smoothSeries') && need('drawWindDayChart')) {
   chk('★圖下標明內插非官方值', /其間曲線為內插（僅供視覺化，非官方值）/.test(html), true);
 }
 
+
+// ════════ 38. 東亞國界／省界圖層 ════════
+console.log('\n=== 東亞邊界圖資 ===');
+if (need('renderEastAsiaLayer') && need('_ringsCentroid')) {
+  const geo = getLex('EAST_ASIA_GEO');
+  console.log(`   國界 ${geo.countries.length} 國、省界 ${geo.provinces.length} 省`);
+  chk('含國界資料', geo.countries.length >= 10, true);
+  chk('含省界資料', geo.provinces.length >= 200, true);
+  chk('標明資料來源', /Natural Earth/.test(geo._src || ''), true);
+
+  // 使用者指定的三個範例必須在
+  const byName = n => geo.provinces.find(p=>p.name === n);
+  [['Okinawa','沖繩縣','Japan'], ['Zhejiang','浙江省','China'],
+   ['Batanes','巴丹群島省','Philippines']].forEach(([n, zht, admin])=>{
+    const p = byName(n);
+    chk(`${zht} 存在`, !!p, true);
+    if(p){ chk(`${zht} 繁中名稱`, p.name_zht, zht);
+           chk(`${zht} 所屬國`, p.admin, admin); }
+  });
+
+  // 涵蓋國家
+  const admins = [...new Set(geo.provinces.map(p=>p.admin))].sort();
+  console.log(`   省界涵蓋：${admins.join('、')}`);
+  ['Japan','China','South Korea','Philippines','Taiwan'].forEach(a=>{
+    chk(`涵蓋 ${a}`, admins.includes(a), true);
+  });
+
+  // 座標範圍須在東亞（裁切正確）
+  let laMin=99, laMax=-99, loMin=999, loMax=-999;
+  geo.provinces.forEach(p=>p.rings.forEach(r=>r.forEach(c=>{
+    laMin=Math.min(laMin,c[0]); laMax=Math.max(laMax,c[0]);
+    loMin=Math.min(loMin,c[1]); loMax=Math.max(loMax,c[1]);
+  })));
+  console.log(`   範圍 lat ${laMin.toFixed(1)}~${laMax.toFixed(1)}、lng ${loMin.toFixed(1)}~${loMax.toFixed(1)}`);
+  chk('緯度在東亞範圍', laMin > -10 && laMax < 60, true);
+  // ★ 裁切條件是「與範圍相交」而非「完全落入」，故青海、甘肅等省的
+  //   西緣會略微超出 100E（主體仍在範圍內），屬正確行為。
+  chk('經度在東亞範圍', loMin > 85 && loMax < 160, true);
+
+  // 座標格式為 [lat,lng]（與 Leaflet 一致）
+  const s0 = byName('Okinawa').rings[0][0];
+  chk('座標為 [lat,lng]', s0[0] > 20 && s0[0] < 30 && s0[1] > 120, true);
+
+  // 形心：必須落在該省範圍內
+  const okc = G._ringsCentroid(byName('Okinawa').rings);
+  console.log(`   沖繩縣標註位置：${okc ? okc.map(v=>v.toFixed(2)).join(', ') : '—'}`);
+  chk('形心可計算', !!okc, true);
+  if(okc){ chk('形心在沖繩附近', okc[0] > 24 && okc[0] < 29 && okc[1] > 122 && okc[1] < 132, true); }
+
+  // 繪圖不拋錯（含關閉狀態）
+  let ethrew = false;
+  setLex("showTownName = true;");
+  try { G.renderEastAsiaLayer(); } catch(e){ ethrew = true; console.log('   ', e.message); }
+  chk('繪製不拋錯', ethrew, false);
+  setLex("showTownName = false;");
+  try { G.renderEastAsiaLayer(); } catch(e){ ethrew = true; }
+  chk('關閉時不拋錯', ethrew, false);
+
+  // 與鄉鎮名圖層同一按鈕控制
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('由鄉鎮市區按鈕一併控制', /renderTownNameLayer\(\)\{[\s\S]{0,200}renderEastAsiaLayer\(\)/.test(src), true);
+  chk('邊界不攔截滑鼠', /color:'#7a94ac'[\s\S]{0,90}interactive:false/.test(src), true);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);
