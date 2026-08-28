@@ -142,8 +142,11 @@ def main():
     print(f'  省界：{len(provinces)} 省、'
           f'{sum(len(x["rings"]) for x in provinces)} 環')
 
+    # ★ 不輸出國界：110m 版精度遠低於 10m 省界，並陳時國界呈現明顯折線
+    #   （橫穿臺灣海峽的粗黑線），視覺突兀且無助判讀。省界已含各國海岸輪廓。
     payload = {'_src': 'Natural Earth (public domain)',
-               'countries': countries, 'provinces': provinces}
+               '_note': '僅省界／縣界；國界已移除（110m 精度過低）',
+               'provinces': provinces}
     txt = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
     io.open(OUT, 'w', encoding='utf-8').write(txt)
     print(f'  已寫出 {OUT}：{len(txt)//1024} KB')

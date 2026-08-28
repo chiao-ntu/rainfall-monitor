@@ -2211,9 +2211,10 @@ if (need('_windSeries') && need('_smoothSeries') && need('drawWindDayChart')) {
 console.log('\n=== 東亞邊界圖資 ===');
 if (need('renderEastAsiaLayer') && need('_ringsCentroid')) {
   const geo = getLex('EAST_ASIA_GEO');
-  console.log(`   國界 ${geo.countries.length} 國、省界 ${geo.provinces.length} 省`);
-  chk('含國界資料', geo.countries.length >= 10, true);
+  console.log(`   省界 ${geo.provinces.length} 省（國界已移除）`);
   chk('含省界資料', geo.provinces.length >= 200, true);
+  // ★ 國界已移除：110m 精度過低，與 10m 省界並陳時呈現折線
+  chk('★不含國界資料', !geo.countries, true);
   // ★ 平滑度：座標精度與點密度需接近臺灣圖資，否則線條呈現稜角
   const _tp = geo.provinces.reduce((a,p)=>a + p.rings.reduce((b,r)=>b+r.length,0), 0);
   const _tr = geo.provinces.reduce((a,p)=>a + p.rings.length, 0);
@@ -2287,14 +2288,10 @@ if (need('renderEastAsiaLayer') && need('_ringsCentroid')) {
   // 與鄉鎮名圖層同一按鈕控制
   const src = fs.readFileSync('index.html', 'utf8');
   chk('由鄉鎮市區按鈕一併控制', /renderTownNameLayer\(\)\{[\s\S]{0,200}renderEastAsiaLayer\(\)/.test(src), true);
-  // ★ 線條規格：國界＝縣市界、省界＝鄉鎮市區界（使用者指定）
-  chk('國界規格同縣市界', /color:'#000000', weight:1, opacity:0\.7/.test(src), true);
-  chk('省界規格同鄉鎮界', /color:'#9ab8d0', weight:0\.6, opacity:0\.45/.test(src), true);
+  // ★ 省界改黑色 1px（同臺灣縣市界）；國界不再繪製
+  chk('省界為黑色1px', /color:'#000000', weight:1, opacity:0\.7/.test(src), true);
   chk('邊界不攔截滑鼠', /color:'#000000'[\s\S]{0,90}interactive:false/.test(src), true);
-  // 國界須後畫（疊在省界之上，同臺灣的層次）
-  const iProv = src.indexOf("EAST_ASIA_GEO.provinces || []).forEach");
-  const iCty  = src.indexOf("EAST_ASIA_GEO.countries || []).forEach");
-  chk('國界疊在省界之上', iProv > 0 && iCty > iProv, true);
+  chk('★不再繪製國界', /EAST_ASIA_GEO\.countries/.test(src), false);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
