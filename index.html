@@ -150,6 +150,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bRisk"  onclick="setMode('risk')" style="border-color:#3a8a5a;color:#7ee8a8">風險指標</button>
       <button class="b"    id="bWarn"  onclick="setMode('warn')" style="border-color:#3a8a5a;color:#7ee8a8">警特報</button>
       <button class="b"    id="bWind"  onclick="setMode('wind')" style="border-color:#3a8a5a;color:#7ee8a8">風力預測</button>
+      <button class="b"    id="bTemp"  onclick="setMode('temp')" style="border-color:#3a8a5a;color:#7ee8a8">氣溫</button>
+      <button class="b"    id="bWave"  onclick="setMode('wave')" style="border-color:#3a8a5a;color:#7ee8a8">浪高</button>
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
         style="border-color:#1a4060;color:#8ac8e8">🏷 鄉鎮市區</button>
       <select id="townNameScope" onchange="setTownNameScope(this.value)"
@@ -1969,6 +1971,20 @@ function getAccum(t){
     return {totalRain: (v==null ? null : v), etrPct: null, isRadar: true};
   }
 
+  // ── 氣溫模式 ──
+  if(mode==='temp'){
+    const w = _tempOf(t);
+    return {totalRain: w.t, etrPct: w.t, isTemp: true,
+            tmax: w.tmax, tmin: w.tmin};
+  }
+
+  // ── 浪高模式（僅沿海預報點有值；內陸留白）──
+  if(mode==='wave'){
+    const w = _waveOf(t);
+    return {totalRain: w.wave, etrPct: w.wave, isWave: true,
+            waveBf: w.bf, waveDir: w.dir};
+  }
+
   // ── 風力預測模式 ──
   //   與雨量／ETR2／風險同層：直接回傳該鄉鎮的蒲福風級，由 renderLayer 著色。
   //   風級本身即為分級值，故 totalRain 與 etrPct 皆放風級，legend 另行處理。
@@ -2185,6 +2201,14 @@ function renderLayer(){
       } else if(acc.isWarn){
         fillColor = warnMapColor(totalRain);
         fillOp    = totalRain>0 ? (isSel?0.93:0.82) : 1.0;
+      } else if(acc.isTemp){
+        // 氣溫：無資料留白（不可視為 0°C）
+        fillColor = _tempColor(totalRain) || '#FFFFFF';
+        fillOp    = (totalRain == null) ? 1.0 : (isSel?0.93:0.82);
+      } else if(acc.isWave){
+        // 浪高：內陸無值 → 極淡灰（明確表示「非沿海」而非「浪高 0」）
+        fillColor = _waveColor(totalRain) || '#e8eef4';
+        fillOp    = (totalRain == null) ? 0.25 : (isSel?0.93:0.82);
       } else if(acc.isWind){
         // 風力預測：蒲福風級色階（<4白/4-7綠/7-10黃/10-13紅/>=13紫）
         fillColor = _bfColor(totalRain) || '#FFFFFF';
@@ -2290,11 +2314,11 @@ function renderLayer(){
             : `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
             `全天累積雨量：${dayRain!=null?dayRain+' mm':'—'}<br>`+
             `ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) +
-            `風險指標：${riskIndicatorHtml(t,3)}` + _windRow(t);
+            `風險指標：${riskIndicatorHtml(t,3)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
         } else if(winKey.startsWith('past')){
-          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>觀測累積雨量：${rainStr} ｜ ETR2%：${etrStr}<br>`+ _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t);
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>觀測累積雨量：${rainStr} ｜ ETR2%：${etrStr}<br>`+ _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
         } else {
-          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>預測累積雨量：${rainStr} ｜ ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t);
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>預測累積雨量：${rainStr} ｜ ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
         }
       }
       poly.bindTooltip(tooltipHtml, {sticky:true, opacity:.92});
@@ -3045,13 +3069,18 @@ function renderLegend(){
   const isFuture6h = false;  // fut6 已改回累積雨量色階
   // 風力預測：以蒲福風級色階呈現（與 BF_BANDS 同一組定義，避免兩處分歧）
   const WIND_SCALE = BF_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
-  const sc = mode==='rain' ? RAIN_SCALE
+  const TEMP_SCALE = TEMP_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
+  const WAVE_SCALE = WAVE_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
+  const sc = mode==='temp' ? TEMP_SCALE
+           : mode==='wave' ? WAVE_SCALE
+           : mode==='rain' ? RAIN_SCALE
            : mode==='etr'  ? ETR_SCALE
            : mode==='warn' ? WARN_MAP_SCALE
            : mode==='wind' ? WIND_SCALE
            : RISK_SCALE;
   const titles = { rain: isFuture6h ? '降雨強度' : '累積雨量(mm)', etr: 'ETR2%',
-                   risk: '風險指標', warn: '警特報預估', wind: '蒲福風級' };
+                   risk: '風險指標', warn: '警特報預估', wind: '蒲福風級',
+                   temp: '氣溫(°C)', wave: '浪高' };
   const titleText = titles[mode] || '';
 
   // 強度分級用描述性文字，不顯示數字範圍
@@ -3062,7 +3091,7 @@ function renderLegend(){
   function rangeLabel(scale, idx){
     if(isFuture6h) return INTENSITY_DESC[idx] || '';
     if(mode==='warn') return scale[idx].label || '';
-    if(mode==='wind') return scale[idx].label || '';
+    if(mode==='wind' || mode==='temp' || mode==='wave') return scale[idx].label || '';
     if(mode==='risk') return RISK_DESC[idx] || '';
     const s = scale[idx];
     const prevMax = idx>0 ? scale[idx-1].max : 0;
@@ -3141,6 +3170,8 @@ async function tryLoadLive(){
     window.TYPHOON_TRACK = d.typhoon_track || [];
     // 風力預測：wind_fcst＝368鄉鎮平均風（官方）、gust_fcst＝颱風期間各地區陣風（官方）
     window.WIND_FCST = d.wind_fcst || {};
+    window.TEMP_FCST = d.temp_fcst || {};   // 鄉鎮氣溫（逐3小時）
+    window.WAVE_FCST = d.wave_fcst || {};   // 沿海浪高（僅120個沿海預報點）
     window.GUST_FCST = d.gust_fcst || {};
     // 官方颱風警報單原文（W-C0034-001）：面板照抄，不改寫
     window.TYPHOON_WARN = d.typhoon_warn || [];
@@ -3366,11 +3397,12 @@ function setModel(m){
 
 function setMode(m){
   mode=m;
-  ['bRain','bEtr','bRisk','bWarn','bWind'].forEach(id=>{
+  ['bRain','bEtr','bRisk','bWarn','bWind','bTemp','bWave'].forEach(id=>{
     const el=document.getElementById(id);
     if(el) el.classList.remove('on');
   });
-  const modeMap={rain:'bRain',etr:'bEtr',risk:'bRisk',warn:'bWarn',wind:'bWind'};
+  const modeMap={rain:'bRain',etr:'bEtr',risk:'bRisk',warn:'bWarn',wind:'bWind',
+                 temp:'bTemp',wave:'bWave'};
   const el=document.getElementById(modeMap[m]);
   if(el) el.classList.add('on');
   withTransition(()=>{
@@ -5364,6 +5396,81 @@ function _bindTownNameZoom(){
 //   避免地圖下拉切換時，使用者分不清當前看的是哪一種來源。
 let windKind = 'mean';
 
+// ══════════════════════════════════════════════════════════
+//  氣溫色階（使用者指定的分級與色碼）
+//  由低到高：白(<0) 靛紫(5) 深藍(10) 青藍(14) 嫩綠(18) 純綠(22)
+//            純黃(26) 橘黃(30) 橘紅(35) 鮮紅(38) 深暗紅(>40)
+// ══════════════════════════════════════════════════════════
+const TEMP_BANDS = [
+  {max: 0,   color:'#FFFFFF', name:'0°C以下'},
+  {max: 5,   color:'#4B0082', name:'0–5°C'},
+  {max: 10,  color:'#0000FF', name:'5–10°C'},
+  {max: 14,  color:'#00FFFF', name:'10–14°C'},
+  {max: 18,  color:'#00FA9A', name:'14–18°C'},
+  {max: 22,  color:'#00FF00', name:'18–22°C'},
+  {max: 26,  color:'#FFFF00', name:'22–26°C'},
+  {max: 30,  color:'#FFA500', name:'26–30°C'},
+  {max: 35,  color:'#FF4500', name:'30–35°C'},
+  {max: 38,  color:'#FF0000', name:'35–38°C'},
+  {max: 999, color:'#8B0000', name:'38°C以上'},
+];
+function _tempColor(t){
+  if(t == null || !isFinite(t)) return null;
+  for(const b of TEMP_BANDS) if(t < b.max) return b.color;
+  return TEMP_BANDS[TEMP_BANDS.length-1].color;
+}
+// ══════════════════════════════════════════════════════════
+//  浪高色階（與累積雨量同一組色；級距為使用者指定的浪級）
+//  ★ 僅 120 個沿海預報點有值，內陸鄉鎮須留白（不可填 0，
+//    否則內陸看起來像「浪高 0 公尺」）。
+// ══════════════════════════════════════════════════════════
+const WAVE_BANDS = [
+  {max: 1.0,  color:'#FFFFFF', name:'微波（<1m）'},
+  {max: 1.5,  color:'#40d060', name:'小浪（1–1.5m）'},
+  {max: 2.5,  color:'#f0d040', name:'中浪（1.5–2.5m）'},
+  {max: 5.5,  color:'#e04040', name:'大浪（2.5–5.5m）'},
+  {max: 999,  color:'#c050e0', name:'巨浪（≥5.5m）'},
+];
+function _waveColor(h){
+  if(h == null || !isFinite(h)) return null;
+  for(const b of WAVE_BANDS) if(h < b.max) return b.color;
+  return WAVE_BANDS[WAVE_BANDS.length-1].color;
+}
+// 取某鄉鎮在選取時刻的氣溫 → {t, tmax, tmin}
+function _tempOf(t){
+  if(!t) return {t:null, tmax:null, tmin:null};
+  const segs = ((window.TEMP_FCST || {})[t.county] || {})[t.township] || [];
+  if(!segs.length) return {t:null, tmax:null, tmin:null};
+  const at = _windAtMs();
+  let seg = segs.find(x=>{
+    const st = Date.parse(x.start||''), en = Date.parse(x.end||x.start||'');
+    return isFinite(st) && isFinite(en) && at >= st && at <= en;
+  });
+  if(!seg) seg = segs.find(x=>{
+    const e = Date.parse(x.end || x.start || '');
+    return isFinite(e) && e >= at;
+  }) || segs[segs.length-1];
+  return {t: seg.t, tmax: seg.tmax, tmin: seg.tmin};
+}
+// 取某鄉鎮在選取時刻的浪高 → {wave, bf, dir}；非沿海回 null
+function _waveOf(t){
+  if(!t) return {wave:null, bf:null, dir:''};
+  const wf = window.WAVE_FCST || {};
+  // 沿海預報點以鄉鎮名對應（官方即以鄉鎮命名，如「蘇澳鎮」）
+  const segs = wf[t.township] || wf[(t.county||'') + (t.township||'')] || [];
+  if(!segs.length) return {wave:null, bf:null, dir:''};
+  const at = _windAtMs();
+  let seg = segs.find(x=>{
+    const st = Date.parse(x.start||''), en = Date.parse(x.end||x.start||'');
+    return isFinite(st) && isFinite(en) && at >= st && at <= en;
+  });
+  if(!seg) seg = segs.find(x=>{
+    const e = Date.parse(x.end || x.start || '');
+    return isFinite(e) && e >= at;
+  }) || segs[segs.length-1];
+  return {wave: seg.wave, bf: seg.bf, dir: seg.dir || ''};
+}
+
 // 蒲福風級色階（使用者指定；與 ETR2% 同一組色）
 const BF_BANDS = [
   {max: 4,   color:'#ffffff', name:'4級以下'},
@@ -5661,6 +5768,28 @@ function drawAllWindCharts(t){
 
 // 懸浮視窗的風力一列（非風力模式時附加；無資料則不顯示）
 //   同時列出平均風與陣風推估，讓使用者不必切模式即可掌握風勢。
+// 懸浮視窗：氣溫一列（無資料則不顯示）
+function _tempRow(t){
+  const w = _tempOf(t);
+  if(w.t == null) return '';
+  const col = _tempColor(w.t) || '#fff';
+  let h = `<br>氣溫：<b style="color:${col}">${w.t.toFixed(0)}°C</b>`;
+  if(w.tmax != null && w.tmin != null){
+    h += `<span style="color:#8a9aaa">　${w.tmin.toFixed(0)}–${w.tmax.toFixed(0)}°C</span>`;
+  }
+  return h;
+}
+// 懸浮視窗：浪高一列（僅沿海預報點有值）
+function _waveRow(t){
+  const w = _waveOf(t);
+  if(w.wave == null) return '';
+  const band = WAVE_BANDS.find(b=>w.wave < b.max) || WAVE_BANDS[WAVE_BANDS.length-1];
+  let h = `<br>浪高：<b style="color:${band.color}">${w.wave.toFixed(1)} m</b>`
+        + `<span style="color:#8a9aaa">　${band.name.replace(/（.*/, '')}</span>`;
+  if(w.dir) h += `<span style="color:#8a9aaa">　${w.dir}</span>`;
+  return h;
+}
+
 function _windRow(t){
   const mean = _windOf(t, 'mean');
   if(mean.bf == null) return '';

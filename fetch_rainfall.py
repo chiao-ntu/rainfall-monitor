@@ -25,6 +25,8 @@ HOURLY_FILE = "rain_hourly.json"   # 由 fetch_qpesums_hourly.py 每小時寫入
 SWCB_STN_LOC = {}
 # 鄉鎮風力預報：{縣市: {鄉鎮: [{start,end,ws,bf}]}}，由 fetch_pop_county 順帶填充
 WIND_FCST = {}
+# 鄉鎮氣溫預報：{縣市: {鄉鎮: [{start,end,t,tmax,tmin}]}}
+TEMP_FCST = {}
 # (縣市, 鄉鎮, 站名) → ETR2(mm)：同名站以地理位置區分
 SWCB_BY_LOC = {}   # (縣市,鄉鎮) → {站名: ETR2}；由 fetch_swcb_etr2() 填充
 # 代表站對站層級的可讀名稱（log 與前端共用語彙）
@@ -61,12 +63,129 @@ COUNTY_EP_7D = {
     '金門縣':'F-D0047-087',
 }
 
+# 鄉鎮沿海預報（浪高）：F-D0047-095 為逐 3 小時、096 為週預報。
+#   ★ 只涵蓋 120 個「沿海預報代表點」，不是 368 鄉鎮 —— 內陸鄉鎮本來就無值，
+#     前端須留白而非填 0，否則會讓內陸看起來像「浪高 0 公尺」。
+COASTAL_EP = 'F-D0047-095'
+
+
+def fetch_wave_forecast():
+    """鄉鎮沿海預報 → {鄉鎮名: [{start, end, wave, bf, dir}]}。
+
+    欄位（官方產品說明 F-D0047-095_096.pdf）：
+      WaveHeight 浪高(公尺)、BeaufortScale 蒲福風級、WaveDirection 浪向(8方位)
+    無資料或失敗回 {}。
+    """
+    if not CWA_API_KEY:
+        return {}
+    print("抓取鄉鎮沿海預報（浪高）...")
+    try:
+        r = requests.get(f"{BASE_URL}/{COASTAL_EP}",
+                         params={"Authorization": CWA_API_KEY, "format": "JSON"},
+                         timeout=30)
+        if r.status_code != 200:
+            print(f"    HTTP {r.status_code}")
+            return {}
+        raw = r.json()
+    except Exception as e:
+        print(f"    取用失敗：{e}")
+        return {}
+
+    def _num(v):
+        if v in (None, '', ' '):
+            return None
+        try:
+            return float(str(v).replace('>=', '').replace('<=', '')
+                          .replace('>', '').replace('<', '').strip())
+        except (TypeError, ValueError):
+            return None
+
+    out = {}
+    try:
+        rec = raw.get('records', {})
+        wrap = rec.get('Locations', rec.get('locations', []))
+        if not wrap:
+            return {}
+        locs = wrap[0].get('Location', wrap[0].get('location', []))
+        for loc in locs:
+            name = (loc.get('LocationName') or loc.get('locationName') or '').strip()
+            if not name:
+                continue
+            segs = {}
+            for we in loc.get('WeatherElement', loc.get('weatherElement', [])):
+                for t in we.get('Time', we.get('time', [])):
+                    def _first(*keys):
+                        for k in keys:
+                            v = t.get(k)
+                            if v not in (None, '', ' '):
+                                return v
+                        return ''
+                    st = _first('StartTime', 'startTime', 'DataTime', 'dataTime')
+                    if not st:
+                        continue
+                    en = _first('EndTime', 'endTime') or st
+                    ev = t.get('ElementValue', t.get('elementValue', [{}]))
+                    if isinstance(ev, list):
+                        ev = ev[0] if ev else {}
+                    rec_ = segs.setdefault(st, {'start': st, 'end': en,
+                                                'wave': None, 'bf': None, 'dir': ''})
+                    for k in ('WaveHeight', 'waveHeight'):
+                        if k in ev:
+                            v = _num(ev.get(k))
+                            if v is not None:
+                                rec_['wave'] = v
+                            break
+                    for k in ('BeaufortScale', 'beaufortScale'):
+                        if k in ev:
+                            v = _num(ev.get(k))
+                            if v is not None:
+                                rec_['bf'] = int(v)
+                            break
+                    for k in ('WaveDirection', 'waveDirection'):
+                        if k in ev and ev.get(k):
+                            rec_['dir'] = str(ev.get(k)).strip()
+                            break
+                    # 逐 3 小時僅有 DataTime，補上區間長度供前端判斷「當前時段」
+                    if rec_['end'] == rec_['start']:
+                        try:
+                            from datetime import datetime as _dt, timedelta as _td
+                            rec_['end'] = (_dt.fromisoformat(st) + _td(hours=3)).isoformat()
+                        except Exception:
+                            pass
+            keep = [v for v in segs.values() if v['wave'] is not None]
+            if keep:
+                out[name] = sorted(keep, key=lambda x: x['start'])
+    except Exception as e:
+        print(f"    解析失敗：{e}")
+        return {}
+    if out:
+        n = sum(len(v) for v in out.values())
+        print(f"    沿海浪高：{len(out)} 個預報點、{n} 時段")
+    return out
+
+
 def load_static():
     with open(STATIC_FILE, encoding='utf-8') as f:
         rows = json.load(f)
     table = {r['county']+r['township']: r for r in rows}
     print(f"靜態警戒值：{len(table)} 個鄉鎮")
     return table
+
+def _numstr(v):
+    """把 ">= 11"、"<=3"、"12" 這類字串轉為數值；無法解析回 None。
+
+    ★ CWA 在風勢或雨勢強時會以區間下界表示（實測連江 F-D0047-081 的
+      WindSpeed 為 ">= 11"）。直接 float() 會拋錯而整筆丟棄，
+      使「數值愈大的地方反而沒資料」。
+    """
+    if v in (None, '', ' '):
+        return None
+    try:
+        return float(str(v).replace('>=', '').replace('<=', '')
+                      .replace('>', '').replace('<', '').strip())
+    except (TypeError, ValueError):
+        return None
+
 
 def _stn_key(n):
     """站名正規化：去除尾端網站代碼字母（s水保/w水利/tp台北/sr/fr等）。"""
@@ -1016,13 +1135,6 @@ def _extract_pop_wind(raw, county, is_3day):
                     # ★ 風速與風級都可能是 ">= 11"、">=6" 這類字串（風勢強時官方
                     #   以區間下界表示）。實測連江縣 F-D0047-081 即為此格式。
                     #   若直接 float() 會解析失敗 → 整筆丟棄 → 風愈大的離島反而無資料。
-                    def _numstr(v):
-                        if v in (None, '', ' '): return None
-                        try:
-                            return float(str(v).replace('>=', '').replace('<=', '')
-                                          .replace('>', '').replace('<', '').strip())
-                        except (TypeError, ValueError):
-                            return None
                     for k in ('WindSpeed', 'windSpeed'):
                         if k in ev:
                             ws = _numstr(ev.get(k)); break
@@ -1043,6 +1155,47 @@ def _extract_pop_wind(raw, county, is_3day):
                         except Exception:
                             pass
                     wsegs.append({'start':start, 'end':end, 'ws':ws, 'bf':bf})
+            # ── 溫度（與風力同一次請求；F-D0047 逐3小時有 Temperature）──
+            #   ★ 只認 Temperature／MaxTemperature／MinTemperature 三個專屬鍵，
+            #     不可退回通用 'Value'（會把濕度、體感溫度等誤當氣溫）。
+            tsegs = []
+            for we in we_list:
+                for t in we.get('Time', we.get('time', [])):
+                    def _f2(*keys):
+                        for k in keys:
+                            v = t.get(k)
+                            if v not in (None, '', ' '): return v
+                        return ''
+                    st = _f2('StartTime','startTime','DataTime','dataTime')
+                    en = _f2('EndTime','endTime') or st
+                    ev = t.get('ElementValue', t.get('elementValue', [{}]))
+                    if isinstance(ev, list): ev = ev[0] if ev else {}
+                    tv = tmax = tmin = None
+                    for k in ('Temperature','temperature'):
+                        if k in ev: tv = _numstr(ev.get(k)); break
+                    for k in ('MaxTemperature','maxTemperature'):
+                        if k in ev: tmax = _numstr(ev.get(k)); break
+                    for k in ('MinTemperature','minTemperature'):
+                        if k in ev: tmin = _numstr(ev.get(k)); break
+                    if tv is None and tmax is None and tmin is None: continue
+                    if en == st and st:
+                        try:
+                            from datetime import datetime as _dt2, timedelta as _td2
+                            en = (_dt2.fromisoformat(st) +
+                                  _td2(hours=(3 if is_3day else 12))).isoformat()
+                        except Exception:
+                            pass
+                    tsegs.append({'start': st, 'end': en, 't': tv,
+                                  'tmax': tmax, 'tmin': tmin})
+            if tsegs:
+                _td_ = {}
+                for x in tsegs:
+                    k = x['start']
+                    if k not in _td_ or (_td_[k].get('t') is None and x.get('t') is not None):
+                        _td_[k] = x
+                TEMP_FCST.setdefault(county, {})[name] = sorted(
+                    _td_.values(), key=lambda x: x.get('start') or '')
+
             # 同一時段可能被多個元素重複掃到，依 start 去重（保留有 bf 者）
             if wsegs:
                 dedup = {}
@@ -2712,6 +2865,8 @@ def main():
     typhoon_warn  = fetch_typhoon_warning() if CWA_API_KEY else []
     # 颱風警報期間各地區風力預測（含陣風）；平時為空
     gust_fcst     = fetch_gust_forecast() if CWA_API_KEY else {}
+    # 沿海浪高（僅 120 個沿海預報點）
+    wave_fcst     = fetch_wave_forecast() if CWA_API_KEY else {}
     debris_alerts = fetch_debris_alerts()
     # 雙軌：現況紅黃走官方發布值、未來推估自算
     official_alerts = fetch_official_alerts()
@@ -3263,6 +3418,10 @@ def main():
         #   ★ 官方鄉鎮級預報**無陣風欄位**，故陣風另存於 gust_fcst（僅颱風警報期間有值）
         'wind_fcst': WIND_FCST,
         'gust_fcst': gust_fcst,          # 颱風警報期間各地區風力預測（無警報＝{}）
+        # 鄉鎮氣溫預報（F-D0047，逐3小時）：{縣市:{鄉鎮:[{start,end,t,tmax,tmin}]}}
+        'temp_fcst': TEMP_FCST,
+        # 鄉鎮沿海浪高（F-D0047-095，僅 120 個沿海預報點；內陸無值須留白）
+        'wave_fcst': wave_fcst,
         # 雙軌警戒：off_* ＝官方發布（權威）、est_* ＝系統推估（前端須標示）
         'debris_alerts': debris_alerts,        # 土石流逐潛勢溪流
         'landslide_alerts': landslide_alerts,  # 大規模崩塌逐警戒區

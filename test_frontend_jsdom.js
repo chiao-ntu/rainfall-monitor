@@ -2007,7 +2007,7 @@ if (need('getAccum') && need('_windOf')) {
   // 按鈕群組：風力屬 mode 群組
   const html = fs.readFileSync('index.html', 'utf8');
   chk('★風力在 mode 按鈕群組', /id="bWind"\s+onclick="setMode\('wind'\)"/.test(html), true);
-  chk('mode 群組含 bWind', /\['bRain','bEtr','bRisk','bWarn','bWind'\]/.test(html), true);
+  chk('mode 群組含 bWind', /'bWarn','bWind'/.test(html), true);
   chk('modeMap 含 wind', /wind:'bWind'/.test(html), true);
   // 按鈕位置：風力(mode群組) 在 鄉鎮市區 之前
   const iWind = html.indexOf(`id="bWind"`), iTown = html.indexOf(`id="bTownName"`);
@@ -2292,6 +2292,87 @@ if (need('renderEastAsiaLayer') && need('_ringsCentroid')) {
   chk('省界為黑色1px', /color:'#000000', weight:1, opacity:0\.7/.test(src), true);
   chk('邊界不攔截滑鼠', /color:'#000000'[\s\S]{0,90}interactive:false/.test(src), true);
   chk('★不再繪製國界', /EAST_ASIA_GEO\.countries/.test(src), false);
+}
+
+
+// ════════ 39. 氣溫與浪高模式 ════════
+console.log('\n=== 氣溫模式 ===');
+if (need('_tempColor') && need('_tempOf') && need('_tempRow')) {
+  // 色階邊界（使用者指定的分級）
+  const tc = [[-5,'#FFFFFF'],[0,'#4B0082'],[4,'#4B0082'],[5,'#0000FF'],[9,'#0000FF'],
+              [10,'#00FFFF'],[13,'#00FFFF'],[14,'#00FA9A'],[18,'#00FF00'],
+              [22,'#FFFF00'],[26,'#FFA500'],[30,'#FF4500'],[35,'#FF0000'],
+              [38,'#8B0000'],[42,'#8B0000']];
+  let ok = true;
+  tc.forEach(([v,c])=>{ if(G._tempColor(v)!==c){ ok=false;
+    fails.push(`氣溫 ${v}°C 色階錯：得 ${G._tempColor(v)} 期望 ${c}`);} });
+  if(ok) console.log('  OK  11 級色階全部正確（白→靛紫→藍→青→綠→黃→橘→紅→暗紅）');
+  chk('無資料回 null（留白）', G._tempColor(null), null);
+
+  const fut = new Date(Date.now()+2*3600e3).toISOString();
+  const past = new Date(Date.now()-1*3600e3).toISOString();
+  setLex(`TMAP['南投縣仁愛鄉'] = Object.assign(TMAP['南投縣仁愛鄉']||{},
+      {county:'南投縣', township:'仁愛鄉'});
+    window.TEMP_FCST = {'南投縣':{'仁愛鄉':[
+      {start:'${past}', end:'${fut}', t:28.0, tmax:31.0, tmin:24.0}]}};
+    mode='temp'; winKey='today'; segFrom=0; segTo=3;`);
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+  const tv = G._tempOf(t);
+  console.log(`   氣溫 ${tv.t}°C（${tv.tmin}–${tv.tmax}）`);
+  chk('取得氣溫', tv.t, 28.0);
+  const acc = G.getAccum(t, 'temp');
+  chk('★氣溫為獨立模式', acc.isTemp, true);
+  chk('地圖著色值＝氣溫', acc.totalRain, 28.0);
+  chk('28°C → 橘黃', G._tempColor(acc.totalRain), '#FFA500');
+  const tr = G._tempRow(t);
+  console.log(`   tooltip：${tr.replace(/<[^>]*>/g,' ').trim()}`);
+  chk('tooltip 含氣溫', /氣溫：/.test(tr), true);
+  chk('tooltip 含高低溫', /24–31/.test(tr), true);
+  chk('無資料時不顯示', G._tempRow({county:'x',township:'y'}), '');
+}
+
+console.log('\n=== 浪高模式 ===');
+if (need('_waveColor') && need('_waveOf') && need('_waveRow')) {
+  const wc = [[0.5,'#FFFFFF'],[0.99,'#FFFFFF'],[1.0,'#40d060'],[1.4,'#40d060'],
+              [1.5,'#f0d040'],[2.4,'#f0d040'],[2.5,'#e04040'],[5.4,'#e04040'],
+              [5.5,'#c050e0'],[9.0,'#c050e0']];
+  let ok2 = true;
+  wc.forEach(([v,c])=>{ if(G._waveColor(v)!==c){ ok2=false;
+    fails.push(`浪高 ${v}m 色階錯：得 ${G._waveColor(v)} 期望 ${c}`);} });
+  if(ok2) console.log('  OK  五級距色階正確（微波/小浪/中浪/大浪/巨浪）');
+  chk('★內陸無資料回 null（不可當 0m）', G._waveColor(null), null);
+
+  const fut2 = new Date(Date.now()+2*3600e3).toISOString();
+  const past2 = new Date(Date.now()-1*3600e3).toISOString();
+  setLex(`TMAP['宜蘭縣蘇澳鎮'] = {county:'宜蘭縣', township:'蘇澳鎮'};
+    window.WAVE_FCST = {'蘇澳鎮':[
+      {start:'${past2}', end:'${fut2}', wave:3.0, bf:7, dir:'東北'}]};
+    mode='wave';`);
+  const ct = getLex("TMAP['宜蘭縣蘇澳鎮']");
+  const wv = G._waveOf(ct);
+  console.log(`   蘇澳鎮浪高 ${wv.wave}m（${wv.dir}、${wv.bf}級）`);
+  chk('沿海取得浪高', wv.wave, 3.0);
+  chk('3.0m → 大浪紅色', G._waveColor(wv.wave), '#e04040');
+  const wacc = G.getAccum(ct, 'wave');
+  chk('★浪高為獨立模式', wacc.isWave, true);
+  // 內陸鄉鎮必須無值
+  const inland = getLex("TMAP['南投縣仁愛鄉']");
+  chk('★內陸鄉鎮無浪高', G._waveOf(inland).wave, null);
+  chk('★內陸 tooltip 不顯示浪高', G._waveRow(inland), '');
+  const wr = G._waveRow(ct);
+  console.log(`   tooltip：${wr.replace(/<[^>]*>/g,' ').trim()}`);
+  chk('tooltip 含浪高', /浪高：/.test(wr), true);
+  chk('tooltip 含浪級', /大浪/.test(wr), true);
+
+  // 按鈕與圖例
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('氣溫為 mode 按鈕', /id="bTemp"\s+onclick="setMode\('temp'\)"/.test(src), true);
+  chk('浪高為 mode 按鈕', /id="bWave"\s+onclick="setMode\('wave'\)"/.test(src), true);
+  chk('mode 群組含兩者', /'bWind','bTemp','bWave'/.test(src), true);
+  chk('圖例支援氣溫', /temp: '氣溫\(°C\)'/.test(src), true);
+  chk('圖例支援浪高', /wave: '浪高'/.test(src), true);
+  chk('tooltip 三處都加入', (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 3);
+  setLex("mode='rain'; window.WAVE_FCST={}; window.TEMP_FCST={};");
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
