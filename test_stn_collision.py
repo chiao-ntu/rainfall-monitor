@@ -303,5 +303,41 @@ _bad = [c for c in FR.COUNTY_EP_3D
         if int(FR.COUNTY_EP_7D[c].split('-')[-1]) - int(FR.COUNTY_EP_3D[c].split('-')[-1]) != 2]
 chk('3D/7D 端點編號規則一致', _bad, [])
 
+
+print('\n=== 全臺打包檔：一次下載取代 44 次呼叫 ===')
+# ★ 逐縣市呼叫時，任一縣市失敗該縣市即全無資料（離島尤其常見）。
+#   打包檔只有一次成敗，可靠得多；解析共用 _extract_pop_wind，兩路徑不會分歧。
+_zipf = 'F-D0047-093.zip'
+if os.path.exists(_zipf):
+    _raw = open(_zipf, 'rb').read()
+    class _ZR:
+        status_code = 200
+        content = _raw
+    FR.requests = types.SimpleNamespace(get=lambda *a, **k: _ZR())
+    FR.WIND_FCST.clear()
+    _res = FR.fetch_all_pop_bundle(set(FR.COUNTY_EP_3D.keys()))
+    chk('打包路徑成功回傳', bool(_res), True)
+    if _res:
+        _p3, _p7 = _res
+        _wn = sum(len(v) for v in FR.WIND_FCST.values())
+        print(f"  PoP3d {len(_p3)} 鄉鎮、PoP7d {len(_p7)}、風力 {_wn} 鄉鎮")
+        chk('★風力涵蓋全臺 368 鄉鎮', _wn, 368)
+        chk('風力涵蓋 22 縣市', len(FR.WIND_FCST), 22)
+        # 鄉鎮名為鍵時，8 組重名會少 11 個（既有行為，逐縣市亦同）
+        chk('PoP 為相異鄉鎮名數（357）', len(_p3), 357)
+        for _c, _n in (('連江縣', 4), ('金門縣', 6), ('澎湖縣', 6)):
+            chk(f'★{_c} 有風力（{_n} 鄉鎮）', len(FR.WIND_FCST.get(_c, {})), _n)
+        # 逐時段數：打包檔為逐 3 小時
+        _first = next(iter(FR.WIND_FCST['連江縣'].values()))
+        chk('每鄉鎮有多個時段', len(_first) > 10, True)
+    chk('解析共用同一函式（不分歧）',
+        '_extract_pop_wind(raw, county, is_3day)' in
+        io.open('fetch_rainfall.py', encoding='utf-8').read(), True)
+    chk('打包失敗會退回逐縣市',
+        'bundled = fetch_all_pop_bundle' in
+        io.open('fetch_rainfall.py', encoding='utf-8').read(), True)
+else:
+    print('  （找不到 F-D0047-093.zip，略過）')
+
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)

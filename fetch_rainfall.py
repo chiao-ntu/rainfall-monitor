@@ -6,7 +6,7 @@
   F-D0047-XXX: WeatherElement「3小時降雨機率」/ 「12小時降雨機率」
                各縣市分開端點（奇數=3天，偶數=1週），Location = 鄉鎮
 """
-import requests, json, math, os, sys, time
+import requests, json, math, os, re, sys, time
 from datetime import datetime, timezone, timedelta
 
 CWA_API_KEY  = os.environ.get("CWA_API_KEY", "")
@@ -921,14 +921,23 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
 
 # ── PoP 各縣市鄉鎮端點 ───────────────────────────
 def fetch_pop_county(county, ep_code, is_3day):
-    """抓單一縣市的鄉鎮 PoP 資料"""
+    """抓單一縣市的鄉鎮 PoP 資料（逐縣市備援路徑；主要路徑為打包檔）"""
     url = f"{BASE_URL}/{ep_code}"
     try:
         r = requests.get(url, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=15)
         if r.status_code==404: return {}
         r.raise_for_status(); raw=r.json()
     except Exception as e: return {}
+    return _extract_pop_wind(raw, county, is_3day)
 
+
+def _extract_pop_wind(raw, county, is_3day):
+    """由 API JSON（或打包 XML 轉出的同構 dict）解析 PoP 與風力。
+
+    ★ 打包檔與逐縣市共用此函式，確保兩條路徑的欄位判讀完全一致
+      （值鍵、">= N" 格式、空 StartTime 等坑都只需修一處）。
+    回傳 {鄉鎮: [{start,end,pop,hours}]}；副作用：填充 WIND_FCST[county]。
+    """
     pop_map={}
     try:
         rec = raw.get('records',{})
@@ -1040,10 +1049,106 @@ def fetch_pop_county(county, ep_code, is_3day):
         pass
     return pop_map
 
+# 全臺打包檔：一次下載內含 22 縣市 × 368 鄉鎮的預報，取代 44 次逐縣市呼叫。
+#   ★ 為何值得：逐縣市呼叫時，任一縣市請求失敗該縣市就整批無資料（離島尤其
+#     容易，先前金門澎湖連江即因此全無風力）。打包檔只有一次成敗，可靠得多。
+#   ★ 注意：檔內的 TAIWAN_*.xml 是「縣市級」預報，**不含鄉鎮**；
+#     鄉鎮級資料在 22 個以縣市代碼命名的檔（如 09007_72hr_CH.xml）。
+BUNDLE_URL = f"{BASE_URL}/F-D0047-093"
+
+
+def _parse_pop_wind_xml(xml_text, county):
+    """解析單一縣市的鄉鎮預報 XML，回傳 (pop3d, pop7d) 並順帶填 WIND_FCST。
+
+    與 fetch_pop_county 共用同一套欄位判讀規則（值鍵、">= N"、空 StartTime），
+    差別僅在資料來源是 XML 而非 API JSON。
+    """
+    import xml.etree.ElementTree as ET
+    txt = re.sub(r'\sxmlns="[^"]+"', '', xml_text, count=1)
+    try:
+        root = ET.fromstring(txt)
+    except Exception as e:
+        print(f"    {county} XML 解析失敗：{e}")
+        return {}, {}
+    locs = []
+    for loc in root.iter('Location'):
+        we_list = []
+        for we in loc.findall('WeatherElement'):
+            times = []
+            for t in we.findall('Time'):
+                ev = t.find('ElementValue')
+                evd = {c.tag: (c.text or '') for c in ev} if ev is not None else {}
+                times.append({'DataTime': t.findtext('DataTime') or '',
+                              'StartTime': t.findtext('StartTime') or '',
+                              'EndTime': t.findtext('EndTime') or '',
+                              'ElementValue': [evd]})
+            we_list.append({'ElementName': we.findtext('ElementName') or '', 'Time': times})
+        locs.append({'LocationName': loc.findtext('LocationName') or '',
+                     'WeatherElement': we_list})
+    return {'records': {'Locations': [{'Location': locs}]}}
+
+
+def fetch_all_pop_bundle(counties_needed):
+    """以打包檔一次取得全臺鄉鎮 PoP 與風力。成功回 (pop3d, pop7d)，失敗回 None。"""
+    if not CWA_API_KEY:
+        return None
+    import io as _io, zipfile as _zip
+    print("抓取全臺打包預報（F-D0047-093）...")
+    try:
+        r = requests.get(BUNDLE_URL,
+                         params={"Authorization": CWA_API_KEY, "format": "ZIP"},
+                         timeout=120)
+        if r.status_code != 200:
+            print(f"    HTTP {r.status_code} → 改用逐縣市抓取")
+            return None
+        zf = _zip.ZipFile(_io.BytesIO(r.content))
+    except Exception as e:
+        print(f"    打包檔取得失敗（{e}）→ 改用逐縣市抓取")
+        return None
+
+    # 縣市代碼 → 縣市名（由檔內 LocationsName 取得，不必自行維護對照表）
+    names = [n for n in zf.namelist() if n.endswith('_CH.xml')
+             and not n.startswith('TAIWAN')]
+    pop3d_all, pop7d_all = {}, {}
+    n_ok = 0
+    for nm in names:
+        is3 = '_72hr_' in nm
+        is7 = '_Weekday_' in nm
+        if not (is3 or is7):
+            continue
+        try:
+            txt = zf.read(nm).decode('utf-8', 'replace')
+        except Exception:
+            continue
+        m = re.search(r'<LocationsName>([^<]+)</LocationsName>', txt)
+        county = (m.group(1).strip() if m else '').replace('台', '臺')
+        if not county:
+            continue
+        raw = _parse_pop_wind_xml(txt, county)
+        got = _extract_pop_wind(raw, county, is3)
+        if is3: pop3d_all.update(got)
+        else:   pop7d_all.update(got)
+        n_ok += 1
+    if not pop3d_all:
+        print("    打包檔未解析出資料 → 改用逐縣市抓取")
+        return None
+    print(f"  打包檔：{n_ok} 份檔案、PoP3d {len(pop3d_all)} 鄉鎮、"
+          f"PoP7d {len(pop7d_all)} 鄉鎮、風力 "
+          f"{sum(len(v) for v in WIND_FCST.values())} 鄉鎮")
+    return pop3d_all, pop7d_all
+
+
 def fetch_all_pop(counties_needed):
-    """抓所有需要縣市的 PoP，合併成鄉鎮層級"""
+    """抓所有需要縣市的 PoP，合併成鄉鎮層級。
+
+    ★ 優先用打包檔（一次下載涵蓋全臺 368 鄉鎮）；失敗才逐縣市抓。
+      逐縣市時任一縣市失敗即該縣市全無資料，打包檔則只有一次成敗。
+    """
     if not CWA_API_KEY: return {}, {}
-    print(f"抓取 PoP（{len(counties_needed)} 個縣市）...")
+    bundled = fetch_all_pop_bundle(counties_needed)
+    if bundled:
+        return bundled
+    print(f"抓取 PoP（逐縣市備援，{len(counties_needed)} 個縣市）...")
     pop3d_all, pop7d_all = {}, {}
     for county in sorted(counties_needed):
         ep3 = COUNTY_EP_3D.get(county)
