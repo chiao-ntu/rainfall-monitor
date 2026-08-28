@@ -2130,7 +2130,13 @@ if (need('_windSeries') && need('_smoothSeries') && need('drawWindDayChart')) {
   chk('圖表有圖例', /if\(pastPts\.length > 1\) item\(dcol, '過去'\)/.test(src2), true);
   // ★ 字級須與逐日雨量圖一致（_townChartGeom：fs 54/12、xFs 25/10）
   chk('★主字級與雨量圖相同', /const fs  = isZoom \? 54 : 12;/.test(src2), true);
-  chk('★X軸字級與雨量圖相同', /const xFs = isZoom \? 25 : 10;/.test(src2), true);
+  // ★ 風力圖時間軸點數少、空間充裕，X 軸字級改與 Y 軸一致（使用者指定）
+  chk('★X軸字級與Y軸相同', /const xFs = fs;/.test(src2), true);
+  // 標籤間隔依實際字寬計算，避免放大後互相重疊
+  chk('標籤間隔依字寬計算', /ctx\.measureText\('12\/31 18時'\)\.width \* 1\.15/.test(src2), true);
+  // 版面：標題獨立一列，不與軸標題／「現在」重疊
+  chk('★標題置於最上緣獨立列', /ctx\.fillText\(o\.title, pL-\(isZoom\?150:44\), fs\+22\)/.test(src2), true);
+  chk('★「現在」標於繪圖區內側', /ctx\.fillText\('現在', xn\+\(isZoom\?10:3\)/.test(src2), true);
   // 高度改由 CSS 決定（offsetHeight），避免屬性尺寸與顯示尺寸不等比而變形
   chk('CSS 指定高度 150px', /id="cv-wind-day" style="width:100%;height:150px/.test(src2), true);
   chk('六張圖高度一致', (src2.match(/height:150px;display:block;background:#040c14/g)||[]).length >= 6, true);

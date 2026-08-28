@@ -5501,18 +5501,21 @@ function _drawWindChart(cvId, pts, opt){
   // ★ 字級與版面比照逐日雨量圖（_townChartGeom）：fs 54/12、X軸 25/10。
   //   原本用 26/9，小圖比雨量圖小 3px、放大版更差近一倍，實機上難以閱讀。
   const fs  = isZoom ? 54 : 12;
-  const xFs = isZoom ? 25 : 10;
+  // ★ 風力圖的時間軸點數遠少於雨量圖（逐3小時 vs 逐時），空間充裕，
+  //   故 X 軸字級與 Y 軸一致，不必比照雨量圖縮小。
+  const xFs = fs;
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle = '#040c14'; ctx.fillRect(0,0,W,H);
   const pL = isZoom ? 210 : 52, pR = isZoom ? 190 : 48;
   // ★ 放大版底部需容納「X軸標籤 + 圖例」兩列，原本 202 太窄導致兩者重疊。
   //   比照雨量圖：xLabelH 78 + legendH 88 + 間距 36 = 202，但風力圖的圖例
   //   有色塊與圓點（較高），故再加 40。
-  const pT = isZoom ? 140 : 16, pB = isZoom ? 242 : 42;
+  const pT = isZoom ? 170 : 22, pB = isZoom ? 242 : 42;
   const iw = W-pL-pR, ih = H-pT-pB;
   if(isZoom && o.title){
+    // ★ 標題置於最上緣獨立一列（原本 pT-48 會與「蒲福風級」「現在」擠在一起）
     ctx.fillStyle='#d0e8ff'; ctx.font=`bold ${fs+10}px sans-serif`; ctx.textAlign='left';
-    ctx.fillText(o.title, pL, pT-48);
+    ctx.fillText(o.title, pL-(isZoom?150:44), fs+22);
   }
   if(!pts.length){
     ctx.fillStyle='#3a6080'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='left';
@@ -5545,7 +5548,8 @@ function _drawWindChart(cvId, pts, opt){
   }
   ctx.textAlign='left'; ctx.fillStyle='#7aa8c8';
   ctx.font=`${fs}px sans-serif`;
-  ctx.fillText('蒲福風級', pL-(isZoom?150:44), pT-(isZoom?30:5));
+  // 軸標題緊貼繪圖區左上角，與上方標題保持一行距離
+  ctx.fillText('蒲福風級', pL-(isZoom?150:44), pT-(isZoom?16:4));
 
   // 現在時刻分隔線（過去／未來）
   if(o.nowMs != null && o.nowMs > t0 && o.nowMs < t1){
@@ -5553,8 +5557,9 @@ function _drawWindChart(cvId, pts, opt){
     ctx.strokeStyle='#ffcc44'; ctx.lineWidth=isZoom?3:1; ctx.setLineDash(isZoom?[10,8]:[3,3]);
     ctx.beginPath(); ctx.moveTo(xn,pT); ctx.lineTo(xn,pT+ih); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle='#ffcc44'; ctx.textAlign='center'; ctx.font=`${fs}px sans-serif`;
-    ctx.fillText('現在', xn, pT-(isZoom?12:4));
+    // ★「現在」改標在繪圖區內側頂端，避免與軸標題／標題重疊
+    ctx.fillStyle='#ffcc44'; ctx.textAlign='left'; ctx.font=`${fs}px sans-serif`;
+    ctx.fillText('現在', xn+(isZoom?10:3), pT+fs+(isZoom?6:2));
     ctx.textAlign='left';
   }
   // 折線：過去段以分署色、未來段以亮青色（比照雨量圖的觀測／預測區分）
@@ -5583,7 +5588,12 @@ function _drawWindChart(cvId, pts, opt){
   // X 軸標籤
   ctx.fillStyle='#9fc8e8'; ctx.font=`${xFs}px sans-serif`; ctx.textAlign='center';
   const keys = pts.filter(p=>p.key !== false);
-  const step = Math.max(1, Math.ceil(keys.length/(isZoom?10:5)));
+  // ★ 字級放大後標籤會變寬，間隔改由「實際字寬」決定，避免互相重疊。
+  //   以最長格式（M/DD HH時）量測，兩標籤間至少留 1.4 倍字寬。
+  //   measureText 量的是實際字型寬度；乘 1.15 留最小間隙即可（過大會標籤太少）。
+  const _lw = ctx.measureText('12/31 18時').width * 1.15;
+  const _maxLabels = Math.max(3, Math.floor(iw / Math.max(1, _lw)));
+  const step = Math.max(1, Math.ceil(keys.length / _maxLabels));
   keys.forEach((p,i)=>{
     if(i % step) return;
     const d=new Date(p.ms);
