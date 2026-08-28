@@ -37,9 +37,9 @@ MUST = ['getAccum', 'setWin', 'onSlider', '_spanAccum', '_hourlyBars', '_futuHou
         'townMetrics', 'townToday', '_tmKey',
         '_etr2NowRow', '_etr2NowLabel', '_safeCall',
         'toggleTownNameLayer', 'renderTownNameLayer', 'setTownNameScope',
-        'setWindKind', '_syncWindKindUI', '_windOf', '_windSegAt', '_windAtMs', '_windTipHtml',
+        '_windOf', '_windSegAt', '_windAtMs', '_windTipHtml',
         '_windSeries', '_smoothSeries', '_drawWindChart', 'drawWindDayChart', 'drawWindHourChart',
-        '_windDayPts',
+        '_windDayPts', 'drawAllWindCharts',
         '_bfColor', '_wsToBf', '_gustFactor',
         'toggleTySec', '_tySecKey', '_tySecOpenHtml', '_tySecClose',
         '_townCentroid', '_buildTownNameScope', '_tyWarnList', '_tyWarnStale', '_tyWarnList', '_tyWarnStale', '_etr2HourlySeries', '_calcDistrictDaily',
@@ -63,7 +63,8 @@ for tag in ['</html>', '</body>', '<div id="map"']:
 # --- 4. 關鍵功能字串 ---
 MUST_STR = ['TOWN_GEO', 'TYPHOON_TRACK', 'DEBRIS_ALERTS', 'typhoon-panel-body',
             'typhoon-legend-wrap', 'typhoon-legend-toggle', 'TW_WARN_EXCLUDE',
-            'bTownName', 'townNameScope', 'bWind', 'windKind', 'cv-wind-day', 'cv-wind-hr',
+            'bTownName', 'townNameScope', 'bWind', 'cv-wind-day', 'cv-wind-day-gust', 'cv-wind-day-est',
+            'cv-wind-hr', 'cv-wind-hr-gust', 'cv-wind-hr-est',
             'debris-panel-body', 'landslide-panel-body', 'typhoon-legend',
             'cust-ctrl', 'slS', 'slE', '颱風動態', 'ETR2',
             # 外援連結（漏掉會靜默消失，沒有其他檢查會抓到）

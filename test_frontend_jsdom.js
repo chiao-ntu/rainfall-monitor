@@ -1916,7 +1916,7 @@ if (need('updateTyphoonPanel')) {
 
 // ════════ 35. 風力預測圖層 ════════
 console.log('\n=== 風力預測：蒲福風級色階與三種來源 ===');
-if (need('_bfColor') && need('_wsToBf') && need('_windOf') && need('setWindKind')) {
+if (need('_bfColor') && need('_wsToBf') && need('_windOf')) {
   // 色階邊界（使用者指定：<4白、4-7綠、7-10黃、10-13紅、>=13紫）
   const cases = [[0,'#ffffff'],[3,'#ffffff'],[4,'#40d060'],[6,'#40d060'],
                  [7,'#f0d040'],[9,'#f0d040'],[10,'#e04040'],[12,'#e04040'],
@@ -1940,17 +1940,17 @@ if (need('_bfColor') && need('_wsToBf') && need('_windOf') && need('setWindKind'
     window.GUST_FCST = {'南投縣':{ws:25.0, gust:33.0, bf:12}};`);
   const t = getLex("TMAP['南投縣仁愛鄉']");
 
-  G.setWindKind('mean');
+  setLex("windKind='mean';");
   const m = G._windOf(t);
   console.log(`   平均風：${m.bf} 級（${m.ws} m/s）來源=${m.src}`);
   chk('平均風用官方 bf', m.bf, 6);
 
-  G.setWindKind('gust');
+  setLex("windKind='gust';");
   const g = G._windOf(t);
   console.log(`   官方陣風：${g.bf} 級（${g.ws} m/s）來源=${g.src}`);
   chk('官方陣風取 gust 值', g.ws, 33.0);
 
-  G.setWindKind('gust_est');
+  setLex("windKind='gust_est';");
   const e = G._windOf(t);
   console.log(`   推估陣風：${e.bf} 級（${e.ws.toFixed(1)} m/s）＝平均風 × 山區因子`);
   if (!(e.ws > m.ws)) fails.push('推估陣風應大於平均風');
@@ -1959,25 +1959,27 @@ if (need('_bfColor') && need('_wsToBf') && need('_windOf') && need('setWindKind'
 
   // 官方陣風無資料時不得著色（平時無颱風警報）
   setLex("window.GUST_FCST = {};");
-  G.setWindKind('gust');
+  setLex("windKind='gust';");
   chk('★無颱風警報時官方陣風為空（不誤導）', G._windOf(t).bf, null);
-  G.setWindKind('mean');
+  setLex("windKind='mean';");
 
   // 標示：推估與官方尺度差異必須寫在 tooltip
   const html = fs.readFileSync('index.html', 'utf8');
   chk('推估陣風標示非官方', /系統推估值，非氣象署發布/.test(html), true);
   chk('官方陣風標示尺度差異', /警戒地區尺度，非鄉鎮尺度/.test(html), true);
-  chk('下拉選單三個選項', /value="mean"[\s\S]{0,400}value="gust"[\s\S]{0,400}value="gust_est"/.test(html), true);
-  // ★ 介面不得出現內部來源說明（使用者指定：對判圖無益）
-  chk('選單無「氣象署」字樣', /<option value="mean">平均風（氣象署）/.test(html), false);
-  chk('選單用「陣風推估」', /<option value="gust_est">陣風推估<\/option>/.test(html), true);
+  // ★ 三種來源改為右側三張圖並列（地圖固定平均風，不再用下拉切換）
+  chk('地圖下拉已移除', /id="windKind"/.test(html), false);
+  ['cv-wind-day','cv-wind-day-gust','cv-wind-day-est',
+   'cv-wind-hr','cv-wind-hr-gust','cv-wind-hr-est'].forEach(id=>{
+    chk(`畫布 ${id} 存在`, new RegExp(`id="${id}"`).test(html), true);
+  });
   chk('圖例標題不帶來源', /wind: '蒲福風級｜'/.test(html), false);
 }
 
 
 // ════════ 36. 風力預測改為 mode（與雨量/ETR2 同層）════════
 console.log('\n=== 風力預測為獨立顯示模式 ===');
-if (need('getAccum') && need('_windOf') && need('_syncWindKindUI')) {
+if (need('getAccum') && need('_windOf')) {
   const future = new Date(Date.now() + 3*3600e3).toISOString();
   const past   = new Date(Date.now() - 3*3600e3).toISOString();
   setLex(`TMAP['南投縣仁愛鄉'] = Object.assign(TMAP['南投縣仁愛鄉']||{},
@@ -2115,9 +2117,10 @@ if (need('_windSeries') && need('_smoothSeries') && need('drawWindDayChart')) {
 
   // 放大：分派表須含兩張風力圖
   const src2 = fs.readFileSync('index.html', 'utf8');
-  chk('★放大分派含逐日風力圖', /canvasId === 'cv-wind-day' && selected/.test(src2), true);
-  chk('★放大分派含逐時風力圖', /canvasId === 'cv-wind-hr' && selected/.test(src2), true);
-  chk('放大需先選取鄉鎮', /canvasId==='cv-wind-day'\|\|canvasId==='cv-wind-hr'/.test(src2), true);
+  // ★ 改為前綴比對，一次涵蓋三種來源的六個畫布
+  chk('★放大分派含逐日風力圖', /canvasId\.startsWith\('cv-wind-day'\) && selected/.test(src2), true);
+  chk('★放大分派含逐時風力圖', /canvasId\.startsWith\('cv-wind-hr'\) && selected/.test(src2), true);
+  chk('放大需先選取鄉鎮', /canvasId\.startsWith\('cv-wind-'\)/.test(src2), true);
   chk('放大標題含鄉鎮名', /'cv-wind-day': selected \? `\$\{selected\.county\}/.test(src2), true);
 
   // 格式：標題、圖例、現在線、分署色
@@ -2128,8 +2131,9 @@ if (need('_windSeries') && need('_smoothSeries') && need('drawWindDayChart')) {
   // ★ 字級須與逐日雨量圖一致（_townChartGeom：fs 54/12、xFs 25/10）
   chk('★主字級與雨量圖相同', /const fs  = isZoom \? 54 : 12;/.test(src2), true);
   chk('★X軸字級與雨量圖相同', /const xFs = isZoom \? 25 : 10;/.test(src2), true);
-  chk('小圖高度與雨量圖一致(150)', /\(o\.h \|\| 150\)/.test(src2), true);
-  chk('canvas 元素高度同步', /id="cv-wind-day" width="260" height="150"/.test(src2), true);
+  // 高度改由 CSS 決定（offsetHeight），避免屬性尺寸與顯示尺寸不等比而變形
+  chk('CSS 指定高度 150px', /id="cv-wind-day" style="width:100%;height:150px/.test(src2), true);
+  chk('六張圖高度一致', (src2.match(/height:150px;display:block;background:#040c14/g)||[]).length >= 6, true);
 
   // 放大繪製不拋錯
   setLex(`document.body.insertAdjacentHTML('beforeend','<canvas id="chart-zoom-canvas"></canvas>');`);
@@ -2139,6 +2143,40 @@ if (need('_windSeries') && need('_smoothSeries') && need('drawWindDayChart')) {
   chk('放大繪製不拋錯', zthrew, false);
   setLex("window.WIND_HIST = {};");
 
+
+  // ── 三張圖各自使用不同來源 ──
+  console.log('   ── 三來源分圖 ──');
+  setLex(`window.GUST_FCST = {'南投縣':{ws:25.0, gust:33.0, bf:12}};`);
+  const sMean = G._windSeries(t, 'mean');
+  const sGust = G._windSeries(t, 'gust');
+  const sEst  = G._windSeries(t, 'gust_est');
+  console.log(`   平均風 ${sMean.length} 點、官方陣風 ${sGust.length} 點、推估 ${sEst.length} 點`);
+  chk('平均風有序列', sMean.length > 0, true);
+  chk('★官方陣風有序列（不再看不到）', sGust.length > 0, true);
+  chk('★推估陣風有序列', sEst.length > 0, true);
+  if (sGust.length && sMean.length) {
+    console.log(`   官方陣風 ${sGust[0].bf} 級 vs 平均風 ${sMean[0].bf} 級`);
+    if (!(sGust[0].bf >= sMean[0].bf)) fails.push('官方陣風應不低於平均風');
+    else console.log('  OK  官方陣風 ≥ 平均風');
+  }
+  if (sEst.length && sMean.length && !(sEst[0].bf >= sMean[0].bf)) {
+    fails.push('推估陣風應不低於平均風');
+  }
+  // 六張圖繪製不拋錯
+  setLex(`document.body.insertAdjacentHTML('beforeend',
+    '<canvas id="cv-wind-day-gust"></canvas><canvas id="cv-wind-day-est"></canvas>' +
+    '<canvas id="cv-wind-hr-gust"></canvas><canvas id="cv-wind-hr-est"></canvas>');`);
+  let sixThrew = false;
+  try { G.drawAllWindCharts(t); } catch(e){ sixThrew = true; console.log('   ', e.message); }
+  chk('六張圖一次繪製不拋錯', sixThrew, false);
+  // 放大分派涵蓋六個 id
+  const zsrc = fs.readFileSync('index.html', 'utf8');
+  chk('放大分派用前綴比對', /canvasId\.startsWith\('cv-wind-day'\)/.test(zsrc), true);
+  chk('放大標題區分三來源', /'cv-wind-day-gust': selected/.test(zsrc), true);
+  // 變形修正：canvas 高度取 CSS 實際像素
+  chk('★畫布高度取 offsetHeight（避免變形）',
+      /cv\.height = isZoom \? 1024 : \(cv\.offsetHeight/.test(zsrc), true);
+  setLex("window.GUST_FCST = {};");
   const html = fs.readFileSync('index.html', 'utf8');
   chk('逐日圖區塊存在', /id="sec-windday"/.test(html), true);
   chk('逐時圖區塊存在', /id="sec-windhr"/.test(html), true);

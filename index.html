@@ -150,13 +150,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bRisk"  onclick="setMode('risk')" style="border-color:#3a8a5a;color:#7ee8a8">風險指標</button>
       <button class="b"    id="bWarn"  onclick="setMode('warn')" style="border-color:#3a8a5a;color:#7ee8a8">警特報</button>
       <button class="b"    id="bWind"  onclick="setMode('wind')" style="border-color:#3a8a5a;color:#7ee8a8">風力預測</button>
-      <select id="windKind" onchange="setWindKind(this.value)"
-        style="display:none;font-size:10px;background:#061220;color:#7ee8a8;
-        border:1px solid #3a8a5a;border-radius:3px;padding:2px 3px;margin-right:3px">
-        <option value="mean">平均風</option>
-        <option value="gust">陣風</option>
-        <option value="gust_est">陣風推估</option>
-      </select>
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
         style="border-color:#1a4060;color:#8ac8e8">🏷 鄉鎮市區</button>
       <select id="townNameScope" onchange="setTownNameScope(this.value)"
@@ -529,9 +522,18 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>逐日風力預測（7天）</span><span class="sec-arrow" id="arrow-windday">▸</span>
       </div>
       <div class="sec-body" id="body-windday" style="display:none">
-        <canvas id="cv-wind-day" width="260" height="150" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">平均風</div>
+        <canvas id="cv-wind-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-wind-day')"
           onmousemove="showChartTooltip(event,'cv-wind-day')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風</div>
+        <canvas id="cv-wind-day-gust" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-day-gust')"
+          onmousemove="showChartTooltip(event,'cv-wind-day-gust')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風推估</div>
+        <canvas id="cv-wind-day-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-day-est')"
+          onmousemove="showChartTooltip(event,'cv-wind-day-est')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
           各日最大風級；點擊圖表可放大／縮小</div>
       </div>
@@ -543,9 +545,18 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>逐時風力預測（3天）</span><span class="sec-arrow" id="arrow-windhr">▸</span>
       </div>
       <div class="sec-body" id="body-windhr" style="display:none">
-        <canvas id="cv-wind-hr" width="260" height="150" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">平均風</div>
+        <canvas id="cv-wind-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-wind-hr')"
           onmousemove="showChartTooltip(event,'cv-wind-hr')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風</div>
+        <canvas id="cv-wind-hr-gust" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-hr-gust')"
+          onmousemove="showChartTooltip(event,'cv-wind-hr-gust')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風推估</div>
+        <canvas id="cv-wind-hr-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-hr-est')"
+          onmousemove="showChartTooltip(event,'cv-wind-hr-est')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
           ● 為氣象署逐3小時官方預報時間點，其間曲線為內插（僅供視覺化，非官方值）</div>
       </div>
@@ -2436,10 +2447,7 @@ function updateInfo(t){
     const hEl = document.getElementById('sec-windhr');
     if(dEl) dEl.style.display = hasWind ? 'block' : 'none';
     if(hEl) hEl.style.display = hasWind ? 'block' : 'none';
-    if(hasWind){
-      try{ drawWindDayChart(t); }catch(e){ console.warn('逐日風力圖繪製失敗', e); }
-      try{ drawWindHourChart(t); }catch(e){ console.warn('逐時風力圖繪製失敗', e); }
-    }
+    if(hasWind) drawAllWindCharts(t);
   }
 
   if(t.stations && t.stations.length){
@@ -3439,7 +3447,6 @@ function setWin(key){
   //   看起來像「不隨設定變動」——實際上計算是對的，只是沒被重繪。
   //   直接沿用 _refreshAfterFactorChange（它已涵蓋全部面板與圖層，且有 _safeCall
   //   逐一報錯），避免這裡再維護一份會漏掉的清單。
-  _syncWindKindUI();
   hideNoData();
   _refreshAfterFactorChange();
 }
@@ -5346,7 +5353,10 @@ function _bindTownNameZoom(){
 //  ★ 官方鄉鎮級預報沒有陣風欄位，故 gust 與 mean 的空間尺度不同（警戒地區
 //    vs 368 鄉鎮），介面必須標明來源，不可讓使用者誤以為同一套資料。
 // ══════════════════════════════════════════════════════════
-let windKind = 'mean';   // mean｜gust｜gust_est（風力預測模式的資料來源）
+// ★ 地圖固定顯示「平均風」（官方 368 鄉鎮逐 3 小時，全年可用）。
+//   陣風與陣風推估改由右側狀態列的三張圖並列呈現，
+//   避免地圖下拉切換時，使用者分不清當前看的是哪一種來源。
+let windKind = 'mean';
 
 // 蒲福風級色階（使用者指定；與 ETR2% 同一組色）
 const BF_BANDS = [
@@ -5411,8 +5421,9 @@ function _windAtMs(){
 //    內插值不是官方預報值——圖下方已明確標示。
 // ══════════════════════════════════════════════════════════
 // 取某鄉鎮的完整風力序列（依目前 windKind），回 [{ms, bf, ws}]
-function _windSeries(t){
+function _windSeries(t, kind){
   if(!t) return [];
+  const K = kind || windKind;
   const segs = ((window.WIND_FCST || {})[t.county] || {})[t.township] || [];
   const out = [];
   // ── 過去 48h：由 wind_hist.json 取回（CWA 無過去預報，需自行累積）──
@@ -5425,7 +5436,8 @@ function _windSeries(t){
     const ms = Date.parse(hk + ':00:00+08:00');
     if(!isFinite(ms) || ms < cut) return;
     let ws = rec.ws, bf = (rec.bf != null) ? rec.bf : _wsToBf(rec.ws);
-    if(windKind === 'gust_est' && ws != null){ ws = ws * _gustFactor(t); bf = _wsToBf(ws); }
+    if(K === 'gust_est' && ws != null){ ws = ws * _gustFactor(t); bf = _wsToBf(ws); }
+    if(K === 'gust') return;          // 官方陣風不在逐時預報中，另由 GUST_FCST 提供
     if(bf == null) return;
     out.push({ms, bf, ws, past:true});
   });
@@ -5433,8 +5445,21 @@ function _windSeries(t){
     const ms = Date.parse(sg.start || sg.end || '');
     if(!isFinite(ms)) return;
     let ws = sg.ws, bf = (sg.bf != null) ? sg.bf : _wsToBf(sg.ws);
-    if(windKind === 'gust_est' && ws != null){
+    if(K === 'gust_est' && ws != null){
       ws = ws * _gustFactor(t); bf = _wsToBf(ws);
+    }
+    if(K === 'gust'){
+      // ★ 官方陣風只有「颱風警報期間各地區風力預測」，無逐時序列。
+      //   以該地區的單一值鋪成同時段的水平線，讓三張圖時間軸一致可比對。
+      const gf = window.GUST_FCST || {};
+      let hit = null;
+      for(const k in gf){
+        if(k && (k.indexOf(t.county) >= 0 || (t.county||'').indexOf(k) >= 0)){ hit = gf[k]; break; }
+      }
+      if(!hit) return;
+      const gws = (hit.gust != null) ? hit.gust : hit.ws;
+      bf = (hit.bf != null) ? hit.bf : _wsToBf(gws);
+      ws = gws;
     }
     if(bf == null) return;
     out.push({ms, bf, ws});
@@ -5468,8 +5493,11 @@ function _drawWindChart(cvId, pts, opt){
   const o = opt || {};
   const isZoom = (cvId === 'chart-zoom-canvas');
   const ctx = cv.getContext('2d');
+  // ★ 變形修正：canvas 的「屬性尺寸」必須與 CSS 顯示尺寸等比，
+  //   否則瀏覽器會拉伸畫布、文字與線條跟著變形。
+  //   故高度一律取 CSS 的實際像素（offsetHeight），不再寫死。
   const W = cv.width  = isZoom ? 2048 : (cv.offsetWidth || cv.clientWidth || 260);
-  const H = cv.height = isZoom ? 1024 : (o.h || 150);   // 與逐日雨量圖同高
+  const H = cv.height = isZoom ? 1024 : (cv.offsetHeight || o.h || 150);
   // ★ 字級與版面比照逐日雨量圖（_townChartGeom）：fs 54/12、X軸 25/10。
   //   原本用 26/9，小圖比雨量圖小 3px、放大版更差近一倍，實機上難以閱讀。
   const fs  = isZoom ? 54 : 12;
@@ -5477,7 +5505,10 @@ function _drawWindChart(cvId, pts, opt){
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle = '#040c14'; ctx.fillRect(0,0,W,H);
   const pL = isZoom ? 210 : 52, pR = isZoom ? 190 : 48;
-  const pT = isZoom ? 140 : 16, pB = isZoom ? 202 : 42;
+  // ★ 放大版底部需容納「X軸標籤 + 圖例」兩列，原本 202 太窄導致兩者重疊。
+  //   比照雨量圖：xLabelH 78 + legendH 88 + 間距 36 = 202，但風力圖的圖例
+  //   有色塊與圓點（較高），故再加 40。
+  const pT = isZoom ? 140 : 16, pB = isZoom ? 242 : 42;
   const iw = W-pL-pR, ih = H-pT-pB;
   if(isZoom && o.title){
     ctx.fillStyle='#d0e8ff'; ctx.font=`bold ${fs+10}px sans-serif`; ctx.textAlign='left';
@@ -5557,11 +5588,11 @@ function _drawWindChart(cvId, pts, opt){
     if(i % step) return;
     const d=new Date(p.ms);
     ctx.fillText(`${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}時`,
-                 X(p.ms), H-pB+(isZoom?62:20));
+                 X(p.ms), H-pB+(isZoom?70:20));
   });
   // 圖例（比照雨量圖置於底部）
   ctx.textAlign='left'; ctx.font=`${fs}px sans-serif`;
-  let lx = pL, ly = H-(isZoom?60:12);
+  let lx = pL, ly = H-(isZoom?40:10);   // 圖例置於最底，與X軸標籤保持距離
   const item=(col,label,isDot)=>{
     if(isDot){ ctx.fillStyle=col; ctx.beginPath();
       ctx.arc(lx+(isZoom?14:5), ly-(isZoom?18:4), isZoom?9:3, 0, Math.PI*2); ctx.fill(); }
@@ -5575,25 +5606,41 @@ function _drawWindChart(cvId, pts, opt){
   if(o.markKey) item('#ffffff', o.dotLabel || '官方時間點', true);
 }
 const WIND_KIND_NAME = {mean:'平均風', gust:'陣風', gust_est:'陣風推估'};
-function _windDayPts(t){
+function _windDayPts(t, kind){
   const byDay = {};
-  _windSeries(t).forEach(p=>{
+  _windSeries(t, kind).forEach(p=>{
     const d = new Date(p.ms); d.setHours(0,0,0,0);
     const k = d.getTime();
     if(!byDay[k] || p.bf > byDay[k].bf) byDay[k] = {ms:k, bf:p.bf, ws:p.ws, key:true};
   });
   return Object.values(byDay).sort((a,b)=>a.ms-b.ms);
 }
-function drawWindDayChart(t, canvasId){
-  _drawWindChart(canvasId || 'cv-wind-day', _windDayPts(t), {
+// 三種來源各一張圖：canvas id 後綴決定 kind
+const WIND_CANVAS_KIND = {
+  'cv-wind-day':'mean', 'cv-wind-day-gust':'gust', 'cv-wind-day-est':'gust_est',
+  'cv-wind-hr':'mean',  'cv-wind-hr-gust':'gust',  'cv-wind-hr-est':'gust_est',
+};
+function drawWindDayChart(t, canvasId, kind){
+  const cid = canvasId || 'cv-wind-day';
+  const K = kind || WIND_CANVAS_KIND[cid] || 'mean';
+  _drawWindChart(cid, _windDayPts(t, K), {
     markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'各日最大',
-    title:`${t.county}${t.township} 逐日風力預測（${WIND_KIND_NAME[windKind]||''}，過去2天＋未來7天）`});
+    title:`${t.county}${t.township} 逐日風力預測（${WIND_KIND_NAME[K]||''}，過去2天＋未來7天）`});
 }
-function drawWindHourChart(t, canvasId){
+function drawWindHourChart(t, canvasId, kind){
+  const cid = canvasId || 'cv-wind-hr';
+  const K = kind || WIND_CANVAS_KIND[cid] || 'mean';
   // 逐時：官方 3h 點為錨，其間內插 2 點（＝約每小時一點）
-  _drawWindChart(canvasId || 'cv-wind-hr', _smoothSeries(_windSeries(t), 2), {
+  _drawWindChart(cid, _smoothSeries(_windSeries(t, K), 2), {
     markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'官方時間點',
-    title:`${t.county}${t.township} 逐時風力預測（${WIND_KIND_NAME[windKind]||''}，過去2天＋未來3天）`});
+    title:`${t.county}${t.township} 逐時風力預測（${WIND_KIND_NAME[K]||''}，過去2天＋未來3天）`});
+}
+// 一次繪製六張（兩區塊 × 三來源）
+function drawAllWindCharts(t){
+  ['cv-wind-day','cv-wind-day-gust','cv-wind-day-est']
+    .forEach(id=>{ try{ drawWindDayChart(t, id); }catch(e){ console.warn(id, e); } });
+  ['cv-wind-hr','cv-wind-hr-gust','cv-wind-hr-est']
+    .forEach(id=>{ try{ drawWindHourChart(t, id); }catch(e){ console.warn(id, e); } });
 }
 
 function _windTipHtml(t){
@@ -5638,17 +5685,7 @@ function _windOf(t){
   return {bf, ws: seg.ws, src:'mean'};
 }
 
-function setWindKind(v){
-  windKind = v || 'mean';
-  // 與其他 mode 一致：改變資料來源後重繪地圖、圖例與右側資訊
-  if(typeof _refreshAfterFactorChange === 'function') _refreshAfterFactorChange();
-  else { renderLayer(); renderLegend(); }
-}
 // 風力來源下拉：僅在風力預測模式顯示
-function _syncWindKindUI(){
-  const sel = document.getElementById('windKind');
-  if(sel) sel.style.display = (mode === 'wind') ? '' : 'none';
-}
 
 
 function toggleTownNameLayer(){
@@ -7023,7 +7060,7 @@ function _redrawZoom(){
 
 function toggleChartZoom(canvasId){
   const needsSelected = (canvasId==='cv'||canvasId==='cv-district-hyeto'
-                       ||canvasId==='cv-wind-day'||canvasId==='cv-wind-hr');
+                       ||canvasId.startsWith('cv-wind-'));
   if(needsSelected && !selected) return;
   const modal = document.getElementById('chart-zoom-modal');
   if(!modal) return;
@@ -7036,8 +7073,12 @@ function toggleChartZoom(canvasId){
   const titleMap = {
     'cv': selected ? `${selected.county}${selected.township} 逐日雨量（16天）` : '',
     'cv-district-hyeto': selected ? `${selected.county}${selected.township} 組體雨量圖` : '',
-    'cv-wind-day': selected ? `${selected.county}${selected.township} 逐日風力預測` : '',
-    'cv-wind-hr': selected ? `${selected.county}${selected.township} 逐時風力預測` : '',
+    'cv-wind-day': selected ? `${selected.county}${selected.township} 逐日風力預測（平均風）` : '',
+    'cv-wind-day-gust': selected ? `${selected.county}${selected.township} 逐日風力預測（陣風）` : '',
+    'cv-wind-day-est': selected ? `${selected.county}${selected.township} 逐日風力預測（陣風推估）` : '',
+    'cv-wind-hr': selected ? `${selected.county}${selected.township} 逐時風力預測（平均風）` : '',
+    'cv-wind-hr-gust': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風）` : '',
+    'cv-wind-hr-est': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風推估）` : '',
     'cv-all-daily': '全台各分署逐日雨量（16天）',
     'cv-all-hyeto': '全台各分署組體雨量圖（未來48h）',
   };
@@ -7045,10 +7086,10 @@ function toggleChartZoom(canvasId){
   if(titleEl) titleEl.textContent = titleMap[canvasId] || '';
   _zoomCanvasType = canvasId;
 
-  if(canvasId === 'cv-wind-day' && selected){
-    drawWindDayChart(selected, 'chart-zoom-canvas');
-  } else if(canvasId === 'cv-wind-hr' && selected){
-    drawWindHourChart(selected, 'chart-zoom-canvas');
+  if(canvasId.startsWith('cv-wind-day') && selected){
+    drawWindDayChart(selected, 'chart-zoom-canvas', WIND_CANVAS_KIND[canvasId]);
+  } else if(canvasId.startsWith('cv-wind-hr') && selected){
+    drawWindHourChart(selected, 'chart-zoom-canvas', WIND_CANVAS_KIND[canvasId]);
   } else if(canvasId === 'cv-district-hyeto' && selected){
     drawHyetograph(selected, 'chart-zoom-canvas');
   } else if(canvasId === 'cv' && selected){
