@@ -981,27 +981,39 @@ def fetch_pop_county(county, ep_code, is_3day):
             wsegs = []
             for we in we_list:
                 for t in we.get('Time', we.get('time',[])):
-                    start = t.get('StartTime', t.get('startTime',
-                            t.get('DataTime',  t.get('dataTime',''))))
-                    end   = t.get('EndTime',   t.get('endTime', start))
+                    # ★ 不可用 dict.get 的預設值串接：StartTime 這個鍵**存在但為空字串**
+                    #   時（逐 3 小時資料只填 DataTime），get 的預設值不會生效，
+                    #   導致 start 取到空值、32 個時間點全部撞成同一鍵而只剩 1 筆。
+                    def _first(*keys):
+                        for k in keys:
+                            v = t.get(k)
+                            if v not in (None, '', ' '): return v
+                        return ''
+                    start = _first('StartTime', 'startTime', 'DataTime', 'dataTime')
+                    end   = _first('EndTime', 'endTime') or start
                     ev    = t.get('ElementValue', t.get('elementValue',[{}]))
                     if isinstance(ev, list): ev = ev[0] if ev else {}
                     ws = bf = None
                     # ★ 只認 WindSpeed／BeaufortScale 這兩個專屬鍵。
                     #   絕不可退回通用的 'Value'：那會把同一位置的溫度、濕度、
                     #   降雨機率等其他元素的數值誤當成風速。
+                    # ★ 風速與風級都可能是 ">= 11"、">=6" 這類字串（風勢強時官方
+                    #   以區間下界表示）。實測連江縣 F-D0047-081 即為此格式。
+                    #   若直接 float() 會解析失敗 → 整筆丟棄 → 風愈大的離島反而無資料。
+                    def _numstr(v):
+                        if v in (None, '', ' '): return None
+                        try:
+                            return float(str(v).replace('>=', '').replace('<=', '')
+                                          .replace('>', '').replace('<', '').strip())
+                        except (TypeError, ValueError):
+                            return None
                     for k in ('WindSpeed', 'windSpeed'):
-                        c = ev.get(k)
-                        if c not in (None, '', ' '):
-                            try: ws = float(c)
-                            except (TypeError, ValueError): pass
-                            break
+                        if k in ev:
+                            ws = _numstr(ev.get(k)); break
                     for k in ('BeaufortScale', 'beaufortScale'):
-                        c = ev.get(k)
-                        if c not in (None, '', ' '):
-                            # 蒲福風級可能是 "8" 或 ">=13" 這類字串
-                            try: bf = int(float(str(c).replace('>=','').replace('>','')))
-                            except (TypeError, ValueError): bf = None
+                        if k in ev:
+                            _b = _numstr(ev.get(k))
+                            bf = int(_b) if _b is not None else None
                             break
                     if ws is None and bf is None: continue
                     # ★ 逐 3 小時資料只有 DataTime（時間點），無 EndTime。

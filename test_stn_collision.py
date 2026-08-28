@@ -241,5 +241,50 @@ chk('★溫度未被誤當風速', all(x['ws'] in (12.0, 18.0) for x in w), True
 chk('★逐3小時已補區間結束時間', w[0]['end'] != w[0]['start'], True)
 print(f"  區間：{w[0]['start'][11:16]} → {w[0]['end'][11:16]}")
 
+
+print('\n=== 離島風力：">= N" 格式與多時間點（真實檔案）===')
+# ★ 使用者實抓的連江縣 F-D0047-081：風大時官方以 ">= 11" 表示，
+#   且逐 3 小時資料只填 DataTime（StartTime 為空字串）。
+#   這兩點先前各自造成：整筆丟棄、32 段併成 1 段。
+_xml = 'F-D0047-081.xml'
+if os.path.exists(_xml):
+    import re as _re, xml.etree.ElementTree as _ET
+    _raw = _re.sub(r'\sxmlns="[^"]+"', '', io.open(_xml, encoding='utf-8').read(), count=1)
+    _root = _ET.fromstring(_raw)
+    _locs = []
+    for _loc in _root.iter('Location'):
+        _wl = []
+        for _we in _loc.findall('WeatherElement'):
+            _ts = []
+            for _t in _we.findall('Time'):
+                _ev = _t.find('ElementValue')
+                _evd = {c.tag: (c.text or '') for c in _ev} if _ev is not None else {}
+                _ts.append({'DataTime': (_t.findtext('DataTime') or ''),
+                            'StartTime': (_t.findtext('StartTime') or ''),
+                            'EndTime': (_t.findtext('EndTime') or ''),
+                            'ElementValue': [_evd]})
+            _wl.append({'ElementName': _we.findtext('ElementName') or '', 'Time': _ts})
+        _locs.append({'LocationName': _loc.findtext('LocationName') or '',
+                      'WeatherElement': _wl})
+    _SAMPLE = {'records': {'Locations': [{'Location': _locs}]}}
+    class _RR:
+        status_code = 200
+        def json(self): return _SAMPLE
+        def raise_for_status(self): pass
+    FR.requests = types.SimpleNamespace(get=lambda *a, **k: _RR())
+    FR.WIND_FCST.clear()
+    FR.fetch_pop_county('連江縣', 'F-D0047-081', True)
+    _w = FR.WIND_FCST.get('連江縣', {})
+    chk('★連江縣四鄉皆有風力', sorted(_w.keys()),
+        ['北竿鄉', '南竿鄉', '東引鄉', '莒光鄉'])
+    _n = len(_w.get('南竿鄉', []))
+    print(f"  南竿鄉 {_n} 段（檔案含 32 個時間點）")
+    chk('★多時間點未被去重誤併', _n >= 30, True)
+    chk('★">= 11" 解析為 11.0', _w['南竿鄉'][0]['ws'], 11.0)
+    chk('★">= 6" 解析為 6 級', _w['南竿鄉'][0]['bf'], 6)
+    chk('區間結束時間已補', _w['南竿鄉'][0]['end'] != _w['南竿鄉'][0]['start'], True)
+else:
+    print('  （找不到 F-D0047-081.xml，略過）')
+
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)
