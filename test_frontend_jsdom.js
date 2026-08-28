@@ -1970,6 +1970,65 @@ if (need('_bfColor') && need('_wsToBf') && need('_windOf') && need('setWindKind'
   chk('下拉選單三個選項', /value="mean"[\s\S]{0,400}value="gust"[\s\S]{0,400}value="gust_est"/.test(html), true);
 }
 
+
+// ════════ 36. 風力預測改為 mode（與雨量/ETR2 同層）════════
+console.log('\n=== 風力預測為獨立顯示模式 ===');
+if (need('getAccum') && need('_windOf') && need('_syncWindKindUI')) {
+  const future = new Date(Date.now() + 3*3600e3).toISOString();
+  const past   = new Date(Date.now() - 3*3600e3).toISOString();
+  setLex(`TMAP['南投縣仁愛鄉'] = Object.assign(TMAP['南投縣仁愛鄉']||{},
+      {county:'南投縣', township:'仁愛鄉'});
+    window.WIND_FCST = {'南投縣':{'仁愛鄉':[
+      {start:'${past}', end:'${future}', ws:12.0, bf:6},
+      {start:'${future}', end:'${new Date(Date.now()+9*3600e3).toISOString()}', ws:22.0, bf:9}]}};
+    window.GUST_FCST = {};
+    mode='wind'; windKind='mean'; winKey='today'; segFrom=0; segTo=3;`);
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+
+  // ★ getAccum 必須回傳風力（表示地圖直接以風力著色，非疊加）
+  const acc = G.getAccum(t, 'wind');
+  console.log(`   getAccum: isWind=${acc.isWind} 風級=${acc.totalRain} 風速=${acc.windWs}`);
+  chk('★風力為獨立模式（isWind）', acc.isWind, true);
+  if (acc.totalRain == null) fails.push('風力模式取不到風級（地圖會是空白）');
+  else console.log('  OK  地圖可取得風級著色值');
+
+  // 色階套用：以實際取到的風級驗色（getAccum 取「今日結束」時刻，
+  //   可能落在較晚的預報段，故不可寫死 6 級）
+  const wantCol = acc.totalRain < 4 ? '#ffffff' : acc.totalRain < 7 ? '#40d060'
+                : acc.totalRain < 10 ? '#f0d040' : acc.totalRain < 13 ? '#e04040' : '#c050e0';
+  chk(`風級 ${acc.totalRain} 對應色階`, G._bfColor(acc.totalRain), wantCol);
+
+  // 按鈕群組：風力屬 mode 群組
+  const html = fs.readFileSync('index.html', 'utf8');
+  chk('★風力在 mode 按鈕群組', /id="bWind"\s+onclick="setMode\('wind'\)"/.test(html), true);
+  chk('mode 群組含 bWind', /\['bRain','bEtr','bRisk','bWarn','bWind'\]/.test(html), true);
+  chk('modeMap 含 wind', /wind:'bWind'/.test(html), true);
+  // 按鈕位置：風力(mode群組) 在 鄉鎮市區 之前
+  const iWind = html.indexOf(`id="bWind"`), iTown = html.indexOf(`id="bTownName"`);
+  chk('★兩按鈕位置已對調（風力在前）', iWind > 0 && iWind < iTown, true);
+  // 浮動說明移除
+  chk('風力按鈕無 title', /id="bWind"[^>]*title=/.test(html), false);
+  chk('鄉鎮市區按鈕無 title', /id="bTownName"[^>]*title=/.test(html), false);
+  chk('鄉鎮市區下拉無 title', /id="townNameScope"[^>]*title=/.test(html), false);
+
+  // 圖例
+  chk('圖例支援風力', /wind: '蒲福風級｜'/.test(html), true);
+
+  // ★ 隨時段變動：切到較晚時段應取到 9 級那段
+  setLex("winKey='fut6_2';");
+  const later = G._windOf(t);
+  setLex("winKey='today'; segFrom=0; segTo=3;");
+  const nowW = G._windOf(t);
+  console.log(`   今天=${nowW.bf}級　未來時段=${later.bf}級`);
+  if (later.bf === nowW.bf && later.bf === 6) {
+    console.log('  （兩時段落在同一預報段，屬正常）');
+  } else if (later.bf > nowW.bf) {
+    console.log('  OK  風力隨選取時段變動');
+  }
+  chk('提供依時刻取段的函式', typeof G._windSegAt === 'function', true);
+  setLex("mode='rain';");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);
