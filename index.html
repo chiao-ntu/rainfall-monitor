@@ -523,6 +523,34 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
     </div>
 
+    <!-- 區塊：逐日風力預測（預設收合） -->
+    <div class="sec" id="sec-windday" style="display:none">
+      <div class="sec-h" onclick="toggleSec('windday')">
+        <span>逐日風力預測（7天）</span><span class="sec-arrow" id="arrow-windday">▸</span>
+      </div>
+      <div class="sec-body" id="body-windday" style="display:none">
+        <canvas id="cv-wind-day" width="260" height="100" style="width:100%;height:100px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-day')"
+          onmousemove="showChartTooltip(event,'cv-wind-day')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          各日最大風級；點擊圖表可放大／縮小</div>
+      </div>
+    </div>
+
+    <!-- 區塊：逐時風力預測（預設收合） -->
+    <div class="sec" id="sec-windhr" style="display:none">
+      <div class="sec-h" onclick="toggleSec('windhr')">
+        <span>逐時風力預測（3天）</span><span class="sec-arrow" id="arrow-windhr">▸</span>
+      </div>
+      <div class="sec-body" id="body-windhr" style="display:none">
+        <canvas id="cv-wind-hr" width="260" height="100" style="width:100%;height:100px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-hr')"
+          onmousemove="showChartTooltip(event,'cv-wind-hr')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          ● 為氣象署逐3小時官方預報時間點，其間曲線為內插（僅供視覺化，非官方值）</div>
+      </div>
+    </div>
+
     <!-- 區塊：測站清單（預設收合） -->
     <div class="sec" id="sec-stations" style="display:none">
       <div class="sec-h" onclick="toggleSec('stations')">
@@ -2400,6 +2428,19 @@ function updateInfo(t){
   drawChart(t);
   drawSegs(t);
   drawDistrictHyetograph(t);
+
+  // ── 風力預測圖：僅在該鄉鎮有風力預報資料時顯示 ──
+  {
+    const hasWind = _windSeries(t).length > 0;
+    const dEl = document.getElementById('sec-windday');
+    const hEl = document.getElementById('sec-windhr');
+    if(dEl) dEl.style.display = hasWind ? 'block' : 'none';
+    if(hEl) hEl.style.display = hasWind ? 'block' : 'none';
+    if(hasWind){
+      try{ drawWindDayChart(t); }catch(e){ console.warn('逐日風力圖繪製失敗', e); }
+      try{ drawWindHourChart(t); }catch(e){ console.warn('逐時風力圖繪製失敗', e); }
+    }
+  }
 
   if(t.stations && t.stations.length){
     document.getElementById('sec-stations').style.display = 'block';
@@ -5351,6 +5392,123 @@ function _windAtMs(){
   }catch(e){ return Date.now(); }
 }
 // 風力 tooltip 內容（含來源標示）
+// ══════════════════════════════════════════════════════════
+//  風力折線圖（逐日／逐時）
+//  ★ 官方 F-D0047 最細為逐 3 小時，**沒有逐小時資料**。
+//    逐時圖的作法：官方 3 小時值為錨點（畫實心圓點），其間以
+//    Catmull-Rom 平滑內插補點，僅供視覺化呈現風力變化趨勢，
+//    內插值不是官方預報值——圖下方已明確標示。
+// ══════════════════════════════════════════════════════════
+// 取某鄉鎮的完整風力序列（依目前 windKind），回 [{ms, bf, ws}]
+function _windSeries(t){
+  if(!t) return [];
+  const segs = ((window.WIND_FCST || {})[t.county] || {})[t.township] || [];
+  const out = [];
+  segs.forEach(sg=>{
+    const ms = Date.parse(sg.start || sg.end || '');
+    if(!isFinite(ms)) return;
+    let ws = sg.ws, bf = (sg.bf != null) ? sg.bf : _wsToBf(sg.ws);
+    if(windKind === 'gust_est' && ws != null){
+      ws = ws * _gustFactor(t); bf = _wsToBf(ws);
+    }
+    if(bf == null) return;
+    out.push({ms, bf, ws});
+  });
+  return out.sort((a,b)=>a.ms - b.ms);
+}
+// Catmull-Rom 平滑內插：在官方點之間補 n 個點
+function _smoothSeries(pts, n){
+  if(pts.length < 2) return pts.slice();
+  const out = [];
+  const at = i => pts[Math.max(0, Math.min(pts.length-1, i))];
+  for(let i=0; i<pts.length-1; i++){
+    const p0=at(i-1), p1=at(i), p2=at(i+1), p3=at(i+2);
+    out.push({ms:p1.ms, bf:p1.bf, ws:p1.ws, key:true});
+    for(let k=1; k<=n; k++){
+      const u = k/(n+1), u2=u*u, u3=u2*u;
+      const bf = 0.5*((2*p1.bf) + (-p0.bf+p2.bf)*u +
+                 (2*p0.bf-5*p1.bf+4*p2.bf-p3.bf)*u2 + (-p0.bf+3*p1.bf-3*p2.bf+p3.bf)*u3);
+      out.push({ms: p1.ms + (p2.ms-p1.ms)*u, bf: Math.max(0, bf), key:false});
+    }
+  }
+  const last = pts[pts.length-1];
+  out.push({ms:last.ms, bf:last.bf, ws:last.ws, key:true});
+  return out;
+}
+// 共用繪圖：以蒲福風級為 Y 軸的折線圖
+function _drawWindChart(cvId, pts, opt){
+  const cv = document.getElementById(cvId);
+  if(!cv) return;
+  const o = opt || {};
+  const ctx = cv.getContext('2d');
+  const W = cv.width = cv.clientWidth || 260, H = cv.height = o.h || 100;
+  ctx.clearRect(0,0,W,H);
+  const pL=22, pR=6, pT=8, pB=16;
+  const iw = W-pL-pR, ih = H-pT-pB;
+  if(!pts.length){
+    ctx.fillStyle='#3a6080'; ctx.font='10px sans-serif';
+    ctx.fillText('無風力預報資料', pL, pT+ih/2);
+    return;
+  }
+  const maxBf = Math.max(4, Math.ceil(Math.max(...pts.map(p=>p.bf))/2)*2);
+  const t0 = pts[0].ms, t1 = pts[pts.length-1].ms || (t0+1);
+  const X = ms => pL + iw * ((ms - t0) / Math.max(1, t1 - t0));
+  const Y = bf => pT + ih * (1 - bf/maxBf);
+  // 風級色帶背景（與地圖同一組色，一眼對應）
+  BF_BANDS.forEach((b, i)=>{
+    const lo = i === 0 ? 0 : BF_BANDS[i-1].max;
+    if(lo >= maxBf) return;
+    const hi = Math.min(b.max, maxBf);
+    ctx.fillStyle = b.color; ctx.globalAlpha = 0.13;
+    ctx.fillRect(pL, Y(hi), iw, Y(lo)-Y(hi));
+    ctx.globalAlpha = 1;
+  });
+  // Y 軸刻度
+  ctx.strokeStyle='#1a3050'; ctx.fillStyle='#5a8aaa'; ctx.font='9px sans-serif';
+  for(let b=0; b<=maxBf; b+=Math.max(2, Math.round(maxBf/4))){
+    const y=Y(b);
+    ctx.beginPath(); ctx.moveTo(pL,y); ctx.lineTo(W-pR,y); ctx.stroke();
+    ctx.fillText(String(b), 4, y+3);
+  }
+  // 折線
+  ctx.strokeStyle='#6ad8f0'; ctx.lineWidth=1.6; ctx.beginPath();
+  pts.forEach((p,i)=>{ const x=X(p.ms), y=Y(p.bf); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+  ctx.stroke();
+  // 官方時間點：實心圓（與內插段區分）
+  if(o.markKey){
+    ctx.fillStyle='#ffffff';
+    pts.filter(p=>p.key).forEach(p=>{
+      ctx.beginPath(); ctx.arc(X(p.ms), Y(p.bf), 2.2, 0, Math.PI*2); ctx.fill();
+    });
+  }
+  // X 軸標籤
+  ctx.fillStyle='#5a8aaa'; ctx.font='9px sans-serif';
+  const keys = pts.filter(p=>p.key !== false);
+  const step = Math.max(1, Math.ceil(keys.length/5));
+  keys.forEach((p,i)=>{
+    if(i % step) return;
+    const d=new Date(p.ms);
+    ctx.fillText(`${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}`,
+                 X(p.ms)-14, H-4);
+  });
+}
+function drawWindDayChart(t){
+  const ser = _windSeries(t);
+  // 逐日：取各日最大風級
+  const byDay = {};
+  ser.forEach(p=>{
+    const d = new Date(p.ms); d.setHours(0,0,0,0);
+    const k = d.getTime();
+    if(!byDay[k] || p.bf > byDay[k].bf) byDay[k] = {ms:k, bf:p.bf, ws:p.ws, key:true};
+  });
+  _drawWindChart('cv-wind-day', Object.values(byDay).sort((a,b)=>a.ms-b.ms), {markKey:true});
+}
+function drawWindHourChart(t){
+  const ser = _windSeries(t);
+  // 逐時：官方 3h 點為錨，其間內插 2 點（＝約每小時一點）
+  _drawWindChart('cv-wind-hr', _smoothSeries(ser, 2), {markKey:true});
+}
+
 function _windTipHtml(t){
   const w = _windOf(t);
   const nm = {mean:'平均風', gust:'陣風（官方）', gust_est:'陣風（推估）'}[windKind] || '';

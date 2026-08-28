@@ -2029,6 +2029,68 @@ if (need('getAccum') && need('_windOf') && need('_syncWindKindUI')) {
   setLex("mode='rain';");
 }
 
+
+// ════════ 37. 風力折線圖（逐日／逐時內插）════════
+console.log('\n=== 風力折線圖 ===');
+if (need('_windSeries') && need('_smoothSeries') && need('drawWindDayChart')) {
+  const base = Date.now();
+  const mk = (hOffset, ws, bf) => ({
+    start: new Date(base + hOffset*3600e3).toISOString(),
+    end:   new Date(base + (hOffset+3)*3600e3).toISOString(), ws, bf});
+  setLex(`TMAP['南投縣仁愛鄉'] = Object.assign(TMAP['南投縣仁愛鄉']||{},
+      {county:'南投縣', township:'仁愛鄉'});
+    window.WIND_FCST = {'南投縣':{'仁愛鄉':[
+      ${JSON.stringify(mk(0, 5, 3))}, ${JSON.stringify(mk(3, 9, 5))},
+      ${JSON.stringify(mk(6, 15, 7))}, ${JSON.stringify(mk(9, 22, 9))},
+      ${JSON.stringify(mk(27, 12, 6))}]}};
+    windKind='mean';`);
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+
+  const ser = G._windSeries(t);
+  console.log(`   官方序列 ${ser.length} 點：${ser.map(p=>p.bf).join('→')} 級`);
+  chk('序列點數＝官方預報段數', ser.length, 5);
+  chk('依時間排序', ser[0].bf, 3);
+
+  // ★ 內插：官方點必須保留且標記為 key
+  const sm = G._smoothSeries(ser, 2);
+  const keys = sm.filter(p=>p.key);
+  console.log(`   內插後 ${sm.length} 點，其中官方錨點 ${keys.length} 點`);
+  chk('★官方錨點全數保留', keys.length, ser.length);
+  chk('★官方錨點值未被內插改動', keys.map(p=>p.bf), ser.map(p=>p.bf));
+  if (!(sm.length > ser.length)) fails.push('內插未產生額外點（曲線不會平滑）');
+  else console.log('  OK  已補入內插點使曲線平滑');
+  // 內插值須落在相鄰官方值之間的合理範圍（不得暴衝）
+  const mx = Math.max(...sm.map(p=>p.bf)), mn = Math.min(...sm.map(p=>p.bf));
+  const omx = Math.max(...ser.map(p=>p.bf)), omn = Math.min(...ser.map(p=>p.bf));
+  console.log(`   內插後範圍 ${mn.toFixed(1)}~${mx.toFixed(1)}（官方 ${omn}~${omx}）`);
+  if (mx > omx + 1.5 || mn < Math.max(0, omn - 1.5)) {
+    fails.push(`內插值超出合理範圍（${mn.toFixed(1)}~${mx.toFixed(1)}）`);
+  } else console.log('  OK  內插值未超出合理範圍');
+  chk('內插值不為負', mn >= 0, true);
+
+  // 推估陣風時序列須整體放大
+  setLex("windKind='gust_est';");
+  const est = G._windSeries(t);
+  setLex("windKind='mean';");
+  console.log(`   推估陣風序列：${est.map(p=>p.bf).join('→')} 級`);
+  if (!(est[3].bf >= ser[3].bf)) fails.push('推估陣風應不小於平均風');
+  else console.log('  OK  推估陣風 ≥ 平均風');
+
+  // 繪圖不得拋錯（含無資料情形）
+  setLex(`document.body.insertAdjacentHTML('beforeend',
+    '<canvas id="cv-wind-day"></canvas><canvas id="cv-wind-hr"></canvas>');`);
+  let threw = false;
+  try { G.drawWindDayChart(t); G.drawWindHourChart(t); } catch(e){ threw = true; console.log('   ', e.message); }
+  chk('繪圖不拋錯', threw, false);
+  try { G.drawWindDayChart({county:'x', township:'y'}); } catch(e){ threw = true; }
+  chk('無資料時亦不拋錯', threw, false);
+
+  const html = fs.readFileSync('index.html', 'utf8');
+  chk('逐日圖區塊存在', /id="sec-windday"/.test(html), true);
+  chk('逐時圖區塊存在', /id="sec-windhr"/.test(html), true);
+  chk('★圖下標明內插非官方值', /其間曲線為內插（僅供視覺化，非官方值）/.test(html), true);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);
