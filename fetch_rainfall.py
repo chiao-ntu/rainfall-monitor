@@ -23,6 +23,8 @@ SWCB_EOCINFO_URL = "https://246.ardswc.gov.tw/webService/GetIDisasterInfo.ashx" 
 HEAVY_RAIN_COUNTY_TH = 150.0   # 「雨勢較大地區」縣市門檻：任一鄉鎮日累積達此值即納入
 HOURLY_FILE = "rain_hourly.json"   # 由 fetch_qpesums_hourly.py 每小時寫入（本腳本只讀）
 SWCB_STN_LOC = {}
+# 鄉鎮風力預報：{縣市: {鄉鎮: [{start,end,ws,bf}]}}，由 fetch_pop_county 順帶填充
+WIND_FCST = {}
 # (縣市, 鄉鎮, 站名) → ETR2(mm)：同名站以地理位置區分
 SWCB_BY_LOC = {}   # (縣市,鄉鎮) → {站名: ETR2}；由 fetch_swcb_etr2() 填充
 # 代表站對站層級的可讀名稱（log 與前端共用語彙）
@@ -967,6 +969,39 @@ def fetch_pop_county(county, ep_code, is_3day):
                     hours = 3 if is_3day else 12
                     segs.append({'start':start,'end':end,'pop':pop,'hours':hours})
             if segs: pop_map[name]=segs
+
+            # ── 風速／蒲福風級（與 PoP 同一次請求，不額外呼叫 API）──
+            #   F-D0047 逐 3 小時提供「風速」與「蒲福風級」；逐 12 小時為「最大風速」。
+            #   ★ 整份 F-D0047 規格**沒有陣風欄位**（已核對官方產品說明文件
+            #     F-D0047-001_093.pdf），鄉鎮級只有平均風。陣風另由
+            #     「颱風警報期間各地區風力預測」提供，且僅警報期間有值。
+            wsegs = []
+            for we in we_list:
+                en = we.get('ElementName', we.get('elementName',''))
+                if en not in ('風速', '最大風速'): continue
+                for t in we.get('Time', we.get('time',[])):
+                    start = t.get('StartTime', t.get('startTime',
+                            t.get('DataTime',  t.get('dataTime',''))))
+                    end   = t.get('EndTime',   t.get('endTime', start))
+                    ev    = t.get('ElementValue', t.get('elementValue',[{}]))
+                    if isinstance(ev, list): ev = ev[0] if ev else {}
+                    ws = bf = None
+                    for k in ('WindSpeed', 'windSpeed', 'Value', 'value'):
+                        c = ev.get(k)
+                        if c not in (None, '', ' '):
+                            try: ws = float(c)
+                            except (TypeError, ValueError): pass
+                            break
+                    for k in ('BeaufortScale', 'beaufortScale'):
+                        c = ev.get(k)
+                        if c not in (None, '', ' '):
+                            # 蒲福風級可能是 "8" 或 ">=13" 這類字串
+                            try: bf = int(float(str(c).replace('>=','').replace('>','')))
+                            except (TypeError, ValueError): bf = None
+                            break
+                    if ws is None and bf is None: continue
+                    wsegs.append({'start':start, 'end':end, 'ws':ws, 'bf':bf})
+            if wsegs: WIND_FCST.setdefault(county, {})[name] = wsegs
     except Exception as e:
         pass
     return pop_map
@@ -1530,6 +1565,72 @@ def calc_bias_24h(daily_rain, model_yday):
 
 # ── 颱風期 QPF 格點 ──────────────────────────────
 QPF_TYPHOON = [f"{BASE_URL}/F-C0041-{str(i).zfill(3)}" for i in range(1,9)]
+
+def fetch_gust_forecast():
+    """颱風警報期間各地區風力預測（含陣風）。
+
+    ★ 此資料集**僅在颱風警報發布期間**有內容，平時回空。
+      與 F-D0047 的差異：
+        - F-D0047：368 鄉鎮、逐 3 小時、只有平均風（無陣風）
+        - 本資料集：警戒「地區」尺度（約 20 餘區）、含最大風與陣風
+      兩者空間精細度不同，前端須分開呈現並標示來源，不可混為一談。
+    回傳 {地區名: {'ws': 最大風(m/s), 'gust': 陣風(m/s), 'bf': 蒲福風級}}；
+    無警報或失敗回 {}。
+    """
+    if not CWA_API_KEY:
+        return {}
+    url = f"{BASE_URL}/W-C0034-002"
+    try:
+        r = requests.get(url, params={"Authorization": CWA_API_KEY, "format": "JSON"},
+                         timeout=20)
+        if r.status_code != 200:
+            return {}
+        raw = r.json()
+    except Exception as e:
+        print(f"    颱風風力預測抓取失敗（不影響其他）：{e}")
+        return {}
+    out = {}
+    try:
+        recs = raw.get('records', {})
+        for key in ('locations', 'Locations', 'location', 'Location'):
+            locs = recs.get(key)
+            if locs: break
+        else:
+            return {}
+        if isinstance(locs, dict): locs = [locs]
+        for wrap in locs:
+            items = wrap.get('location', wrap.get('Location', [])) \
+                    if isinstance(wrap, dict) else []
+            if not items and isinstance(wrap, dict) and wrap.get('locationName'):
+                items = [wrap]
+            for loc in items:
+                nm = (loc.get('locationName') or loc.get('LocationName') or '').strip()
+                if not nm: continue
+                rec = {'ws': None, 'gust': None, 'bf': None}
+                for we in loc.get('weatherElement', loc.get('WeatherElement', [])):
+                    en = (we.get('elementName') or we.get('ElementName') or '')
+                    times = we.get('time', we.get('Time', []))
+                    vals = []
+                    for t in times:
+                        ev = t.get('elementValue', t.get('ElementValue', {}))
+                        if isinstance(ev, list): ev = ev[0] if ev else {}
+                        v = ev.get('value', ev.get('Value'))
+                        try: vals.append(float(v))
+                        except (TypeError, ValueError): pass
+                    if not vals: continue
+                    mx = max(vals)
+                    if '陣風' in en or 'Gust' in en: rec['gust'] = mx
+                    elif '風速' in en or 'Wind' in en: rec['ws'] = mx
+                    elif '風級' in en or 'Beaufort' in en: rec['bf'] = int(mx)
+                if rec['ws'] is not None or rec['gust'] is not None:
+                    out[nm] = rec
+    except Exception as e:
+        print(f"    颱風風力預測解析失敗：{e}")
+        return {}
+    if out:
+        print(f"    颱風風力預測：{len(out)} 個警戒地區")
+    return out
+
 
 def fetch_typhoon_track():
     """W-C0034-005：西北太平洋及南海活動中熱帶氣旋之過去軌跡與預報路徑。
@@ -2400,6 +2501,8 @@ def main():
     typhoon_segs = fetch_typhoon_qpf() if CWA_API_KEY else []
     typhoon_track = fetch_typhoon_track() if CWA_API_KEY else []
     typhoon_warn  = fetch_typhoon_warning() if CWA_API_KEY else []
+    # 颱風警報期間各地區風力預測（含陣風）；平時為空
+    gust_fcst     = fetch_gust_forecast() if CWA_API_KEY else {}
     debris_alerts = fetch_debris_alerts()
     # 雙軌：現況紅黃走官方發布值、未來推估自算
     official_alerts = fetch_official_alerts()
@@ -2941,6 +3044,11 @@ def main():
         'radar_qpf_time': radar_dt,   # F-B0046 未來1h雷達QPF 發布時間（空=本次未取得）
         'typhoon_track': typhoon_track,  # W-C0034-005 颱風過去軌跡＋預報路徑（無颱風＝[]）
         'typhoon_warn': typhoon_warn,    # W-C0034-001 官方警報單原文（無警報＝[]）
+        # 鄉鎮風力預報（F-D0047，逐3小時）：{縣市:{鄉鎮:[{start,end,ws,bf}]}}
+        #   ws＝風速(m/s)、bf＝蒲福風級（官方直接提供，不需自行換算）
+        #   ★ 官方鄉鎮級預報**無陣風欄位**，故陣風另存於 gust_fcst（僅颱風警報期間有值）
+        'wind_fcst': WIND_FCST,
+        'gust_fcst': gust_fcst,          # 颱風警報期間各地區風力預測（無警報＝{}）
         # 雙軌警戒：off_* ＝官方發布（權威）、est_* ＝系統推估（前端須標示）
         'debris_alerts': debris_alerts,        # 土石流逐潛勢溪流
         'landslide_alerts': landslide_alerts,  # 大規模崩塌逐警戒區

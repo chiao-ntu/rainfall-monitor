@@ -155,6 +155,16 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         title="選擇要顯示名稱的範圍"
         style="display:none;font-size:10px;background:#061220;color:#8ac8e8;
         border:1px solid #1a4060;border-radius:3px;padding:2px 3px;margin-right:3px"></select>
+      <button class="b"    id="bWind" onclick="toggleWindLayer()"
+        style="border-color:#1a4060;color:#8ac8e8" title="鄉鎮風力預測（蒲福風級著色）">💨 風力預測</button>
+      <select id="windKind" onchange="setWindKind(this.value)"
+        title="選擇風力資料來源"
+        style="display:none;font-size:10px;background:#061220;color:#8ac8e8;
+        border:1px solid #1a4060;border-radius:3px;padding:2px 3px;margin-right:3px">
+        <option value="mean">平均風（氣象署）</option>
+        <option value="gust">陣風（颱風警報期間）</option>
+        <option value="gust_est">推估陣風（系統推估）</option>
+      </select>
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
         style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
       <button class="b"    id="bTyphoon" onclick="toggleTyphoonLayer()"
@@ -3064,6 +3074,9 @@ async function tryLoadLive(){
     window._dataGenAt = d.generated_at || '';  // 供各面板快取鍵使用
     // 颱風動態（W-C0034-005 軌跡）：無颱風時為空陣列
     window.TYPHOON_TRACK = d.typhoon_track || [];
+    // 風力預測：wind_fcst＝368鄉鎮平均風（官方）、gust_fcst＝颱風期間各地區陣風（官方）
+    window.WIND_FCST = d.wind_fcst || {};
+    window.GUST_FCST = d.gust_fcst || {};
     // 官方颱風警報單原文（W-C0034-001）：面板照抄，不改寫
     window.TYPHOON_WARN = d.typhoon_warn || [];
     // 雨勢較大地區（縣市級，日累積≥門檻）
@@ -5251,6 +5264,127 @@ function _bindTownNameZoom(){
     clearTimeout(_tnTimer);
     _tnTimer = setTimeout(renderTownNameLayer, 150);
   });
+}
+
+// ══════════════════════════════════════════════════════════
+//  風力預測圖層（蒲福風級著色）
+//  三種來源，以下拉選單切換：
+//    mean     平均風  — 氣象署 F-D0047，368 鄉鎮逐 3 小時（官方值）
+//    gust     陣風    — 颱風警報期間各地區風力預測（官方值，僅警報期間有）
+//    gust_est 推估陣風 — 由平均風乘陣風因子推得（★系統推估，非官方值）
+//  ★ 官方鄉鎮級預報沒有陣風欄位，故 gust 與 mean 的空間尺度不同（警戒地區
+//    vs 368 鄉鎮），介面必須標明來源，不可讓使用者誤以為同一套資料。
+// ══════════════════════════════════════════════════════════
+let showWind = false, windLayer = null, windKind = 'mean';
+
+// 蒲福風級色階（使用者指定；與 ETR2% 同一組色）
+const BF_BANDS = [
+  {max: 4,   color:'#ffffff', name:'4級以下'},
+  {max: 7,   color:'#40d060', name:'4–7級'},
+  {max: 10,  color:'#f0d040', name:'7–10級'},
+  {max: 13,  color:'#e04040', name:'10–13級'},
+  {max: 99,  color:'#c050e0', name:'13級以上'},
+];
+function _bfColor(bf){
+  if(bf == null || !isFinite(bf)) return null;
+  for(const b of BF_BANDS) if(bf < b.max) return b.color;
+  return BF_BANDS[BF_BANDS.length-1].color;
+}
+// 由風速(m/s)換算蒲福風級（官方已給 bf 時優先用官方值，此為備援）
+function _wsToBf(ws){
+  if(ws == null || !isFinite(ws)) return null;
+  const th = [0.3,1.6,3.4,5.5,8.0,10.8,13.9,17.2,20.8,24.5,28.5,32.7];
+  let bf = 0;
+  for(let i=0;i<th.length;i++) if(ws >= th[i]) bf = i+1;
+  return bf;
+}
+// 陣風因子：平地約 1.4、山區地形加成較高。★ 純屬推估，非官方值。
+function _gustFactor(t){
+  const z = (typeof _townZone === 'function') ? _townZone(t) : null;
+  if(z === '山區') return 1.7;
+  if(z === '淺山區') return 1.55;
+  return 1.4;
+}
+// 取某鄉鎮當前選定來源的風力值 → {bf, ws, src}
+function _windOf(t){
+  if(!t) return {bf:null, ws:null, src:''};
+  const wf = (window.WIND_FCST || {});
+  const segs = ((wf[t.county] || {})[t.township]) || [];
+  // 取「現在之後最近一段」；無則取第一段
+  const now = Date.now();
+  let seg = segs.find(x=>{
+    const e = Date.parse(x.end || x.start || '');
+    return isFinite(e) && e >= now;
+  }) || segs[0] || null;
+
+  if(windKind === 'gust'){
+    // 官方陣風：以鄉鎮所屬縣市對應警戒地區（名稱包含比對）
+    const gf = window.GUST_FCST || {};
+    let hit = null;
+    for(const k in gf){
+      if(k && (k.indexOf(t.county) >= 0 || (t.county||'').indexOf(k) >= 0)){ hit = gf[k]; break; }
+    }
+    if(!hit) return {bf:null, ws:null, src:'gust'};
+    const bf = hit.bf != null ? hit.bf : _wsToBf(hit.gust != null ? hit.gust : hit.ws);
+    return {bf, ws: hit.gust != null ? hit.gust : hit.ws, src:'gust'};
+  }
+  if(windKind === 'gust_est'){
+    if(!seg || seg.ws == null) return {bf:null, ws:null, src:'gust_est'};
+    const ws = seg.ws * _gustFactor(t);
+    return {bf: _wsToBf(ws), ws, src:'gust_est'};
+  }
+  if(!seg) return {bf:null, ws:null, src:'mean'};
+  const bf = (seg.bf != null) ? seg.bf : _wsToBf(seg.ws);
+  return {bf, ws: seg.ws, src:'mean'};
+}
+
+function setWindKind(v){
+  windKind = v || 'mean';
+  renderWindLayer();
+  if(typeof renderLegend === 'function') renderLegend();
+}
+
+function toggleWindLayer(){
+  showWind = !showWind;
+  const btn = document.getElementById('bWind');
+  const sel = document.getElementById('windKind');
+  if(btn) btn.classList.toggle('on', showWind);
+  if(sel) sel.style.display = showWind ? '' : 'none';
+  renderWindLayer();
+}
+
+function renderWindLayer(){
+  if(windLayer){ map.removeLayer(windLayer); windLayer = null; }
+  if(!showWind || typeof TOWN_GEO === 'undefined') return;
+  windLayer = L.layerGroup().addTo(map);
+  let n = 0, nNull = 0;
+  (TOWN_GEO.features||[]).forEach(f=>{
+    const p = f.properties || {};
+    const t = TMAP[(p.COUNTYNAME||'') + (p.TOWNNAME||'')];
+    if(!t) return;
+    const w = _windOf(t);
+    const col = _bfColor(w.bf);
+    if(!col){ nNull++; return; }
+    const g = f.geometry;
+    const polys = g.type === 'Polygon' ? [g.coordinates]
+                : g.type === 'MultiPolygon' ? g.coordinates : [];
+    polys.forEach(poly=>{
+      const ring = (poly[0]||[]).map(c=>[c[1], c[0]]);
+      if(ring.length < 3) return;
+      L.polygon(ring, {color:'#33556e', weight:0.5, fillColor:col, fillOpacity:0.72})
+        .bindTooltip(`<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>` +
+          `${windKind === 'mean' ? '平均風' : windKind === 'gust' ? '陣風（官方）' : '陣風（推估）'}` +
+          `：<b>${w.bf ?? '—'}</b> 級` +
+          (w.ws != null ? `（${w.ws.toFixed(1)} m/s）` : '') +
+          (windKind === 'gust_est'
+            ? '<br><span style="color:#e8a860;font-size:9px">系統推估值，非氣象署發布</span>' : '') +
+          (windKind === 'gust'
+            ? '<br><span style="color:#8a9aaa;font-size:9px">警戒地區尺度，非鄉鎮尺度</span>' : ''),
+          {sticky:true, opacity:.92}).addTo(windLayer);
+    });
+    n++;
+  });
+  console.log(`風力預測（${windKind}）：${n} 個鄉鎮著色` + (nNull ? `、${nNull} 個無資料` : ''));
 }
 
 function toggleTownNameLayer(){

@@ -1913,6 +1913,63 @@ if (need('updateTyphoonPanel')) {
          "for (const k in _tySecOpen) delete _tySecOpen[k];");
 }
 
+
+// ════════ 35. 風力預測圖層 ════════
+console.log('\n=== 風力預測：蒲福風級色階與三種來源 ===');
+if (need('_bfColor') && need('_wsToBf') && need('_windOf') && need('setWindKind')) {
+  // 色階邊界（使用者指定：<4白、4-7綠、7-10黃、10-13紅、>=13紫）
+  const cases = [[0,'#ffffff'],[3,'#ffffff'],[4,'#40d060'],[6,'#40d060'],
+                 [7,'#f0d040'],[9,'#f0d040'],[10,'#e04040'],[12,'#e04040'],
+                 [13,'#c050e0'],[17,'#c050e0']];
+  let ok = true;
+  cases.forEach(([bf, col])=>{ if(G._bfColor(bf) !== col){ ok = false;
+    fails.push(`風級 ${bf} 色階錯誤：得 ${G._bfColor(bf)} 期望 ${col}`); } });
+  if(ok) console.log('  OK  五級距色階全部正確（白/綠/黃/紅/紫）');
+  chk('無資料回 null（不著色）', G._bfColor(null), null);
+
+  // 風速→風級換算（蒲福風級標準值）
+  chk('0.2 m/s → 0 級', G._wsToBf(0.2), 0);
+  chk('10.8 m/s → 6 級', G._wsToBf(10.8), 6);
+  chk('17.2 m/s → 8 級', G._wsToBf(17.2), 8);
+  chk('32.7 m/s → 12 級', G._wsToBf(32.7), 12);
+
+  // 三種來源
+  const future = new Date(Date.now() + 3*3600e3).toISOString();
+  setLex(`TMAP['南投縣仁愛鄉'] = TMAP['南投縣仁愛鄉'] || {county:'南投縣',township:'仁愛鄉'};
+    window.WIND_FCST = {'南投縣':{'仁愛鄉':[{start:'', end:'${future}', ws:12.0, bf:6}]}};
+    window.GUST_FCST = {'南投縣':{ws:25.0, gust:33.0, bf:12}};`);
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+
+  G.setWindKind('mean');
+  const m = G._windOf(t);
+  console.log(`   平均風：${m.bf} 級（${m.ws} m/s）來源=${m.src}`);
+  chk('平均風用官方 bf', m.bf, 6);
+
+  G.setWindKind('gust');
+  const g = G._windOf(t);
+  console.log(`   官方陣風：${g.bf} 級（${g.ws} m/s）來源=${g.src}`);
+  chk('官方陣風取 gust 值', g.ws, 33.0);
+
+  G.setWindKind('gust_est');
+  const e = G._windOf(t);
+  console.log(`   推估陣風：${e.bf} 級（${e.ws.toFixed(1)} m/s）＝平均風 × 山區因子`);
+  if (!(e.ws > m.ws)) fails.push('推估陣風應大於平均風');
+  else console.log('  OK  推估陣風 > 平均風');
+  chk('推估標記來源', e.src, 'gust_est');
+
+  // 官方陣風無資料時不得著色（平時無颱風警報）
+  setLex("window.GUST_FCST = {};");
+  G.setWindKind('gust');
+  chk('★無颱風警報時官方陣風為空（不誤導）', G._windOf(t).bf, null);
+  G.setWindKind('mean');
+
+  // 標示：推估與官方尺度差異必須寫在 tooltip
+  const html = fs.readFileSync('index.html', 'utf8');
+  chk('推估陣風標示非官方', /系統推估值，非氣象署發布/.test(html), true);
+  chk('官方陣風標示尺度差異', /警戒地區尺度，非鄉鎮尺度/.test(html), true);
+  chk('下拉選單三個選項', /value="mean"[\s\S]{0,400}value="gust"[\s\S]{0,400}value="gust_est"/.test(html), true);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);
