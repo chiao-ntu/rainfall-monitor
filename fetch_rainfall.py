@@ -1526,6 +1526,57 @@ def load_qpesums_history():
     return out
 
 
+def _daily_rain_or_qpesums(obs, county, township, qp_daily, days=15):
+    """取逐日雨量：優先用測站觀測，缺測站或全 0 時改用 QPESUMS 格點。
+
+    ★ 「無測站」不等於「沒下雨」。測站觀測為空或全 0，但 QPESUMS 有值時，
+      以 QPESUMS 補上，避免圖上顯示成 0mm 而與實際降雨不符。
+    """
+    arr = (obs or {}).get('daily_rain')
+    has_obs = bool(arr) and any((x or 0) > 0 for x in arr)
+    if has_obs:
+        return arr
+    qp = qp_daily.get(county + township)
+    if qp:
+        # QPESUMS 缺值以 0 補（該小時無回波），長度對齊
+        return [(0.0 if x is None else x) for x in (qp + [0.0] * days)[:days]]
+    return arr if arr else [0.0] * days
+
+
+def load_qpesums_daily(days=15):
+    """由 QPESUMS 逐時歷史合成各鄉鎮的逐日雨量（[0]=今天，[1]=昨天…）。
+
+    ★ 為何需要：town{} 只由「有觀測站的鄉鎮」建立，沒有雨量站的鄉鎮
+      daily_rain 會取到預設的 [0.0]*15 —— 「無測站」被寫成「雨量 0」，
+      在圖上與真的沒下雨無法分辨（實例：臺南柳營/佳里、高雄鳥松/前金/鹽埕）。
+      QPESUMS 是雷達整合網格，逐鄉鎮都有值，正好補上這個缺口。
+    回傳 {縣市+鄉鎮: [d0..d14]}；無檔案回 {}。
+    """
+    if not os.path.exists(QPESUMS_HIST):
+        return {}
+    try:
+        with open(QPESUMS_HIST, encoding='utf-8') as f:
+            hist = json.load(f)
+    except Exception:
+        return {}
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    # 各日的日期字串（本地時間 00-24 時）
+    day_keys = [(now - timedelta(days=d)).strftime('%Y-%m-%d') for d in range(days)]
+    out = {}
+    for key, hours in hist.items():
+        arr = [None] * days
+        for h, v in hours.items():
+            if v is None:
+                continue
+            dk = h[:10]
+            if dk in day_keys:
+                i = day_keys.index(dk)
+                arr[i] = (arr[i] or 0.0) + v
+        if any(x is not None for x in arr):
+            out[key] = [None if x is None else round(x, 1) for x in arr]
+    return out
+
+
 def load_qpesums_p48():
     """QPESUMS 逐時觀測 → 每鄉鎮過去48h逐時序列（[0]=48小時前，[47]=上一完整小時；缺值None）。
     官方觀測資料（O-A0038-001雷達整合網格），供前端逐時圖過去段——絕不以模式回算充當觀測。"""
@@ -2701,6 +2752,10 @@ def main():
     qp_grid = {}
     qp_24h  = load_qpesums_history()
     qp_p48  = load_qpesums_p48()
+    # 逐日雨量備援：無測站鄉鎮改用 QPESUMS 格點，避免「無測站」被寫成「雨量 0」
+    qp_daily = load_qpesums_daily()
+    if qp_daily:
+        print(f"  QPESUMS 逐日：{len(qp_daily)} 鄉鎮（供無測站者補值）")
     if qp_24h: print(f"    QPESUMS 24h 歷史：{len(qp_24h)} 個鄉鎮")
     if qp_p48: print(f"    QPESUMS 逐時觀測 p48：{len(qp_p48)} 個鄉鎮")
 
@@ -2893,7 +2948,7 @@ def main():
             'maxh_icon':  maxh_icon,
             'obs_6h':[0.0]*8,
             'stations':  enrich_stations_with_etr2(info.get('stations', []), obs, stations, alert_v),
-            'daily_rain': obs.get('daily_rain', [0.0]*15),  # 過去15天逐日雨量（過去7日視圖ETR2需回推14天）
+            'daily_rain': _daily_rain_or_qpesums(obs, county, township, qp_daily),  # 觀測優先，無測站改用QPESUMS
         })
 
     # 加入「全台所有行政區」中尚未處理的：用 all_townships.json 為基準
@@ -2994,7 +3049,7 @@ def main():
             'warn_seg_lo':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'lo')),
             'qpf_radar_1h': radar_qpf.get(f"{at['county']}{at['township']}"),   # F-B0046 未來1h雷達QPF(mm)
             'stations':  station_list,
-            'daily_rain': obs.get('daily_rain', [0.0]*15),
+            'daily_rain': _daily_rain_or_qpesums(obs, county, township, qp_daily),
         })
 
     # ════════════════════════════════════════════════════════

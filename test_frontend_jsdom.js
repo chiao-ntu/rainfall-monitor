@@ -2183,6 +2183,23 @@ if (need('_windSeries') && need('_smoothSeries') && need('drawWindDayChart')) {
   chk('★畫布高度取 offsetHeight（避免變形）',
       /cv\.height = isZoom \? 1024 : \(cv\.offsetHeight/.test(zsrc), true);
   setLex("window.GUST_FCST = {};");
+
+  // ── 懸浮視窗的風力列 ──
+  console.log('   ── tooltip 風力列 ──');
+  const row = G._windRow(t);
+  console.log(`   ${row.replace(/<[^>]*>/g,' ').trim()}`);
+  chk('tooltip 含風力', /風力：/.test(row), true);
+  chk('顯示風級', /級/.test(row), true);
+  // 陣風推估高於平均風時應一併顯示
+  chk('附帶陣風推估', /陣風推估/.test(row), true);
+  // 無資料鄉鎮不顯示空列
+  chk('無資料時不顯示', G._windRow({county:'x', township:'y'}), '');
+  // 三種 mode 的 tooltip 都要有
+  const tsrc = fs.readFileSync('index.html', 'utf8');
+  chk('今天視窗 tooltip 含風力',
+      /風險指標：\$\{riskIndicatorHtml\(t,3\)\}` \+ _windRow\(t\)/.test(tsrc), true);
+  chk('過去/未來視窗 tooltip 含風力',
+      (tsrc.match(/_windowRisk\(t\)\}\` \+ _windRow\(t\)/g)||[]).length >= 2, true);
   const html = fs.readFileSync('index.html', 'utf8');
   chk('逐日圖區塊存在', /id="sec-windday"/.test(html), true);
   chk('逐時圖區塊存在', /id="sec-windhr"/.test(html), true);

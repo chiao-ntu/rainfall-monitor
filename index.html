@@ -2290,11 +2290,11 @@ function renderLayer(){
             : `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
             `全天累積雨量：${dayRain!=null?dayRain+' mm':'—'}<br>`+
             `ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) +
-            `風險指標：${riskIndicatorHtml(t,3)}`;
+            `風險指標：${riskIndicatorHtml(t,3)}` + _windRow(t);
         } else if(winKey.startsWith('past')){
-          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>觀測累積雨量：${rainStr} ｜ ETR2%：${etrStr}<br>`+ _etr2NowRow(t) + `風險指標：${_windowRisk(t)}`;
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>觀測累積雨量：${rainStr} ｜ ETR2%：${etrStr}<br>`+ _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t);
         } else {
-          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>預測累積雨量：${rainStr} ｜ ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) + `風險指標：${_windowRisk(t)}`;
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>預測累積雨量：${rainStr} ｜ ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t);
         }
       }
       poly.bindTooltip(tooltipHtml, {sticky:true, opacity:.92});
@@ -5653,6 +5653,21 @@ function drawAllWindCharts(t){
     .forEach(id=>{ try{ drawWindHourChart(t, id); }catch(e){ console.warn(id, e); } });
 }
 
+// 懸浮視窗的風力一列（非風力模式時附加；無資料則不顯示）
+//   同時列出平均風與陣風推估，讓使用者不必切模式即可掌握風勢。
+function _windRow(t){
+  const mean = _windOf(t, 'mean');
+  if(mean.bf == null) return '';
+  const band = BF_BANDS.find(b=>mean.bf < b.max) || BF_BANDS[BF_BANDS.length-1];
+  let h = `<br>風力：<b style="color:${band.color}">${mean.bf} 級</b>`
+        + (mean.ws != null ? `（${mean.ws.toFixed(1)} m/s）` : '');
+  const est = _windOf(t, 'gust_est');
+  if(est.bf != null && est.bf > mean.bf){
+    h += `<span style="color:#8a9aaa">　陣風推估 ${est.bf} 級</span>`;
+  }
+  return h;
+}
+
 function _windTipHtml(t){
   const w = _windOf(t);
   const nm = {mean:'平均風', gust:'陣風', gust_est:'陣風推估'}[windKind] || '';
@@ -5670,11 +5685,12 @@ function _windTipHtml(t){
       ? '<br><span style="color:#8a9aaa;font-size:9px">警戒地區尺度，非鄉鎮尺度</span>' : '');
 }
 
-function _windOf(t){
+function _windOf(t, kind){
   if(!t) return {bf:null, ws:null, src:''};
+  const K = kind || windKind;      // 允許指定來源（tooltip 需同時取平均風與推估）
   let seg = _windSegAt(t, _windAtMs());
 
-  if(windKind === 'gust'){
+  if(K === 'gust'){
     // 官方陣風：以鄉鎮所屬縣市對應警戒地區（名稱包含比對）
     const gf = window.GUST_FCST || {};
     let hit = null;
@@ -5685,7 +5701,7 @@ function _windOf(t){
     const bf = hit.bf != null ? hit.bf : _wsToBf(hit.gust != null ? hit.gust : hit.ws);
     return {bf, ws: hit.gust != null ? hit.gust : hit.ws, src:'gust'};
   }
-  if(windKind === 'gust_est'){
+  if(K === 'gust_est'){
     if(!seg || seg.ws == null) return {bf:null, ws:null, src:'gust_est'};
     const ws = seg.ws * _gustFactor(t);
     return {bf: _wsToBf(ws), ws, src:'gust_est'};

@@ -39,7 +39,7 @@ MUST = ['getAccum', 'setWin', 'onSlider', '_spanAccum', '_hourlyBars', '_futuHou
         'toggleTownNameLayer', 'renderTownNameLayer', 'setTownNameScope',
         '_windOf', '_windSegAt', '_windAtMs', '_windTipHtml',
         '_windSeries', '_smoothSeries', '_drawWindChart', 'drawWindDayChart', 'drawWindHourChart',
-        '_windDayPts', 'drawAllWindCharts',
+        '_windDayPts', 'drawAllWindCharts', '_windRow',
         '_bfColor', '_wsToBf', '_gustFactor',
         'toggleTySec', '_tySecKey', '_tySecOpenHtml', '_tySecClose',
         '_townCentroid', '_buildTownNameScope', '_tyWarnList', '_tyWarnStale', '_tyWarnList', '_tyWarnStale', '_etr2HourlySeries', '_calcDistrictDaily',
