@@ -6022,11 +6022,31 @@ function updateTyphoonPanel(){
     h += _tySecClose();
   });
 
-  // 無警報但有活動中系統（熱帶性低氣壓／尚未發布警報之颱風）
+  // 其他活動中系統（熱帶性低氣壓／尚未發布警報之颱風）
   //   ★ TD 階段官方多半尚未命名、無編號，故名稱與編號須有 fallback，
   //     且仍應完整呈現路徑、強度與雨勢資訊——不可因「未發布警報」而少給資訊。
-  if(!warns.length){
-    rows.forEach(({ty, cur, fut}, _ti)=>{
+  //   ★★ 一律顯示（不再限於「完全沒有警報單」時）：
+  //     舊版寫 if(!warns.length)，導致只要有一份海／陸警報單，
+  //     其他尚未發布警報的颱風與 TD 就整組從面板消失。
+  //     僅排除「已在警報單段落呈現過」的系統，避免重複。
+  {
+    const _warned = new Set();
+    warns.forEach(w=>{
+      if(w.ty_no) _warned.add('N' + w.ty_no);
+      if(w.name_zh) _warned.add('Z' + w.name_zh);
+    });
+    const _others = rows.filter(({ty})=>
+      !(ty.ty_no && _warned.has('N' + ty.ty_no)) &&
+      !(ty.name_zh && _warned.has('Z' + ty.name_zh)));
+    if(warns.length && _others.length){
+      h += `<div style="font-size:10px;font-weight:700;color:#8a9aaa;
+        border-top:1px solid #2a3a4a;padding-top:5px;margin-top:6px">
+        其他活動中系統（${_others.length}）</div>`;
+    }
+    _others.forEach(({ty, cur, fut}, _oi)=>{
+      // ★ 有警報單時，其他系統一律預設收合（使用者指定）；
+      //   無警報單時，最急迫者（索引 0）維持展開。
+      const _ti = warns.length ? 1 : _oi;
       const it = _tyIntensity(cur.ws);
       const nm = ty.name_zh || ty.name_en || '熱帶性低氣壓';
       // ★ TD 階段官方仍有編號，惟欄位不同：颱風為 CwaTyNo（ty_no）、
@@ -6072,7 +6092,8 @@ function updateTyphoonPanel(){
       // 雨勢較大地區（與有警報時一致，TD 也需要）
       h += `<div style="${SEC}">雨勢較大地區（日累積≥${th}mm）</div>
         <div style="font-size:10px;color:#c8b8d8;line-height:1.5">${_heavyRainLine()}</div>`;
-      h += _tySecClose();
+      // ★ 警報時間須在收合區塊「內」：舊版把 _tySecClose() 放在其前面，
+      //   導致收合後這段仍留在畫面上，與標題脫節。
       h += `<div style="${SEC}">警報時間（系統依預報路徑推估）</div>`;
       _tyAlertTimes(ty).forEach(([k, v])=>{
         const c = TY_TIME_STYLE[k] || '#8ab8d8';
@@ -6081,6 +6102,7 @@ function updateTyphoonPanel(){
           <span style="flex:0 0 62px;color:#a8b8c8">${k.replace('預計','')}</span>
           <span style="flex:1;color:#d8c8e8">${v}</span></div>`;
       });
+      h += _tySecClose();
     });
   }
 

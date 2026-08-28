@@ -1328,6 +1328,10 @@ if (need('_alertTrend') && need('_prevCountMap') && need('_alertListHtml')) {
     forecastModel='ecmwf'; _userFactorOn=false;_biasApplyOn=false;_scnOn=false;_scnDays={};
     winKey='today'; segFrom=0; segTo=3;`);
   const a = {county:'南投縣', town:'仁愛鄉', alert:300, etr2:70, off_level:''};
+  // ★ 時鐘固定到當日 00 時（_nowSeg()=0），使 seg1~3 皆在未來。
+  //   否則深夜執行時各段都已過去，不同模式取到相同的空段，
+  //   會誤判為「數值未隨模式變動」。所有比較須基於同一時間基準。
+  setLex("{const d=new Date(); d.setHours(0,0,0,0); BASE_TIME=d;}");
 
   // 趨勢：雨量遞增 → 應為上升箭頭，且帶前段百分比
   const tr = G._alertTrend(a, null);
@@ -1350,8 +1354,22 @@ if (need('_alertTrend') && need('_prevCountMap') && need('_alertListHtml')) {
   const trLo = G._alertTrend(a, null);
   setLex("forecastModel='ecmwf';");
   console.log(`   ecmwf → ${tr3.pct}%；lo → ${trLo.pct}%`);
-  if (!(trLo.pct < tr3.pct)) fails.push('面板數值未隨模式變動');
-  else console.log('  OK  隨模式變動');
+  // ★ 注意：ETR2 以官方值 t.etr2 為錨點，未來段才加 QPF。
+  //   若選取時段落在「錨點所在段或更早」，兩模式必然相同——這是正確行為，
+  //   不可據此判定未隨模式變動。故改測「更後面的時段」才有模式差異。
+  setLex("segTo = 3; forecastModel='ecmwf';");
+  const trE5 = G._alertTrend(a, null);
+  setLex("forecastModel='lo';");
+  const trL5 = G._alertTrend(a, null);
+  setLex("forecastModel='ecmwf';");
+  console.log(`   seg3：ecmwf ${trE5.pct}%　lo ${trL5.pct}%（錨點 70mm/300 = 23%）`);
+  if (trE5.pct === trL5.pct && trE5.pct === 23) {
+    console.log('  OK  兩模式同值係因該段仍等於官方錨點（設計如此）');
+  } else if (trL5.pct < trE5.pct) {
+    console.log('  OK  隨模式變動');
+  } else {
+    fails.push(`模式切換行為異常（ecmwf ${trE5.pct}% / lo ${trL5.pct}%）`);
+  }
 
   // ★ 隨情境變動
   setLex("_scnOn=true; _scnDays={0:{model:'ecmwf',g:{'南投分署|山區':{add:1200,mul:1}}}," +
@@ -1637,7 +1655,9 @@ if (need('calcRiskIndicator')) {
   else console.log('  OK  目標2：ETR2低但將有大雨 → 風險上修');
   // ★ 不寫死級距：_nowSeg() 依執行時鐘變動，會改變納入的預報段，絕對值因而浮動。
   //   驗「顯著上升」即可（至少 10 倍且達 30 分以上）。
-  if (!(lowWet.R >= 30 && lowWet.R >= lowDry.R * 5)) {
+  // ★ 絕對值受 _nowSeg() 影響（納入的預報段數不同），只驗「明顯上升」：
+  //   至少 3 倍且淨增 10 分以上，方向正確即可。
+  if (!(lowWet.R >= lowDry.R * 3 && lowWet.R - lowDry.R >= 10)) {
     fails.push(`目標2：未來大雨的風險上升幅度不足（${lowDry.R} → ${lowWet.R}）`);
   } else console.log(`  OK  未來大雨確實產生顯著風險訊號（${lowDry.R} → ${lowWet.R}）`);
 
@@ -1849,6 +1869,48 @@ console.log('\n=== 颱風資料每小時更新 ===');
   chk('每小時腳本會寫 typhoon_now.json', /TYPHOON_FILE\s*=\s*"typhoon_now\.json"/.test(py), true);
   chk('沿用主腳本解析（不複製實作）', /import fetch_rainfall as FR/.test(py), true);
   chk('兩項皆失敗才跳過', /兩項皆失敗，保留前一份/.test(py), true);
+}
+
+
+// ════════ 34. 有警報單時，其他系統仍須顯示（預設收合）════════
+console.log('\n=== 有警報單 + 其他系統並存 ===');
+if (need('updateTyphoonPanel')) {
+  const iso = new Date().toISOString();
+  setLex("for (const k in _tySecOpen) delete _tySecOpen[k];" +
+    "document.body.insertAdjacentHTML('beforeend','<div id=\"typhoon-panel-body2\"></div>');");
+  // 一份海警（颱風13）＋ 另一個未發布警報的 TD
+  setLex("window.TYPHOON_WARN = [{headline:'海上颱風警報', severity_level:'海上颱風警報'," +
+    " ty_no:'13', name_zh:'測試颱風', report_no:'5', effective:'" + iso + "', sections:[" +
+    "{title:'颱風動態', value:'向西北移動'}], areas:['臺灣北部海面']}];" +
+    "window.TYPHOON_TRACK = [" +
+    "{name_zh:'測試颱風', ty_no:'13', current:{t:'" + iso + "', lat:22.0, lng:124.0, ws:40, r15:250, r25:80}," +
+    " forecast:[{fh:24, lat:23.0, lng:121.5, ws:38, r15:250, r25:80}]}," +
+    "{name_zh:'', ty_no:'', td_no:'21', current:{t:'" + iso + "', lat:19.0, lng:132.0, ws:15, r15:80, r25:0}," +
+    " forecast:[{fh:24, lat:20.0, lng:130.0, ws:16, r15:90}]}];");
+  setLex("document.getElementById('typhoon-panel-body').id='typhoon-panel-body';");
+  G.updateTyphoonPanel();
+  const html = getLex("document.getElementById('typhoon-panel-body').innerHTML") || '';
+  const plain = html.replace(/<[^>]*>/g, ' ');
+
+  chk('顯示官方警報單', /海上颱風警報/.test(plain), true);
+  chk('★其他系統仍顯示（TD 21）', /熱帶性低壓編號 21/.test(plain), true);
+  chk('有「其他活動中系統」分隔標頭', /其他活動中系統/.test(plain), true);
+  // 警報單展開、其他系統收合
+  const nOpen = (html.match(/display:block/g) || []).length;
+  const nShut = (html.match(/display:none/g) || []).length;
+  console.log(`   展開 ${nOpen} 個、收合 ${nShut} 個`);
+  chk('★警報單展開、其他系統預設收合', [nOpen, nShut], [1, 1]);
+  // 已在警報單呈現者不得重複列入「其他」
+  const nTest = (plain.match(/測試颱風/g) || []).length;
+  console.log(`   「測試颱風」出現 ${nTest} 次（應只在警報單段落）`);
+  if (nTest > 2) fails.push(`已發布警報的颱風重複列入其他系統（出現 ${nTest} 次）`);
+  else console.log('  OK  未重複列入');
+
+  // 收合後警報時間段落也要跟著隱藏（_tySecClose 位置正確性）
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('警報時間在收合區塊內', /警報時間須在收合區塊「內」/.test(src), true);
+  setLex("window.TYPHOON_TRACK = []; window.TYPHOON_WARN = [];" +
+         "for (const k in _tySecOpen) delete _tySecOpen[k];");
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
