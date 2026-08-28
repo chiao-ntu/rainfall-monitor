@@ -323,8 +323,27 @@ if os.path.exists(_zipf):
         print(f"  PoP3d {len(_p3)} 鄉鎮、PoP7d {len(_p7)}、風力 {_wn} 鄉鎮")
         chk('★風力涵蓋全臺 368 鄉鎮', _wn, 368)
         chk('風力涵蓋 22 縣市', len(FR.WIND_FCST), 22)
-        # 鄉鎮名為鍵時，8 組重名會少 11 個（既有行為，逐縣市亦同）
-        chk('PoP 為相異鄉鎮名數（357）', len(_p3), 357)
+        # ★ 改以「縣市+鄉鎮」為鍵後，368 個鄉鎮全數到齊（不再被同名覆蓋）
+        _comp = [k for k in _p3 if any(k.startswith(c) for c in FR.COUNTY_EP_3D)]
+        chk('★PoP 複合鍵涵蓋 368 鄉鎮', len(_comp), 368)
+        # 同名鄉鎮必須各自取到自己的值
+        from datetime import datetime as _dt
+        _base = _dt(2026, 8, 28, 18, 0, 0)
+        for _twn, _n in (('東區', 4), ('中正區', 2), ('北區', 3)):
+            _vals = {}
+            for _c in FR.COUNTY_EP_3D:
+                if (_c + _twn) in _p3:
+                    _vals[_c] = tuple(FR.get_pop_6h_series(_twn, _p3, _p7, _base,
+                                                           county=_c)[:4])
+            chk(f'{_twn} 出現在 {_n} 個縣市', len(_vals), _n)
+            if len(_vals) > 1:
+                print(f"  {_twn}：" + "、".join(f"{c}{list(v)}" for c, v in
+                                                list(_vals.items())[:2]))
+                if len(set(_vals.values())) == 1:
+                    print(f"  （{_twn} 各縣市值恰好相同，無法據此判定，略過）")
+                else:
+                    print(f"  OK  {_twn} 各縣市取到不同值（未互相覆蓋）")
+        chk('保留純鄉鎮名鍵以相容', ('東區' in _p3), True)
         for _c, _n in (('連江縣', 4), ('金門縣', 6), ('澎湖縣', 6)):
             chk(f'★{_c} 有風力（{_n} 鄉鎮）', len(FR.WIND_FCST.get(_c, {})), _n)
         # 逐時段數：打包檔為逐 3 小時

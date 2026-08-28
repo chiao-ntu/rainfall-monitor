@@ -977,7 +977,14 @@ def _extract_pop_wind(raw, county, is_3day):
 
                     hours = 3 if is_3day else 12
                     segs.append({'start':start,'end':end,'pop':pop,'hours':hours})
-            if segs: pop_map[name]=segs
+            # ★ 鍵改為「縣市+鄉鎮」：全臺有 8 組同名鄉鎮（中正區×2、東區×4、
+            #   北區×3、中山區/信義區/西區/大安區/南區各×2），以純鄉鎮名為鍵
+            #   會互相覆蓋，實測 368 個鄉鎮只剩 357 個 —— 11 個鄉鎮的降雨機率
+            #   被別縣市的值取代，且完全無跡可循。
+            #   同時保留純鄉鎮名鍵（僅在尚未存在時寫入）以相容舊呼叫端。
+            if segs:
+                pop_map[county + name] = segs
+                pop_map.setdefault(name, segs)
 
             # ── 風速／蒲福風級（與 PoP 同一次請求，不額外呼叫 API）──
             #   F-D0047 逐 3 小時提供「風速」與「蒲福風級」；逐 12 小時為「最大風速」。
@@ -1166,18 +1173,27 @@ def fetch_all_pop(counties_needed):
         print(f"  [除錯] {k} 共{len(s)}時段，第一段：start={s[0]['start']} pop={s[0]['pop']} hrs={s[0]['hours']}")
     return pop3d_all, pop7d_all
 
-def get_pop_6h_series(township_name, pop3d, pop7d, base_time, num_segs=28):
+def get_pop_6h_series(township_name, pop3d, pop7d, base_time, num_segs=28, county=''):
     """
     取鄉鎮的 6h PoP 序列（共 num_segs 個 6h 時段 = 7天）
     前3天用 pop3d（3h）：每兩個3h合成一個6h（取最大值，保守側）
     後4天用 pop7d（12h）：用 p=1-√(1-p12) 轉換為6h
     回傳 list of float or None，長度=num_segs
+
+    ★ 優先以「縣市+鄉鎮」查詢（同名鄉鎮不會互相取值）；
+      未提供 county 時退回純鄉鎮名，維持舊呼叫端相容。
     """
     result = [None] * num_segs
     base = base_time
 
+    def _pick(m):
+        if county:
+            v = m.get(county + township_name)
+            if v: return v
+        return m.get(township_name, [])
+
     # 3天資料（3h段）→ 6h段（取前兩個的最大值）
-    segs3 = pop3d.get(township_name, [])
+    segs3 = _pick(pop3d)
     if segs3:
         # 每2個3h合一個6h
         for i in range(0, min(len(segs3)-1, 24), 2):  # 最多12個6h（3天）
@@ -1190,7 +1206,7 @@ def get_pop_6h_series(township_name, pop3d, pop7d, base_time, num_segs=28):
                     result[seg_idx] = pop6
 
     # 7天資料（12h段）→ 6h段
-    segs7 = pop7d.get(township_name, [])
+    segs7 = _pick(pop7d)
     if segs7:
         for seg in segs7:
             start_str = seg.get('start','')
@@ -2808,7 +2824,8 @@ def main():
         daily  = [round(sum(qpf15d[i*4:(i+1)*4]),1) for i in range(16)]
 
         # PoP 序列（28個6h時段=7天）
-        pop_6h = get_pop_6h_series(township, pop3d, pop7d, base_dt, num_segs=28)
+        pop_6h = get_pop_6h_series(township, pop3d, pop7d, base_dt, num_segs=28,
+                                   county=county)
 
         # ETR2%各6h
         seg_etr_pct = [round(min(qpf15d[i]/alert_6h*100,300),1) if alert_6h>0 else None
