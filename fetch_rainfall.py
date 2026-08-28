@@ -2520,7 +2520,10 @@ def main():
     hourly_ser, hourly_meta = load_hourly_series()   # 逐時序列（暖機未滿時自動回「資料不足」）
     time.sleep(1)
     static_list = list(alert_table.values())
-    counties_needed = set(t['county'] for t in static_list)
+    # ★ 風力預報須涵蓋全臺 22 縣市，不可只取「有坡地警戒站」的縣市。
+    #   金門、澎湖、連江沒有坡地警戒站，若沿用 alert_table 的縣市集合，
+    #   這三縣市的 PoP 與風力會完全不抓 —— 實測即為三離島全無風力資料的主因。
+    counties_needed = set(COUNTY_EP_3D.keys()) | set(t['county'] for t in static_list)
 
     # 觀測
     stations = fetch_obs()

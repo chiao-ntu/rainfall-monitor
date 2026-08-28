@@ -286,5 +286,22 @@ if os.path.exists(_xml):
 else:
     print('  （找不到 F-D0047-081.xml，略過）')
 
+
+print('\n=== 風力須涵蓋全臺 22 縣市（含無坡地警戒的離島）===')
+# ★ 金門、澎湖、連江沒有坡地警戒站。若 counties_needed 沿用 alert_table 的
+#   縣市集合，這三縣市的 PoP 與風力會完全不抓 —— 實測即為離島無風力的主因。
+_src = io.open('fetch_rainfall.py', encoding='utf-8').read()
+chk('端點表含 22 縣市', len(FR.COUNTY_EP_3D), 22)
+for _c in ('金門縣', '澎湖縣', '連江縣'):
+    chk(f'{_c} 有 3 天端點', bool(FR.COUNTY_EP_3D.get(_c)), True)
+    chk(f'{_c} 有 7 天端點', bool(FR.COUNTY_EP_7D.get(_c)), True)
+chk('連江 3D 端點為 081（與實測檔案相符）', FR.COUNTY_EP_3D['連江縣'], 'F-D0047-081')
+chk('連江 7D 端點為 083（與實測檔案相符）', FR.COUNTY_EP_7D['連江縣'], 'F-D0047-083')
+chk('★counties_needed 以端點表為底（不受坡地警戒縣市限制）',
+    'counties_needed = set(COUNTY_EP_3D.keys())' in _src, True)
+_bad = [c for c in FR.COUNTY_EP_3D
+        if int(FR.COUNTY_EP_7D[c].split('-')[-1]) - int(FR.COUNTY_EP_3D[c].split('-')[-1]) != 2]
+chk('3D/7D 端點編號規則一致', _bad, [])
+
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)
