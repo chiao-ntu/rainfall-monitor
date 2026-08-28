@@ -2214,6 +2214,26 @@ if (need('renderEastAsiaLayer') && need('_ringsCentroid')) {
   console.log(`   國界 ${geo.countries.length} 國、省界 ${geo.provinces.length} 省`);
   chk('含國界資料', geo.countries.length >= 10, true);
   chk('含省界資料', geo.provinces.length >= 200, true);
+  // ★ 平滑度：座標精度與點密度需接近臺灣圖資，否則線條呈現稜角
+  const _tp = geo.provinces.reduce((a,p)=>a + p.rings.reduce((b,r)=>b+r.length,0), 0);
+  const _tr = geo.provinces.reduce((a,p)=>a + p.rings.length, 0);
+  const _avg = _tp / _tr;
+  console.log(`   省界平均 ${_avg.toFixed(0)} 點/環（臺灣約 35）`);
+  if (_avg < 30) fails.push(`點密度過低（${_avg.toFixed(0)} 點/環），線條會有稜角`);
+  else console.log('  OK  點密度足夠（線條平滑）');
+  // 座標小數位數（2 位≈1km 會有明顯鋸齒，需 ≥3 位）
+  // ★ 單點可能剛好是整數或 1 位，故取多點的最大位數才可靠。
+  let _dp = 0, _cnt = 0;
+  outer: for (const p of geo.provinces) {
+    for (const r of p.rings) for (const c of r) {
+      _dp = Math.max(_dp, (String(c[0]).split('.')[1] || '').length,
+                          (String(c[1]).split('.')[1] || '').length);
+      if (++_cnt > 500) break outer;
+    }
+  }
+  console.log(`   座標最大小數位數：${_dp}（取樣 ${_cnt} 點）`);
+  if (_dp < 3) fails.push(`座標精度不足（${_dp} 位），線條會有鋸齒`);
+  else console.log('  OK  座標精度足夠');
   chk('標明資料來源', /Natural Earth/.test(geo._src || ''), true);
 
   // 使用者指定的三個範例必須在
@@ -2267,7 +2287,14 @@ if (need('renderEastAsiaLayer') && need('_ringsCentroid')) {
   // 與鄉鎮名圖層同一按鈕控制
   const src = fs.readFileSync('index.html', 'utf8');
   chk('由鄉鎮市區按鈕一併控制', /renderTownNameLayer\(\)\{[\s\S]{0,200}renderEastAsiaLayer\(\)/.test(src), true);
-  chk('邊界不攔截滑鼠', /color:'#7a94ac'[\s\S]{0,90}interactive:false/.test(src), true);
+  // ★ 線條規格：國界＝縣市界、省界＝鄉鎮市區界（使用者指定）
+  chk('國界規格同縣市界', /color:'#000000', weight:1, opacity:0\.7/.test(src), true);
+  chk('省界規格同鄉鎮界', /color:'#9ab8d0', weight:0\.6, opacity:0\.45/.test(src), true);
+  chk('邊界不攔截滑鼠', /color:'#000000'[\s\S]{0,90}interactive:false/.test(src), true);
+  // 國界須後畫（疊在省界之上，同臺灣的層次）
+  const iProv = src.indexOf("EAST_ASIA_GEO.provinces || []).forEach");
+  const iCty  = src.indexOf("EAST_ASIA_GEO.countries || []).forEach");
+  chk('國界疊在省界之上', iProv > 0 && iCty > iProv, true);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`

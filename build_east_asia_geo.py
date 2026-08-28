@@ -27,10 +27,15 @@ LON0, LON1, LAT0, LAT1 = 100.0, 150.0, 5.0, 50.0
 # 只保留這些國家的省界（其餘國家只畫國界，避免檔案過大）
 PROV_ADMINS = {'China', 'Japan', 'South Korea', 'North Korea', 'Philippines',
                'Vietnam', 'Taiwan'}
-TOL_COUNTRY = 0.05      # 國界簡化容差（度）
-TOL_PROV = 0.03         # 省界稍細
+# ★ 容差與精度直接決定線條是否平滑。
+#   初版用 0.05/0.03 度容差 + 小數 2 位（約 1km），線條呈現明顯稜角，
+#   與臺灣圖資（小數 11 位、平均 35 點/環）的平滑度落差很大。
+#   改為 0.008/0.005 度容差 + 小數 4 位（約 10m），視覺上即與臺灣一致。
+TOL_COUNTRY = 0.008     # 國界簡化容差（度）
+TOL_PROV = 0.005        # 省界稍細
+COORD_DP = 4            # 座標小數位數（4 位≈10m，肉眼已無鋸齒）
 MIN_RING_PTS = 4        # 簡化後少於此點數的環直接丟棄
-MIN_RING_SPAN = 0.15    # 環的對角跨距小於此值視為碎點，丟棄
+MIN_RING_SPAN = 0.08    # 環的對角跨距小於此值視為碎點，丟棄
 
 
 def fetch(name):
@@ -96,8 +101,8 @@ def process(feat, tol):
         ys = [p[1] for p in simp]
         if math.hypot(max(xs) - min(xs), max(ys) - min(ys)) < MIN_RING_SPAN:
             continue
-        # 前端用 [lat, lng]；座標取小數 2 位（約 1km）
-        out.append([[round(p[1], 2), round(p[0], 2)] for p in simp])
+        # 前端用 [lat, lng]
+        out.append([[round(p[1], COORD_DP), round(p[0], COORD_DP)] for p in simp])
     return out
 
 
