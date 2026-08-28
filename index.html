@@ -529,7 +529,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>逐日風力預測（7天）</span><span class="sec-arrow" id="arrow-windday">▸</span>
       </div>
       <div class="sec-body" id="body-windday" style="display:none">
-        <canvas id="cv-wind-day" width="260" height="100" style="width:100%;height:100px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+        <canvas id="cv-wind-day" width="260" height="150" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-wind-day')"
           onmousemove="showChartTooltip(event,'cv-wind-day')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
@@ -543,7 +543,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>逐時風力預測（3天）</span><span class="sec-arrow" id="arrow-windhr">▸</span>
       </div>
       <div class="sec-body" id="body-windhr" style="display:none">
-        <canvas id="cv-wind-hr" width="260" height="100" style="width:100%;height:100px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+        <canvas id="cv-wind-hr" width="260" height="150" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-wind-hr')"
           onmousemove="showChartTooltip(event,'cv-wind-hr')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
@@ -5469,19 +5469,22 @@ function _drawWindChart(cvId, pts, opt){
   const isZoom = (cvId === 'chart-zoom-canvas');
   const ctx = cv.getContext('2d');
   const W = cv.width  = isZoom ? 2048 : (cv.offsetWidth || cv.clientWidth || 260);
-  const H = cv.height = isZoom ? 1024 : (o.h || 100);
-  const fs = isZoom ? 26 : 9;
+  const H = cv.height = isZoom ? 1024 : (o.h || 150);   // 與逐日雨量圖同高
+  // ★ 字級與版面比照逐日雨量圖（_townChartGeom）：fs 54/12、X軸 25/10。
+  //   原本用 26/9，小圖比雨量圖小 3px、放大版更差近一倍，實機上難以閱讀。
+  const fs  = isZoom ? 54 : 12;
+  const xFs = isZoom ? 25 : 10;
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle = '#040c14'; ctx.fillRect(0,0,W,H);
-  const pL = isZoom ? 90 : 24, pR = isZoom ? 40 : 8;
-  const pT = isZoom ? 110 : 10, pB = isZoom ? 90 : 24;
+  const pL = isZoom ? 210 : 52, pR = isZoom ? 190 : 48;
+  const pT = isZoom ? 140 : 16, pB = isZoom ? 202 : 42;
   const iw = W-pL-pR, ih = H-pT-pB;
   if(isZoom && o.title){
     ctx.fillStyle='#d0e8ff'; ctx.font=`bold ${fs+10}px sans-serif`; ctx.textAlign='left';
     ctx.fillText(o.title, pL, pT-48);
   }
   if(!pts.length){
-    ctx.fillStyle='#3a6080'; ctx.font=`${fs+2}px sans-serif`; ctx.textAlign='left';
+    ctx.fillStyle='#3a6080'; ctx.font=`${fs}px sans-serif`; ctx.textAlign='left';
     ctx.fillText('無風力預報資料', pL, pT+ih/2);
     return;
   }
@@ -5507,10 +5510,11 @@ function _drawWindChart(cvId, pts, opt){
     ctx.strokeStyle='rgba(255,255,255,0.1)';
     ctx.beginPath(); ctx.moveTo(pL,y); ctx.lineTo(W-pR,y); ctx.stroke();
     ctx.fillStyle='#9fc8e8'; ctx.textAlign='right';
-    ctx.fillText(String(b), pL-(isZoom?12:4), y+fs*0.35);
+    ctx.fillText(String(b), pL-(isZoom?20:8), y+fs*0.35);
   }
   ctx.textAlign='left'; ctx.fillStyle='#7aa8c8';
-  ctx.fillText('蒲福風級', pL-(isZoom?70:20), pT-(isZoom?18:3));
+  ctx.font=`${fs}px sans-serif`;
+  ctx.fillText('蒲福風級', pL-(isZoom?150:44), pT-(isZoom?30:5));
 
   // 現在時刻分隔線（過去／未來）
   if(o.nowMs != null && o.nowMs > t0 && o.nowMs < t1){
@@ -5519,7 +5523,7 @@ function _drawWindChart(cvId, pts, opt){
     ctx.beginPath(); ctx.moveTo(xn,pT); ctx.lineTo(xn,pT+ih); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle='#ffcc44'; ctx.textAlign='center'; ctx.font=`${fs}px sans-serif`;
-    ctx.fillText('現在', xn, pT-(isZoom?6:2));
+    ctx.fillText('現在', xn, pT-(isZoom?12:4));
     ctx.textAlign='left';
   }
   // 折線：過去段以分署色、未來段以亮青色（比照雨量圖的觀測／預測區分）
@@ -5546,25 +5550,25 @@ function _drawWindChart(cvId, pts, opt){
     });
   }
   // X 軸標籤
-  ctx.fillStyle='#9fc8e8'; ctx.font=`${isZoom?fs-2:fs}px sans-serif`; ctx.textAlign='center';
+  ctx.fillStyle='#9fc8e8'; ctx.font=`${xFs}px sans-serif`; ctx.textAlign='center';
   const keys = pts.filter(p=>p.key !== false);
   const step = Math.max(1, Math.ceil(keys.length/(isZoom?10:5)));
   keys.forEach((p,i)=>{
     if(i % step) return;
     const d=new Date(p.ms);
     ctx.fillText(`${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}時`,
-                 X(p.ms), H-pB+(isZoom?36:12));
+                 X(p.ms), H-pB+(isZoom?62:20));
   });
   // 圖例（比照雨量圖置於底部）
   ctx.textAlign='left'; ctx.font=`${fs}px sans-serif`;
-  let lx = pL, ly = H-(isZoom?26:5);
+  let lx = pL, ly = H-(isZoom?60:12);
   const item=(col,label,isDot)=>{
     if(isDot){ ctx.fillStyle=col; ctx.beginPath();
-      ctx.arc(lx+(isZoom?8:4), ly-(isZoom?8:3), isZoom?5:2.2, 0, Math.PI*2); ctx.fill(); }
-    else { ctx.fillStyle=col; ctx.fillRect(lx, ly-(isZoom?12:5), isZoom?24:12, isZoom?5:2); }
+      ctx.arc(lx+(isZoom?14:5), ly-(isZoom?18:4), isZoom?9:3, 0, Math.PI*2); ctx.fill(); }
+    else { ctx.fillStyle=col; ctx.fillRect(lx, ly-(isZoom?24:7), isZoom?44:16, isZoom?8:3); }
     ctx.fillStyle='#9fc8e8';
-    ctx.fillText(label, lx+(isZoom?34:16), ly-(isZoom?4:1));
-    lx += ctx.measureText(label).width + (isZoom?80:36);
+    ctx.fillText(label, lx+(isZoom?60:22), ly-(isZoom?10:2));
+    lx += ctx.measureText(label).width + (isZoom?110:44);
   };
   if(pastPts.length > 1) item(dcol, '過去');
   item('#6ad8f0', '預報');

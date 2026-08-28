@@ -2125,6 +2125,11 @@ if (need('_windSeries') && need('_smoothSeries') && need('drawWindDayChart')) {
   chk('圖表有現在分隔線', /o\.nowMs != null/.test(src2), true);
   chk('過去段用分署色', /getDistrictColor\(o\.county\)/.test(src2), true);
   chk('圖表有圖例', /if\(pastPts\.length > 1\) item\(dcol, '過去'\)/.test(src2), true);
+  // ★ 字級須與逐日雨量圖一致（_townChartGeom：fs 54/12、xFs 25/10）
+  chk('★主字級與雨量圖相同', /const fs  = isZoom \? 54 : 12;/.test(src2), true);
+  chk('★X軸字級與雨量圖相同', /const xFs = isZoom \? 25 : 10;/.test(src2), true);
+  chk('小圖高度與雨量圖一致(150)', /\(o\.h \|\| 150\)/.test(src2), true);
+  chk('canvas 元素高度同步', /id="cv-wind-day" width="260" height="150"/.test(src2), true);
 
   // 放大繪製不拋錯
   setLex(`document.body.insertAdjacentHTML('beforeend','<canvas id="chart-zoom-canvas"></canvas>');`);
