@@ -2089,6 +2089,51 @@ if (need('_windSeries') && need('_smoothSeries') && need('drawWindDayChart')) {
   try { G.drawWindDayChart({county:'x', township:'y'}); } catch(e){ threw = true; }
   chk('無資料時亦不拋錯', threw, false);
 
+
+  // ── 過去資料併入 + 放大 + 圖表格式 ──
+  console.log('   ── 過去兩天資料與放大顯示 ──');
+  const hk = h => {
+    const d = new Date(Date.now() - h*3600e3);
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' +
+           String(d.getDate()).padStart(2,'0') + 'T' + String(d.getHours()).padStart(2,'0');
+  };
+  setLex(`window.WIND_HIST = {
+    '${hk(30)}': {'南投縣仁愛鄉':{ws:8, bf:5}},
+    '${hk(20)}': {'南投縣仁愛鄉':{ws:10, bf:5}},
+    '${hk(6)}':  {'南投縣仁愛鄉':{ws:14, bf:7}},
+    '${hk(80)}': {'南投縣仁愛鄉':{ws:99, bf:12}}
+  };`);
+  const withHist = G._windSeries(t);
+  const pastN = withHist.filter(p=>p.past).length;
+  console.log(`   併入歷史後 ${withHist.length} 點（過去 ${pastN} 點）`);
+  chk('★過去資料已併入', pastN, 3);
+  chk('★超過48h的歷史被濾除', withHist.some(p=>p.bf===12), false);
+  // 時序必須單調遞增（過去在前、預報在後）
+  let mono = true;
+  for(let i=1;i<withHist.length;i++) if(withHist[i].ms < withHist[i-1].ms) mono = false;
+  chk('時序正確（過去在前）', mono, true);
+
+  // 放大：分派表須含兩張風力圖
+  const src2 = fs.readFileSync('index.html', 'utf8');
+  chk('★放大分派含逐日風力圖', /canvasId === 'cv-wind-day' && selected/.test(src2), true);
+  chk('★放大分派含逐時風力圖', /canvasId === 'cv-wind-hr' && selected/.test(src2), true);
+  chk('放大需先選取鄉鎮', /canvasId==='cv-wind-day'\|\|canvasId==='cv-wind-hr'/.test(src2), true);
+  chk('放大標題含鄉鎮名', /'cv-wind-day': selected \? `\$\{selected\.county\}/.test(src2), true);
+
+  // 格式：標題、圖例、現在線、分署色
+  chk('圖表有標題', /title:`\$\{t\.county\}\$\{t\.township\} 逐日風力預測/.test(src2), true);
+  chk('圖表有現在分隔線', /o\.nowMs != null/.test(src2), true);
+  chk('過去段用分署色', /getDistrictColor\(o\.county\)/.test(src2), true);
+  chk('圖表有圖例', /if\(pastPts\.length > 1\) item\(dcol, '過去'\)/.test(src2), true);
+
+  // 放大繪製不拋錯
+  setLex(`document.body.insertAdjacentHTML('beforeend','<canvas id="chart-zoom-canvas"></canvas>');`);
+  let zthrew = false;
+  try { G.drawWindDayChart(t, 'chart-zoom-canvas'); G.drawWindHourChart(t, 'chart-zoom-canvas'); }
+  catch(e){ zthrew = true; console.log('   ', e.message); }
+  chk('放大繪製不拋錯', zthrew, false);
+  setLex("window.WIND_HIST = {};");
+
   const html = fs.readFileSync('index.html', 'utf8');
   chk('逐日圖區塊存在', /id="sec-windday"/.test(html), true);
   chk('逐時圖區塊存在', /id="sec-windhr"/.test(html), true);

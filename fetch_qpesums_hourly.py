@@ -35,6 +35,10 @@ ETR2_FILE     = "etr2_now.json"
 #     fetch_typhoon_warning，確保兩處永遠同一套解析邏輯（欄位大小寫、
 #     警報單段落結構等都很容易改一邊漏一邊）。
 TYPHOON_FILE  = "typhoon_now.json"
+# ── 風力歷史（每小時累積，保留 72h）───────────────────
+#   ★ CWA 只發布「預報」，不提供過去的風力預報值。
+#     要在圖上呈現過去兩天，只能由本系統逐時保存快照自行累積。
+WIND_HIST_FILE = "wind_hist.json"
 SLOPE_WARN_FILE = "slope_warning_stations.json"
 # (縣市, 鄉鎮, 站名) → ETR2(mm)：由 fetch_swcb_hourly 填充，供聚合精準對站
 SWCB_BY_LOC = {}
@@ -473,6 +477,67 @@ def write_etr2_now(swcb, now_tpe):
           + ("｜最高：" + "、".join(f"{k} {v['pct']*100:.0f}%" for k, v in top) if top else ""))
 
 
+def update_wind_history(now_tpe):
+    """把 data.json 內的當前風力預報存成歷史快照，供圖表呈現過去兩天。
+
+    ★ 為何需要：CWA 只給未來預報，沒有「過去的風力預報」查詢。
+      故每小時取當前時刻對應的那筆預報值存檔，滾動保留 72 小時。
+    結構：{"hours": {"2026-08-30T12": {"南投縣仁愛鄉": {"ws":12,"bf":6}}}, "updated": ...}
+    """
+    if not os.path.exists("data.json"):
+        print("    找不到 data.json，跳過風力歷史")
+        return
+    try:
+        with open("data.json", encoding='utf-8') as f:
+            d = json.load(f)
+    except Exception as e:
+        print(f"    data.json 讀取失敗：{e}")
+        return
+    wf = d.get('wind_fcst') or {}
+    if not wf:
+        print("    data.json 無 wind_fcst，跳過風力歷史")
+        return
+
+    hist = {'hours': {}}
+    if os.path.exists(WIND_HIST_FILE):
+        try:
+            with open(WIND_HIST_FILE, encoding='utf-8') as f:
+                hist = json.load(f) or {'hours': {}}
+        except Exception:
+            hist = {'hours': {}}
+    hist.setdefault('hours', {})
+
+    hkey = now_tpe.strftime('%Y-%m-%dT%H')
+    now_iso = now_tpe.isoformat()
+    snap = {}
+    for cty, towns in wf.items():
+        for twn, segs in (towns or {}).items():
+            # 取涵蓋「現在」的那一段；沒有就取最接近的前一段
+            best = None
+            for sg in segs or []:
+                st, en = sg.get('start') or '', sg.get('end') or ''
+                if st <= now_iso <= en: best = sg; break
+                if st <= now_iso: best = sg
+            if not best: continue
+            rec = {}
+            if best.get('ws') is not None: rec['ws'] = best['ws']
+            if best.get('bf') is not None: rec['bf'] = best['bf']
+            if rec: snap[cty + twn] = rec
+    if not snap:
+        print("    本時無可存的風力值")
+        return
+    hist['hours'][hkey] = snap
+
+    # 滾動保留 72 小時
+    cutoff = (now_tpe - timedelta(hours=72)).strftime('%Y-%m-%dT%H')
+    hist['hours'] = {k: v for k, v in hist['hours'].items() if k >= cutoff}
+    hist['updated'] = now_tpe.strftime('%Y-%m-%dT%H:%M')
+    with open(WIND_HIST_FILE, 'w', encoding='utf-8') as f:
+        json.dump(hist, f, ensure_ascii=False, separators=(',', ':'))
+    print(f"    已寫 {WIND_HIST_FILE}：{len(snap)} 鄉鎮、"
+          f"序列 {len(hist['hours'])} 小時")
+
+
 def write_typhoon_now(now_tpe):
     """每小時更新颱風路徑與警報單，寫 typhoon_now.json。
 
@@ -638,6 +703,12 @@ def main():
         print(f"    逐時快照失敗（不影響 radar.json）：{e}")
 
     # ── 颱風路徑與警報單（每小時更新，獨立於雨量流程成敗）──
+    print("風力歷史累積...")
+    try:
+        update_wind_history(now)
+    except Exception as e:
+        print(f"    風力歷史失敗（不影響其他資料）：{e}")
+
     print("颱風動態更新...")
     try:
         write_typhoon_now(now)

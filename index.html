@@ -3236,6 +3236,19 @@ async function tryLoadLive(){
       }
     }catch(e){ console.warn('typhoon_now.json 載入失敗（沿用 data.json 的值）：', e.message); }
 
+    // ── 風力歷史：獨立讀 wind_hist.json（每小時腳本累積）──
+    //   CWA 不提供過去的風力預報，故由本系統逐時保存快照，
+    //   用於在圖上呈現過去兩天的實際走勢。
+    window.WIND_HIST = {};
+    try{
+      const hr = await fetch('wind_hist.json?t='+Date.now());
+      if(hr.ok){
+        const hd = await hr.json();
+        window.WIND_HIST = hd.hours || {};
+        console.log('wind_hist.json 載入：', Object.keys(window.WIND_HIST).length, '小時');
+      }
+    }catch(e){ console.warn('wind_hist.json 載入失敗（圖表僅顯示預報段）：', e.message); }
+
     // 雷達1h QPF 發布時間顯示
     const _rt = document.getElementById('radar-time');
     if(_rt){
@@ -5402,6 +5415,20 @@ function _windSeries(t){
   if(!t) return [];
   const segs = ((window.WIND_FCST || {})[t.county] || {})[t.township] || [];
   const out = [];
+  // ── 過去 48h：由 wind_hist.json 取回（CWA 無過去預報，需自行累積）──
+  const hist = window.WIND_HIST || {};
+  const key = (t.county||'') + (t.township||'');
+  const cut = Date.now() - 48*3600e3;
+  Object.keys(hist).sort().forEach(hk=>{
+    const rec = hist[hk] && hist[hk][key];
+    if(!rec) return;
+    const ms = Date.parse(hk + ':00:00+08:00');
+    if(!isFinite(ms) || ms < cut) return;
+    let ws = rec.ws, bf = (rec.bf != null) ? rec.bf : _wsToBf(rec.ws);
+    if(windKind === 'gust_est' && ws != null){ ws = ws * _gustFactor(t); bf = _wsToBf(ws); }
+    if(bf == null) return;
+    out.push({ms, bf, ws, past:true});
+  });
   segs.forEach(sg=>{
     const ms = Date.parse(sg.start || sg.end || '');
     if(!isFinite(ms)) return;
@@ -5434,17 +5461,27 @@ function _smoothSeries(pts, n){
   return out;
 }
 // 共用繪圖：以蒲福風級為 Y 軸的折線圖
+//   格式比照逐日雨量圖：放大時加標題、字級隨之放大、含圖例與分署色。
 function _drawWindChart(cvId, pts, opt){
   const cv = document.getElementById(cvId);
   if(!cv) return;
   const o = opt || {};
+  const isZoom = (cvId === 'chart-zoom-canvas');
   const ctx = cv.getContext('2d');
-  const W = cv.width = cv.clientWidth || 260, H = cv.height = o.h || 100;
+  const W = cv.width  = isZoom ? 2048 : (cv.offsetWidth || cv.clientWidth || 260);
+  const H = cv.height = isZoom ? 1024 : (o.h || 100);
+  const fs = isZoom ? 26 : 9;
   ctx.clearRect(0,0,W,H);
-  const pL=22, pR=6, pT=8, pB=16;
+  ctx.fillStyle = '#040c14'; ctx.fillRect(0,0,W,H);
+  const pL = isZoom ? 90 : 24, pR = isZoom ? 40 : 8;
+  const pT = isZoom ? 110 : 10, pB = isZoom ? 90 : 24;
   const iw = W-pL-pR, ih = H-pT-pB;
+  if(isZoom && o.title){
+    ctx.fillStyle='#d0e8ff'; ctx.font=`bold ${fs+10}px sans-serif`; ctx.textAlign='left';
+    ctx.fillText(o.title, pL, pT-48);
+  }
   if(!pts.length){
-    ctx.fillStyle='#3a6080'; ctx.font='10px sans-serif';
+    ctx.fillStyle='#3a6080'; ctx.font=`${fs+2}px sans-serif`; ctx.textAlign='left';
     ctx.fillText('無風力預報資料', pL, pT+ih/2);
     return;
   }
@@ -5461,50 +5498,98 @@ function _drawWindChart(cvId, pts, opt){
     ctx.fillRect(pL, Y(hi), iw, Y(lo)-Y(hi));
     ctx.globalAlpha = 1;
   });
-  // Y 軸刻度
-  ctx.strokeStyle='#1a3050'; ctx.fillStyle='#5a8aaa'; ctx.font='9px sans-serif';
-  for(let b=0; b<=maxBf; b+=Math.max(2, Math.round(maxBf/4))){
+  // 格線 + Y 軸刻度（比照雨量圖：右對齊、單位標於軸頂）
+  ctx.lineWidth = isZoom ? 2 : 0.5;
+  ctx.font = `${fs}px sans-serif`;
+  const stepBf = Math.max(2, Math.round(maxBf/4));
+  for(let b=0; b<=maxBf; b+=stepBf){
     const y=Y(b);
+    ctx.strokeStyle='rgba(255,255,255,0.1)';
     ctx.beginPath(); ctx.moveTo(pL,y); ctx.lineTo(W-pR,y); ctx.stroke();
-    ctx.fillText(String(b), 4, y+3);
+    ctx.fillStyle='#9fc8e8'; ctx.textAlign='right';
+    ctx.fillText(String(b), pL-(isZoom?12:4), y+fs*0.35);
   }
-  // 折線
-  ctx.strokeStyle='#6ad8f0'; ctx.lineWidth=1.6; ctx.beginPath();
-  pts.forEach((p,i)=>{ const x=X(p.ms), y=Y(p.bf); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
-  ctx.stroke();
+  ctx.textAlign='left'; ctx.fillStyle='#7aa8c8';
+  ctx.fillText('蒲福風級', pL-(isZoom?70:20), pT-(isZoom?18:3));
+
+  // 現在時刻分隔線（過去／未來）
+  if(o.nowMs != null && o.nowMs > t0 && o.nowMs < t1){
+    const xn = X(o.nowMs);
+    ctx.strokeStyle='#ffcc44'; ctx.lineWidth=isZoom?3:1; ctx.setLineDash(isZoom?[10,8]:[3,3]);
+    ctx.beginPath(); ctx.moveTo(xn,pT); ctx.lineTo(xn,pT+ih); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='#ffcc44'; ctx.textAlign='center'; ctx.font=`${fs}px sans-serif`;
+    ctx.fillText('現在', xn, pT-(isZoom?6:2));
+    ctx.textAlign='left';
+  }
+  // 折線：過去段以分署色、未來段以亮青色（比照雨量圖的觀測／預測區分）
+  const dcol = (o.county && typeof getDistrictColor === 'function')
+             ? getDistrictColor(o.county) : '#6ad8f0';
+  const drawSeg = (arr, col, dash)=>{
+    if(arr.length < 2) return;
+    ctx.strokeStyle=col; ctx.lineWidth=isZoom?4:1.6;
+    ctx.setLineDash(dash||[]);
+    ctx.beginPath();
+    arr.forEach((p,i)=>{ const x=X(p.ms), y=Y(p.bf); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+    ctx.stroke(); ctx.setLineDash([]);
+  };
+  const nowMs = (o.nowMs == null) ? -Infinity : o.nowMs;
+  const pastPts = pts.filter(p=>p.ms <= nowMs);
+  const futPts  = pts.filter(p=>p.ms >= nowMs);
+  drawSeg(pastPts, dcol);
+  drawSeg(futPts, '#6ad8f0');
   // 官方時間點：實心圓（與內插段區分）
   if(o.markKey){
     ctx.fillStyle='#ffffff';
     pts.filter(p=>p.key).forEach(p=>{
-      ctx.beginPath(); ctx.arc(X(p.ms), Y(p.bf), 2.2, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(X(p.ms), Y(p.bf), isZoom?5:2.2, 0, Math.PI*2); ctx.fill();
     });
   }
   // X 軸標籤
-  ctx.fillStyle='#5a8aaa'; ctx.font='9px sans-serif';
+  ctx.fillStyle='#9fc8e8'; ctx.font=`${isZoom?fs-2:fs}px sans-serif`; ctx.textAlign='center';
   const keys = pts.filter(p=>p.key !== false);
-  const step = Math.max(1, Math.ceil(keys.length/5));
+  const step = Math.max(1, Math.ceil(keys.length/(isZoom?10:5)));
   keys.forEach((p,i)=>{
     if(i % step) return;
     const d=new Date(p.ms);
-    ctx.fillText(`${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}`,
-                 X(p.ms)-14, H-4);
+    ctx.fillText(`${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}時`,
+                 X(p.ms), H-pB+(isZoom?36:12));
   });
+  // 圖例（比照雨量圖置於底部）
+  ctx.textAlign='left'; ctx.font=`${fs}px sans-serif`;
+  let lx = pL, ly = H-(isZoom?26:5);
+  const item=(col,label,isDot)=>{
+    if(isDot){ ctx.fillStyle=col; ctx.beginPath();
+      ctx.arc(lx+(isZoom?8:4), ly-(isZoom?8:3), isZoom?5:2.2, 0, Math.PI*2); ctx.fill(); }
+    else { ctx.fillStyle=col; ctx.fillRect(lx, ly-(isZoom?12:5), isZoom?24:12, isZoom?5:2); }
+    ctx.fillStyle='#9fc8e8';
+    ctx.fillText(label, lx+(isZoom?34:16), ly-(isZoom?4:1));
+    lx += ctx.measureText(label).width + (isZoom?80:36);
+  };
+  if(pastPts.length > 1) item(dcol, '過去');
+  item('#6ad8f0', '預報');
+  if(o.markKey) item('#ffffff', o.dotLabel || '官方時間點', true);
 }
-function drawWindDayChart(t){
-  const ser = _windSeries(t);
-  // 逐日：取各日最大風級
+const WIND_KIND_NAME = {mean:'平均風', gust:'陣風', gust_est:'陣風推估'};
+function _windDayPts(t){
   const byDay = {};
-  ser.forEach(p=>{
+  _windSeries(t).forEach(p=>{
     const d = new Date(p.ms); d.setHours(0,0,0,0);
     const k = d.getTime();
     if(!byDay[k] || p.bf > byDay[k].bf) byDay[k] = {ms:k, bf:p.bf, ws:p.ws, key:true};
   });
-  _drawWindChart('cv-wind-day', Object.values(byDay).sort((a,b)=>a.ms-b.ms), {markKey:true});
+  return Object.values(byDay).sort((a,b)=>a.ms-b.ms);
 }
-function drawWindHourChart(t){
-  const ser = _windSeries(t);
+function drawWindDayChart(t, canvasId){
+  _drawWindChart(canvasId || 'cv-wind-day', _windDayPts(t), {
+    markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'各日最大',
+    title:`${t.county}${t.township} 逐日風力預測（${WIND_KIND_NAME[windKind]||''}，過去2天＋未來7天）`});
+}
+function drawWindHourChart(t, canvasId){
   // 逐時：官方 3h 點為錨，其間內插 2 點（＝約每小時一點）
-  _drawWindChart('cv-wind-hr', _smoothSeries(ser, 2), {markKey:true});
+  _drawWindChart(canvasId || 'cv-wind-hr', _smoothSeries(_windSeries(t), 2), {
+    markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'官方時間點',
+    title:`${t.county}${t.township} 逐時風力預測（${WIND_KIND_NAME[windKind]||''}，過去2天＋未來3天）`});
 }
 
 function _windTipHtml(t){
@@ -6933,7 +7018,8 @@ function _redrawZoom(){
 }
 
 function toggleChartZoom(canvasId){
-  const needsSelected = (canvasId==='cv'||canvasId==='cv-district-hyeto');
+  const needsSelected = (canvasId==='cv'||canvasId==='cv-district-hyeto'
+                       ||canvasId==='cv-wind-day'||canvasId==='cv-wind-hr');
   if(needsSelected && !selected) return;
   const modal = document.getElementById('chart-zoom-modal');
   if(!modal) return;
@@ -6946,6 +7032,8 @@ function toggleChartZoom(canvasId){
   const titleMap = {
     'cv': selected ? `${selected.county}${selected.township} 逐日雨量（16天）` : '',
     'cv-district-hyeto': selected ? `${selected.county}${selected.township} 組體雨量圖` : '',
+    'cv-wind-day': selected ? `${selected.county}${selected.township} 逐日風力預測` : '',
+    'cv-wind-hr': selected ? `${selected.county}${selected.township} 逐時風力預測` : '',
     'cv-all-daily': '全台各分署逐日雨量（16天）',
     'cv-all-hyeto': '全台各分署組體雨量圖（未來48h）',
   };
@@ -6953,7 +7041,11 @@ function toggleChartZoom(canvasId){
   if(titleEl) titleEl.textContent = titleMap[canvasId] || '';
   _zoomCanvasType = canvasId;
 
-  if(canvasId === 'cv-district-hyeto' && selected){
+  if(canvasId === 'cv-wind-day' && selected){
+    drawWindDayChart(selected, 'chart-zoom-canvas');
+  } else if(canvasId === 'cv-wind-hr' && selected){
+    drawWindHourChart(selected, 'chart-zoom-canvas');
+  } else if(canvasId === 'cv-district-hyeto' && selected){
     drawHyetograph(selected, 'chart-zoom-canvas');
   } else if(canvasId === 'cv' && selected){
     drawChartHQ(selected, 'chart-zoom-canvas');
