@@ -42,7 +42,7 @@ MUST = ['getAccum', 'setWin', 'onSlider', '_spanAccum', '_hourlyBars', '_futuHou
         '_windDayPts', 'drawAllWindCharts', '_windRow',
         'renderEastAsiaLayer', '_ringsCentroid',
         '_tempColor', '_waveColor', '_tempOf', '_waveOf', '_tempRow', '_waveRow',
-        '_tempSeries', '_waveSeries', '_dayMax', '_buildWaveIndex',
+        '_tempSeries', '_waveSeries', '_dayMax', '_buildWaveIndex', '_maxHourRow',
         'drawTempDayChart', 'drawTempHourChart', 'drawWaveDayChart', 'drawWaveHourChart',
         '_bfColor', '_wsToBf', '_gustFactor',
         'toggleTySec', '_tySecKey', '_tySecOpenHtml', '_tySecClose',

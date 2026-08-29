@@ -2465,6 +2465,32 @@ if (need('_tempSeries') && need('_waveSeries') && need('drawTempDayChart')) {
   setLex("window.TEMP_FCST={}; window.WAVE_FCST={};");
 }
 
+
+console.log('\n=== 級距上色與 tooltip 補齊 ===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('級距上色已實作', /if\(o\.bandLine\)\{[\s\S]{0,200}bandColorOf/.test(src), true);
+  chk('氣溫／浪高啟用級距上色', (src.match(/bandLine:true/g)||[]).length, 4);
+  chk('過去段仍保留分署色底線', /先用分署色描較粗的底線/.test(src), true);
+  chk('圖例說明線色含義', /'線色＝級距色'/.test(src), true);
+  // 全日 tooltip 補上最大時雨量
+  chk('★全日 tooltip 含最大時雨量', /_maxHourRow\(t, 0, 3\)/.test(src), true);
+  chk('★過去/未來 tooltip 含最大時雨量',
+      (src.match(/_maxHourRow\(t, segFrom, segTo\)/g)||[]).length, 2);
+}
+if (need('_maxHourRow')) {
+  setLex(`TMAP['南投縣仁愛鄉'] = Object.assign(TMAP['南投縣仁愛鄉']||{},
+    {county:'南投縣', township:'仁愛鄉', maxh_ecmwf:[12, 45, 120, 8].concat(Array(60).fill(0))});
+    forecastModel='ecmwf';`);
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+  const r = G._maxHourRow(t, 0, 3);
+  console.log(`   最大時雨量列：${r}`);
+  chk('取區間最大值', /120\.0 mm\/h/.test(r), true);
+  chk('標示警示級別', /豪雨/.test(r), true);
+  chk('單一時段取該段值', /45\.0 mm\/h（大雨）/.test(G._maxHourRow(t, 1, 1)), true);
+  chk('無資料回 —', G._maxHourRow({county:'x',township:'y'}, 0, 3), '—');
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

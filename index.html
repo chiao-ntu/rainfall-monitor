@@ -2359,12 +2359,18 @@ function renderLayer(){
             ? `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>` + _windTipHtml(t)
             : `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
             `全天累積雨量：${dayRain!=null?dayRain+' mm':'—'}<br>`+
+            // ★ 與未來6h段一致：補上最大時雨量與其警示級別
+            `最大時雨量：${_maxHourRow(t, 0, 3)}<br>`+
             `ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) +
             `風險指標：${riskIndicatorHtml(t,3)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
         } else if(winKey.startsWith('past')){
-          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>觀測累積雨量：${rainStr} ｜ ETR2%：${etrStr}<br>`+ _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>觀測累積雨量：${rainStr} ｜ ETR2%：${etrStr}<br>`+
+            `最大時雨量：${_maxHourRow(t, segFrom, segTo)}<br>`+
+            _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
         } else {
-          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>預測累積雨量：${rainStr} ｜ ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>預測累積雨量：${rainStr} ｜ ETR2%（預估）：${etrStr}<br>`+
+            `最大時雨量：${_maxHourRow(t, segFrom, segTo)}<br>`+
+            _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
         }
       }
       poly.bindTooltip(tooltipHtml, {sticky:true, opacity:.92});
@@ -5771,17 +5777,46 @@ function _drawWindChart(cvId, pts, opt){
   // 折線：過去段以分署色、未來段以亮青色（比照雨量圖的觀測／預測區分）
   const dcol = (o.county && typeof getDistrictColor === 'function')
              ? getDistrictColor(o.county) : (o.lineColor || '#6ad8f0');
+  // 依級距上色：每一小段用「該段起點所屬級距」的顏色。
+  //   ★ 成本極低：本來就是逐點連線，只是改為逐段 stroke（點數上限約數百），
+  //     實測繪圖時間差異在毫秒等級，不影響操作。
+  //   ★ 但純用級距色會讓「過去／預報」的區分消失，故：
+  //     過去段仍以分署色描一條底線，級距色疊在其上；預報段直接用級距色。
+  const bandColorOf = v => {
+    const b = BANDS.find(x=>v < x.max) || BANDS[BANDS.length-1];
+    return b.color;
+  };
   const drawSeg = (arr, col, dash)=>{
     if(arr.length < 2) return;
-    ctx.strokeStyle=col; ctx.lineWidth=isZoom?4:1.6;
     ctx.setLineDash(dash||[]);
-    ctx.beginPath();
-    arr.forEach((p,i)=>{ const x=X(p.ms), y=Y(p.bf); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
-    ctx.stroke(); ctx.setLineDash([]);
+    ctx.lineWidth = isZoom?4:1.6;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    if(o.bandLine){
+      for(let i=0; i<arr.length-1; i++){
+        ctx.strokeStyle = bandColorOf(arr[i].bf);
+        ctx.beginPath();
+        ctx.moveTo(X(arr[i].ms), Y(arr[i].bf));
+        ctx.lineTo(X(arr[i+1].ms), Y(arr[i+1].bf));
+        ctx.stroke();
+      }
+    } else {
+      ctx.strokeStyle=col;
+      ctx.beginPath();
+      arr.forEach((p,i)=>{ const x=X(p.ms), y=Y(p.bf); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
   };
   const nowMs = (o.nowMs == null) ? -Infinity : o.nowMs;
   const pastPts = pts.filter(p=>p.ms <= nowMs);
   const futPts  = pts.filter(p=>p.ms >= nowMs);
+  if(o.bandLine && pastPts.length > 1){
+    // 過去段：先用分署色描較粗的底線，級距色再疊上，兩種資訊都保留
+    ctx.strokeStyle = dcol; ctx.lineWidth = isZoom?9:4; ctx.globalAlpha = 0.45;
+    ctx.beginPath();
+    pastPts.forEach((p,i)=>{ const x=X(p.ms), y=Y(p.bf); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+    ctx.stroke(); ctx.globalAlpha = 1;
+  }
   drawSeg(pastPts, dcol);
   drawSeg(futPts, o.lineColor || '#6ad8f0');
   // 官方時間點：實心圓（與內插段區分）
@@ -5818,7 +5853,8 @@ function _drawWindChart(cvId, pts, opt){
     lx += ctx.measureText(label).width + (isZoom?110:44);
   };
   if(pastPts.length > 1) item(dcol, '過去');
-  item(o.lineColor || '#6ad8f0', '預報');
+  if(o.bandLine) item('#9fc8e8', '線色＝級距色');
+  else item(o.lineColor || '#6ad8f0', '預報');
   if(o.markKey) item('#ffffff', o.dotLabel || '官方時間點', true);
 }
 const WIND_KIND_NAME = {mean:'平均風', gust:'陣風', gust_est:'陣風推估'};
@@ -5888,25 +5924,25 @@ function drawTempDayChart(t, canvasId){
   _drawWindChart(canvasId || 'cv-temp-day', _dayMax(_tempSeries(t)), {
     markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'各日最高',
     bands:TEMP_BANDS, axisTitle:'氣溫(°C)', lineColor:'#ff9a4a', allowNeg:true,
-    title:`${t.county}${t.township} 逐日氣溫預測（過去2天＋未來7天）`});
+    title:`${t.county}${t.township} 逐日氣溫預測（過去2天＋未來7天）`, bandLine:true});
 }
 function drawTempHourChart(t, canvasId){
   _drawWindChart(canvasId || 'cv-temp-hr', _smoothSeries(_tempSeries(t), 2), {
     markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'官方時間點',
     bands:TEMP_BANDS, axisTitle:'氣溫(°C)', lineColor:'#ff9a4a', allowNeg:true,
-    title:`${t.county}${t.township} 逐時氣溫預測（過去2天＋未來3天）`});
+    title:`${t.county}${t.township} 逐時氣溫預測（過去2天＋未來3天）`, bandLine:true});
 }
 function drawWaveDayChart(t, canvasId){
   _drawWindChart(canvasId || 'cv-wave-day', _dayMax(_waveSeries(t)), {
     markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'各日最大',
     bands:WAVE_BANDS, axisTitle:'浪高(m)', lineColor:'#5aa8ff',
-    title:`${t.county}${t.township} 逐日浪高預測`});
+    title:`${t.county}${t.township} 逐日浪高預測`, bandLine:true});
 }
 function drawWaveHourChart(t, canvasId){
   _drawWindChart(canvasId || 'cv-wave-hr', _smoothSeries(_waveSeries(t), 2), {
     markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'官方時間點',
     bands:WAVE_BANDS, axisTitle:'浪高(m)', lineColor:'#5aa8ff',
-    title:`${t.county}${t.township} 逐時浪高預測`});
+    title:`${t.county}${t.township} 逐時浪高預測`, bandLine:true});
 }
 
 function drawAllWindCharts(t){
@@ -5938,6 +5974,21 @@ function _waveRow(t){
         + `<span style="color:#8a9aaa">　${band.name.replace(/（.*/, '')}</span>`;
   if(w.dir) h += `<span style="color:#8a9aaa">　${w.dir}</span>`;
   return h;
+}
+
+// 最大時雨量一列（含警示級別）：與未來6h段的呈現一致
+function _maxHourRow(t, sf, st){
+  const maxhField = 'maxh_' + (MODEL_FIELD[forecastModel]||'qpf_best').replace('qpf_','');
+  const arr = t[maxhField] || [];
+  let mx = 0, got = false;
+  for(let s=Math.max(0, sf); s<=Math.max(0, st); s++){
+    const v = arr[s];
+    if(v != null){ mx = Math.max(mx, v); got = true; }
+  }
+  if(!got) return '—';
+  const lab = mx>=500?'超大豪雨' : mx>=200?'大豪雨' : mx>=100?'豪雨'
+            : mx>=40?'大雨' : '未達警示';
+  return `${mx.toFixed(1)} mm/h（${lab}）`;
 }
 
 function _windRow(t){
