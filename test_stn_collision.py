@@ -358,5 +358,39 @@ if os.path.exists(_zipf):
 else:
     print('  （找不到 F-D0047-093.zip，略過）')
 
+
+print('\n=== 沿海浪高解析（F-D0047-095）===')
+_WAVE = {"records":{"Locations":[{"Location":[{
+  "LocationName":"蘇澳鎮",
+  "WeatherElement":[
+    {"ElementName":"浪高","Time":[
+      {"StartTime":"2026-08-30T12:00:00+08:00","EndTime":"2026-08-30T15:00:00+08:00",
+       "ElementValue":[{"WaveHeight":"2.5"}]},
+      {"DataTime":"2026-08-30T15:00:00+08:00",
+       "ElementValue":[{"WaveHeight":">= 6"}]}]},
+    {"ElementName":"浪向","Time":[
+      {"StartTime":"2026-08-30T12:00:00+08:00","EndTime":"2026-08-30T15:00:00+08:00",
+       "ElementValue":[{"WaveDirection":"東北"}]}]},
+    {"ElementName":"蒲福風級","Time":[
+      {"StartTime":"2026-08-30T12:00:00+08:00","EndTime":"2026-08-30T15:00:00+08:00",
+       "ElementValue":[{"BeaufortScale":"7"}]}]},
+  ]}]}]}}
+class _WR:
+    status_code = 200
+    def json(self): return _WAVE
+FR.requests = types.SimpleNamespace(get=lambda *a, **k: _WR())
+_w = FR.fetch_wave_forecast()
+chk('解析到沿海預報點', list(_w.keys()), ['蘇澳鎮'])
+_sg = _w.get('蘇澳鎮', [])
+chk('時段數', len(_sg), 2)
+chk('浪高數值', _sg[0]['wave'], 2.5)
+chk('浪向', _sg[0]['dir'], '東北')
+chk('蒲福風級', _sg[0]['bf'], 7)
+chk('★">= 6" 解析為 6.0', _sg[1]['wave'], 6.0)
+chk('★只有 DataTime 時補區間', _sg[1]['end'] != _sg[1]['start'], True)
+chk('端點為鄉鎮沿海預報', FR.COASTAL_EP, 'F-D0047-095')
+chk('輸出含 wave_fcst 欄位',
+    "'wave_fcst': wave_fcst" in io.open('fetch_rainfall.py', encoding='utf-8').read(), True)
+
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)

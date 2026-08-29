@@ -2127,7 +2127,7 @@ if (need('_windSeries') && need('_smoothSeries') && need('drawWindDayChart')) {
   chk('圖表有標題', /title:`\$\{t\.county\}\$\{t\.township\} 逐日風力預測/.test(src2), true);
   chk('圖表有現在分隔線', /o\.nowMs != null/.test(src2), true);
   chk('過去段用分署色', /getDistrictColor\(o\.county\)/.test(src2), true);
-  chk('圖表有圖例', /if\(pastPts\.length > 1\) item\(dcol, '過去'\)/.test(src2), true);
+  chk('圖表有圖例', /item\(dcol, '過去（分署色）'\)/.test(src2), true);
   // ★ 字級須與逐日雨量圖一致（_townChartGeom：fs 54/12、xFs 25/10）
   chk('★主字級與雨量圖相同', /const fs  = isZoom \? 54 : 12;/.test(src2), true);
   // ★ 風力圖時間軸點數少、空間充裕，X 軸字級改與 Y 軸一致（使用者指定）
@@ -2469,10 +2469,11 @@ if (need('_tempSeries') && need('_waveSeries') && need('drawTempDayChart')) {
 console.log('\n=== 級距上色與 tooltip 補齊 ===');
 {
   const src = fs.readFileSync('index.html', 'utf8');
-  chk('級距上色已實作', /if\(o\.bandLine\)\{[\s\S]{0,200}bandColorOf/.test(src), true);
+  chk('級距上色已實作', /if\(o\.bandLine \|\| forceBand\)\{[\s\S]{0,200}bandColorOf/.test(src), true);
   chk('氣溫／浪高啟用級距上色', (src.match(/bandLine:true/g)||[]).length, 4);
-  chk('過去段仍保留分署色底線', /先用分署色描較粗的底線/.test(src), true);
-  chk('圖例說明線色含義', /'線色＝級距色'/.test(src), true);
+  // 過去段改為分署色＋半透明（不再用粗底線疊色），與未來的級距色明顯區隔
+  chk('過去段用分署色半透明', /分署色＋半透明/.test(src), true);
+  chk('圖例說明線色含義', /'預報（線色＝級距色）'/.test(src), true);
   // 全日 tooltip 補上最大時雨量
   chk('★全日 tooltip 含最大時雨量', /_maxHourRow\(t, 0, 3\)/.test(src), true);
   chk('★過去/未來 tooltip 含最大時雨量',
@@ -2489,6 +2490,35 @@ if (need('_maxHourRow')) {
   chk('標示警示級別', /豪雨/.test(r), true);
   chk('單一時段取該段值', /45\.0 mm\/h（大雨）/.test(G._maxHourRow(t, 1, 1)), true);
   chk('無資料回 —', G._maxHourRow({county:'x',township:'y'}, 0, 3), '—');
+}
+
+
+console.log('\n=== 折線在「現在」不得斷開 ===');
+if (need('_drawWindChart')) {
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★於 nowMs 插入共用端點', /在「現在」處插入內插點/.test(src), true);
+  chk('過去段與未來段共用該點', /pastPts = pastPts\.concat\(\[mid\]\)/.test(src), true);
+  chk('未來段一律級距上色', /drawSeg\(futPts, o\.lineColor \|\| '#6ad8f0', null, true\)/.test(src), true);
+  chk('過去段用分署色＋半透明', /ctx\.globalAlpha = 0\.55/.test(src), true);
+  chk('圖例區分兩者', /'過去（分署色）'[\s\S]{0,120}'預報（線色＝級距色）'/.test(src), true);
+
+  // 實測：造一組跨越「現在」的資料，確認兩段端點相同
+  const now = Date.now();
+  const pts = [
+    {ms: now - 4*3600e3, bf: 3, key:true},
+    {ms: now - 1*3600e3, bf: 5, key:true},
+    {ms: now + 2*3600e3, bf: 8, key:true},
+    {ms: now + 5*3600e3, bf: 6, key:true},
+  ];
+  setLex(`document.body.insertAdjacentHTML('beforeend','<canvas id="cv-gap-test"></canvas>');`);
+  let gthrew = false;
+  try {
+    setLex(`window.__gapPts = ${JSON.stringify(pts)};`);
+    setLex(`_drawWindChart('cv-gap-test', window.__gapPts,
+      {markKey:true, nowMs:${now}, bands:BF_BANDS});`);
+  } catch(e){ gthrew = true; console.log('   ', e.message); }
+  chk('跨越現在的資料繪製不拋錯', gthrew, false);
+  console.log('   （視覺連續性需實機確認，此處驗程式路徑）');
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`

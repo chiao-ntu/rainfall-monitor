@@ -5786,12 +5786,12 @@ function _drawWindChart(cvId, pts, opt){
     const b = BANDS.find(x=>v < x.max) || BANDS[BANDS.length-1];
     return b.color;
   };
-  const drawSeg = (arr, col, dash)=>{
+  const drawSeg = (arr, col, dash, forceBand)=>{
     if(arr.length < 2) return;
     ctx.setLineDash(dash||[]);
     ctx.lineWidth = isZoom?4:1.6;
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    if(o.bandLine){
+    if(o.bandLine || forceBand){
       for(let i=0; i<arr.length-1; i++){
         ctx.strokeStyle = bandColorOf(arr[i].bf);
         ctx.beginPath();
@@ -5808,17 +5808,28 @@ function _drawWindChart(cvId, pts, opt){
     ctx.setLineDash([]);
   };
   const nowMs = (o.nowMs == null) ? -Infinity : o.nowMs;
-  const pastPts = pts.filter(p=>p.ms <= nowMs);
-  const futPts  = pts.filter(p=>p.ms >= nowMs);
-  if(o.bandLine && pastPts.length > 1){
-    // 過去段：先用分署色描較粗的底線，級距色再疊上，兩種資訊都保留
-    ctx.strokeStyle = dcol; ctx.lineWidth = isZoom?9:4; ctx.globalAlpha = 0.45;
+  // ★ 在「現在」處插入內插點，讓過去段與未來段共用同一個端點。
+  //   否則資料點鮮少剛好落在 nowMs 上，兩段之間會留下缺口（線條斷開）。
+  let pastPts = pts.filter(p=>p.ms <= nowMs);
+  let futPts  = pts.filter(p=>p.ms >= nowMs);
+  if(isFinite(nowMs) && pastPts.length && futPts.length &&
+     pastPts[pastPts.length-1].ms !== nowMs && futPts[0].ms !== nowMs){
+    const a = pastPts[pastPts.length-1], b = futPts[0];
+    const u = (nowMs - a.ms) / Math.max(1, b.ms - a.ms);
+    const mid = {ms: nowMs, bf: a.bf + (b.bf - a.bf) * u, key: false};
+    pastPts = pastPts.concat([mid]);
+    futPts  = [mid].concat(futPts);
+  }
+  // 過去段：分署色＋半透明（與未來的級距色明顯區隔，且有「現在」虛線分界）
+  if(pastPts.length > 1){
+    ctx.strokeStyle = dcol; ctx.lineWidth = isZoom?4:1.6; ctx.globalAlpha = 0.55;
+    ctx.lineCap='round'; ctx.lineJoin='round';
     ctx.beginPath();
     pastPts.forEach((p,i)=>{ const x=X(p.ms), y=Y(p.bf); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
     ctx.stroke(); ctx.globalAlpha = 1;
   }
-  drawSeg(pastPts, dcol);
-  drawSeg(futPts, o.lineColor || '#6ad8f0');
+  // 未來段：一律依級距上色（含風力）
+  drawSeg(futPts, o.lineColor || '#6ad8f0', null, true);
   // 官方時間點：實心圓（與內插段區分）
   if(o.markKey){
     ctx.fillStyle='#ffffff';
@@ -5852,9 +5863,8 @@ function _drawWindChart(cvId, pts, opt){
     ctx.fillText(label, lx+(isZoom?60:22), ly-(isZoom?10:2));
     lx += ctx.measureText(label).width + (isZoom?110:44);
   };
-  if(pastPts.length > 1) item(dcol, '過去');
-  if(o.bandLine) item('#9fc8e8', '線色＝級距色');
-  else item(o.lineColor || '#6ad8f0', '預報');
+  if(pastPts.length > 1) item(dcol, '過去（分署色）');
+  item('#9fc8e8', '預報（線色＝級距色）');
   if(o.markKey) item('#ffffff', o.dotLabel || '官方時間點', true);
 }
 const WIND_KIND_NAME = {mean:'平均風', gust:'陣風', gust_est:'陣風推估'};
