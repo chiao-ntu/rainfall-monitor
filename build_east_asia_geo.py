@@ -25,8 +25,10 @@ OUT = 'east_asia_geo.json'
 # 東亞範圍（含日本本州以北、菲律賓南端、中國東半部）
 LON0, LON1, LAT0, LAT1 = 100.0, 150.0, 5.0, 50.0
 # 只保留這些國家的省界（其餘國家只畫國界，避免檔案過大）
+# ★ 不含 Taiwan：系統已有自己的縣市界與鄉鎮市區界（精度更高、與圖臺一致），
+#   套疊 Natural Earth 的臺灣資料會與既有邊界對不齊，視覺上明顯錯位。
 PROV_ADMINS = {'China', 'Japan', 'South Korea', 'North Korea', 'Philippines',
-               'Vietnam', 'Taiwan'}
+               'Vietnam'}
 # ★ 容差與精度直接決定線條是否平滑。
 #   初版用 0.05/0.03 度容差 + 小數 2 位（約 1km），線條呈現明顯稜角，
 #   與臺灣圖資（小數 11 位、平均 35 點/環）的平滑度落差很大。

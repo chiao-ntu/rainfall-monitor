@@ -2250,9 +2250,11 @@ if (need('renderEastAsiaLayer') && need('_ringsCentroid')) {
   // 涵蓋國家
   const admins = [...new Set(geo.provinces.map(p=>p.admin))].sort();
   console.log(`   省界涵蓋：${admins.join('、')}`);
-  ['Japan','China','South Korea','Philippines','Taiwan'].forEach(a=>{
+  // ★ 不含 Taiwan：系統已有自己的縣市／鄉鎮界，套疊外部資料會錯位
+  ['Japan','China','South Korea','Philippines','Vietnam'].forEach(a=>{
     chk(`涵蓋 ${a}`, admins.includes(a), true);
   });
+  chk('★排除 Taiwan', admins.includes('Taiwan'), false);
 
   // 座標範圍須在東亞（裁切正確）
   let laMin=99, laMax=-99, loMin=999, loMax=-999;
@@ -2373,6 +2375,35 @@ if (need('_waveColor') && need('_waveOf') && need('_waveRow')) {
   chk('圖例支援浪高', /wave: '浪高'/.test(src), true);
   chk('tooltip 三處都加入', (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 3);
   setLex("mode='rain'; window.WAVE_FCST={}; window.TEMP_FCST={};");
+}
+
+
+console.log('\n=== 著色分支順序（null 檢查不得攔截各 mode）===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  const iWarn = src.indexOf('} else if(acc.isWarn){');
+  const iWave = src.indexOf('} else if(acc.isWave){');
+  const iNull = src.indexOf('} else if(totalRain === null || totalRain === undefined){');
+  console.log(`   isWarn@${iWarn} isWave@${iWave} nullCheck@${iNull}`);
+  chk('★警特報分支在 null 檢查之前', iWarn > 0 && iWarn < iNull, true);
+  chk('★浪高分支在 null 檢查之前', iWave > 0 && iWave < iNull, true);
+  chk('警特報 null 視為 0（未達標仍著色）', /warnMapColor\(totalRain \|\| 0\)/.test(src), true);
+}
+
+console.log('\n=== 臺灣不套疊外部邊界 ===');
+if (need('renderEastAsiaLayer')) {
+  const geo = getLex('EAST_ASIA_GEO');
+  const admins = [...new Set(geo.provinces.map(p=>p.admin))];
+  console.log(`   涵蓋：${admins.sort().join('、')}`);
+  chk('★不含臺灣（用系統自有邊界）', admins.includes('Taiwan'), false);
+  chk('仍涵蓋周邊國家', admins.length >= 5, true);
+  // 座標不得落在臺灣本島範圍
+  let inTW = 0;
+  geo.provinces.forEach(p=>p.rings.forEach(r=>r.forEach(c=>{
+    if(c[0] > 21.9 && c[0] < 25.3 && c[1] > 120.0 && c[1] < 122.0) inTW++;
+  })));
+  console.log(`   落在臺灣本島範圍的點：${inTW}`);
+  chk('臺灣本島範圍無外部邊界點', inTW < 50, true);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
