@@ -392,5 +392,45 @@ chk('端點為鄉鎮沿海預報', FR.COASTAL_EP, 'F-D0047-095')
 chk('輸出含 wave_fcst 欄位',
     "'wave_fcst': wave_fcst" in io.open('fetch_rainfall.py', encoding='utf-8').read(), True)
 
+
+print('\n=== 浪高：外層結構與值鍵的容錯 ===')
+# ★ 使用者實測回報「有 wave_fcst 但內容為空」→ 外層結構或值鍵與假設不同。
+#   故對四種已知結構變體與四種值寫法都須能解析，且失敗時要印出診斷。
+_E = [{"ElementName":"浪高","Time":[
+    {"StartTime":"2026-08-30T12:00:00+08:00","EndTime":"2026-08-30T15:00:00+08:00",
+     "ElementValue":[{"WaveHeight":"2.5"}]}]}]
+_L = {"LocationName":"蘇澳鎮","WeatherElement":_E}
+for _nm, _pl in [
+    ('Locations[0].Location[]', {"records":{"Locations":[{"Location":[_L]}]}}),
+    ('locations[0].location[]', {"records":{"locations":[{"location":[_L]}]}}),
+    ('location[] 無包層',        {"records":{"location":[_L]}}),
+    ('Locations 為 dict',        {"records":{"Locations":{"Location":[_L]}}}),
+]:
+    def _mk(p=_pl):
+        class _R:
+            status_code = 200
+            def json(self): return p
+        return _R()
+    FR.requests = types.SimpleNamespace(get=lambda *a, **k: _mk())
+    chk(f'結構 {_nm}', list(FR.fetch_wave_forecast().keys()), ['蘇澳鎮'])
+
+for _k, _v, _want in [('WaveHeight','2.5',2.5), ('WaveHeightRange','2~3',3.0),
+                      ('waveHeight','>= 6',6.0), ('WaveHeightRange','1-1.5',1.5)]:
+    _L2 = {"LocationName":"蘇澳鎮","WeatherElement":[
+      {"ElementName":"浪高","Time":[{"StartTime":"2026-08-30T12:00:00+08:00",
+        "EndTime":"2026-08-30T15:00:00+08:00","ElementValue":[{_k:_v}]}]}]}
+    def _mk2(p={"records":{"Locations":[{"Location":[_L2]}]}}):
+        class _R:
+            status_code = 200
+            def json(self): return p
+        return _R()
+    FR.requests = types.SimpleNamespace(get=lambda *a, **k: _mk2())
+    _o = FR.fetch_wave_forecast()
+    chk(f'值鍵 {_k}="{_v}"', _o.get('蘇澳鎮', [{}])[0].get('wave'), _want)
+
+_src = io.open('fetch_rainfall.py', encoding='utf-8').read()
+chk('找不到節點時印出 records 鍵', '找不到 Location 節點' in _src, True)
+chk('無浪高值時印出氣象因子與值鍵', '個預報點但無浪高值' in _src, True)
+
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)

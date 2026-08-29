@@ -103,10 +103,28 @@ def fetch_wave_forecast():
     out = {}
     try:
         rec = raw.get('records', {})
+        # ★ 各資料集的外層結構不一致，必須逐一嘗試並在失敗時印出實際鍵名，
+        #   否則像先前那樣靜默 return {}，log 完全看不出原因。
+        #   已知變體：
+        #     records.Locations[0].Location[]   （鄉鎮預報 F-D0047-0xx）
+        #     records.locations[0].location[]   （小寫版）
+        #     records.location[]                （部分資料集無 Locations 包層）
+        locs = []
         wrap = rec.get('Locations', rec.get('locations', []))
-        if not wrap:
+        if isinstance(wrap, dict):
+            wrap = [wrap]
+        if wrap:
+            locs = wrap[0].get('Location', wrap[0].get('location', [])) or []
+        if not locs:
+            locs = rec.get('Location', rec.get('location', [])) or []
+        if isinstance(locs, dict):
+            locs = [locs]
+        if not locs:
+            print(f"    找不到 Location 節點；records 鍵：{list(rec.keys())[:8]}")
+            if wrap:
+                print(f"    Locations[0] 鍵：{list(wrap[0].keys())[:8]}")
             return {}
-        locs = wrap[0].get('Location', wrap[0].get('location', []))
+        _dbg_elems = set()
         for loc in locs:
             name = (loc.get('LocationName') or loc.get('locationName') or '').strip()
             if not name:
@@ -129,9 +147,18 @@ def fetch_wave_forecast():
                         ev = ev[0] if ev else {}
                     rec_ = segs.setdefault(st, {'start': st, 'end': en,
                                                 'wave': None, 'bf': None, 'dir': ''})
-                    for k in ('WaveHeight', 'waveHeight'):
+                    # ★ 浪高的值鍵可能有多種寫法；區間值（如 "2~3"）取上界（保守側）。
+                    for k in ('WaveHeight', 'waveHeight',
+                              'WaveHeightRange', 'waveHeightRange'):
                         if k in ev:
-                            v = _num(ev.get(k))
+                            _raw = ev.get(k)
+                            v = _num(_raw)
+                            if v is None and _raw:
+                                # "2~3"、"2-3"、"2到3" → 取較大者
+                                _parts = [x for x in re.split(r'[~\-—到至]', str(_raw))
+                                          if x.strip()]
+                                _nums = [n for n in (_num(x) for x in _parts) if n is not None]
+                                if _nums: v = max(_nums)
                             if v is not None:
                                 rec_['wave'] = v
                             break
@@ -155,12 +182,31 @@ def fetch_wave_forecast():
             keep = [v for v in segs.values() if v['wave'] is not None]
             if keep:
                 out[name] = sorted(keep, key=lambda x: x['start'])
+            else:
+                for we in loc.get('WeatherElement', loc.get('weatherElement', [])):
+                    en = we.get('ElementName') or we.get('elementName') or ''
+                    if en: _dbg_elems.add(en)
     except Exception as e:
         print(f"    解析失敗：{e}")
         return {}
     if out:
         n = sum(len(v) for v in out.values())
         print(f"    沿海浪高：{len(out)} 個預報點、{n} 時段")
+    else:
+        # 有 Location 但取不到浪高 → 印出實際的氣象因子名稱與值鍵，供比對
+        print(f"    有 {len(locs)} 個預報點但無浪高值；氣象因子：{sorted(_dbg_elems)[:12]}")
+        try:
+            _l0 = locs[0]
+            _w0 = (_l0.get('WeatherElement') or _l0.get('weatherElement') or [])
+            for _we in _w0[:3]:
+                _t0 = (_we.get('Time') or _we.get('time') or [])
+                if _t0:
+                    _ev = _t0[0].get('ElementValue') or _t0[0].get('elementValue') or [{}]
+                    if isinstance(_ev, list): _ev = _ev[0] if _ev else {}
+                    print(f"      {_we.get('ElementName') or _we.get('elementName')}"
+                          f" → 值鍵 {list(_ev.keys())}")
+        except Exception:
+            pass
     return out
 
 
