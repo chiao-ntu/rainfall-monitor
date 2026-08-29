@@ -2373,7 +2373,8 @@ if (need('_waveColor') && need('_waveOf') && need('_waveRow')) {
   chk('mode 群組含兩者', /'bWind','bTemp','bWave'/.test(src), true);
   chk('圖例支援氣溫', /temp: '氣溫\(°C\)'/.test(src), true);
   chk('圖例支援浪高', /wave: '浪高'/.test(src), true);
-  chk('tooltip 三處都加入', (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 3);
+  // ★ 未來6h 視窗補齊後為 4 處（今天／過去／未來／未來6h段）
+  chk('tooltip 四處都加入', (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 4);
   setLex("mode='rain'; window.WAVE_FCST={}; window.TEMP_FCST={};");
 }
 
@@ -2404,6 +2405,64 @@ if (need('renderEastAsiaLayer')) {
   })));
   console.log(`   落在臺灣本島範圍的點：${inTW}`);
   chk('臺灣本島範圍無外部邊界點', inTW < 50, true);
+}
+
+
+console.log('\n=== 氣溫／浪高圖表 ===');
+if (need('_tempSeries') && need('_waveSeries') && need('drawTempDayChart')) {
+  const base = Date.now();
+  const mk = (h, v) => ({start:new Date(base+h*3600e3).toISOString(),
+                         end:new Date(base+(h+3)*3600e3).toISOString()});
+  setLex(`TMAP['宜蘭縣蘇澳鎮'] = {county:'宜蘭縣', township:'蘇澳鎮'};
+    window.TEMP_FCST = {'宜蘭縣':{'蘇澳鎮':[
+      ${JSON.stringify(Object.assign(mk(0),{t:26,tmax:29,tmin:23}))},
+      ${JSON.stringify(Object.assign(mk(3),{t:22,tmax:29,tmin:23}))},
+      ${JSON.stringify(Object.assign(mk(27),{t:31,tmax:33,tmin:26}))}]}};
+    window.WAVE_FCST = {'蘇澳鎮':[
+      ${JSON.stringify(Object.assign(mk(0),{wave:1.2,bf:5,dir:'東北'}))},
+      ${JSON.stringify(Object.assign(mk(3),{wave:2.8,bf:7,dir:'北'}))},
+      ${JSON.stringify(Object.assign(mk(27),{wave:6.0,bf:9,dir:'東北'}))}]};`);
+  const ct = getLex("TMAP['宜蘭縣蘇澳鎮']");
+
+  const ts = G._tempSeries(ct), ws = G._waveSeries(ct);
+  console.log(`   氣溫序列 ${ts.length} 點：${ts.map(p=>p.bf).join('→')}°C`);
+  console.log(`   浪高序列 ${ws.length} 點：${ws.map(p=>p.bf).join('→')}m`);
+  chk('氣溫序列', ts.length, 3);
+  chk('浪高序列', ws.length, 3);
+  chk('依時間排序', ts[0].bf, 26);
+
+  // 逐日取最大
+  const td = G._dayMax(ts);
+  console.log(`   逐日氣溫 ${td.length} 日：${td.map(p=>p.bf).join('、')}`);
+  chk('逐日取各日最大', td[0].bf, 26);
+
+  // 內陸鄉鎮無浪高
+  const inland = getLex("TMAP['南投縣仁愛鄉']");
+  chk('★內陸無浪高序列', G._waveSeries(inland).length, 0);
+
+  // 繪圖不拋錯（含放大）
+  setLex(`document.body.insertAdjacentHTML('beforeend',
+    '<canvas id="cv-temp-day"></canvas><canvas id="cv-temp-hr"></canvas>' +
+    '<canvas id="cv-wave-day"></canvas><canvas id="cv-wave-hr"></canvas>');`);
+  let thrown = false;
+  try {
+    G.drawTempDayChart(ct); G.drawTempHourChart(ct);
+    G.drawWaveDayChart(ct); G.drawWaveHourChart(ct);
+    G.drawTempDayChart(ct, 'chart-zoom-canvas');
+    G.drawWaveHourChart(ct, 'chart-zoom-canvas');
+  } catch(e){ thrown = true; console.log('   ', e.message); }
+  chk('四張圖繪製不拋錯（含放大）', thrown, false);
+
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('氣溫用橘色線', /lineColor:'#ff9a4a'/.test(src), true);
+  chk('浪高用藍色線', /lineColor:'#5aa8ff'/.test(src), true);
+  chk('氣溫軸標題', /axisTitle:'氣溫\(°C\)'/.test(src), true);
+  chk('浪高軸標題', /axisTitle:'浪高\(m\)'/.test(src), true);
+  chk('氣溫允許負值', /allowNeg:true/.test(src), true);
+  chk('放大分派含四張圖', /canvasId === 'cv-temp-day'[\s\S]{0,400}canvasId === 'cv-wave-hr'/.test(src), true);
+  chk('★未來6h tooltip 補齊要素',
+      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 4);
+  setLex("window.TEMP_FCST={}; window.WAVE_FCST={};");
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`

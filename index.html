@@ -564,6 +564,44 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
     </div>
 
+    <!-- 區塊：氣溫預測（預設收合） -->
+    <div class="sec" id="sec-temp" style="display:none">
+      <div class="sec-h" onclick="toggleSec('temp')">
+        <span>氣溫預測</span><span class="sec-arrow" id="arrow-temp">▸</span>
+      </div>
+      <div class="sec-body" id="body-temp" style="display:none">
+        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">逐日（各日最高/最低）</div>
+        <canvas id="cv-temp-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-temp-day')"
+          onmousemove="showChartTooltip(event,'cv-temp-day')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">逐時</div>
+        <canvas id="cv-temp-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-temp-hr')"
+          onmousemove="showChartTooltip(event,'cv-temp-hr')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          ● 為氣象署逐3小時官方預報時間點；點擊圖表可放大／縮小</div>
+      </div>
+    </div>
+
+    <!-- 區塊：浪高預測（僅沿海鄉鎮，預設收合） -->
+    <div class="sec" id="sec-wave" style="display:none">
+      <div class="sec-h" onclick="toggleSec('wave')">
+        <span>浪高預測</span><span class="sec-arrow" id="arrow-wave">▸</span>
+      </div>
+      <div class="sec-body" id="body-wave" style="display:none">
+        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">逐日（各日最大）</div>
+        <canvas id="cv-wave-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wave-day')"
+          onmousemove="showChartTooltip(event,'cv-wave-day')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">逐時</div>
+        <canvas id="cv-wave-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wave-hr')"
+          onmousemove="showChartTooltip(event,'cv-wave-hr')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          僅沿海預報點有資料；● 為官方預報時間點</div>
+      </div>
+    </div>
+
     <!-- 區塊：測站清單（預設收合） -->
     <div class="sec" id="sec-stations" style="display:none">
       <div class="sec-h" onclick="toggleSec('stations')">
@@ -2303,11 +2341,15 @@ function renderLayer(){
         const maxIntensity = (t[maxhField]||[])[segFrom] || 0;
         const intensityLabel = maxIntensity>=500?'超大豪雨':maxIntensity>=200?'大豪雨':
                                 maxIntensity>=100?'豪雨':maxIntensity>=40?'大雨':'未達警示';
+        // ★ 未來6h段的 tooltip 先前少了 ETR2%、官方現值與氣象要素，
+        //   與「今天／逐日」視窗資訊量落差很大；此處補齊為同一組欄位。
         tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
           `時段：+${startH}h ~ +${endH}h<br>`+
           `該時段累積雨量：${rainStr}<br>`+
           `最大時雨量：${maxIntensity.toFixed(1)} mm/h（${intensityLabel}）<br>`+
-          `風險指標：${_windowRisk(t)}`;
+          `ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) +
+          `風險指標：${_windowRisk(t)}`
+          + _windRow(t) + _tempRow(t) + _waveRow(t);
       } else {
         let rainLabel;
         if(winKey === 'today'){
@@ -2476,6 +2518,23 @@ function updateInfo(t){
     if(dEl) dEl.style.display = hasWind ? 'block' : 'none';
     if(hEl) hEl.style.display = hasWind ? 'block' : 'none';
     if(hasWind) drawAllWindCharts(t);
+
+    // 氣溫圖：有預報資料才顯示
+    const hasTemp = _tempSeries(t).length > 0;
+    const tEl = document.getElementById('sec-temp');
+    if(tEl) tEl.style.display = hasTemp ? 'block' : 'none';
+    if(hasTemp){
+      try{ drawTempDayChart(t); }catch(e){ console.warn('逐日氣溫圖失敗', e); }
+      try{ drawTempHourChart(t); }catch(e){ console.warn('逐時氣溫圖失敗', e); }
+    }
+    // 浪高圖：僅沿海鄉鎮有資料
+    const hasWave = _waveSeries(t).length > 0;
+    const vEl = document.getElementById('sec-wave');
+    if(vEl) vEl.style.display = hasWave ? 'block' : 'none';
+    if(hasWave){
+      try{ drawWaveDayChart(t); }catch(e){ console.warn('逐日浪高圖失敗', e); }
+      try{ drawWaveHourChart(t); }catch(e){ console.warn('逐時浪高圖失敗', e); }
+    }
   }
 
   if(t.stations && t.stations.length){
@@ -5457,11 +5516,35 @@ function _tempOf(t){
   return {t: seg.t, tmax: seg.tmax, tmin: seg.tmin};
 }
 // 取某鄉鎮在選取時刻的浪高 → {wave, bf, dir}；非沿海回 null
+// 浪高對應表快取：官方沿海預報點的命名格式未經證實，故建立多種鍵的索引，
+//   並在首次查詢時印出診斷（對到幾個鄉鎮、範例鍵名），方便回報與比對。
+let _waveIndex = null, _waveIndexKey = '';
+function _buildWaveIndex(){
+  const wf = window.WAVE_FCST || {};
+  // ★ 鍵須涵蓋「會改變結果的輸入」：只用筆數會在資料換成同筆數的另一份時
+  //   沿用舊索引（測試中即因此取到前一組浪高）。加入首筆時間戳區分。
+  const _k0 = Object.keys(wf)[0];
+  const _t0 = _k0 && wf[_k0] && wf[_k0][0] ? (wf[_k0][0].start || '') : '';
+  const key = Object.keys(wf).length + '|' + _k0 + '|' + _t0 + '|' + (window._dataGenAt || '');
+  if(_waveIndex && _waveIndexKey === key) return _waveIndex;
+  const idx = {};
+  Object.keys(wf).forEach(k=>{
+    const v = wf[k];
+    idx[k] = v;                                   // 原鍵
+    const bare = k.replace(/^[^縣市]*[縣市]/, '');  // 去掉縣市前綴
+    if(bare && bare !== k) idx[bare] = idx[bare] || v;
+  });
+  _waveIndex = idx; _waveIndexKey = key;
+  const n = Object.keys(wf).length;
+  console.log(`浪高資料：${n} 個沿海預報點` +
+    (n ? `，範例鍵：${Object.keys(wf).slice(0,5).join('、')}` : '（data.json 無 wave_fcst）'));
+  return idx;
+}
 function _waveOf(t){
   if(!t) return {wave:null, bf:null, dir:''};
-  const wf = window.WAVE_FCST || {};
-  // 沿海預報點以鄉鎮名對應（官方即以鄉鎮命名，如「蘇澳鎮」）
-  const segs = wf[t.township] || wf[(t.county||'') + (t.township||'')] || [];
+  const idx = _buildWaveIndex();
+  // 官方命名可能是「蘇澳鎮」或「宜蘭縣蘇澳鎮」，兩種都試
+  const segs = idx[t.township] || idx[(t.county||'') + (t.township||'')] || [];
   if(!segs.length) return {wave:null, bf:null, dir:''};
   const at = _windAtMs();
   let seg = segs.find(x=>{
@@ -5639,13 +5722,19 @@ function _drawWindChart(cvId, pts, opt){
     ctx.fillText('無風力預報資料', pL, pT+ih/2);
     return;
   }
-  const maxBf = Math.max(4, Math.ceil(Math.max(...pts.map(p=>p.bf))/2)*2);
+  // ★ 參數化：氣溫／浪高共用本繪圖函式，只換色帶、軸標題與線色。
+  const BANDS = o.bands || BF_BANDS;
+  const vals = pts.map(p=>p.bf);
+  const vMax = Math.max(...vals), vMin = Math.min(...vals);
+  const maxBf = Math.max(4, Math.ceil(vMax / 2) * 2);
+  // 氣溫可能為負，Y 軸下界需跟著調整（浪高與風級最低為 0）
+  const minBf = o.allowNeg ? Math.min(0, Math.floor(vMin / 2) * 2) : 0;
   const t0 = pts[0].ms, t1 = pts[pts.length-1].ms || (t0+1);
   const X = ms => pL + iw * ((ms - t0) / Math.max(1, t1 - t0));
-  const Y = bf => pT + ih * (1 - bf/maxBf);
+  const Y = bf => pT + ih * (1 - (bf - minBf) / Math.max(1, maxBf - minBf));
   // 風級色帶背景（與地圖同一組色，一眼對應）
-  BF_BANDS.forEach((b, i)=>{
-    const lo = i === 0 ? 0 : BF_BANDS[i-1].max;
+  BANDS.forEach((b, i)=>{
+    const lo = i === 0 ? minBf : BANDS[i-1].max;
     if(lo >= maxBf) return;
     const hi = Math.min(b.max, maxBf);
     ctx.fillStyle = b.color; ctx.globalAlpha = 0.13;
@@ -5655,8 +5744,8 @@ function _drawWindChart(cvId, pts, opt){
   // 格線 + Y 軸刻度（比照雨量圖：右對齊、單位標於軸頂）
   ctx.lineWidth = isZoom ? 2 : 0.5;
   ctx.font = `${fs}px sans-serif`;
-  const stepBf = Math.max(2, Math.round(maxBf/4));
-  for(let b=0; b<=maxBf; b+=stepBf){
+  const stepBf = Math.max(1, Math.round((maxBf - minBf)/4));
+  for(let b=minBf; b<=maxBf; b+=stepBf){
     const y=Y(b);
     ctx.strokeStyle='rgba(255,255,255,0.1)';
     ctx.beginPath(); ctx.moveTo(pL,y); ctx.lineTo(W-pR,y); ctx.stroke();
@@ -5666,7 +5755,7 @@ function _drawWindChart(cvId, pts, opt){
   ctx.textAlign='left'; ctx.fillStyle='#7aa8c8';
   ctx.font=`${fs}px sans-serif`;
   // 軸標題緊貼繪圖區左上角，與上方標題保持一行距離
-  ctx.fillText('蒲福風級', pL-(isZoom?150:44), pT-(isZoom?16:4));
+  ctx.fillText(o.axisTitle || '蒲福風級', pL-(isZoom?150:44), pT-(isZoom?16:4));
 
   // 現在時刻分隔線（過去／未來）
   if(o.nowMs != null && o.nowMs > t0 && o.nowMs < t1){
@@ -5681,7 +5770,7 @@ function _drawWindChart(cvId, pts, opt){
   }
   // 折線：過去段以分署色、未來段以亮青色（比照雨量圖的觀測／預測區分）
   const dcol = (o.county && typeof getDistrictColor === 'function')
-             ? getDistrictColor(o.county) : '#6ad8f0';
+             ? getDistrictColor(o.county) : (o.lineColor || '#6ad8f0');
   const drawSeg = (arr, col, dash)=>{
     if(arr.length < 2) return;
     ctx.strokeStyle=col; ctx.lineWidth=isZoom?4:1.6;
@@ -5694,7 +5783,7 @@ function _drawWindChart(cvId, pts, opt){
   const pastPts = pts.filter(p=>p.ms <= nowMs);
   const futPts  = pts.filter(p=>p.ms >= nowMs);
   drawSeg(pastPts, dcol);
-  drawSeg(futPts, '#6ad8f0');
+  drawSeg(futPts, o.lineColor || '#6ad8f0');
   // 官方時間點：實心圓（與內插段區分）
   if(o.markKey){
     ctx.fillStyle='#ffffff';
@@ -5729,7 +5818,7 @@ function _drawWindChart(cvId, pts, opt){
     lx += ctx.measureText(label).width + (isZoom?110:44);
   };
   if(pastPts.length > 1) item(dcol, '過去');
-  item('#6ad8f0', '預報');
+  item(o.lineColor || '#6ad8f0', '預報');
   if(o.markKey) item('#ffffff', o.dotLabel || '官方時間點', true);
 }
 const WIND_KIND_NAME = {mean:'平均風', gust:'陣風', gust_est:'陣風推估'};
@@ -5763,6 +5852,63 @@ function drawWindHourChart(t, canvasId, kind){
     title:`${t.county}${t.township} 逐時風力預測（${WIND_KIND_NAME[K]||''}，過去2天＋未來3天）`});
 }
 // 一次繪製六張（兩區塊 × 三來源）
+// ══════════════════════════════════════════════════════════
+//  氣溫／浪高折線圖
+//  ★ 沿用 _drawWindChart 的版面（字級、留白、放大、圖例、現在線），
+//    只換 Y 軸語意與色帶，避免兩套繪圖邏輯分歧。
+//    線條顏色刻意與風力（青）區隔：氣溫橘、浪高藍。
+// ══════════════════════════════════════════════════════════
+function _tempSeries(t){
+  const segs = ((window.TEMP_FCST || {})[t.county] || {})[t.township] || [];
+  return segs.map(x=>{
+    const v = (x.t != null) ? x.t
+            : (x.tmax != null && x.tmin != null) ? (x.tmax + x.tmin) / 2 : null;
+    const ms = Date.parse(x.start || '');
+    return (v == null || !isFinite(ms)) ? null : {ms, bf:v, ws:v, tmax:x.tmax, tmin:x.tmin};
+  }).filter(Boolean).sort((a,b)=>a.ms-b.ms);
+}
+function _waveSeries(t){
+  const idx = _buildWaveIndex();
+  const segs = idx[t.township] || idx[(t.county||'') + (t.township||'')] || [];
+  return segs.map(x=>{
+    const ms = Date.parse(x.start || '');
+    return (x.wave == null || !isFinite(ms)) ? null : {ms, bf:x.wave, ws:x.wave};
+  }).filter(Boolean).sort((a,b)=>a.ms-b.ms);
+}
+function _dayMax(pts){
+  const byDay = {};
+  pts.forEach(p=>{
+    const d = new Date(p.ms); d.setHours(0,0,0,0);
+    const k = d.getTime();
+    if(!byDay[k] || p.bf > byDay[k].bf) byDay[k] = {ms:k, bf:p.bf, ws:p.ws, key:true};
+  });
+  return Object.values(byDay).sort((a,b)=>a.ms-b.ms);
+}
+function drawTempDayChart(t, canvasId){
+  _drawWindChart(canvasId || 'cv-temp-day', _dayMax(_tempSeries(t)), {
+    markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'各日最高',
+    bands:TEMP_BANDS, axisTitle:'氣溫(°C)', lineColor:'#ff9a4a', allowNeg:true,
+    title:`${t.county}${t.township} 逐日氣溫預測（過去2天＋未來7天）`});
+}
+function drawTempHourChart(t, canvasId){
+  _drawWindChart(canvasId || 'cv-temp-hr', _smoothSeries(_tempSeries(t), 2), {
+    markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'官方時間點',
+    bands:TEMP_BANDS, axisTitle:'氣溫(°C)', lineColor:'#ff9a4a', allowNeg:true,
+    title:`${t.county}${t.township} 逐時氣溫預測（過去2天＋未來3天）`});
+}
+function drawWaveDayChart(t, canvasId){
+  _drawWindChart(canvasId || 'cv-wave-day', _dayMax(_waveSeries(t)), {
+    markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'各日最大',
+    bands:WAVE_BANDS, axisTitle:'浪高(m)', lineColor:'#5aa8ff',
+    title:`${t.county}${t.township} 逐日浪高預測`});
+}
+function drawWaveHourChart(t, canvasId){
+  _drawWindChart(canvasId || 'cv-wave-hr', _smoothSeries(_waveSeries(t), 2), {
+    markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'官方時間點',
+    bands:WAVE_BANDS, axisTitle:'浪高(m)', lineColor:'#5aa8ff',
+    title:`${t.county}${t.township} 逐時浪高預測`});
+}
+
 function drawAllWindCharts(t){
   ['cv-wind-day','cv-wind-day-gust','cv-wind-day-est']
     .forEach(id=>{ try{ drawWindDayChart(t, id); }catch(e){ console.warn(id, e); } });
@@ -7285,7 +7431,9 @@ function _redrawZoom(){
 
 function toggleChartZoom(canvasId){
   const needsSelected = (canvasId==='cv'||canvasId==='cv-district-hyeto'
-                       ||canvasId.startsWith('cv-wind-'));
+                       ||canvasId.startsWith('cv-wind-')
+                       ||canvasId.startsWith('cv-temp-')
+                       ||canvasId.startsWith('cv-wave-'));
   if(needsSelected && !selected) return;
   const modal = document.getElementById('chart-zoom-modal');
   if(!modal) return;
@@ -7304,6 +7452,10 @@ function toggleChartZoom(canvasId){
     'cv-wind-hr': selected ? `${selected.county}${selected.township} 逐時風力預測（平均風）` : '',
     'cv-wind-hr-gust': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風）` : '',
     'cv-wind-hr-est': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風推估）` : '',
+    'cv-temp-day': selected ? `${selected.county}${selected.township} 逐日氣溫預測` : '',
+    'cv-temp-hr': selected ? `${selected.county}${selected.township} 逐時氣溫預測` : '',
+    'cv-wave-day': selected ? `${selected.county}${selected.township} 逐日浪高預測` : '',
+    'cv-wave-hr': selected ? `${selected.county}${selected.township} 逐時浪高預測` : '',
     'cv-all-daily': '全台各分署逐日雨量（16天）',
     'cv-all-hyeto': '全台各分署組體雨量圖（未來48h）',
   };
@@ -7311,7 +7463,15 @@ function toggleChartZoom(canvasId){
   if(titleEl) titleEl.textContent = titleMap[canvasId] || '';
   _zoomCanvasType = canvasId;
 
-  if(canvasId.startsWith('cv-wind-day') && selected){
+  if(canvasId === 'cv-temp-day' && selected){
+    drawTempDayChart(selected, 'chart-zoom-canvas');
+  } else if(canvasId === 'cv-temp-hr' && selected){
+    drawTempHourChart(selected, 'chart-zoom-canvas');
+  } else if(canvasId === 'cv-wave-day' && selected){
+    drawWaveDayChart(selected, 'chart-zoom-canvas');
+  } else if(canvasId === 'cv-wave-hr' && selected){
+    drawWaveHourChart(selected, 'chart-zoom-canvas');
+  } else if(canvasId.startsWith('cv-wind-day') && selected){
     drawWindDayChart(selected, 'chart-zoom-canvas', WIND_CANVAS_KIND[canvasId]);
   } else if(canvasId.startsWith('cv-wind-hr') && selected){
     drawWindHourChart(selected, 'chart-zoom-canvas', WIND_CANVAS_KIND[canvasId]);
