@@ -1748,8 +1748,9 @@ console.log('\n=== 鄉鎮市區界線 ===');
 {
   const html = fs.readFileSync('index.html', 'utf8');
   chk('名稱圖層會畫界線', /鄉鎮市區界：比縣市界細/.test(html), true);
-  chk('界線不攔截滑鼠事件', /color:'#9ab8d0'[\s\S]{0,120}interactive:false/.test(html), true);
-  chk('界線比縣市界細（weight 0.6）', /color:'#9ab8d0', weight:0\.6/.test(html), true);
+  chk('界線不攔截滑鼠事件', /color:'#2a2a2a'[\s\S]{0,120}interactive:false/.test(html), true);
+  // 改深灰以確保在飽和色塊上可見；粗細維持比縣市界細
+  chk('界線比縣市界細（weight 0.7）', /color:'#2a2a2a', weight:0\.7/.test(html), true);
   chk('繪後把縣市界拉回上層', /countyBorder\.bringToFront/.test(html), true);
 }
 
@@ -2565,6 +2566,34 @@ if (need('_logModeDistribution')) {
   try { G._logModeDistribution(); } catch(e){ dthrew = true; console.log('   ', e.message); }
   setLex("mode='rain';");
   chk('診斷不拋錯', dthrew, false);
+}
+
+
+console.log('\n=== 渲染模式須用各自色階 ===');
+if (need('_modeBandsRgb')) {
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★渲染支援風力色階', /mode==='wind'\) sc = BF_BANDS/.test(src), true);
+  chk('★渲染支援氣溫色階', /mode==='temp'\) sc = TEMP_BANDS/.test(src), true);
+  chk('★渲染支援浪高色階', /mode==='wave'\) sc = WAVE_BANDS/.test(src), true);
+
+  // 實測：氣溫 28°C 在渲染模式下不可落到雨量色階的綠
+  setLex("mode='temp';");
+  const tb = G._modeBandsRgb();
+  let bi = 0; while(bi < tb.length-1 && 28 >= tb[bi].max) bi++;
+  const rgb = tb[bi].rgb;
+  console.log(`   氣溫 28°C → RGB(${rgb.join(',')})`);
+  // TEMP_BANDS 中 28°C 落在 26–30 帶 = #FFA500 橘黃 (255,165,0)
+  chk('★28°C 為橘黃非綠', rgb.join(','), '255,165,0');
+  setLex("mode='rain';");
+}
+
+console.log('\n=== 鄉鎮界線可辨識 ===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★多邊形邊框改深灰（非同填色）', /color: isSel \? '#ffff44' : '#2a2a2a'/.test(src), true);
+  chk('邊框有透明度設定', /opacity: isSel \? 1 : 0\.55/.test(src), true);
+  chk('★名稱圖層界線改深灰', /color:'#2a2a2a', weight:0\.7, opacity:0\.75/.test(src), true);
+  chk('不再用 fillColor 當邊框色', /color: isSel \? '#ffff44' : fillColor/.test(src), false);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`

@@ -2275,8 +2275,11 @@ function renderLayer(){
     const _hideFill = _blurOn && !_outIsland;
     const opts={
       pane: 'townPane',
-      color: isSel ? '#ffff44' : fillColor,
-      weight: _hideFill ? (isSel ? 1.5 : 0) : (isSel ? 1.5 : 0.3),
+      // ★ 邊框改深灰：原本用 fillColor（與填色同色）等於沒有邊界，
+      //   飽和色塊相鄰時完全分不出鄉鎮。選取時仍為黃色高亮。
+      color: isSel ? '#ffff44' : '#2a2a2a',
+      weight: _hideFill ? (isSel ? 1.5 : 0) : (isSel ? 1.5 : 0.4),
+      opacity: isSel ? 1 : 0.55,
       stroke: _hideFill ? isSel : true,
       fillColor, fillOpacity: _hideFill ? 0.02 : fillOp,
       smoothFactor: 0  // 停用Leaflet的路徑平滑，避免縮放時端點偏移
@@ -6195,7 +6198,9 @@ function renderTownNameLayer(){
     polys.forEach(poly=>{
       const ring = (poly[0] || []).map(c=>[c[1], c[0]]);
       if(ring.length < 3) return;
-      L.polyline(ring.concat([ring[0]]), {color:'#9ab8d0', weight:0.6, opacity:0.45,
+      // ★ 改深灰：原本的淡藍(#9ab8d0, 0.45) 在飽和色塊上（紅/紫/黃）幾乎看不見，
+      //   界線失去分隔作用。深灰不透明度提高後在各種底色上都能辨識。
+      L.polyline(ring.concat([ring[0]]), {color:'#2a2a2a', weight:0.7, opacity:0.75,
         fill:false, interactive:false}).addTo(townNameLayer);
     });
     const ll = _townCentroid(f);
@@ -7947,6 +7952,11 @@ function _modeBandsRgb(){
   if(mode==='etr') sc = ETR_SCALE;
   else if(mode==='risk') sc = RISK_SCALE;
   else if(mode==='warn') sc = WARN_MAP_SCALE;
+  // ★ 風力／氣溫／浪高必須各用自己的色階。
+  //   先前落到 else 的雨量色階，使 28°C 被當成 28mm 而全臺一片綠。
+  else if(mode==='wind') sc = BF_BANDS;
+  else if(mode==='temp') sc = TEMP_BANDS;
+  else if(mode==='wave') sc = WAVE_BANDS;
   else sc = RAIN_SCALE_CWA;  // 渲染時累積雨量用CWA官方配色（門檻同RAIN_SCALE，僅換色）
   return sc.map(s=>({max:s.max, rgb:hex2rgb(s.color)}));
 }
