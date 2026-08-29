@@ -2521,6 +2521,18 @@ if (need('_drawWindChart')) {
   console.log('   （視覺連續性需實機確認，此處驗程式路徑）');
 }
 
+
+console.log('\n=== 浪高診斷訊息可區分兩種情況 ===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('區分欄位不存在與內容為空', /_dataHasWaveField/.test(src), true);
+  chk('提示後端未更新', /後端 fetch_rainfall\.py 尚未更新至含浪高的版本/.test(src), true);
+  chk('提示 API 取用失敗', /F-D0047-095 取用失敗或當期無沿海預報/.test(src), true);
+  const py = fs.readFileSync('fetch_rainfall.py', 'utf8');
+  chk('後端輸出欄位自我檢查', /新增欄位：/.test(py), true);
+  chk('後端提示 wave_fcst 為空', /wave_fcst 為空/.test(py), true);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

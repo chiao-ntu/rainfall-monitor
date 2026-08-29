@@ -3464,6 +3464,19 @@ def main():
 
     with open(OUTPUT_FILE,'w',encoding='utf-8') as f:
         json.dump(output,f,ensure_ascii=False,separators=(',',':'))
+    # ★ 欄位自我檢查：列出本版應有的欄位與其筆數，讓「程式已更新但沒部署」
+    #   或「某支 API 全數失敗」能從 log 一眼看出，不必等前端回報。
+    _chk = [('wind_fcst', WIND_FCST), ('temp_fcst', TEMP_FCST),
+            ('wave_fcst', wave_fcst), ('gust_fcst', gust_fcst)]
+    _msg = []
+    for _k, _v in _chk:
+        _n = sum(len(x) for x in _v.values()) if isinstance(_v, dict) and _v \
+             and isinstance(next(iter(_v.values())), dict) else len(_v or {})
+        _msg.append(f"{_k}={_n}")
+    print(f"  新增欄位：{'、'.join(_msg)}")
+    if not wave_fcst:
+        print("  ※ wave_fcst 為空：颱風/海象預報可能未發布，或 F-D0047-095 取用失敗")
+
     print(f"\n完成：{OUTPUT_FILE}（{os.path.getsize(OUTPUT_FILE)//1024}KB）")
     print(f"  鄉鎮：{len(out_towns)}，PoP3d：{len(pop3d)}，PoP7d：{len(pop7d)}")
     if output['bias_24h_median'] is not None:
