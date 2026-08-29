@@ -1748,9 +1748,9 @@ console.log('\n=== 鄉鎮市區界線 ===');
 {
   const html = fs.readFileSync('index.html', 'utf8');
   chk('名稱圖層會畫界線', /鄉鎮市區界：比縣市界細/.test(html), true);
-  chk('界線不攔截滑鼠事件', /color:'#2a2a2a'[\s\S]{0,120}interactive:false/.test(html), true);
+  chk('界線不攔截滑鼠事件', /color:'#5a5a5a'[\s\S]{0,120}interactive:false/.test(html), true);
   // 改深灰以確保在飽和色塊上可見；粗細維持比縣市界細
-  chk('界線比縣市界細（weight 0.7）', /color:'#2a2a2a', weight:0\.7/.test(html), true);
+  chk('界線比縣市界細（weight 0.7）', /color:'#5a5a5a', weight:0\.7/.test(html), true);
   chk('繪後把縣市界拉回上層', /countyBorder\.bringToFront/.test(html), true);
 }
 
@@ -2590,10 +2590,21 @@ if (need('_modeBandsRgb')) {
 console.log('\n=== 鄉鎮界線可辨識 ===');
 {
   const src = fs.readFileSync('index.html', 'utf8');
-  chk('★多邊形邊框改深灰（非同填色）', /color: isSel \? '#ffff44' : '#2a2a2a'/.test(src), true);
-  chk('邊框有透明度設定', /opacity: isSel \? 1 : 0\.55/.test(src), true);
-  chk('★名稱圖層界線改深灰', /color:'#2a2a2a', weight:0\.7, opacity:0\.75/.test(src), true);
+  chk('★多邊形邊框非同填色', /color: isSel \? '#ffff44' : '#5a5a5a'/.test(src), true);
+  chk('邊框有透明度設定', /opacity: isSel \? 1 : 0\.45/.test(src), true);
+  chk('★名稱圖層界線為中灰', /color:'#5a5a5a', weight:0\.7, opacity:0\.6/.test(src), true);
   chk('不再用 fillColor 當邊框色', /color: isSel \? '#ffff44' : fillColor/.test(src), false);
+}
+
+
+console.log('\n=== 浪高端點候選重試 ===');
+{
+  const py = fs.readFileSync('fetch_rainfall.py', 'utf8');
+  chk('提供多個候選端點', /COASTAL_EP_CANDIDATES = \['F-D0047-095'/.test(py), true);
+  chk('印出每個候選的 HTTP 與 records 鍵', /HTTP 200，records 鍵/.test(py), true);
+  chk('全部失敗時明確標示', /所有候選端點皆無 Location 節點/.test(py), true);
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★載入前不輸出矛盾診斷', /data\.json 尚未載入時不輸出診斷/.test(src), true);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`

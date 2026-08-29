@@ -66,7 +66,12 @@ COUNTY_EP_7D = {
 # 鄉鎮沿海預報（浪高）：F-D0047-095 為逐 3 小時、096 為週預報。
 #   ★ 只涵蓋 120 個「沿海預報代表點」，不是 368 鄉鎮 —— 內陸鄉鎮本來就無值，
 #     前端須留白而非填 0，否則會讓內陸看起來像「浪高 0 公尺」。
-COASTAL_EP = 'F-D0047-095'
+# 鄉鎮沿海預報的資料集代號。★ 095/096 取自官方產品說明文件檔名
+#   （F-D0047-095_096.pdf「海象_鄉鎮沿海-鄉鎮沿海預報」），但**文件檔名未必等於
+#   API 的 dataid**。故依序嘗試多個候選，第一個回傳有效資料者即採用，
+#   並把每個候選的 HTTP 狀態與 records 鍵印出來，便於一次定位。
+COASTAL_EP_CANDIDATES = ['F-D0047-095', 'F-D0047-096', 'F-A0085-001', 'F-A0085-002']
+COASTAL_EP = COASTAL_EP_CANDIDATES[0]
 
 
 def fetch_wave_forecast():
@@ -77,18 +82,36 @@ def fetch_wave_forecast():
     無資料或失敗回 {}。
     """
     if not CWA_API_KEY:
+        print("★ 浪高：無 CWA_API_KEY，略過")
         return {}
     print("抓取鄉鎮沿海預報（浪高）...")
-    try:
-        r = requests.get(f"{BASE_URL}/{COASTAL_EP}",
-                         params={"Authorization": CWA_API_KEY, "format": "JSON"},
-                         timeout=30)
-        if r.status_code != 200:
-            print(f"    HTTP {r.status_code}")
-            return {}
-        raw = r.json()
-    except Exception as e:
-        print(f"    取用失敗：{e}")
+    raw = None
+    for _ep in COASTAL_EP_CANDIDATES:
+        try:
+            r = requests.get(f"{BASE_URL}/{_ep}",
+                             params={"Authorization": CWA_API_KEY, "format": "JSON"},
+                             timeout=30)
+            if r.status_code != 200:
+                print(f"    {_ep}：HTTP {r.status_code}")
+                continue
+            _raw = r.json()
+            _rec = (_raw or {}).get('records', {})
+            _keys = list(_rec.keys())[:8] if isinstance(_rec, dict) else []
+            print(f"    {_ep}：HTTP 200，records 鍵 {_keys}")
+            # 判定是否含 Location 節點；沒有就換下一個候選
+            _w = _rec.get('Locations', _rec.get('locations', [])) if isinstance(_rec, dict) else []
+            if isinstance(_w, dict): _w = [_w]
+            _has = bool(_w and (_w[0].get('Location') or _w[0].get('location'))) \
+                   or bool(isinstance(_rec, dict) and (_rec.get('Location') or _rec.get('location')))
+            if _has:
+                raw = _raw
+                print(f"    → 採用 {_ep}")
+                break
+        except Exception as e:
+            print(f"    {_ep}：取用失敗 {e}")
+            continue
+    if raw is None:
+        print("★ 浪高：所有候選端點皆無 Location 節點，wave_fcst 將為空")
         return {}
 
     def _num(v):

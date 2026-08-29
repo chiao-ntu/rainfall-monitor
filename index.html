@@ -2277,9 +2277,10 @@ function renderLayer(){
       pane: 'townPane',
       // ★ 邊框改深灰：原本用 fillColor（與填色同色）等於沒有邊界，
       //   飽和色塊相鄰時完全分不出鄉鎮。選取時仍為黃色高亮。
-      color: isSel ? '#ffff44' : '#2a2a2a',
+      // 深灰但不過重：#2a2a2a 太黑會蓋過色塊，改中灰並降低不透明度
+      color: isSel ? '#ffff44' : '#5a5a5a',
       weight: _hideFill ? (isSel ? 1.5 : 0) : (isSel ? 1.5 : 0.4),
-      opacity: isSel ? 1 : 0.55,
+      opacity: isSel ? 1 : 0.45,
       stroke: _hideFill ? isSel : true,
       fillColor, fillOpacity: _hideFill ? 0.02 : fillOp,
       smoothFactor: 0  // 停用Leaflet的路徑平滑，避免縮放時端點偏移
@@ -5549,6 +5550,9 @@ function _buildWaveIndex(){
   });
   _waveIndex = idx; _waveIndexKey = key;
   const n = Object.keys(wf).length;
+  // ★ data.json 尚未載入時不輸出診斷：否則會先印「無 wave_fcst 欄位」，
+  //   載入後又印「有欄位但為空」，同一頁出現兩則矛盾訊息。
+  if(!window._dataGenAt && !n) return idx;
   if(n){
     console.log(`浪高資料：${n} 個沿海預報點，範例鍵：${Object.keys(wf).slice(0,5).join('、')}`);
   }else{
@@ -6200,7 +6204,7 @@ function renderTownNameLayer(){
       if(ring.length < 3) return;
       // ★ 改深灰：原本的淡藍(#9ab8d0, 0.45) 在飽和色塊上（紅/紫/黃）幾乎看不見，
       //   界線失去分隔作用。深灰不透明度提高後在各種底色上都能辨識。
-      L.polyline(ring.concat([ring[0]]), {color:'#2a2a2a', weight:0.7, opacity:0.75,
+      L.polyline(ring.concat([ring[0]]), {color:'#5a5a5a', weight:0.7, opacity:0.6,
         fill:false, interactive:false}).addTo(townNameLayer);
     });
     const ll = _townCentroid(f);
