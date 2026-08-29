@@ -2395,6 +2395,7 @@ function renderLayer(){
     }
   });
   countyLayer.addTo(map);
+  try{ _logModeDistribution(); }catch(e){}
   // 渲染模式：重算內插色帶層（防抖180ms：拉時間軸時不連續重算，停下才算一次）
   if(_blurOn){
     clearTimeout(window._interpDebounce);
@@ -5495,12 +5496,13 @@ function _tempColor(t){
 //  ★ 僅 120 個沿海預報點有值，內陸鄉鎮須留白（不可填 0，
 //    否則內陸看起來像「浪高 0 公尺」）。
 // ══════════════════════════════════════════════════════════
+// 色碼與 RAIN_SCALE 一致（使用者指定「跟累積雨量同一套」）
 const WAVE_BANDS = [
   {max: 1.0,  color:'#FFFFFF', name:'微波（<1m）'},
-  {max: 1.5,  color:'#40d060', name:'小浪（1–1.5m）'},
-  {max: 2.5,  color:'#f0d040', name:'中浪（1.5–2.5m）'},
-  {max: 5.5,  color:'#e04040', name:'大浪（2.5–5.5m）'},
-  {max: 999,  color:'#c050e0', name:'巨浪（≥5.5m）'},
+  {max: 1.5,  color:'#00FF00', name:'小浪（1–1.5m）'},
+  {max: 2.5,  color:'#FFFF00', name:'中浪（1.5–2.5m）'},
+  {max: 5.5,  color:'#FF0000', name:'大浪（2.5–5.5m）'},
+  {max: 999,  color:'#FF00FF', name:'巨浪（≥5.5m）'},
 ];
 function _waveColor(h){
   if(h == null || !isFinite(h)) return null;
@@ -5573,12 +5575,14 @@ function _waveOf(t){
 }
 
 // 蒲福風級色階（使用者指定；與 ETR2% 同一組色）
+// ★ 色碼與 RAIN_SCALE 完全一致（純色），先前誤用柔和版 #40d060/#f0d040…
+//   導致同一張圖臺上「綠」有兩種深淺，判讀時容易誤以為是不同等級。
 const BF_BANDS = [
-  {max: 4,   color:'#ffffff', name:'4級以下'},
-  {max: 7,   color:'#40d060', name:'4–7級'},
-  {max: 10,  color:'#f0d040', name:'7–10級'},
-  {max: 13,  color:'#e04040', name:'10–13級'},
-  {max: 99,  color:'#c050e0', name:'13級以上'},
+  {max: 4,   color:'#FFFFFF', name:'4級以下'},
+  {max: 7,   color:'#00FF00', name:'4–7級'},
+  {max: 10,  color:'#FFFF00', name:'7–10級'},
+  {max: 13,  color:'#FF0000', name:'10–13級'},
+  {max: 99,  color:'#FF00FF', name:'13級以上'},
 ];
 function _bfColor(bf){
   if(bf == null || !isFinite(bf)) return null;
@@ -6138,6 +6142,31 @@ function _ringsCentroid(rings){
   // rings 為 [lat,lng]；_townCentroidRaw 需 GeoJSON 形式（[lng,lat]）
   const geo = {geometry:{type:'Polygon', coordinates:[best.map(p=>[p[1], p[0]])]}};
   return _townCentroidRaw(geo);
+}
+
+// 各 mode 的值分布診斷：整片同色時，用來分辨是「實際如此」還是「取值有誤」。
+//   只在切到該 mode 時印一次，不干擾一般操作。
+let _distLogged = '';
+function _logModeDistribution(){
+  if(!['wind','temp','wave'].includes(mode)) return;
+  const key = mode + '|' + winKey + '|' + (window._dataGenAt || '');
+  if(_distLogged === key) return;
+  _distLogged = key;
+  const hist = {}; let n = 0, nNull = 0;
+  TOWNSHIPS.forEach(t=>{
+    const v = mode==='wind' ? _windOf(t).bf
+            : mode==='temp' ? _tempOf(t).t
+            : _waveOf(t).wave;
+    if(v == null){ nNull++; return; }
+    const k = (mode==='temp') ? Math.round(v/5)*5 : Math.round(v);
+    hist[k] = (hist[k]||0) + 1; n++;
+  });
+  const label = {wind:'風級', temp:'氣溫(每5°C)', wave:'浪高(m)'}[mode];
+  const parts = Object.keys(hist).sort((a,b)=>a-b).map(k=>`${k}:${hist[k]}`);
+  console.log(`${label} 分布（${n} 個鄉鎮有值、${nNull} 個無值）：${parts.join('、')}`);
+  if(n && Object.keys(hist).length === 1){
+    console.warn(`※ 全臺 ${label} 皆為同一值，請確認資料來源是否正常`);
+  }
 }
 
 function renderTownNameLayer(){

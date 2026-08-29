@@ -1918,9 +1918,9 @@ if (need('updateTyphoonPanel')) {
 console.log('\n=== 風力預測：蒲福風級色階與三種來源 ===');
 if (need('_bfColor') && need('_wsToBf') && need('_windOf')) {
   // 色階邊界（使用者指定：<4白、4-7綠、7-10黃、10-13紅、>=13紫）
-  const cases = [[0,'#ffffff'],[3,'#ffffff'],[4,'#40d060'],[6,'#40d060'],
-                 [7,'#f0d040'],[9,'#f0d040'],[10,'#e04040'],[12,'#e04040'],
-                 [13,'#c050e0'],[17,'#c050e0']];
+  const cases = [[0,'#FFFFFF'],[3,'#FFFFFF'],[4,'#00FF00'],[6,'#00FF00'],
+                 [7,'#FFFF00'],[9,'#FFFF00'],[10,'#FF0000'],[12,'#FF0000'],
+                 [13,'#FF00FF'],[17,'#FF00FF']];
   let ok = true;
   cases.forEach(([bf, col])=>{ if(G._bfColor(bf) !== col){ ok = false;
     fails.push(`風級 ${bf} 色階錯誤：得 ${G._bfColor(bf)} 期望 ${col}`); } });
@@ -2000,8 +2000,9 @@ if (need('getAccum') && need('_windOf')) {
 
   // 色階套用：以實際取到的風級驗色（getAccum 取「今日結束」時刻，
   //   可能落在較晚的預報段，故不可寫死 6 級）
-  const wantCol = acc.totalRain < 4 ? '#ffffff' : acc.totalRain < 7 ? '#40d060'
-                : acc.totalRain < 10 ? '#f0d040' : acc.totalRain < 13 ? '#e04040' : '#c050e0';
+  // 色碼已對齊 RAIN_SCALE（純色）
+  const wantCol = acc.totalRain < 4 ? '#FFFFFF' : acc.totalRain < 7 ? '#00FF00'
+                : acc.totalRain < 10 ? '#FFFF00' : acc.totalRain < 13 ? '#FF0000' : '#FF00FF';
   chk(`風級 ${acc.totalRain} 對應色階`, G._bfColor(acc.totalRain), wantCol);
 
   // 按鈕群組：風力屬 mode 群組
@@ -2335,9 +2336,9 @@ if (need('_tempColor') && need('_tempOf') && need('_tempRow')) {
 
 console.log('\n=== 浪高模式 ===');
 if (need('_waveColor') && need('_waveOf') && need('_waveRow')) {
-  const wc = [[0.5,'#FFFFFF'],[0.99,'#FFFFFF'],[1.0,'#40d060'],[1.4,'#40d060'],
-              [1.5,'#f0d040'],[2.4,'#f0d040'],[2.5,'#e04040'],[5.4,'#e04040'],
-              [5.5,'#c050e0'],[9.0,'#c050e0']];
+  const wc = [[0.5,'#FFFFFF'],[0.99,'#FFFFFF'],[1.0,'#00FF00'],[1.4,'#00FF00'],
+              [1.5,'#FFFF00'],[2.4,'#FFFF00'],[2.5,'#FF0000'],[5.4,'#FF0000'],
+              [5.5,'#FF00FF'],[9.0,'#FF00FF']];
   let ok2 = true;
   wc.forEach(([v,c])=>{ if(G._waveColor(v)!==c){ ok2=false;
     fails.push(`浪高 ${v}m 色階錯：得 ${G._waveColor(v)} 期望 ${c}`);} });
@@ -2354,7 +2355,7 @@ if (need('_waveColor') && need('_waveOf') && need('_waveRow')) {
   const wv = G._waveOf(ct);
   console.log(`   蘇澳鎮浪高 ${wv.wave}m（${wv.dir}、${wv.bf}級）`);
   chk('沿海取得浪高', wv.wave, 3.0);
-  chk('3.0m → 大浪紅色', G._waveColor(wv.wave), '#e04040');
+  chk('3.0m → 大浪紅色', G._waveColor(wv.wave), '#FF0000');
   const wacc = G.getAccum(ct, 'wave');
   chk('★浪高為獨立模式', wacc.isWave, true);
   // 內陸鄉鎮必須無值
@@ -2531,6 +2532,39 @@ console.log('\n=== 浪高診斷訊息可區分兩種情況 ===');
   const py = fs.readFileSync('fetch_rainfall.py', 'utf8');
   chk('後端輸出欄位自我檢查', /新增欄位：/.test(py), true);
   chk('後端提示 wave_fcst 為空', /wave_fcst 為空/.test(py), true);
+}
+
+
+console.log('\n=== 色階與雨量一致 + 分布診斷 ===');
+{
+  const rain = getLex('RAIN_SCALE').map(x=>x.color);
+  const bf = getLex('BF_BANDS').map(x=>x.color);
+  const wv = getLex('WAVE_BANDS').map(x=>x.color);
+  console.log(`   雨量：${rain.slice(0,5).join(' ')}`);
+  console.log(`   風力：${bf.join(' ')}`);
+  console.log(`   浪高：${wv.join(' ')}`);
+  // 風力/浪高的綠黃紅紫須與雨量同色碼
+  chk('★風力綠＝雨量綠(#00FF00)', bf[1], '#00FF00');
+  chk('★風力黃＝雨量黃(#FFFF00)', bf[2], '#FFFF00');
+  chk('★風力紅＝雨量紅(#FF0000)', bf[3], '#FF0000');
+  chk('★風力紫＝雨量紫(#FF00FF)', bf[4], '#FF00FF');
+  chk('浪高綠＝雨量綠', wv[1], '#00FF00');
+  chk('浪高紫＝雨量紫', wv[4], '#FF00FF');
+  // ★ 只檢查「實際使用」的色碼，註解中的說明文字不算
+  const _src = fs.readFileSync('index.html','utf8')
+    .split('\n').filter(l=>!l.trim().startsWith('//')).join('\n');
+  chk('無柔和版色碼殘留（程式碼中）',
+      /'#40d060'|'#f0d040'|'#e04040'|'#c050e0'/.test(_src), false);
+}
+if (need('_logModeDistribution')) {
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('提供值分布診斷', /分布（\$\{n\} 個鄉鎮有值/.test(src), true);
+  chk('全臺同值時提出警告', /全臺 \$\{label\} 皆為同一值/.test(src), true);
+  let dthrew = false;
+  setLex("mode='wind';");
+  try { G._logModeDistribution(); } catch(e){ dthrew = true; console.log('   ', e.message); }
+  setLex("mode='rain';");
+  chk('診斷不拋錯', dthrew, false);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
