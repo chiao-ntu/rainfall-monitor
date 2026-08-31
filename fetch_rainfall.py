@@ -73,189 +73,144 @@ COUNTY_EP_7D = {
 # ★ 實測（2026-08-30）：F-D0047-095/096 與 F-A0085-001 皆回 404，
 #   只有 F-A0085-002 回 200 且含 Locations，故置於首位。
 #   先前誤用 095 是從官方 PDF 檔名推得，文件檔名 ≠ API dataid。
-COASTAL_EP_CANDIDATES = ['F-A0085-002', 'F-A0085-001', 'F-D0047-095', 'F-D0047-096']
-COASTAL_EP = COASTAL_EP_CANDIDATES[0]
+WAVE_EP = 'F-A0020-001'          # 波浪預報模式（實測確認：含 hs/dir/t 三組格點）
+WAVE_STEPS = 24                  # 取 24 個時間步（每 3 小時 → 涵蓋 72 小時）
+COASTAL_TOWNS_FILE = 'coastal_towns.json'   # 沿海鄉鎮清單（由海岸線距離判定）
 
 
 def fetch_wave_forecast():
-    """鄉鎮沿海預報 → {鄉鎮名: [{start, end, wave, bf, dir}]}。
+    """波浪預報模式（F-A0020-001）→ 沿海鄉鎮的浪高／浪向／週期。
 
-    欄位（官方產品說明 F-D0047-095_096.pdf）：
-      WaveHeight 浪高(公尺)、BeaufortScale 蒲福風級、WaveDirection 浪向(8方位)
-    無資料或失敗回 {}。
+    ★ 資料源（實測 2026-08-31，使用者提供原始 zip 確認）：
+        F-A0020-001「波浪預報模式資料」
+        0.1°格點 163×268、範圍 109.9-126.1E / 9.4-36.1N、逐時 169 步
+        zip 內三組檔：hs（浪高）、dir（浪向）、t（週期），各 169 個 XML
+      先前誤用 F-D0047-095/096（404）與 F-A0085-002（實為寒害指數），
+      皆因從文件檔名或名稱推測 dataid —— CWA 的 dataid 無法推測，必須實證。
+
+    ★ 體積控制：解壓後全套約 2.4GB，故只讀「浪高＋浪向＋週期」各 24 個時間步
+      （前 72 小時、每 3 小時一筆），且只保留沿海鄉鎮對應的格點。
+
+    回傳 {縣市+鄉鎮: [{start, end, wave, dir, period}]}；失敗回 {}。
     """
     if not CWA_API_KEY:
         print("★ 浪高：無 CWA_API_KEY，略過")
         return {}
-    print("抓取鄉鎮沿海預報（浪高）...")
-    raw = None
-    for _ep in COASTAL_EP_CANDIDATES:
-        try:
-            r = requests.get(f"{BASE_URL}/{_ep}",
-                             params={"Authorization": CWA_API_KEY, "format": "JSON"},
-                             timeout=30)
-            if r.status_code != 200:
-                print(f"    {_ep}：HTTP {r.status_code}")
-                continue
-            _raw = r.json()
-            _rec = (_raw or {}).get('records', {})
-            _keys = list(_rec.keys())[:8] if isinstance(_rec, dict) else []
-            print(f"    {_ep}：HTTP 200，records 鍵 {_keys}")
-            # 判定是否含 Location 節點；沒有就換下一個候選
-            _w = _rec.get('Locations', _rec.get('locations', [])) if isinstance(_rec, dict) else []
-            if isinstance(_w, dict): _w = [_w]
-            _has = bool(_w and (_w[0].get('Location') or _w[0].get('location'))) \
-                   or bool(isinstance(_rec, dict) and (_rec.get('Location') or _rec.get('location')))
-            if _has:
-                raw = _raw
-                print(f"    → 採用 {_ep}")
-                break
-        except Exception as e:
-            print(f"    {_ep}：取用失敗 {e}")
-            continue
-    if raw is None:
-        print("★ 浪高：所有候選端點皆無 Location 節點，wave_fcst 將為空")
+    if not os.path.exists(COASTAL_TOWNS_FILE):
+        print(f"★ 浪高：找不到 {COASTAL_TOWNS_FILE}，略過")
+        return {}
+    try:
+        with open(COASTAL_TOWNS_FILE, encoding='utf-8') as f:
+            towns = json.load(f)
+    except Exception as e:
+        print(f"★ 浪高：沿海鄉鎮清單讀取失敗 {e}")
         return {}
 
-    def _num(v):
-        if v in (None, '', ' '):
-            return None
+    import io as _io, zipfile as _zip
+    print(f"抓取波浪預報模式（{WAVE_EP}）...")
+    zf = None
+    for _try in range(2):
         try:
-            return float(str(v).replace('>=', '').replace('<=', '')
-                          .replace('>', '').replace('<', '').strip())
-        except (TypeError, ValueError):
-            return None
+            r = requests.get(f"{BASE_URL}/{WAVE_EP}",
+                             params={"Authorization": CWA_API_KEY, "format": "ZIP"},
+                             timeout=180)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}（{_try+1}/2）")
+                if _try == 0: time.sleep(5)
+                continue
+            zf = _zip.ZipFile(_io.BytesIO(r.content))
+            break
+        except Exception as e:
+            print(f"    取用失敗（{_try+1}/2）：{e}")
+            if _try == 0: time.sleep(5)
+    if zf is None:
+        print("★ 浪高：下載失敗")
+        return {}
+
+    names = zf.namelist()
+    def _pick(tag):
+        got = sorted(n for n in names if f'-{tag}.' in n and n.endswith('.xml'))
+        return got[:WAVE_STEPS * 3:3]        # 逐時 → 每 3 小時取一筆
+    files = {'hs': _pick('hs'), 'dir': _pick('dir'), 't': _pick('t')}
+    print(f"    zip 內 {len(names)} 檔；取浪高 {len(files['hs'])}、"
+          f"浪向 {len(files['dir'])}、週期 {len(files['t'])} 個時間步")
+    if not files['hs']:
+        print(f"★ 浪高：zip 內找不到 hs 檔，實際檔名例：{names[:5]}")
+        return {}
+
+    _pt_re = re.compile(
+        r'<Latitude>([\d.]+)</Latitude>\s*<Longitude>([\d.]+)</Longitude>\s*<(\w+)>([-\d.]+)</\4?')
+
+    def _read(fn):
+        """回傳 (DateTime, {(lat,lng): value})，只保留臺灣周邊格點。"""
+        try:
+            txt = zf.read(fn).decode('utf-8', 'replace')
+        except Exception:
+            return None, {}
+        m = re.search(r'<DateTime>([^<]+)</DateTime>', txt)
+        dt = m.group(1) if m else ''
+        vals = {}
+        for mm in re.finditer(
+                r'<Latitude>([\d.]+)</Latitude>\s*<Longitude>([\d.]+)</Longitude>\s*'
+                r'<(?:WaveHeight|WaveDirection|WavePeriod)>([-\d.]+)<', txt):
+            la, lo, v = float(mm.group(1)), float(mm.group(2)), float(mm.group(3))
+            if not (21.0 <= la <= 26.5 and 118.0 <= lo <= 123.0):
+                continue
+            if v < 0:            # 負值＝陸地／無效
+                continue
+            vals[(round(la, 1), round(lo, 1))] = v
+        return dt, vals
+
+    # 每個沿海鄉鎮先找一次最近的有效格點（以第一個時間步為準），之後沿用
+    _dt0, _v0 = _read(files['hs'][0])
+    if not _v0:
+        print("★ 浪高：第一個時間步無有效格點")
+        return {}
+    sea_keys = list(_v0.keys())
+
+    def _nearest(lat, lng):
+        best, bd = None, 1e9
+        for (sla, slo) in sea_keys:
+            d = (sla - lat) ** 2 + ((slo - lng) * 0.92) ** 2
+            if d < bd: bd, best = d, (sla, slo)
+        return best, math.sqrt(bd) * 111.0
+
+    town_grid, far = {}, 0
+    for k, info in towns.items():
+        g, dkm = _nearest(info['lat'], info['lng'])
+        if g is None or dkm > 60:
+            far += 1
+            continue
+        town_grid[k] = (g, round(dkm, 1))
+    print(f"    沿海鄉鎮 {len(towns)} 個 → 對到格點 {len(town_grid)} 個"
+          + (f"（{far} 個超出 60km 略過）" if far else ""))
 
     out = {}
-    try:
-        rec = raw.get('records', {})
-        # ★ 各資料集的外層結構不一致，必須逐一嘗試並在失敗時印出實際鍵名，
-        #   否則像先前那樣靜默 return {}，log 完全看不出原因。
-        #   已知變體：
-        #     records.Locations[0].Location[]   （鄉鎮預報 F-D0047-0xx）
-        #     records.locations[0].location[]   （小寫版）
-        #     records.location[]                （部分資料集無 Locations 包層）
-        locs = []
-        wrap = rec.get('Locations', rec.get('locations', []))
-        if isinstance(wrap, dict):
-            wrap = [wrap]
-        if wrap:
-            locs = wrap[0].get('Location', wrap[0].get('location', [])) or []
-        if not locs:
-            locs = rec.get('Location', rec.get('location', [])) or []
-        if isinstance(locs, dict):
-            locs = [locs]
-        if not locs:
-            print(f"    找不到 Location 節點；records 鍵：{list(rec.keys())[:8]}")
-            if wrap:
-                print(f"    Locations[0] 鍵：{list(wrap[0].keys())[:8]}")
-            return {}
-        _dbg_elems = set()
-        _dbg_loc_keys = set()
-        _dbg_we_keys = set()
-        for loc in locs:
-            name = (loc.get('LocationName') or loc.get('locationName') or '').strip()
-            if not name:
+    for idx in range(len(files['hs'])):
+        dt, hs = _read(files['hs'][idx])
+        _, dr = _read(files['dir'][idx]) if idx < len(files['dir']) else ('', {})
+        _, pd = _read(files['t'][idx])   if idx < len(files['t'])   else ('', {})
+        if not dt or not hs:
+            continue
+        try:
+            st = datetime.fromisoformat(dt)
+            en = (st + timedelta(hours=3)).isoformat()
+            st = st.isoformat()
+        except Exception:
+            st, en = dt, dt
+        for k, (g, _d) in town_grid.items():
+            w = hs.get(g)
+            if w is None:
                 continue
-            segs = {}
-            # ★ 實測 F-A0085-002 回 29 個預報點但 WeatherElement 為空 →
-            #   氣象因子的鍵名與鄉鎮預報不同。故列舉多種變體，
-            #   全數落空時把 Location 的實際鍵印出來供比對。
-            _we_list = (loc.get('WeatherElement') or loc.get('weatherElement')
-                        or loc.get('WeatherElements') or loc.get('weatherElements')
-                        or loc.get('Weather') or loc.get('weather') or [])
-            if not _we_list and not _dbg_loc_keys:
-                _dbg_loc_keys.update(list(loc.keys())[:12])
-            for we in _we_list:
-                if not isinstance(we, dict):
-                    continue
-                _dbg_we_keys.update(list(we.keys())[:12])
-                # 時間序列的鍵名也可能不同，逐一嘗試
-                _times = (we.get('Time') or we.get('time')
-                          or we.get('Times') or we.get('times') or [])
-                for t in _times:
-                    def _first(*keys):
-                        for k in keys:
-                            v = t.get(k)
-                            if v not in (None, '', ' '):
-                                return v
-                        return ''
-                    st = _first('StartTime', 'startTime', 'DataTime', 'dataTime')
-                    if not st:
-                        continue
-                    en = _first('EndTime', 'endTime') or st
-                    ev = t.get('ElementValue', t.get('elementValue', [{}]))
-                    if isinstance(ev, list):
-                        ev = ev[0] if ev else {}
-                    rec_ = segs.setdefault(st, {'start': st, 'end': en,
-                                                'wave': None, 'bf': None, 'dir': ''})
-                    # ★ 浪高的值鍵可能有多種寫法；區間值（如 "2~3"）取上界（保守側）。
-                    for k in ('WaveHeight', 'waveHeight',
-                              'WaveHeightRange', 'waveHeightRange'):
-                        if k in ev:
-                            _raw = ev.get(k)
-                            v = _num(_raw)
-                            if v is None and _raw:
-                                # "2~3"、"2-3"、"2到3" → 取較大者
-                                _parts = [x for x in re.split(r'[~\-—到至]', str(_raw))
-                                          if x.strip()]
-                                _nums = [n for n in (_num(x) for x in _parts) if n is not None]
-                                if _nums: v = max(_nums)
-                            if v is not None:
-                                rec_['wave'] = v
-                            break
-                    for k in ('BeaufortScale', 'beaufortScale'):
-                        if k in ev:
-                            v = _num(ev.get(k))
-                            if v is not None:
-                                rec_['bf'] = int(v)
-                            break
-                    for k in ('WaveDirection', 'waveDirection'):
-                        if k in ev and ev.get(k):
-                            rec_['dir'] = str(ev.get(k)).strip()
-                            break
-                    # 逐 3 小時僅有 DataTime，補上區間長度供前端判斷「當前時段」
-                    if rec_['end'] == rec_['start']:
-                        try:
-                            from datetime import datetime as _dt, timedelta as _td
-                            rec_['end'] = (_dt.fromisoformat(st) + _td(hours=3)).isoformat()
-                        except Exception:
-                            pass
-            keep = [v for v in segs.values() if v['wave'] is not None]
-            if keep:
-                out[name] = sorted(keep, key=lambda x: x['start'])
-            else:
-                for we in loc.get('WeatherElement', loc.get('weatherElement', [])):
-                    en = we.get('ElementName') or we.get('elementName') or ''
-                    if en: _dbg_elems.add(en)
-    except Exception as e:
-        print(f"    解析失敗：{e}")
-        return {}
+            out.setdefault(k, []).append({
+                'start': st, 'end': en, 'wave': round(w, 2),
+                'dir': dr.get(g), 'period': pd.get(g)})
     if out:
         n = sum(len(v) for v in out.values())
-        print(f"    沿海浪高：{len(out)} 個預報點、{n} 時段")
+        print(f"    沿海浪高：{len(out)} 個鄉鎮、{n} 筆時段"
+              f"（含浪向與週期）")
     else:
-        # 有 Location 但取不到浪高 → 印出實際的氣象因子名稱與值鍵，供比對
-        print(f"    有 {len(locs)} 個預報點但無浪高值；氣象因子：{sorted(_dbg_elems)[:12]}")
-        # ★ 前兩輪的分層診斷都沒印出東西（表示鍵名與所有假設都不同），
-        #   故直接傾印第一筆 Location 的原始 JSON（截斷 1200 字），一次看清全貌。
-        try:
-            _dump = json.dumps(locs[0], ensure_ascii=False)[:1200]
-            print(f"    ★ 第一筆 Location 原始結構：{_dump}")
-        except Exception as _e:
-            print(f"    （傾印失敗：{_e}）")
-        try:
-            _l0 = locs[0]
-            _w0 = (_l0.get('WeatherElement') or _l0.get('weatherElement') or [])
-            for _we in _w0[:3]:
-                _t0 = (_we.get('Time') or _we.get('time') or [])
-                if _t0:
-                    _ev = _t0[0].get('ElementValue') or _t0[0].get('elementValue') or [{}]
-                    if isinstance(_ev, list): _ev = _ev[0] if _ev else {}
-                    print(f"      {_we.get('ElementName') or _we.get('elementName')}"
-                          f" → 值鍵 {list(_ev.keys())}")
-        except Exception:
-            pass
+        print("★ 浪高：格點對應後仍無資料")
     return out
 
 
@@ -3583,7 +3538,7 @@ def main():
         _msg.append(f"{_k}={_n}")
     print(f"  新增欄位：{'、'.join(_msg)}")
     if not wave_fcst:
-        print(f"  ※ wave_fcst 為空：候選端點 {COASTAL_EP_CANDIDATES} 均未取得浪高值")
+        print(f"  ※ wave_fcst 為空：{WAVE_EP} 取用失敗或沿海鄉鎮清單缺漏")
 
     print(f"\n完成：{OUTPUT_FILE}（{os.path.getsize(OUTPUT_FILE)//1024}KB）")
     print(f"  鄉鎮：{len(out_towns)}，PoP3d：{len(pop3d)}，PoP7d：{len(pop7d)}")
