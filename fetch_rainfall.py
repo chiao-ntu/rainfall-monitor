@@ -134,6 +134,82 @@ def _resolve_product_url(dataid, timeout=60):
     return url
 
 
+TIDE_EP = 'F-A0021-001'          # 鄉鎮潮汐預報（滿潮／乾潮時刻與潮高）
+
+
+def fetch_tide_forecast():
+    """鄉鎮潮汐預報 → {縣市+鄉鎮: {'range': 大/中/小, 'times': [...]}}。
+
+    ★ 為何需要：暴潮溢淹的高風險時刻是「滿潮 × 大浪」同時發生，
+      只看浪高會低估。潮差「大」的日子（大潮）風險更高。
+    ★ 資料源實測（使用者提供原始檔）：266 個地點，鍵即「縣市+鄉鎮」，
+      每日含 2-4 筆滿潮／乾潮，潮高有三種基準，取 AboveLocalMSL
+      （相對當地平均海平面）最適合判讀相對水位。
+    回傳 {}, 失敗不影響其他流程。
+    """
+    if not CWA_API_KEY:
+        return {}
+    print(f"抓取鄉鎮潮汐預報（{TIDE_EP}）...")
+    txt = None
+    for _try in range(2):
+        try:
+            r = requests.get(f"{FILEAPI}/{TIDE_EP}",
+                             params={"Authorization": CWA_API_KEY,
+                                     "downloadType": "WEB", "format": "XML"},
+                             timeout=120)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}（{_try+1}/2）")
+                if _try == 0: time.sleep(5)
+                continue
+            txt = r.content.decode('utf-8', 'replace')
+            break
+        except Exception as e:
+            print(f"    取用失敗（{_try+1}/2）：{e}")
+            if _try == 0: time.sleep(5)
+    if not txt:
+        print("★ 潮汐：下載失敗")
+        return {}
+
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(re.sub(r'\sxmlns="[^"]+"', '', txt, count=1))
+    except Exception as e:
+        print(f"★ 潮汐：XML 解析失敗 {e}")
+        return {}
+
+    out = {}
+    for loc in root.iter('Location'):
+        name = (loc.findtext('LocationName') or '').strip()
+        if not name:
+            continue
+        days = []
+        for d in loc.iter('Daily'):
+            date = d.findtext('Date') or ''
+            rng = d.findtext('TideRange') or ''
+            times = []
+            for t in d.findall('Time'):
+                dt = t.findtext('DateTime') or ''
+                kind = t.findtext('Tide') or ''
+                th = t.find('TideHeights')
+                msl = None
+                if th is not None:
+                    v = th.findtext('AboveLocalMSL')
+                    try: msl = int(float(v))
+                    except (TypeError, ValueError): msl = None
+                if dt and kind:
+                    times.append({'t': dt, 'kind': kind, 'cm': msl})
+            if times:
+                days.append({'date': date, 'range': rng, 'times': times})
+        if days:
+            out[name] = days
+    if out:
+        n = sum(len(v) for v in out.values())
+        print(f"    潮汐預報：{len(out)} 個地點、{n} 個預報日")
+    else:
+        print("★ 潮汐：解析後無資料")
+    return out
+
+
 def fetch_wave_forecast():
     """波浪預報模式（F-A0020-001）→ 沿海鄉鎮的浪高／浪向／週期。
 
@@ -2999,6 +3075,7 @@ def main():
     gust_fcst     = fetch_gust_forecast() if CWA_API_KEY else {}
     # 沿海浪高（僅 120 個沿海預報點）
     wave_fcst     = fetch_wave_forecast() if CWA_API_KEY else {}
+    tide_fcst     = fetch_tide_forecast() if CWA_API_KEY else {}
     debris_alerts = fetch_debris_alerts()
     # 雙軌：現況紅黃走官方發布值、未來推估自算
     official_alerts = fetch_official_alerts()
@@ -3554,6 +3631,9 @@ def main():
         'temp_fcst': TEMP_FCST,
         # 鄉鎮沿海浪高（F-D0047-095，僅 120 個沿海預報點；內陸無值須留白）
         'wave_fcst': wave_fcst,
+        # 鄉鎮潮汐預報（F-A0021-001）：滿潮/乾潮時刻、潮高(cm,相對當地均潮位)、潮差級別
+        #   ★ 暴潮溢淹風險＝滿潮 × 大浪同時發生，故需與 wave_fcst 併看
+        'tide_fcst': tide_fcst,
         # 雙軌警戒：off_* ＝官方發布（權威）、est_* ＝系統推估（前端須標示）
         'debris_alerts': debris_alerts,        # 土石流逐潛勢溪流
         'landslide_alerts': landslide_alerts,  # 大規模崩塌逐警戒區
@@ -3599,7 +3679,8 @@ def main():
     # ★ 欄位自我檢查：列出本版應有的欄位與其筆數，讓「程式已更新但沒部署」
     #   或「某支 API 全數失敗」能從 log 一眼看出，不必等前端回報。
     _chk = [('wind_fcst', WIND_FCST), ('temp_fcst', TEMP_FCST),
-            ('wave_fcst', wave_fcst), ('gust_fcst', gust_fcst)]
+            ('wave_fcst', wave_fcst), ('gust_fcst', gust_fcst),
+            ('tide_fcst', tide_fcst)]
     _msg = []
     for _k, _v in _chk:
         _n = sum(len(x) for x in _v.values()) if isinstance(_v, dict) and _v \

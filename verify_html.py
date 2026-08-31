@@ -43,6 +43,8 @@ MUST = ['getAccum', 'setWin', 'onSlider', '_spanAccum', '_hourlyBars', '_futuHou
         'renderEastAsiaLayer', '_ringsCentroid',
         '_tempColor', '_waveColor', '_tempOf', '_waveOf', '_tempRow', '_waveRow',
         '_tempSeries', '_waveSeries', '_dayMax', '_buildWaveIndex', '_maxHourRow',
+        '_longSwell', '_waveDirText', '_onshore', '_isCoastal',
+        '_nextHighTide', '_surgeRisk',
         '_logModeDistribution',
         'drawTempDayChart', 'drawTempHourChart', 'drawWaveDayChart', 'drawWaveHourChart',
         '_bfColor', '_wsToBf', '_gustFactor',

@@ -2787,6 +2787,74 @@ if (need('_waveOf') && need('_buildWaveIndex')) {
   setLex("window.WAVE_FCST = {};");
 }
 
+
+console.log('\n=== 潮汐與暴潮溢淹研判 ===');
+if (need('_nextHighTide') && need('_surgeRisk')) {
+  // ★ _surgeRisk 以「目前選取時段」為基準（_windAtMs），非牆上時鐘。
+  //   測試須用同一基準佈題，否則滿潮距離會對不上。
+  setLex("winKey='today'; segFrom=0; segTo=3; mode='rain';" +
+         "{const d=new Date(); d.setHours(0,0,0,0); BASE_TIME=d;}");
+  const now = getLex('_windAtMs()');
+  const iso = ms => new Date(ms).toISOString();
+  const wseg = (w) => ({start:iso(now-3*3600e3), end:iso(now+3*3600e3),
+                        wave:w, dir:60, period:9});
+  const mkTide = (offsetH, cm, range) => ([{
+    date:'2026-08-31', range,
+    times:[{t: iso(now + offsetH*3600e3), kind:'滿潮', cm},
+           {t: iso(now + (offsetH+6)*3600e3), kind:'乾潮', cm:-cm}]}]);
+  const t = {county:'宜蘭縣', township:'蘇澳鎮'};
+
+  // 滿潮在 1 小時後 + 大浪 3.0m → 警戒
+  setLex(`window.TIDE_FCST = {'宜蘭縣蘇澳鎮': ${JSON.stringify(mkTide(1, 120, '大'))}};
+    window.WAVE_FCST = {'宜蘭縣蘇澳鎮': [${JSON.stringify(wseg(3.0))}]};`);
+  const ht = G._nextHighTide(t, now);
+  console.log(`   下次滿潮 ${ht ? ht.hoursAway.toFixed(1) : '—'}h 後、${ht ? ht.cm : '—'}cm、潮差${ht ? ht.range : '—'}`);
+  chk('取得滿潮', !!ht, true);
+  chk('潮高正確', ht.cm, 120);
+  chk('潮差級別', ht.range, '大');
+
+  const sr = G._surgeRisk(t);
+  console.log(`   暴潮研判：等級${sr.level}（浪${sr.wave}m、滿潮${sr.hoursAway}h後、潮差${sr.range}）`);
+  chk('★滿潮±2h + 大浪 → 警戒(2)', sr.level, 2);
+
+  // 中浪 1.8m + 大潮 → 注意升警戒
+  setLex(`window.WAVE_FCST = {'宜蘭縣蘇澳鎮': [${JSON.stringify(wseg(2.0))}]};`);
+  chk('★滿潮 + 2.0m + 大潮 → 警戒', G._surgeRisk(t).level, 2);
+  setLex(`window.WAVE_FCST = {'宜蘭縣蘇澳鎮': [${JSON.stringify(wseg(1.6))}]};`);
+  chk('滿潮 + 1.6m → 注意(1)', G._surgeRisk(t).level, 1);
+  // 浪小 → 無風險
+  setLex(`window.WAVE_FCST = {'宜蘭縣蘇澳鎮': [${JSON.stringify(wseg(0.8))}]};`);
+  chk('★浪小時無暴潮風險', G._surgeRisk(t).level, 0);
+
+  // 滿潮很遠（10h後）+ 大浪 + 大潮 → 僅注意
+  setLex(`window.TIDE_FCST = {'宜蘭縣蘇澳鎮': ${JSON.stringify(mkTide(10, 120, '大'))}};
+    window.WAVE_FCST = {'宜蘭縣蘇澳鎮': [${JSON.stringify(wseg(3.0))}]};`);
+  const far = G._surgeRisk(t);
+  console.log(`   滿潮 ${far.hoursAway}h 後 + 3.0m 大浪 → 等級${far.level}`);
+  chk('★滿潮尚遠時降為注意', far.level, 1);
+
+  // 無潮汐資料 → null（不誤報）
+  setLex("window.TIDE_FCST = {};");
+  chk('★無潮汐資料回 null', G._surgeRisk(t), null);
+  chk('內陸無滿潮', G._nextHighTide({county:'南投縣',township:'仁愛鄉'}, now), null);
+
+  // tooltip
+  setLex(`window.TIDE_FCST = {'宜蘭縣蘇澳鎮': ${JSON.stringify(mkTide(1, 120, '大'))}};
+    window.WAVE_FCST = {'宜蘭縣蘇澳鎮': [${JSON.stringify(wseg(3.0))}]};`);
+  const row = G._waveRow(t).replace(/<[^>]*>/g, ' ');
+  console.log(`   tooltip：${row.trim()}`);
+  chk('含滿潮時刻', /滿潮/.test(row), true);
+  chk('含潮高', /120cm/.test(row), true);
+  chk('含潮差', /潮差大/.test(row), true);
+  chk('★含暴潮警戒', /暴潮警戒/.test(row), true);
+  chk('★標明非官方', /系統研判，非官方暴潮警戒/.test(G._waveRow(t)), true);
+
+  const py = fs.readFileSync('fetch_rainfall.py', 'utf8');
+  chk('後端有潮汐擷取', /TIDE_EP = 'F-A0021-001'/.test(py), true);
+  chk('輸出含 tide_fcst', /'tide_fcst': tide_fcst/.test(py), true);
+  setLex("window.TIDE_FCST = {}; window.WAVE_FCST = {};");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

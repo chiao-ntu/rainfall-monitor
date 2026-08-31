@@ -3267,7 +3267,8 @@ async function tryLoadLive(){
     // 風力預測：wind_fcst＝368鄉鎮平均風（官方）、gust_fcst＝颱風期間各地區陣風（官方）
     window.WIND_FCST = d.wind_fcst || {};
     window.TEMP_FCST = d.temp_fcst || {};   // 鄉鎮氣溫（逐3小時）
-    window.WAVE_FCST = d.wave_fcst || {};   // 沿海浪高（僅120個沿海預報點）
+    window.WAVE_FCST = d.wave_fcst || {};   // 沿海浪高（僅沿海鄉鎮）
+    window.TIDE_FCST = d.tide_fcst || {};   // 鄉鎮潮汐（滿潮/乾潮時刻與潮高）
     // 區分「欄位不存在（後端未更新）」與「欄位存在但為空（API 無資料）」
     window._dataHasWaveField = Object.prototype.hasOwnProperty.call(d, 'wave_fcst');
     window.GUST_FCST = d.gust_fcst || {};
@@ -5607,6 +5608,48 @@ function _waveOf(t){
           period: (seg.period != null ? seg.period : null)};
 }
 
+// ══════════════════════════════════════════════════════════
+//  潮汐與暴潮溢淹研判
+//  ★ 暴潮的高風險時刻是「滿潮 × 大浪」同時發生 —— 只看浪高會低估。
+//    大潮日（潮差「大」）的滿潮位更高，風險再往上一階。
+//  ★ 這是本系統的研判，非官方暴潮警戒，介面須標明。
+// ══════════════════════════════════════════════════════════
+// 取某鄉鎮在指定時刻前後最近的一次滿潮
+function _nextHighTide(t, atMs){
+  const days = (window.TIDE_FCST || {})[(t.county||'') + (t.township||'')] || [];
+  if(!days.length) return null;
+  const at = (atMs == null) ? Date.now() : atMs;
+  let best = null, bd = Infinity;
+  days.forEach(d=>{
+    (d.times || []).forEach(x=>{
+      if(x.kind !== '滿潮') return;
+      const ms = Date.parse(x.t);
+      if(!isFinite(ms)) return;
+      const diff = Math.abs(ms - at);
+      if(diff < bd){ bd = diff; best = {ms, cm: x.cm, range: d.range, date: d.date}; }
+    });
+  });
+  return best ? Object.assign(best, {hoursAway: bd / 3600e3}) : null;
+}
+// 暴潮溢淹研判：滿潮時刻附近（±2h）是否同時有大浪
+//   level 0=無 1=注意 2=警戒
+function _surgeRisk(t){
+  const ht = _nextHighTide(t, _windAtMs());
+  if(!ht) return null;
+  const w = _waveOf(t);
+  if(w.wave == null) return null;
+  const near = ht.hoursAway <= 2;              // 滿潮前後 2 小時內
+  const bigTide = (ht.range === '大');
+  let level = 0;
+  if(near && w.wave >= 2.5) level = 2;
+  else if(near && w.wave >= 1.5) level = 1;
+  else if(bigTide && w.wave >= 2.5) level = 1;
+  // 大潮日的滿潮再加一階
+  if(level === 1 && near && bigTide && w.wave >= 2.0) level = 2;
+  return {level, wave: w.wave, tideCm: ht.cm, range: ht.range,
+          tideMs: ht.ms, hoursAway: Math.round(ht.hoursAway * 10) / 10, near};
+}
+
 // ── 長浪示警 ──────────────────────────────────────
 //   週期長的湧浪能量深、爬升高，對海岸構造物與越堤的威脅遠高於同高度的風浪。
 //   判準（實務常用）：週期 ≥8s 且浪高 ≥2m。
@@ -6063,6 +6106,27 @@ function _waveRow(t){
   const dt = _waveDirText(w.dir);
   if(dt) h += `<span style="color:#8a9aaa">　${dt}浪</span>`;
   if(w.period != null) h += `<span style="color:#8a9aaa">　週期 ${w.period.toFixed(0)}s</span>`;
+  // 潮汐：下一次滿潮的時刻與潮高
+  const ht = _nextHighTide(t, _windAtMs());
+  if(ht){
+    const d = new Date(ht.ms);
+    const hhmm = String(d.getHours()).padStart(2,'0') + ':' +
+                 String(d.getMinutes()).padStart(2,'0');
+    h += `<br>滿潮：<b>${hhmm}</b>`
+       + (ht.cm != null ? `<span style="color:#8a9aaa">　${ht.cm > 0 ? '+' : ''}${ht.cm}cm</span>` : '')
+       + (ht.range ? `<span style="color:#8a9aaa">　潮差${ht.range}</span>` : '');
+  }
+  // 暴潮溢淹研判（滿潮 × 大浪）
+  const sr = _surgeRisk(t);
+  if(sr && sr.level > 0){
+    const col = sr.level >= 2 ? '#ff4444' : '#ffaa33';
+    const name = sr.level >= 2 ? '暴潮警戒' : '暴潮注意';
+    h += `<br><b style="color:${col}">⚠ ${name}</b>`
+       + `<span style="color:#8a9aaa">（滿潮${sr.near ? '±2h內' : ''}`
+       + `、浪高${sr.wave.toFixed(1)}m、潮差${sr.range}）</span>`
+       + '<br><span style="color:#8a9aaa;font-size:9px">系統研判，非官方暴潮警戒</span>';
+  }
+
   // 長浪示警（本系統研判，非官方告警）
   const ls = _longSwell(t);
   if(ls && ls.hit){
