@@ -2350,7 +2350,7 @@ if (need('_waveColor') && need('_waveOf') && need('_waveRow')) {
   const fut2 = new Date(Date.now()+2*3600e3).toISOString();
   const past2 = new Date(Date.now()-1*3600e3).toISOString();
   setLex(`TMAP['宜蘭縣蘇澳鎮'] = {county:'宜蘭縣', township:'蘇澳鎮'};
-    window.WAVE_FCST = {'蘇澳鎮':[
+    window.WAVE_FCST = {'宜蘭縣蘇澳鎮':[
       {start:'${past2}', end:'${fut2}', wave:3.0, bf:7, dir:'東北'}]};
     mode='wave';`);
   const ct = getLex("TMAP['宜蘭縣蘇澳鎮']");
@@ -2421,7 +2421,7 @@ if (need('_tempSeries') && need('_waveSeries') && need('drawTempDayChart')) {
       ${JSON.stringify(Object.assign(mk(0),{t:26,tmax:29,tmin:23}))},
       ${JSON.stringify(Object.assign(mk(3),{t:22,tmax:29,tmin:23}))},
       ${JSON.stringify(Object.assign(mk(27),{t:31,tmax:33,tmin:26}))}]}};
-    window.WAVE_FCST = {'蘇澳鎮':[
+    window.WAVE_FCST = {'宜蘭縣蘇澳鎮':[
       ${JSON.stringify(Object.assign(mk(0),{wave:1.2,bf:5,dir:'東北'}))},
       ${JSON.stringify(Object.assign(mk(3),{wave:2.8,bf:7,dir:'北'}))},
       ${JSON.stringify(Object.assign(mk(27),{wave:6.0,bf:9,dir:'東北'}))}]};`);
@@ -2714,7 +2714,7 @@ if (need('_isCoastal') && need('_townZone')) {
   const z = getLex('TOWN_ZONE');
   const nCoast = getLex('TOWN_COASTAL.size');
   console.log(`   臨海鄉鎮 ${nCoast} 個（TOWN_ZONE 仍為單值，分布不變）`);
-  chk('臨海鄉鎮 113 個', nCoast, 113);
+  chk('臨海鄉鎮 109 個', nCoast, 109);
 
   // ★ 山區／淺山但臨海者：兩種屬性必須同時成立
   [['花蓮縣秀林鄉','山區'], ['宜蘭縣南澳鄉','山區'], ['臺東縣達仁鄉','山區'],
@@ -2748,6 +2748,43 @@ if (need('_isCoastal') && need('_townZone')) {
   Object.values(z).forEach(v => cnt[v] = (cnt[v]||0)+1);
   chk('地形分布不變（山區31）', cnt['山區'], 31);
   chk('地形分布不變（沿海85）', cnt['沿海地區'], 85);
+}
+
+
+console.log('\n=== 浪高不得因鄉鎮同名而外溢至內陸 ===');
+if (need('_waveOf') && need('_buildWaveIndex')) {
+  const now = Date.now();
+  const seg = {start:new Date(now-3600e3).toISOString(),
+               end:new Date(now+3*3600e3).toISOString(),
+               wave:2.0, dir:60, period:9};
+  // 只給基隆的資料，臺北同名區不得取到
+  setLex(`window.WAVE_FCST = {'基隆市中正區':[${JSON.stringify(seg)}],
+                              '基隆市信義區':[${JSON.stringify(seg)}],
+                              '臺南市南區':[${JSON.stringify(seg)}]};`);
+  const kl = {county:'基隆市', township:'中正區'};
+  const tp = {county:'臺北市', township:'中正區'};
+  chk('基隆中正區有浪高', G._waveOf(kl).wave, 2.0);
+  chk('★臺北中正區不得有浪高（同名）', G._waveOf(tp).wave, null);
+  chk('★臺北信義區不得有浪高', G._waveOf({county:'臺北市',township:'信義區'}).wave, null);
+  chk('★臺中南區不得有浪高', G._waveOf({county:'臺中市',township:'南區'}).wave, null);
+  chk('★臺北中山區不得有浪高', G._waveOf({county:'臺北市',township:'中山區'}).wave, null);
+  // tooltip 也不得出現
+  chk('內陸 tooltip 無浪高列', G._waveRow(tp), '');
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('已移除純鄉鎮名備援鍵', /idx\[bare\]/.test(src), false);
+  chk('說明撞名風險', /會讓臺北中正區查到基隆中正區的浪高/.test(src), true);
+
+  // 臨海清單：內陸不得列入
+  const cs = getLex('TOWN_COASTAL');
+  ['臺北市信義區','臺中市南區','高雄市橋頭區','臺東縣金峰鄉','南投縣仁愛鄉']
+    .forEach(k=>{
+      chk(`★${k} 不在臨海清單`, getLex(`TOWN_COASTAL.has('${k}')`), false);
+    });
+  ['高雄市旗津區','宜蘭縣蘇澳鎮','花蓮縣秀林鄉','新北市瑞芳區']
+    .forEach(k=>{
+      chk(`${k} 在臨海清單`, getLex(`TOWN_COASTAL.has('${k}')`), true);
+    });
+  setLex("window.WAVE_FCST = {};");
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
