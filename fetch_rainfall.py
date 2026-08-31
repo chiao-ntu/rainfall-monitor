@@ -152,6 +152,7 @@ def fetch_wave_forecast():
             return {}
         _dbg_elems = set()
         _dbg_loc_keys = set()
+        _dbg_we_keys = set()
         for loc in locs:
             name = (loc.get('LocationName') or loc.get('locationName') or '').strip()
             if not name:
@@ -166,7 +167,13 @@ def fetch_wave_forecast():
             if not _we_list and not _dbg_loc_keys:
                 _dbg_loc_keys.update(list(loc.keys())[:12])
             for we in _we_list:
-                for t in we.get('Time', we.get('time', [])):
+                if not isinstance(we, dict):
+                    continue
+                _dbg_we_keys.update(list(we.keys())[:12])
+                # 時間序列的鍵名也可能不同，逐一嘗試
+                _times = (we.get('Time') or we.get('time')
+                          or we.get('Times') or we.get('times') or [])
+                for t in _times:
                     def _first(*keys):
                         for k in keys:
                             v = t.get(k)
@@ -230,16 +237,13 @@ def fetch_wave_forecast():
     else:
         # 有 Location 但取不到浪高 → 印出實際的氣象因子名稱與值鍵，供比對
         print(f"    有 {len(locs)} 個預報點但無浪高值；氣象因子：{sorted(_dbg_elems)[:12]}")
-        if _dbg_loc_keys:
-            print(f"    ★ Location 節點的實際鍵：{sorted(_dbg_loc_keys)}")
-            try:
-                _l = locs[0]
-                for _k in _l.keys():
-                    _v = _l[_k]
-                    if isinstance(_v, list) and _v and isinstance(_v[0], dict):
-                        print(f"      {_k}[0] 鍵：{list(_v[0].keys())[:10]}")
-            except Exception:
-                pass
+        # ★ 前兩輪的分層診斷都沒印出東西（表示鍵名與所有假設都不同），
+        #   故直接傾印第一筆 Location 的原始 JSON（截斷 1200 字），一次看清全貌。
+        try:
+            _dump = json.dumps(locs[0], ensure_ascii=False)[:1200]
+            print(f"    ★ 第一筆 Location 原始結構：{_dump}")
+        except Exception as _e:
+            print(f"    （傾印失敗：{_e}）")
         try:
             _l0 = locs[0]
             _w0 = (_l0.get('WeatherElement') or _l0.get('weatherElement') or [])
@@ -1357,6 +1361,11 @@ def fetch_all_pop_bundle(counties_needed):
                 zf = _zip.ZipFile(_io.BytesIO(r.content))
                 break
             print(f"    HTTP {r.status_code}（{_try+1}/3）")
+            # ★ 500 為 CWA 端伺服器錯誤，短時間重試通常無效；
+            #   直接退回逐縣市（實測仍可取得 725 鄉鎮），省去 10 秒等待。
+            if r.status_code == 500 and _try == 0:
+                print("    （HTTP 500 為伺服器端錯誤，不再重試）")
+                break
         except Exception as e:
             print(f"    打包檔取得失敗（{_try+1}/3）：{e}")
         if _try < 2:
@@ -3574,7 +3583,7 @@ def main():
         _msg.append(f"{_k}={_n}")
     print(f"  新增欄位：{'、'.join(_msg)}")
     if not wave_fcst:
-        print("  ※ wave_fcst 為空：颱風/海象預報可能未發布，或 F-D0047-095 取用失敗")
+        print(f"  ※ wave_fcst 為空：候選端點 {COASTAL_EP_CANDIDATES} 均未取得浪高值")
 
     print(f"\n完成：{OUTPUT_FILE}（{os.path.getsize(OUTPUT_FILE)//1024}KB）")
     print(f"  鄉鎮：{len(out_towns)}，PoP3d：{len(pop3d)}，PoP7d：{len(pop7d)}")

@@ -441,8 +441,32 @@ chk('★首選端點為實測有效的 F-A0085-002',
     FR.COASTAL_EP_CANDIDATES[0], 'F-A0085-002')
 chk('保留其他候選作備援', len(FR.COASTAL_EP_CANDIDATES) >= 3, True)
 chk('支援多種 WeatherElement 鍵名', 'weatherElements' in _src2, True)
-chk('無氣象因子時印出 Location 實際鍵', 'Location 節點的實際鍵' in _src2, True)
+chk('無氣象因子時傾印原始結構', '第一筆 Location 原始結構' in _src2, True)
 chk('打包檔失敗會重試三次', '打包檔三次皆失敗' in _src2, True)
+
+
+print('\n=== 浪高：解析失敗時須傾印原始結構 ===')
+# ★ 實測兩輪：分層診斷都印不出東西（元素連 ElementName 都沒有），
+#   故改為直接傾印第一筆 Location 的原始 JSON，一次看清鍵名。
+_LOC = {"LocationName": "蘇澳鎮", "StationId": "C001",
+        "WeatherElement": [{"Name": "浪高", "Data": [{"Dt": "x", "Val": "2.5"}]}]}
+def _mk3(*a, **k):
+    class _R:
+        status_code = 200
+        def json(self): return {"records": {"Locations": [{"Location": [_LOC]}]}}
+    return _R()
+FR.requests = types.SimpleNamespace(get=_mk3)
+import contextlib as _ctx
+_buf = io.StringIO()
+with _ctx.redirect_stdout(_buf):
+    FR.fetch_wave_forecast()
+_out = _buf.getvalue()
+chk('印出原始結構', '第一筆 Location 原始結構' in _out, True)
+chk('結構含實際鍵名', '"Name": "浪高"' in _out, True)
+_src3 = io.open('fetch_rainfall.py', encoding='utf-8').read()
+chk('時間序列鍵名有多種變體', "we.get('Times')" in _src3, True)
+chk('警告訊息不寫死舊端點', 'F-D0047-095 取用失敗' in _src3, False)
+chk('HTTP 500 不重試', 'HTTP 500 為伺服器端錯誤' in _src3, True)
 
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)
