@@ -2641,6 +2641,73 @@ console.log('\n=== 地形分類已更新為官方定義 ===');
   }
 }
 
+
+console.log('\n=== 長浪示警與浪向 ===');
+if (need('_longSwell') && need('_waveDirText') && need('_onshore')) {
+  // 浪向角度 → 方位
+  chk('0° → 北', G._waveDirText(0), '北');
+  chk('45° → 東北', G._waveDirText(45), '東北');
+  chk('180° → 南', G._waveDirText(180), '南');
+  chk('315° → 西北', G._waveDirText(315), '西北');
+  chk('無資料回空字串', G._waveDirText(null), '');
+
+  const now = Date.now();
+  const seg = (w, p) => ({start:new Date(now-3600e3).toISOString(),
+                          end:new Date(now+3*3600e3).toISOString(),
+                          wave:w, dir:60, period:p});
+  setLex(`TMAP['宜蘭縣蘇澳鎮'] = {county:'宜蘭縣', township:'蘇澳鎮', lat:24.59, lng:121.87};
+    window.WAVE_FCST = {'宜蘭縣蘇澳鎮':[${JSON.stringify(seg(3.0, 10))}]};`);
+  const t = getLex("TMAP['宜蘭縣蘇澳鎮']");
+  const ls = G._longSwell(t);
+  console.log(`   蘇澳：浪高${ls.wave}m 週期${ls.period}s → 長浪=${ls.hit} 等級${ls.level}`);
+  chk('★長浪判定（≥8s 且 ≥2m）', ls.hit, true);
+  // 第2級門檻：浪高≥4m 或 週期≥11s；3.0m/10s 屬第1級
+  chk('3.0m/10s 為第1級', ls.level, 1);
+  setLex(`window.WAVE_FCST = {'宜蘭縣蘇澳鎮':[${JSON.stringify(seg(4.5, 12))}]};`);
+  chk('★4.5m/12s 升為第2級', G._longSwell(t).level, 2);
+
+  // 短週期不算長浪（即使浪高）
+  setLex(`window.WAVE_FCST = {'宜蘭縣蘇澳鎮':[${JSON.stringify(seg(3.0, 5))}]};`);
+  chk('★週期不足不算長浪', G._longSwell(t).hit, false);
+  // 浪不高也不算
+  setLex(`window.WAVE_FCST = {'宜蘭縣蘇澳鎮':[${JSON.stringify(seg(1.0, 12))}]};`);
+  chk('★浪高不足不算長浪', G._longSwell(t).hit, false);
+  // 邊界：剛好達標
+  setLex(`window.WAVE_FCST = {'宜蘭縣蘇澳鎮':[${JSON.stringify(seg(2.0, 8))}]};`);
+  chk('邊界值（8s/2.0m）成立', G._longSwell(t).hit, true);
+  chk('中等為第1級', G._longSwell(t).level, 1);
+
+  // 向岸／離岸
+  const onE = G._onshore({lat:24.59, lng:121.87}, 60);   // 東部、來向東北
+  const onW = G._onshore({lat:24.59, lng:121.87}, 240);  // 來向西南（陸側）
+  console.log(`   蘇澳（東岸）：來向60°→${onE?'向岸':'離岸'}　來向240°→${onW?'向岸':'離岸'}`);
+  chk('★東岸受東北來浪為向岸', onE, true);
+  chk('★來自陸側為離岸', onW, false);
+  chk('無浪向時回 null', G._onshore({lat:24,lng:121}, null), null);
+
+  // tooltip 內容
+  setLex(`window.WAVE_FCST = {'宜蘭縣蘇澳鎮':[${JSON.stringify(seg(3.0, 10))}]};`);
+  const row = G._waveRow(t);
+  const plain = row.replace(/<[^>]*>/g, ' ');
+  console.log(`   tooltip：${plain.trim()}`);
+  chk('含浪高', /浪高/.test(row), true);
+  chk('含浪向文字', /東北浪/.test(plain), true);
+  chk('含週期', /週期 10s/.test(plain), true);
+  chk('★含長浪示警', /長浪/.test(plain), true);
+  chk('★標明非官方告警', /系統研判，非官方長浪告警/.test(row), true);
+  setLex("window.WAVE_FCST = {};");
+}
+
+console.log('\n=== 檔案型資料集須經 ProductURL 下載 ===');
+{
+  const py = fs.readFileSync('fetch_rainfall.py', 'utf8');
+  chk('提供 ProductURL 解析', /def _resolve_product_url/.test(py), true);
+  chk('★浪高經 ProductURL', /url = _resolve_product_url\(WAVE_EP\)/.test(py), true);
+  chk('★打包預報經 ProductURL', /_burl = _resolve_product_url\('F-D0047-093'\)/.test(py), true);
+  chk('說明 500 的成因', /直接向 API 要 ZIP 會得到 HTTP 500/.test(py), true);
+  chk('解析失敗仍有備援', /備援：仍試 API 的 ZIP 格式/.test(py), true);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

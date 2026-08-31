@@ -5546,8 +5546,12 @@ function _buildWaveIndex(){
   // ★ 鍵須涵蓋「會改變結果的輸入」：只用筆數會在資料換成同筆數的另一份時
   //   沿用舊索引（測試中即因此取到前一組浪高）。加入首筆時間戳區分。
   const _k0 = Object.keys(wf)[0];
-  const _t0 = _k0 && wf[_k0] && wf[_k0][0] ? (wf[_k0][0].start || '') : '';
-  const key = Object.keys(wf).length + '|' + _k0 + '|' + _t0 + '|' + (window._dataGenAt || '');
+  const _s0 = _k0 && wf[_k0] && wf[_k0][0] ? wf[_k0][0] : null;
+  // ★ 鍵須涵蓋「會改變結果的輸入」：只用筆數與時間戳，會在資料換成
+  //   同筆數、同起始時刻但數值不同的另一份時沿用舊索引。
+  const key = Object.keys(wf).length + '|' + _k0 + '|' +
+              (_s0 ? [_s0.start, _s0.wave, _s0.period, _s0.dir].join(',') : '') +
+              '|' + (window._dataGenAt || '');
   if(_waveIndex && _waveIndexKey === key) return _waveIndex;
   const idx = {};
   Object.keys(wf).forEach(k=>{
@@ -5572,10 +5576,11 @@ function _buildWaveIndex(){
   return idx;
 }
 function _waveOf(t){
-  if(!t) return {wave:null, bf:null, dir:''};
+  if(!t) return {wave:null, bf:null, dir:'', period:null};
   const idx = _buildWaveIndex();
-  // 官方命名可能是「蘇澳鎮」或「宜蘭縣蘇澳鎮」，兩種都試
-  const segs = idx[t.township] || idx[(t.county||'') + (t.township||'')] || [];
+  // 後端以「縣市+鄉鎮」為鍵（波浪模式格點對座標，不需名稱比對）；
+  // 舊格式的純鄉鎮名鍵仍相容。
+  const segs = idx[(t.county||'') + (t.township||'')] || idx[t.township] || [];
   if(!segs.length) return {wave:null, bf:null, dir:''};
   const at = _windAtMs();
   let seg = segs.find(x=>{
@@ -5586,7 +5591,41 @@ function _waveOf(t){
     const e = Date.parse(x.end || x.start || '');
     return isFinite(e) && e >= at;
   }) || segs[segs.length-1];
-  return {wave: seg.wave, bf: seg.bf, dir: seg.dir || ''};
+  return {wave: seg.wave, bf: seg.bf, dir: seg.dir,
+          period: (seg.period != null ? seg.period : null)};
+}
+
+// ── 長浪示警 ──────────────────────────────────────
+//   週期長的湧浪能量深、爬升高，對海岸構造物與越堤的威脅遠高於同高度的風浪。
+//   判準（實務常用）：週期 ≥8s 且浪高 ≥2m。
+//   ★ 這是本系統的研判，非官方發布之長浪告警，介面須標明。
+function _longSwell(t){
+  const w = _waveOf(t);
+  if(w.wave == null || w.period == null) return null;
+  const hit = (w.period >= 8 && w.wave >= 2.0);
+  return {hit, wave: w.wave, period: w.period, dir: w.dir,
+          level: !hit ? 0 : (w.wave >= 4 || w.period >= 11) ? 2 : 1};
+}
+// 浪向：數值角度（來向，度）→ 8 方位中文
+function _waveDirText(d){
+  if(d == null || !isFinite(d)) return '';
+  const names = ['北','東北','東','東南','南','西南','西','西北'];
+  return names[Math.round(((d % 360) + 360) % 360 / 45) % 8];
+}
+// 是否為向岸浪：浪向與該鄉鎮的外海方位相近（±60°）
+//   ★ 向岸的長浪才會直接衝擊海岸；離岸浪的風險低得多。
+function _onshore(t, dirDeg){
+  if(dirDeg == null || !isFinite(dirDeg) || !t) return null;
+  // 以鄉鎮質心相對臺灣中心的方位，粗估其面海方向
+  const cLat = 23.75, cLng = 121.0;
+  const dy = (t.lat || 0) - cLat, dx = (t.lng || 0) - cLng;
+  if(!dy && !dx) return null;
+  const seaBearing = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+  // ★ dirDeg 是浪的「來向」。鄉鎮位於島的哪一側（seaBearing）就面向該方位的海，
+  //   故「來向 ≈ 面海方位」代表浪由外海朝陸地打來＝向岸。
+  //   （曾誤寫為 diff>120，使蘇澳受東北浪被判成離岸。）
+  const diff = Math.abs(((dirDeg - seaBearing + 540) % 360) - 180);
+  return diff <= 60;
 }
 
 // 蒲福風級色階（使用者指定；與 ETR2% 同一組色）
@@ -6009,7 +6048,20 @@ function _waveRow(t){
   const band = WAVE_BANDS.find(b=>w.wave < b.max) || WAVE_BANDS[WAVE_BANDS.length-1];
   let h = `<br>浪高：<b style="color:${band.color}">${w.wave.toFixed(1)} m</b>`
         + `<span style="color:#8a9aaa">　${band.name.replace(/（.*/, '')}</span>`;
-  if(w.dir) h += `<span style="color:#8a9aaa">　${w.dir}</span>`;
+  const dt = _waveDirText(w.dir);
+  if(dt) h += `<span style="color:#8a9aaa">　${dt}浪</span>`;
+  if(w.period != null) h += `<span style="color:#8a9aaa">　週期 ${w.period.toFixed(0)}s</span>`;
+  // 長浪示警（本系統研判，非官方告警）
+  const ls = _longSwell(t);
+  if(ls && ls.hit){
+    const col = ls.level >= 2 ? '#ff4444' : '#ffaa33';
+    const on = _onshore(t, w.dir);
+    h += `<br><b style="color:${col}">⚠ 長浪</b>`
+       + `<span style="color:#8a9aaa">（${ls.period.toFixed(0)}s／${ls.wave.toFixed(1)}m`
+       + (on === true ? '、向岸' : on === false ? '、離岸' : '')
+       + '）</span>'
+       + '<br><span style="color:#8a9aaa;font-size:9px">系統研判，非官方長浪告警</span>';
+  }
   return h;
 }
 

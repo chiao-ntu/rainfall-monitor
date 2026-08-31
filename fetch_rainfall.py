@@ -78,6 +78,50 @@ WAVE_STEPS = 24                  # 取 24 個時間步（每 3 小時 → 涵蓋
 COASTAL_TOWNS_FILE = 'coastal_towns.json'   # 沿海鄉鎮清單（由海岸線距離判定）
 
 
+def _resolve_product_url(dataid, timeout=60):
+    """大型檔案資料集：先取 metadata 拿 ProductURL，再從 S3 下載。
+
+    ★ CWA 對「檔案型」資料集（zip/nc/png）不直接以 format=ZIP 回傳檔案，
+      而是回一段 JSON，內含 Resources.Resource.ProductURL 指向 S3。
+      直接向 API 要 ZIP 會得到 HTTP 500 —— 實測 F-A0020-001 與
+      F-D0047-093 皆如此（與既有的 F-C0035 PNG 取法同一模式）。
+    回傳 URL 字串；失敗回 None。
+    """
+    try:
+        r = requests.get(f"{BASE_URL}/{dataid}",
+                         params={"Authorization": CWA_API_KEY, "format": "JSON"},
+                         timeout=timeout)
+        if r.status_code != 200:
+            print(f"    {dataid} metadata HTTP {r.status_code}")
+            return None
+        d = r.json()
+    except Exception as e:
+        print(f"    {dataid} metadata 取用失敗：{e}")
+        return None
+
+    def _walk(o):
+        """遞迴找出第一個看起來像檔案網址的值（鍵名含 ProductURL/uri）。"""
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if isinstance(v, str) and v.startswith('http') and \
+                   ('producturl' in k.lower() or k.lower() == 'uri'):
+                    return v
+                got = _walk(v)
+                if got: return got
+        elif isinstance(o, list):
+            for x in o:
+                got = _walk(x)
+                if got: return got
+        return None
+
+    url = _walk(d)
+    if url:
+        print(f"    {dataid} → {url.rsplit('/', 1)[-1]}")
+    else:
+        print(f"    {dataid} metadata 內找不到 ProductURL")
+    return url
+
+
 def fetch_wave_forecast():
     """波浪預報模式（F-A0020-001）→ 沿海鄉鎮的浪高／浪向／週期。
 
@@ -108,17 +152,22 @@ def fetch_wave_forecast():
 
     import io as _io, zipfile as _zip
     print(f"抓取波浪預報模式（{WAVE_EP}）...")
+    url = _resolve_product_url(WAVE_EP)
     zf = None
     for _try in range(2):
         try:
-            r = requests.get(f"{BASE_URL}/{WAVE_EP}",
-                             params={"Authorization": CWA_API_KEY, "format": "ZIP"},
-                             timeout=180)
+            if url:                      # 主要路徑：S3 直接下載
+                r = requests.get(url, timeout=300)
+            else:                        # 備援：仍試 API 的 ZIP 格式
+                r = requests.get(f"{BASE_URL}/{WAVE_EP}",
+                                 params={"Authorization": CWA_API_KEY, "format": "ZIP"},
+                                 timeout=300)
             if r.status_code != 200:
                 print(f"    HTTP {r.status_code}（{_try+1}/2）")
                 if _try == 0: time.sleep(5)
                 continue
             zf = _zip.ZipFile(_io.BytesIO(r.content))
+            print(f"    下載完成：{len(r.content)//1024//1024} MB")
             break
         except Exception as e:
             print(f"    取用失敗（{_try+1}/2）：{e}")
@@ -1306,12 +1355,17 @@ def fetch_all_pop_bundle(counties_needed):
     print("抓取全臺打包預報（F-D0047-093）...")
     # ★ 實測遇過 HTTP 500（CWA 端暫時性錯誤）。打包檔是主要路徑，
     #   失敗會退回 44 次逐縣市呼叫（較慢且較脆弱），故值得重試兩次。
+    # ★ 同為檔案型資料集，須先解析 ProductURL（直接要 ZIP 會 HTTP 500）
+    _burl = _resolve_product_url('F-D0047-093')
     zf = None
     for _try in range(3):
         try:
-            r = requests.get(BUNDLE_URL,
-                             params={"Authorization": CWA_API_KEY, "format": "ZIP"},
-                             timeout=120)
+            if _burl:
+                r = requests.get(_burl, timeout=180)
+            else:
+                r = requests.get(BUNDLE_URL,
+                                 params={"Authorization": CWA_API_KEY, "format": "ZIP"},
+                                 timeout=120)
             if r.status_code == 200:
                 zf = _zip.ZipFile(_io.BytesIO(r.content))
                 break

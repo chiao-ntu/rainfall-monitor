@@ -359,114 +359,31 @@ else:
     print('  （找不到 F-D0047-093.zip，略過）')
 
 
-print('\n=== 沿海浪高解析（F-D0047-095）===')
-_WAVE = {"records":{"Locations":[{"Location":[{
-  "LocationName":"蘇澳鎮",
-  "WeatherElement":[
-    {"ElementName":"浪高","Time":[
-      {"StartTime":"2026-08-30T12:00:00+08:00","EndTime":"2026-08-30T15:00:00+08:00",
-       "ElementValue":[{"WaveHeight":"2.5"}]},
-      {"DataTime":"2026-08-30T15:00:00+08:00",
-       "ElementValue":[{"WaveHeight":">= 6"}]}]},
-    {"ElementName":"浪向","Time":[
-      {"StartTime":"2026-08-30T12:00:00+08:00","EndTime":"2026-08-30T15:00:00+08:00",
-       "ElementValue":[{"WaveDirection":"東北"}]}]},
-    {"ElementName":"蒲福風級","Time":[
-      {"StartTime":"2026-08-30T12:00:00+08:00","EndTime":"2026-08-30T15:00:00+08:00",
-       "ElementValue":[{"BeaufortScale":"7"}]}]},
-  ]}]}]}}
-class _WR:
-    status_code = 200
-    def json(self): return _WAVE
-FR.requests = types.SimpleNamespace(get=lambda *a, **k: _WR())
-_w = FR.fetch_wave_forecast()
-chk('解析到沿海預報點', list(_w.keys()), ['蘇澳鎮'])
-_sg = _w.get('蘇澳鎮', [])
-chk('時段數', len(_sg), 2)
-chk('浪高數值', _sg[0]['wave'], 2.5)
-chk('浪向', _sg[0]['dir'], '東北')
-chk('蒲福風級', _sg[0]['bf'], 7)
-chk('★">= 6" 解析為 6.0', _sg[1]['wave'], 6.0)
-chk('★只有 DataTime 時補區間', _sg[1]['end'] != _sg[1]['start'], True)
-chk('端點為鄉鎮沿海預報', FR.COASTAL_EP, 'F-A0085-002')
-chk('輸出含 wave_fcst 欄位',
-    "'wave_fcst': wave_fcst" in io.open('fetch_rainfall.py', encoding='utf-8').read(), True)
+print('\n=== 波浪預報模式（F-A0020-001）===')
+# ★ 改用波浪模式格點資料：0.1°格點、逐時、含浪高/浪向/週期。
+#   先前 F-D0047-095/096 與 F-A0085-00x 皆非沿海預報（404 或寒害指數）。
+_src4 = io.open('fetch_rainfall.py', encoding='utf-8').read()
+chk('採用波浪模式端點', FR.WAVE_EP, 'F-A0020-001')
+chk('限制時間步控制體積', FR.WAVE_STEPS, 24)
+chk('讀沿海鄉鎮清單', FR.COASTAL_TOWNS_FILE, 'coastal_towns.json')
+chk('★經 ProductURL 下載（直接要 ZIP 會 500）',
+    'url = _resolve_product_url(WAVE_EP)' in _src4, True)
+chk('打包預報同樣經 ProductURL',
+    "_burl = _resolve_product_url('F-D0047-093')" in _src4, True)
 
-
-print('\n=== 浪高：外層結構與值鍵的容錯 ===')
-# ★ 使用者實測回報「有 wave_fcst 但內容為空」→ 外層結構或值鍵與假設不同。
-#   故對四種已知結構變體與四種值寫法都須能解析，且失敗時要印出診斷。
-_E = [{"ElementName":"浪高","Time":[
-    {"StartTime":"2026-08-30T12:00:00+08:00","EndTime":"2026-08-30T15:00:00+08:00",
-     "ElementValue":[{"WaveHeight":"2.5"}]}]}]
-_L = {"LocationName":"蘇澳鎮","WeatherElement":_E}
-for _nm, _pl in [
-    ('Locations[0].Location[]', {"records":{"Locations":[{"Location":[_L]}]}}),
-    ('locations[0].location[]', {"records":{"locations":[{"location":[_L]}]}}),
-    ('location[] 無包層',        {"records":{"location":[_L]}}),
-    ('Locations 為 dict',        {"records":{"Locations":{"Location":[_L]}}}),
+# ProductURL 解析器：對兩種 metadata 結構都須有效
+for _name, _meta, _want in [
+    ('ProductURL 大寫',
+     {"cwaopendata":{"Resources":{"Resource":{"ProductURL":"https://x/a.zip"}}}}, 'https://x/a.zip'),
+    ('uri 小寫',
+     {"cwaopendata":{"dataset":{"resource":{"uri":"https://y/b.zip"}}}}, 'https://y/b.zip'),
 ]:
-    def _mk(p=_pl):
-        class _R:
-            status_code = 200
-            def json(self): return p
-        return _R()
-    FR.requests = types.SimpleNamespace(get=lambda *a, **k: _mk())
-    chk(f'結構 {_nm}', list(FR.fetch_wave_forecast().keys()), ['蘇澳鎮'])
-
-for _k, _v, _want in [('WaveHeight','2.5',2.5), ('WaveHeightRange','2~3',3.0),
-                      ('waveHeight','>= 6',6.0), ('WaveHeightRange','1-1.5',1.5)]:
-    _L2 = {"LocationName":"蘇澳鎮","WeatherElement":[
-      {"ElementName":"浪高","Time":[{"StartTime":"2026-08-30T12:00:00+08:00",
-        "EndTime":"2026-08-30T15:00:00+08:00","ElementValue":[{_k:_v}]}]}]}
-    def _mk2(p={"records":{"Locations":[{"Location":[_L2]}]}}):
-        class _R:
-            status_code = 200
-            def json(self): return p
-        return _R()
-    FR.requests = types.SimpleNamespace(get=lambda *a, **k: _mk2())
-    _o = FR.fetch_wave_forecast()
-    chk(f'值鍵 {_k}="{_v}"', _o.get('蘇澳鎮', [{}])[0].get('wave'), _want)
-
-_src = io.open('fetch_rainfall.py', encoding='utf-8').read()
-chk('找不到節點時印出 records 鍵', '找不到 Location 節點' in _src, True)
-chk('無浪高值時印出氣象因子與值鍵', '個預報點但無浪高值' in _src, True)
-
-
-print('\n=== 浪高端點：實測結果固化 ===')
-# ★ 2026-08-30 實測：F-D0047-095/096、F-A0085-001 皆 404，
-#   只有 F-A0085-002 回 200 且含 Locations。
-_src2 = io.open('fetch_rainfall.py', encoding='utf-8').read()
-chk('★首選端點為實測有效的 F-A0085-002',
-    FR.COASTAL_EP_CANDIDATES[0], 'F-A0085-002')
-chk('保留其他候選作備援', len(FR.COASTAL_EP_CANDIDATES) >= 3, True)
-chk('支援多種 WeatherElement 鍵名', 'weatherElements' in _src2, True)
-chk('無氣象因子時傾印原始結構', '第一筆 Location 原始結構' in _src2, True)
-chk('打包檔失敗會重試三次', '打包檔三次皆失敗' in _src2, True)
-
-
-print('\n=== 浪高：解析失敗時須傾印原始結構 ===')
-# ★ 實測兩輪：分層診斷都印不出東西（元素連 ElementName 都沒有），
-#   故改為直接傾印第一筆 Location 的原始 JSON，一次看清鍵名。
-_LOC = {"LocationName": "蘇澳鎮", "StationId": "C001",
-        "WeatherElement": [{"Name": "浪高", "Data": [{"Dt": "x", "Val": "2.5"}]}]}
-def _mk3(*a, **k):
-    class _R:
+    class _MR:
         status_code = 200
-        def json(self): return {"records": {"Locations": [{"Location": [_LOC]}]}}
-    return _R()
-FR.requests = types.SimpleNamespace(get=_mk3)
-import contextlib as _ctx
-_buf = io.StringIO()
-with _ctx.redirect_stdout(_buf):
-    FR.fetch_wave_forecast()
-_out = _buf.getvalue()
-chk('印出原始結構', '第一筆 Location 原始結構' in _out, True)
-chk('結構含實際鍵名', '"Name": "浪高"' in _out, True)
-_src3 = io.open('fetch_rainfall.py', encoding='utf-8').read()
-chk('時間序列鍵名有多種變體', "we.get('Times')" in _src3, True)
-chk('警告訊息不寫死舊端點', 'F-D0047-095 取用失敗' in _src3, False)
-chk('HTTP 500 不重試', 'HTTP 500 為伺服器端錯誤' in _src3, True)
+        def __init__(self, m): self._m = m
+        def json(self): return self._m
+    FR.requests = types.SimpleNamespace(get=lambda *a, _m=_meta, **k: _MR(_m))
+    chk(f'解析 {_name}', FR._resolve_product_url('X'), _want)
 
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)
