@@ -2705,7 +2705,49 @@ console.log('\n=== 檔案型資料集須經 ProductURL 下載 ===');
   chk('★浪高經 ProductURL', /url = _resolve_product_url\(WAVE_EP\)/.test(py), true);
   chk('★打包預報經 ProductURL', /_burl = _resolve_product_url\('F-D0047-093'\)/.test(py), true);
   chk('說明 500 的成因', /直接向 API 要 ZIP 會得到 HTTP 500/.test(py), true);
-  chk('解析失敗仍有備援', /備援：仍試 API 的 ZIP 格式/.test(py), true);
+  chk('解析失敗仍有備援（改走 fileapi）', /備援：直接向 fileapi 要檔案/.test(py), true);
+}
+
+
+console.log('\n=== 地形與臨海為獨立維度（不互相覆蓋）===');
+if (need('_isCoastal') && need('_townZone')) {
+  const z = getLex('TOWN_ZONE');
+  const nCoast = getLex('TOWN_COASTAL.size');
+  console.log(`   臨海鄉鎮 ${nCoast} 個（TOWN_ZONE 仍為單值，分布不變）`);
+  chk('臨海鄉鎮 113 個', nCoast, 113);
+
+  // ★ 山區／淺山但臨海者：兩種屬性必須同時成立
+  [['花蓮縣秀林鄉','山區'], ['宜蘭縣南澳鄉','山區'], ['臺東縣達仁鄉','山區'],
+   ['新北市瑞芳區','淺山區'], ['臺東縣成功鎮','淺山區'],
+   ['基隆市中正區','淺山區']].forEach(([k, wantZone])=>{
+    const t = {county:k.slice(0,3), township:k.slice(3)};
+    chk(`${k} 地形為${wantZone}`, G._townZone(t), wantZone);
+    chk(`★${k} 同時具臨海屬性`, G._isCoastal(t), true);
+  });
+
+  // 純沿海鄉鎮：兩者都成立
+  const su = {county:'宜蘭縣', township:'蘇澳鎮'};
+  chk('蘇澳地形為沿海地區', G._townZone(su), '沿海地區');
+  chk('蘇澳具臨海屬性', G._isCoastal(su), true);
+
+  // 內陸：不具臨海屬性
+  const rn = {county:'南投縣', township:'仁愛鄉'};
+  chk('仁愛鄉為山區', G._townZone(rn), '山區');
+  chk('★內陸山區不具臨海屬性', G._isCoastal(rn), false);
+  chk('大安區不具臨海屬性', G._isCoastal({county:'臺北市', township:'大安區'}), false);
+
+  // ★ 不衝突驗證：情境群組鍵與陣風因子仍依「地形單值」運作
+  const key = G._townGroupKey({county:'花蓮縣', township:'秀林鄉'});
+  console.log(`   秀林鄉（山區且臨海）情境群組鍵 = ${key}`);
+  chk('★情境群組仍用地形（不因臨海改變）', /\|山區$/.test(key), true);
+  chk('★陣風因子仍用地形（山區 1.7）',
+      G._gustFactor({county:'花蓮縣', township:'秀林鄉'}), 1.7);
+
+  // TOWN_ZONE 分布未被臨海旗標影響
+  const cnt = {};
+  Object.values(z).forEach(v => cnt[v] = (cnt[v]||0)+1);
+  chk('地形分布不變（山區31）', cnt['山區'], 31);
+  chk('地形分布不變（沿海85）', cnt['沿海地區'], 85);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
