@@ -1,18 +1,81 @@
 {
- "_method": "國土署地形定義（面積佔比法）",
+ "_method": "國土署地形定義（面積佔比法）＋行政屬性修正",
  "_rules": [
-  "山區：海拔≥1000m 之網格面積佔 ≥30%",
-  "淺山：海拔100-1000m（含≥1000m）合計 ≥50%，或 <100m 但坡度>5% 之面積 ≥50%",
-  "沿海：平均高潮線至第一條濱海省道之間（台1,2,9,11,15,17,26,61）；離島與旗津全境",
-  "平地：其餘（海拔<100m 且坡度<5%）",
-  "優先序：山區 > 淺山 > 沿海 > 平地"
+  "① 離島一律沿海 —— 水保署/林保署未對離島劃設坡地災害管制，無主責依據；且離島全境臨海，需完整沿海屬性（浪高、暴潮、長浪判讀）",
+  "② 山地原住民鄉（30個，扣除離島之蘭嶼）歸山區 —— 原民會依地形劃設，有法源",
+  "③ 山區：海拔≥1000m 網格面積 ≥30%",
+  "④ 淺山：100-1000m 合計 ≥50%，或 <100m 但坡度>5% 之面積 ≥50%",
+  "⑤ 沿海：平均高潮線至第一條濱海省道之間（台1,2,9,11,15,17,26,61）",
+  "⑥ 平地：其餘（<100m 且坡度<5%）",
+  "優先序：離島沿海 > 山地原住民鄉 > 山區 > 淺山 > 沿海 > 平地"
  ],
  "_data": [
-  "20m DTM 2025（國土測繪中心）10035×18852",
-  "ROAD_國省道 1150409（58276段）"
+  "20m DTM 2025 國土測繪中心（10035×18852 網格）",
+  "ROAD_國省道含快速公路 1150409（58276 段）"
  ],
- "_note": "面積佔比法取代平均值法：平均會被行政區內小片丘陵拉高，使臺北大安區、澎湖馬公市等平地誤判為淺山",
- "_threshold_basis": "30%門檻依實測：現有淺山之 ≥1000m 佔比最大 27.4%、90分位 9.1%；現有山區 25分位 34.1%",
+ "_why_area_not_mean": "平均值會被行政區內小片丘陵拉高（臺北大安區含蟾蜍山→誤判淺山），故改逐網格判定後計面積比例",
+ "_threshold_basis": "30% 依實測分界：舊分類淺山之≥1000m佔比最大27.4%、山區25分位34.1%",
+ "_distribution": {
+  "山區": 31,
+  "淺山區": 110,
+  "沿海地區": 85,
+  "平地": 143
+ },
+ "_diff_from_manual": "與人工分類落差 69/368（19%）",
+ "islands": [
+  "屏東縣琉球鄉",
+  "澎湖縣七美鄉",
+  "澎湖縣望安鄉",
+  "澎湖縣湖西鄉",
+  "澎湖縣白沙鄉",
+  "澎湖縣西嶼鄉",
+  "澎湖縣馬公市",
+  "臺東縣綠島鄉",
+  "臺東縣蘭嶼鄉",
+  "連江縣北竿鄉",
+  "連江縣南竿鄉",
+  "連江縣東引鄉",
+  "連江縣莒光鄉",
+  "金門縣烈嶼鄉",
+  "金門縣烏坵鄉",
+  "金門縣金城鎮",
+  "金門縣金寧鄉",
+  "金門縣金沙鎮",
+  "金門縣金湖鎮",
+  "高雄市旗津區"
+ ],
+ "mountain_indigenous": [
+  "南投縣仁愛鄉",
+  "南投縣信義鄉",
+  "嘉義縣阿里山鄉",
+  "宜蘭縣南澳鄉",
+  "宜蘭縣大同鄉",
+  "屏東縣三地門鄉",
+  "屏東縣來義鄉",
+  "屏東縣春日鄉",
+  "屏東縣泰武鄉",
+  "屏東縣牡丹鄉",
+  "屏東縣獅子鄉",
+  "屏東縣瑪家鄉",
+  "屏東縣霧臺鄉",
+  "新北市烏來區",
+  "新竹縣五峰鄉",
+  "新竹縣尖石鄉",
+  "桃園市復興區",
+  "臺中市和平區",
+  "臺東縣延平鄉",
+  "臺東縣海端鄉",
+  "臺東縣蘭嶼鄉",
+  "臺東縣達仁鄉",
+  "臺東縣金峰鄉",
+  "花蓮縣卓溪鄉",
+  "花蓮縣秀林鄉",
+  "花蓮縣萬榮鄉",
+  "苗栗縣泰安鄉",
+  "高雄市桃源區",
+  "高雄市茂林區",
+  "高雄市那瑪夏區"
+ ],
  "zones": {
   "南投縣中寮鄉": "淺山區",
   "南投縣仁愛鄉": "山區",
@@ -66,10 +129,10 @@
   "宜蘭縣羅東鎮": "平地",
   "宜蘭縣蘇澳鎮": "沿海地區",
   "宜蘭縣頭城鎮": "淺山區",
-  "屏東縣三地門鄉": "淺山區",
+  "屏東縣三地門鄉": "山區",
   "屏東縣九如鄉": "平地",
   "屏東縣佳冬鄉": "沿海地區",
-  "屏東縣來義鄉": "淺山區",
+  "屏東縣來義鄉": "山區",
   "屏東縣內埔鄉": "平地",
   "屏東縣南州鄉": "平地",
   "屏東縣屏東市": "平地",
@@ -77,7 +140,7 @@
   "屏東縣恆春鎮": "沿海地區",
   "屏東縣新園鄉": "沿海地區",
   "屏東縣新埤鄉": "平地",
-  "屏東縣春日鄉": "淺山區",
+  "屏東縣春日鄉": "山區",
   "屏東縣東港鎮": "沿海地區",
   "屏東縣枋寮鄉": "沿海地區",
   "屏東縣枋山鄉": "沿海地區",
@@ -85,10 +148,10 @@
   "屏東縣泰武鄉": "山區",
   "屏東縣滿州鄉": "淺山區",
   "屏東縣潮州鎮": "平地",
-  "屏東縣牡丹鄉": "淺山區",
-  "屏東縣獅子鄉": "淺山區",
-  "屏東縣琉球鄉": "淺山區",
-  "屏東縣瑪家鄉": "淺山區",
+  "屏東縣牡丹鄉": "山區",
+  "屏東縣獅子鄉": "山區",
+  "屏東縣琉球鄉": "沿海地區",
+  "屏東縣瑪家鄉": "山區",
   "屏東縣竹田鄉": "平地",
   "屏東縣萬丹鄉": "平地",
   "屏東縣萬巒鄉": "平地",
@@ -185,7 +248,7 @@
   "桃園市龍潭區": "淺山區",
   "桃園市龜山區": "淺山區",
   "澎湖縣七美鄉": "沿海地區",
-  "澎湖縣望安鄉": "淺山區",
+  "澎湖縣望安鄉": "沿海地區",
   "澎湖縣湖西鄉": "沿海地區",
   "澎湖縣白沙鄉": "沿海地區",
   "澎湖縣西嶼鄉": "沿海地區",
@@ -278,8 +341,8 @@
   "臺東縣海端鄉": "山區",
   "臺東縣綠島鄉": "沿海地區",
   "臺東縣臺東市": "沿海地區",
-  "臺東縣蘭嶼鄉": "淺山區",
-  "臺東縣達仁鄉": "淺山區",
+  "臺東縣蘭嶼鄉": "沿海地區",
+  "臺東縣達仁鄉": "山區",
   "臺東縣金峰鄉": "山區",
   "臺東縣長濱鄉": "淺山區",
   "臺東縣關山鎮": "淺山區",
@@ -391,7 +454,9 @@
    "pct_lo100_steep": 0.1,
    "elev_max": 1390.1,
    "coast_km": 38.07,
-   "road_km": 15.11
+   "road_km": 15.11,
+   "island": false,
+   "mountain_indigenous": false
   },
   "南投縣仁愛鄉": {
    "pct_ge1000": 86.9,
@@ -399,7 +464,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 3529.1,
    "coast_km": 29.63,
-   "road_km": 21.4
+   "road_km": 21.4,
+   "island": false,
+   "mountain_indigenous": true
   },
   "南投縣信義鄉": {
    "pct_ge1000": 87.7,
@@ -407,7 +474,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 3947.5,
    "coast_km": 30.48,
-   "road_km": 16.92
+   "road_km": 16.92,
+   "island": false,
+   "mountain_indigenous": true
   },
   "南投縣南投市": {
    "pct_ge1000": 0.0,
@@ -415,7 +484,9 @@
    "pct_lo100_steep": 7.3,
    "elev_max": 442.6,
    "coast_km": 28.71,
-   "road_km": 6.18
+   "road_km": 6.18,
+   "island": false,
+   "mountain_indigenous": false
   },
   "南投縣名間鄉": {
    "pct_ge1000": 0.0,
@@ -423,7 +494,9 @@
    "pct_lo100_steep": 0.5,
    "elev_max": 432.2,
    "coast_km": 33.27,
-   "road_km": 8.98
+   "road_km": 8.98,
+   "island": false,
+   "mountain_indigenous": false
   },
   "南投縣國姓鄉": {
    "pct_ge1000": 3.0,
@@ -431,7 +504,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1481.4,
    "coast_km": 37.99,
-   "road_km": 21.65
+   "road_km": 21.65,
+   "island": false,
+   "mountain_indigenous": false
   },
   "南投縣埔里鎮": {
    "pct_ge1000": 9.1,
@@ -439,7 +514,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1666.2,
    "coast_km": 47.66,
-   "road_km": 31.59
+   "road_km": 31.59,
+   "island": false,
+   "mountain_indigenous": false
   },
   "南投縣水里鄉": {
    "pct_ge1000": 6.8,
@@ -447,7 +524,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1532.8,
    "coast_km": 52.4,
-   "road_km": 29.29
+   "road_km": 29.29,
+   "island": false,
+   "mountain_indigenous": false
   },
   "南投縣竹山鎮": {
    "pct_ge1000": 26.4,
@@ -455,7 +534,9 @@
    "pct_lo100_steep": 0.1,
    "elev_max": 2287.2,
    "coast_km": 39.87,
-   "road_km": 14.95
+   "road_km": 14.95,
+   "island": false,
+   "mountain_indigenous": false
   },
   "南投縣草屯鎮": {
    "pct_ge1000": 0.1,
@@ -463,7 +544,9 @@
    "pct_lo100_steep": 3.6,
    "elev_max": 1086.5,
    "coast_km": 27.47,
-   "road_km": 6.88
+   "road_km": 6.88,
+   "island": false,
+   "mountain_indigenous": false
   },
   "南投縣集集鎮": {
    "pct_ge1000": 2.8,
@@ -471,7 +554,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1390.1,
    "coast_km": 43.95,
-   "road_km": 20.05
+   "road_km": 20.05,
+   "island": false,
+   "mountain_indigenous": false
   },
   "南投縣魚池鄉": {
    "pct_ge1000": 10.7,
@@ -479,7 +564,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 2096.0,
    "coast_km": 52.68,
-   "road_km": 31.33
+   "road_km": 31.33,
+   "island": false,
+   "mountain_indigenous": false
   },
   "南投縣鹿谷鄉": {
    "pct_ge1000": 25.9,
@@ -487,7 +574,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 2020.5,
    "coast_km": 46.88,
-   "road_km": 22.18
+   "road_km": 22.18,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義市東區": {
    "pct_ge1000": 0.0,
@@ -495,7 +584,9 @@
    "pct_lo100_steep": 33.4,
    "elev_max": 179.3,
    "coast_km": 27.0,
-   "road_km": 0.17
+   "road_km": 0.17,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義市西區": {
    "pct_ge1000": 0.0,
@@ -503,7 +594,9 @@
    "pct_lo100_steep": 5.9,
    "elev_max": 36.2,
    "coast_km": 22.44,
-   "road_km": 0.02
+   "road_km": 0.02,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣中埔鄉": {
    "pct_ge1000": 1.5,
@@ -511,7 +604,9 @@
    "pct_lo100_steep": 6.1,
    "elev_max": 1281.3,
    "coast_km": 28.11,
-   "road_km": 2.85
+   "road_km": 2.85,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣六腳鄉": {
    "pct_ge1000": 0.0,
@@ -519,7 +614,9 @@
    "pct_lo100_steep": 8.5,
    "elev_max": 16.9,
    "coast_km": 3.61,
-   "road_km": 2.59
+   "road_km": 2.59,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣大埔鄉": {
    "pct_ge1000": 2.5,
@@ -527,7 +624,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1234.8,
    "coast_km": 37.73,
-   "road_km": 17.24
+   "road_km": 17.24,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣大林鎮": {
    "pct_ge1000": 0.0,
@@ -535,7 +634,9 @@
    "pct_lo100_steep": 21.0,
    "elev_max": 183.1,
    "coast_km": 26.56,
-   "road_km": 0.23
+   "road_km": 0.23,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣太保市": {
    "pct_ge1000": 0.0,
@@ -543,7 +644,9 @@
    "pct_lo100_steep": 6.8,
    "elev_max": 29.9,
    "coast_km": 12.47,
-   "road_km": 2.56
+   "road_km": 2.56,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣布袋鎮": {
    "pct_ge1000": 0.0,
@@ -551,7 +654,9 @@
    "pct_lo100_steep": 13.3,
    "elev_max": 10.7,
    "coast_km": 0.02,
-   "road_km": 0.08
+   "road_km": 0.08,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣新港鄉": {
    "pct_ge1000": 0.0,
@@ -559,7 +664,9 @@
    "pct_lo100_steep": 6.1,
    "elev_max": 27.1,
    "coast_km": 14.18,
-   "road_km": 3.68
+   "road_km": 3.68,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣朴子市": {
    "pct_ge1000": 0.0,
@@ -567,7 +674,9 @@
    "pct_lo100_steep": 6.2,
    "elev_max": 14.1,
    "coast_km": 5.4,
-   "road_km": 3.81
+   "road_km": 3.81,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣東石鄉": {
    "pct_ge1000": 0.0,
@@ -575,7 +684,9 @@
    "pct_lo100_steep": 11.8,
    "elev_max": 8.7,
    "coast_km": 0.02,
-   "road_km": 0.14
+   "road_km": 0.14,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣梅山鄉": {
    "pct_ge1000": 27.4,
@@ -583,7 +694,9 @@
    "pct_lo100_steep": 1.2,
    "elev_max": 1955.7,
    "coast_km": 36.04,
-   "road_km": 7.18
+   "road_km": 7.18,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣民雄鄉": {
    "pct_ge1000": 0.0,
@@ -591,7 +704,9 @@
    "pct_lo100_steep": 20.7,
    "elev_max": 167.7,
    "coast_km": 21.48,
-   "road_km": 0.29
+   "road_km": 0.29,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣水上鄉": {
    "pct_ge1000": 0.0,
@@ -599,7 +714,9 @@
    "pct_lo100_steep": 20.2,
    "elev_max": 198.2,
    "coast_km": 18.9,
-   "road_km": 0.56
+   "road_km": 0.56,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣溪口鄉": {
    "pct_ge1000": 0.0,
@@ -607,7 +724,9 @@
    "pct_lo100_steep": 6.0,
    "elev_max": 36.9,
    "coast_km": 21.96,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣番路鄉": {
    "pct_ge1000": 14.6,
@@ -615,7 +734,9 @@
    "pct_lo100_steep": 1.4,
    "elev_max": 1468.9,
    "coast_km": 33.64,
-   "road_km": 5.18
+   "road_km": 5.18,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣竹崎鄉": {
    "pct_ge1000": 20.1,
@@ -623,7 +744,9 @@
    "pct_lo100_steep": 11.1,
    "elev_max": 1862.3,
    "coast_km": 32.15,
-   "road_km": 3.49
+   "road_km": 3.49,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣義竹鄉": {
    "pct_ge1000": 0.0,
@@ -631,7 +754,9 @@
    "pct_lo100_steep": 11.8,
    "elev_max": 14.8,
    "coast_km": 3.79,
-   "road_km": 0.13
+   "road_km": 0.13,
+   "island": false,
+   "mountain_indigenous": false
   },
   "嘉義縣阿里山鄉": {
    "pct_ge1000": 78.3,
@@ -639,7 +764,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 3875.4,
    "coast_km": 48.97,
-   "road_km": 22.35
+   "road_km": 22.35,
+   "island": false,
+   "mountain_indigenous": true
   },
   "嘉義縣鹿草鄉": {
    "pct_ge1000": 0.0,
@@ -647,7 +774,9 @@
    "pct_lo100_steep": 6.1,
    "elev_max": 26.1,
    "coast_km": 9.62,
-   "road_km": 2.97
+   "road_km": 2.97,
+   "island": false,
+   "mountain_indigenous": false
   },
   "基隆市七堵區": {
    "pct_ge1000": 0.0,
@@ -655,7 +784,9 @@
    "pct_lo100_steep": 37.0,
    "elev_max": 629.6,
    "coast_km": 3.01,
-   "road_km": 0.96
+   "road_km": 0.96,
+   "island": false,
+   "mountain_indigenous": false
   },
   "基隆市中山區": {
    "pct_ge1000": 0.0,
@@ -663,7 +794,9 @@
    "pct_lo100_steep": 58.8,
    "elev_max": 222.2,
    "coast_km": 0.01,
-   "road_km": 0.04
+   "road_km": 0.04,
+   "island": false,
+   "mountain_indigenous": false
   },
   "基隆市中正區": {
    "pct_ge1000": 0.0,
@@ -671,7 +804,9 @@
    "pct_lo100_steep": 59.0,
    "elev_max": 180.3,
    "coast_km": 0.02,
-   "road_km": 0.1
+   "road_km": 0.1,
+   "island": false,
+   "mountain_indigenous": false
   },
   "基隆市仁愛區": {
    "pct_ge1000": 0.0,
@@ -679,7 +814,9 @@
    "pct_lo100_steep": 59.5,
    "elev_max": 205.1,
    "coast_km": 2.38,
-   "road_km": 0.28
+   "road_km": 0.28,
+   "island": false,
+   "mountain_indigenous": false
   },
   "基隆市信義區": {
    "pct_ge1000": 0.0,
@@ -687,7 +824,9 @@
    "pct_lo100_steep": 60.0,
    "elev_max": 214.3,
    "coast_km": 0.77,
-   "road_km": 0.43
+   "road_km": 0.43,
+   "island": false,
+   "mountain_indigenous": false
   },
   "基隆市安樂區": {
    "pct_ge1000": 0.0,
@@ -695,7 +834,9 @@
    "pct_lo100_steep": 52.1,
    "elev_max": 337.2,
    "coast_km": 0.02,
-   "road_km": 0.08
+   "road_km": 0.08,
+   "island": false,
+   "mountain_indigenous": false
   },
   "基隆市暖暖區": {
    "pct_ge1000": 0.0,
@@ -703,7 +844,9 @@
    "pct_lo100_steep": 24.7,
    "elev_max": 735.4,
    "coast_km": 4.76,
-   "road_km": 1.56
+   "road_km": 1.56,
+   "island": false,
+   "mountain_indigenous": false
   },
   "宜蘭縣三星鄉": {
    "pct_ge1000": 0.0,
@@ -711,7 +854,9 @@
    "pct_lo100_steep": 5.9,
    "elev_max": 722.2,
    "coast_km": 7.52,
-   "road_km": 1.35
+   "road_km": 1.35,
+   "island": false,
+   "mountain_indigenous": false
   },
   "宜蘭縣五結鄉": {
    "pct_ge1000": 0.0,
@@ -719,7 +864,9 @@
    "pct_lo100_steep": 11.0,
    "elev_max": 15.9,
    "coast_km": 0.04,
-   "road_km": 0.06
+   "road_km": 0.06,
+   "island": false,
+   "mountain_indigenous": false
   },
   "宜蘭縣冬山鄉": {
    "pct_ge1000": 0.0,
@@ -727,7 +874,9 @@
    "pct_lo100_steep": 16.1,
    "elev_max": 504.9,
    "coast_km": 2.15,
-   "road_km": 0.25
+   "road_km": 0.25,
+   "island": false,
+   "mountain_indigenous": false
   },
   "宜蘭縣南澳鄉": {
    "pct_ge1000": 45.7,
@@ -735,7 +884,9 @@
    "pct_lo100_steep": 2.0,
    "elev_max": 3598.6,
    "coast_km": 0.03,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": true
   },
   "宜蘭縣員山鄉": {
    "pct_ge1000": 2.6,
@@ -743,7 +894,9 @@
    "pct_lo100_steep": 7.0,
    "elev_max": 1454.8,
    "coast_km": 6.84,
-   "road_km": 1.19
+   "road_km": 1.19,
+   "island": false,
+   "mountain_indigenous": false
   },
   "宜蘭縣壯圍鄉": {
    "pct_ge1000": 0.0,
@@ -751,7 +904,9 @@
    "pct_lo100_steep": 10.0,
    "elev_max": 18.7,
    "coast_km": 0.01,
-   "road_km": 0.07
+   "road_km": 0.07,
+   "island": false,
+   "mountain_indigenous": false
   },
   "宜蘭縣大同鄉": {
    "pct_ge1000": 59.5,
@@ -759,7 +914,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 3531.5,
    "coast_km": 9.86,
-   "road_km": 6.43
+   "road_km": 6.43,
+   "island": false,
+   "mountain_indigenous": true
   },
   "宜蘭縣宜蘭市": {
    "pct_ge1000": 0.0,
@@ -767,7 +924,9 @@
    "pct_lo100_steep": 8.0,
    "elev_max": 39.6,
    "coast_km": 3.34,
-   "road_km": 0.15
+   "road_km": 0.15,
+   "island": false,
+   "mountain_indigenous": false
   },
   "宜蘭縣礁溪鄉": {
    "pct_ge1000": 1.9,
@@ -775,7 +934,9 @@
    "pct_lo100_steep": 9.3,
    "elev_max": 1209.4,
    "coast_km": 0.35,
-   "road_km": 0.07
+   "road_km": 0.07,
+   "island": false,
+   "mountain_indigenous": false
   },
   "宜蘭縣羅東鎮": {
    "pct_ge1000": 0.0,
@@ -783,7 +944,9 @@
    "pct_lo100_steep": 5.3,
    "elev_max": 22.1,
    "coast_km": 3.6,
-   "road_km": 0.16
+   "road_km": 0.16,
+   "island": false,
+   "mountain_indigenous": false
   },
   "宜蘭縣蘇澳鎮": {
    "pct_ge1000": 0.0,
@@ -791,7 +954,9 @@
    "pct_lo100_steep": 24.7,
    "elev_max": 881.1,
    "coast_km": 0.01,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "宜蘭縣頭城鎮": {
    "pct_ge1000": 0.0,
@@ -799,7 +964,9 @@
    "pct_lo100_steep": 14.8,
    "elev_max": 1003.8,
    "coast_km": 0.03,
-   "road_km": 0.07
+   "road_km": 0.07,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣三地門鄉": {
    "pct_ge1000": 22.7,
@@ -807,7 +974,9 @@
    "pct_lo100_steep": 0.5,
    "elev_max": 2421.9,
    "coast_km": 31.56,
-   "road_km": 12.94
+   "road_km": 12.94,
+   "island": false,
+   "mountain_indigenous": true
   },
   "屏東縣九如鄉": {
    "pct_ge1000": 0.0,
@@ -815,7 +984,9 @@
    "pct_lo100_steep": 7.5,
    "elev_max": 43.7,
    "coast_km": 18.86,
-   "road_km": 3.64
+   "road_km": 3.64,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣佳冬鄉": {
    "pct_ge1000": 0.0,
@@ -823,7 +994,9 @@
    "pct_lo100_steep": 7.8,
    "elev_max": 19.8,
    "coast_km": 0.03,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣來義鄉": {
    "pct_ge1000": 27.4,
@@ -831,7 +1004,9 @@
    "pct_lo100_steep": 2.6,
    "elev_max": 2312.3,
    "coast_km": 8.27,
-   "road_km": 3.81
+   "road_km": 3.81,
+   "island": false,
+   "mountain_indigenous": true
   },
   "屏東縣內埔鄉": {
    "pct_ge1000": 0.0,
@@ -839,7 +1014,9 @@
    "pct_lo100_steep": 8.5,
    "elev_max": 309.1,
    "coast_km": 17.95,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣南州鄉": {
    "pct_ge1000": 0.0,
@@ -847,7 +1024,9 @@
    "pct_lo100_steep": 2.9,
    "elev_max": 17.7,
    "coast_km": 4.68,
-   "road_km": 0.03
+   "road_km": 0.03,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣屏東市": {
    "pct_ge1000": 0.0,
@@ -855,7 +1034,9 @@
    "pct_lo100_steep": 5.8,
    "elev_max": 38.2,
    "coast_km": 15.47,
-   "road_km": 0.13
+   "road_km": 0.13,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣崁頂鄉": {
    "pct_ge1000": 0.0,
@@ -863,7 +1044,9 @@
    "pct_lo100_steep": 5.1,
    "elev_max": 16.6,
    "coast_km": 5.39,
-   "road_km": 0.43
+   "road_km": 0.43,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣恆春鎮": {
    "pct_ge1000": 0.0,
@@ -871,7 +1054,9 @@
    "pct_lo100_steep": 40.1,
    "elev_max": 674.0,
    "coast_km": 0.04,
-   "road_km": 0.13
+   "road_km": 0.13,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣新園鄉": {
    "pct_ge1000": 0.0,
@@ -879,7 +1064,9 @@
    "pct_lo100_steep": 7.7,
    "elev_max": 29.8,
    "coast_km": 0.04,
-   "road_km": 0.85
+   "road_km": 0.85,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣新埤鄉": {
    "pct_ge1000": 0.0,
@@ -887,7 +1074,9 @@
    "pct_lo100_steep": 8.2,
    "elev_max": 104.9,
    "coast_km": 6.25,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣春日鄉": {
    "pct_ge1000": 20.5,
@@ -895,7 +1084,9 @@
    "pct_lo100_steep": 3.8,
    "elev_max": 1689.3,
    "coast_km": 2.28,
-   "road_km": 1.25
+   "road_km": 1.25,
+   "island": false,
+   "mountain_indigenous": true
   },
   "屏東縣東港鎮": {
    "pct_ge1000": 0.0,
@@ -903,7 +1094,9 @@
    "pct_lo100_steep": 6.8,
    "elev_max": 9.3,
    "coast_km": 0.04,
-   "road_km": 0.02
+   "road_km": 0.02,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣枋寮鄉": {
    "pct_ge1000": 0.0,
@@ -911,7 +1104,9 @@
    "pct_lo100_steep": 8.3,
    "elev_max": 164.6,
    "coast_km": 0.03,
-   "road_km": 0.34
+   "road_km": 0.34,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣枋山鄉": {
    "pct_ge1000": 0.0,
@@ -919,7 +1114,9 @@
    "pct_lo100_steep": 32.0,
    "elev_max": 63.7,
    "coast_km": 0.01,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣林邊鄉": {
    "pct_ge1000": 0.0,
@@ -927,7 +1124,9 @@
    "pct_lo100_steep": 10.5,
    "elev_max": 10.8,
    "coast_km": 0.05,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣泰武鄉": {
    "pct_ge1000": 38.4,
@@ -935,7 +1134,9 @@
    "pct_lo100_steep": 2.9,
    "elev_max": 3070.8,
    "coast_km": 18.26,
-   "road_km": 6.48
+   "road_km": 6.48,
+   "island": false,
+   "mountain_indigenous": true
   },
   "屏東縣滿州鄉": {
    "pct_ge1000": 0.0,
@@ -943,7 +1144,9 @@
    "pct_lo100_steep": 27.2,
    "elev_max": 672.6,
    "coast_km": 0.0,
-   "road_km": 0.13
+   "road_km": 0.13,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣潮州鎮": {
    "pct_ge1000": 0.0,
@@ -951,7 +1154,9 @@
    "pct_lo100_steep": 2.9,
    "elev_max": 63.5,
    "coast_km": 10.38,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣牡丹鄉": {
    "pct_ge1000": 0.0,
@@ -959,7 +1164,9 @@
    "pct_lo100_steep": 7.4,
    "elev_max": 1057.8,
    "coast_km": 0.01,
-   "road_km": 0.17
+   "road_km": 0.17,
+   "island": false,
+   "mountain_indigenous": true
   },
   "屏東縣獅子鄉": {
    "pct_ge1000": 3.5,
@@ -967,7 +1174,9 @@
    "pct_lo100_steep": 7.0,
    "elev_max": 1468.2,
    "coast_km": 0.08,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": true
   },
   "屏東縣琉球鄉": {
    "pct_ge1000": 0.0,
@@ -975,7 +1184,9 @@
    "pct_lo100_steep": 64.4,
    "elev_max": 87.0,
    "coast_km": 0.02,
-   "road_km": 14.52
+   "road_km": 14.52,
+   "island": true,
+   "mountain_indigenous": false
   },
   "屏東縣瑪家鄉": {
    "pct_ge1000": 15.6,
@@ -983,7 +1194,9 @@
    "pct_lo100_steep": 1.8,
    "elev_max": 1985.1,
    "coast_km": 26.03,
-   "road_km": 7.23
+   "road_km": 7.23,
+   "island": false,
+   "mountain_indigenous": true
   },
   "屏東縣竹田鄉": {
    "pct_ge1000": 0.0,
@@ -991,7 +1204,9 @@
    "pct_lo100_steep": 9.3,
    "elev_max": 26.2,
    "coast_km": 11.12,
-   "road_km": 0.03
+   "road_km": 0.03,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣萬丹鄉": {
    "pct_ge1000": 0.0,
@@ -999,7 +1214,9 @@
    "pct_lo100_steep": 6.3,
    "elev_max": 23.7,
    "coast_km": 8.17,
-   "road_km": 2.14
+   "road_km": 2.14,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣萬巒鄉": {
    "pct_ge1000": 0.0,
@@ -1007,7 +1224,9 @@
    "pct_lo100_steep": 8.5,
    "elev_max": 240.3,
    "coast_km": 15.19,
-   "road_km": 0.03
+   "road_km": 0.03,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣車城鄉": {
    "pct_ge1000": 0.0,
@@ -1015,7 +1234,9 @@
    "pct_lo100_steep": 31.6,
    "elev_max": 620.5,
    "coast_km": 0.02,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣里港鄉": {
    "pct_ge1000": 0.0,
@@ -1023,7 +1244,9 @@
    "pct_lo100_steep": 12.5,
    "elev_max": 68.1,
    "coast_km": 21.94,
-   "road_km": 11.13
+   "road_km": 11.13,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣長治鄉": {
    "pct_ge1000": 0.0,
@@ -1031,7 +1254,9 @@
    "pct_lo100_steep": 2.9,
    "elev_max": 88.0,
    "coast_km": 23.05,
-   "road_km": 0.57
+   "road_km": 0.57,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣霧臺鄉": {
    "pct_ge1000": 78.0,
@@ -1039,7 +1264,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 3037.7,
    "coast_km": 16.07,
-   "road_km": 15.06
+   "road_km": 15.06,
+   "island": false,
+   "mountain_indigenous": true
   },
   "屏東縣高樹鄉": {
    "pct_ge1000": 0.0,
@@ -1047,7 +1274,9 @@
    "pct_lo100_steep": 8.6,
    "elev_max": 285.6,
    "coast_km": 30.56,
-   "road_km": 13.38
+   "road_km": 13.38,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣鹽埔鄉": {
    "pct_ge1000": 0.0,
@@ -1055,7 +1284,9 @@
    "pct_lo100_steep": 5.1,
    "elev_max": 105.2,
    "coast_km": 25.18,
-   "road_km": 7.5
+   "road_km": 7.5,
+   "island": false,
+   "mountain_indigenous": false
   },
   "屏東縣麟洛鄉": {
    "pct_ge1000": 0.0,
@@ -1063,7 +1294,9 @@
    "pct_lo100_steep": 3.8,
    "elev_max": 37.0,
    "coast_km": 18.56,
-   "road_km": 0.57
+   "road_km": 0.57,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣二林鎮": {
    "pct_ge1000": 0.0,
@@ -1071,7 +1304,9 @@
    "pct_lo100_steep": 2.4,
    "elev_max": 25.4,
    "coast_km": 7.68,
-   "road_km": 2.75
+   "road_km": 2.75,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣二水鄉": {
    "pct_ge1000": 0.0,
@@ -1079,7 +1314,9 @@
    "pct_lo100_steep": 6.4,
    "elev_max": 432.9,
    "coast_km": 32.81,
-   "road_km": 8.7
+   "road_km": 8.7,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣伸港鄉": {
    "pct_ge1000": 0.0,
@@ -1087,7 +1324,9 @@
    "pct_lo100_steep": 6.5,
    "elev_max": 18.2,
    "coast_km": 0.03,
-   "road_km": 0.02
+   "road_km": 0.02,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣北斗鎮": {
    "pct_ge1000": 0.0,
@@ -1095,7 +1334,9 @@
    "pct_lo100_steep": 2.6,
    "elev_max": 46.2,
    "coast_km": 21.41,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣和美鎮": {
    "pct_ge1000": 0.0,
@@ -1103,7 +1344,9 @@
    "pct_lo100_steep": 7.0,
    "elev_max": 24.2,
    "coast_km": 6.57,
-   "road_km": 1.4
+   "road_km": 1.4,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣員林市": {
    "pct_ge1000": 0.0,
@@ -1111,7 +1354,9 @@
    "pct_lo100_steep": 15.0,
    "elev_max": 402.1,
    "coast_km": 20.74,
-   "road_km": 0.26
+   "road_km": 0.26,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣埔心鄉": {
    "pct_ge1000": 0.0,
@@ -1119,7 +1364,9 @@
    "pct_lo100_steep": 4.6,
    "elev_max": 29.4,
    "coast_km": 17.68,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣埔鹽鄉": {
    "pct_ge1000": 0.0,
@@ -1127,7 +1374,9 @@
    "pct_lo100_steep": 3.8,
    "elev_max": 22.2,
    "coast_km": 8.07,
-   "road_km": 2.33
+   "road_km": 2.33,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣埤頭鄉": {
    "pct_ge1000": 0.0,
@@ -1135,7 +1384,9 @@
    "pct_lo100_steep": 2.4,
    "elev_max": 38.8,
    "coast_km": 14.73,
-   "road_km": 0.09
+   "road_km": 0.09,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣大城鄉": {
    "pct_ge1000": 0.0,
@@ -1143,7 +1394,9 @@
    "pct_lo100_steep": 3.3,
    "elev_max": 20.1,
    "coast_km": 0.01,
-   "road_km": 0.34
+   "road_km": 0.34,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣大村鄉": {
    "pct_ge1000": 0.0,
@@ -1151,7 +1404,9 @@
    "pct_lo100_steep": 11.7,
    "elev_max": 249.5,
    "coast_km": 16.54,
-   "road_km": 0.42
+   "road_km": 0.42,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣彰化市": {
    "pct_ge1000": 0.0,
@@ -1159,7 +1414,9 @@
    "pct_lo100_steep": 26.6,
    "elev_max": 231.9,
    "coast_km": 11.38,
-   "road_km": 0.04
+   "road_km": 0.04,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣永靖鄉": {
    "pct_ge1000": 0.0,
@@ -1167,7 +1424,9 @@
    "pct_lo100_steep": 2.0,
    "elev_max": 36.5,
    "coast_km": 19.03,
-   "road_km": 0.26
+   "road_km": 0.26,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣溪州鄉": {
    "pct_ge1000": 0.0,
@@ -1175,7 +1434,9 @@
    "pct_lo100_steep": 6.0,
    "elev_max": 73.2,
    "coast_km": 21.22,
-   "road_km": 0.14
+   "road_km": 0.14,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣溪湖鎮": {
    "pct_ge1000": 0.0,
@@ -1183,7 +1444,9 @@
    "pct_lo100_steep": 4.0,
    "elev_max": 27.5,
    "coast_km": 12.71,
-   "road_km": 4.39
+   "road_km": 4.39,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣田中鎮": {
    "pct_ge1000": 0.0,
@@ -1191,7 +1454,9 @@
    "pct_lo100_steep": 10.0,
    "elev_max": 382.0,
    "coast_km": 26.94,
-   "road_km": 2.93
+   "road_km": 2.93,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣田尾鄉": {
    "pct_ge1000": 0.0,
@@ -1199,7 +1464,9 @@
    "pct_lo100_steep": 3.8,
    "elev_max": 41.1,
    "coast_km": 17.62,
-   "road_km": 0.19
+   "road_km": 0.19,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣社頭鄉": {
    "pct_ge1000": 0.0,
@@ -1207,7 +1474,9 @@
    "pct_lo100_steep": 14.1,
    "elev_max": 441.2,
    "coast_km": 25.91,
-   "road_km": 1.76
+   "road_km": 1.76,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣福興鄉": {
    "pct_ge1000": 0.0,
@@ -1215,7 +1484,9 @@
    "pct_lo100_steep": 3.8,
    "elev_max": 14.0,
    "coast_km": 0.05,
-   "road_km": 0.05
+   "road_km": 0.05,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣秀水鄉": {
    "pct_ge1000": 0.0,
@@ -1223,7 +1494,9 @@
    "pct_lo100_steep": 4.2,
    "elev_max": 20.7,
    "coast_km": 9.73,
-   "road_km": 1.15
+   "road_km": 1.15,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣竹塘鄉": {
    "pct_ge1000": 0.0,
@@ -1231,7 +1504,9 @@
    "pct_lo100_steep": 4.2,
    "elev_max": 31.5,
    "coast_km": 12.06,
-   "road_km": 0.97
+   "road_km": 0.97,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣線西鄉": {
    "pct_ge1000": 0.0,
@@ -1239,7 +1514,9 @@
    "pct_lo100_steep": 7.2,
    "elev_max": 12.6,
    "coast_km": 0.02,
-   "road_km": 0.02
+   "road_km": 0.02,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣芬園鄉": {
    "pct_ge1000": 0.0,
@@ -1247,7 +1524,9 @@
    "pct_lo100_steep": 14.5,
    "elev_max": 366.0,
    "coast_km": 21.75,
-   "road_km": 3.92
+   "road_km": 3.92,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣花壇鄉": {
    "pct_ge1000": 0.0,
@@ -1255,7 +1534,9 @@
    "pct_lo100_steep": 27.4,
    "elev_max": 255.6,
    "coast_km": 14.13,
-   "road_km": 0.04
+   "road_km": 0.04,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣芳苑鄉": {
    "pct_ge1000": 0.0,
@@ -1263,7 +1544,9 @@
    "pct_lo100_steep": 3.1,
    "elev_max": 19.0,
    "coast_km": 0.02,
-   "road_km": 0.05
+   "road_km": 0.05,
+   "island": false,
+   "mountain_indigenous": false
   },
   "彰化縣鹿港鎮": {
    "pct_ge1000": 0.0,
@@ -1271,7 +1554,9 @@
    "pct_lo100_steep": 5.5,
    "elev_max": 16.9,
    "coast_km": 0.02,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市三峽區": {
    "pct_ge1000": 5.7,
@@ -1279,7 +1564,9 @@
    "pct_lo100_steep": 9.1,
    "elev_max": 1724.9,
    "coast_km": 19.91,
-   "road_km": 5.9
+   "road_km": 5.9,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市三芝區": {
    "pct_ge1000": 0.6,
@@ -1287,7 +1574,9 @@
    "pct_lo100_steep": 17.5,
    "elev_max": 1095.2,
    "coast_km": 0.01,
-   "road_km": 0.15
+   "road_km": 0.15,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市三重區": {
    "pct_ge1000": 0.0,
@@ -1295,7 +1584,9 @@
    "pct_lo100_steep": 10.4,
    "elev_max": 14.1,
    "coast_km": 11.21,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市中和區": {
    "pct_ge1000": 0.0,
@@ -1303,7 +1594,9 @@
    "pct_lo100_steep": 30.1,
    "elev_max": 320.8,
    "coast_km": 17.69,
-   "road_km": 0.96
+   "road_km": 0.96,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市五股區": {
    "pct_ge1000": 0.0,
@@ -1311,7 +1604,9 @@
    "pct_lo100_steep": 31.9,
    "elev_max": 521.5,
    "coast_km": 3.18,
-   "road_km": 0.26
+   "road_km": 0.26,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市八里區": {
    "pct_ge1000": 0.0,
@@ -1319,7 +1614,9 @@
    "pct_lo100_steep": 30.6,
    "elev_max": 611.3,
    "coast_km": 0.01,
-   "road_km": 0.1
+   "road_km": 0.1,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市土城區": {
    "pct_ge1000": 0.0,
@@ -1327,7 +1624,9 @@
    "pct_lo100_steep": 32.2,
    "elev_max": 425.5,
    "coast_km": 17.73,
-   "road_km": 4.67
+   "road_km": 4.67,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市坪林區": {
    "pct_ge1000": 0.5,
@@ -1335,7 +1634,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1128.2,
    "coast_km": 5.35,
-   "road_km": 0.08
+   "road_km": 0.08,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市平溪區": {
    "pct_ge1000": 0.0,
@@ -1343,7 +1644,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 839.0,
    "coast_km": 5.59,
-   "road_km": 4.42
+   "road_km": 4.42,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市新店區": {
    "pct_ge1000": 0.0,
@@ -1351,7 +1654,9 @@
    "pct_lo100_steep": 18.1,
    "elev_max": 979.4,
    "coast_km": 21.85,
-   "road_km": 0.19
+   "road_km": 0.19,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市新莊區": {
    "pct_ge1000": 0.0,
@@ -1359,7 +1664,9 @@
    "pct_lo100_steep": 12.2,
    "elev_max": 238.9,
    "coast_km": 10.54,
-   "road_km": 0.15
+   "road_km": 0.15,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市板橋區": {
    "pct_ge1000": 0.0,
@@ -1367,7 +1674,9 @@
    "pct_lo100_steep": 10.9,
    "elev_max": 24.7,
    "coast_km": 14.34,
-   "road_km": 1.98
+   "road_km": 1.98,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市林口區": {
    "pct_ge1000": 0.0,
@@ -1375,7 +1684,9 @@
    "pct_lo100_steep": 20.2,
    "elev_max": 257.9,
    "coast_km": 0.01,
-   "road_km": 0.11
+   "road_km": 0.11,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市樹林區": {
    "pct_ge1000": 0.0,
@@ -1383,7 +1694,9 @@
    "pct_lo100_steep": 25.3,
    "elev_max": 402.7,
    "coast_km": 13.33,
-   "road_km": 0.06
+   "road_km": 0.06,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市永和區": {
    "pct_ge1000": 0.0,
@@ -1391,7 +1704,9 @@
    "pct_lo100_steep": 11.4,
    "elev_max": 16.5,
    "coast_km": 18.63,
-   "road_km": 0.47
+   "road_km": 0.47,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市汐止區": {
    "pct_ge1000": 0.0,
@@ -1399,7 +1714,9 @@
    "pct_lo100_steep": 34.1,
    "elev_max": 727.4,
    "coast_km": 7.75,
-   "road_km": 6.25
+   "road_km": 6.25,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市泰山區": {
    "pct_ge1000": 0.0,
@@ -1407,7 +1724,9 @@
    "pct_lo100_steep": 21.7,
    "elev_max": 248.6,
    "coast_km": 6.92,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市淡水區": {
    "pct_ge1000": 0.2,
@@ -1415,7 +1734,9 @@
    "pct_lo100_steep": 31.7,
    "elev_max": 1092.0,
    "coast_km": 0.02,
-   "road_km": 0.15
+   "road_km": 0.15,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市深坑區": {
    "pct_ge1000": 0.0,
@@ -1423,7 +1744,9 @@
    "pct_lo100_steep": 25.5,
    "elev_max": 591.7,
    "coast_km": 17.13,
-   "road_km": 1.4
+   "road_km": 1.4,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市烏來區": {
    "pct_ge1000": 34.1,
@@ -1431,7 +1754,9 @@
    "pct_lo100_steep": 0.1,
    "elev_max": 2128.5,
    "coast_km": 11.9,
-   "road_km": 6.57
+   "road_km": 6.57,
+   "island": false,
+   "mountain_indigenous": true
   },
   "新北市瑞芳區": {
    "pct_ge1000": 0.0,
@@ -1439,7 +1764,9 @@
    "pct_lo100_steep": 23.2,
    "elev_max": 746.5,
    "coast_km": 0.01,
-   "road_km": 0.03
+   "road_km": 0.03,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市石碇區": {
    "pct_ge1000": 0.0,
@@ -1447,7 +1774,9 @@
    "pct_lo100_steep": 1.3,
    "elev_max": 924.0,
    "coast_km": 13.53,
-   "road_km": 0.05
+   "road_km": 0.05,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市石門區": {
    "pct_ge1000": 0.1,
@@ -1455,7 +1784,9 @@
    "pct_lo100_steep": 33.6,
    "elev_max": 1071.8,
    "coast_km": 0.01,
-   "road_km": 0.08
+   "road_km": 0.08,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市萬里區": {
    "pct_ge1000": 0.0,
@@ -1463,7 +1794,9 @@
    "pct_lo100_steep": 20.2,
    "elev_max": 914.6,
    "coast_km": 0.01,
-   "road_km": 0.1
+   "road_km": 0.1,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市蘆洲區": {
    "pct_ge1000": 0.0,
@@ -1471,7 +1804,9 @@
    "pct_lo100_steep": 8.2,
    "elev_max": 11.6,
    "coast_km": 8.73,
-   "road_km": 1.32
+   "road_km": 1.32,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市貢寮區": {
    "pct_ge1000": 0.0,
@@ -1479,7 +1814,9 @@
    "pct_lo100_steep": 31.9,
    "elev_max": 714.9,
    "coast_km": 0.0,
-   "road_km": 0.14
+   "road_km": 0.14,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市金山區": {
    "pct_ge1000": 0.5,
@@ -1487,7 +1824,9 @@
    "pct_lo100_steep": 17.7,
    "elev_max": 1097.7,
    "coast_km": 0.02,
-   "road_km": 0.07
+   "road_km": 0.07,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市雙溪區": {
    "pct_ge1000": 0.0,
@@ -1495,7 +1834,9 @@
    "pct_lo100_steep": 9.8,
    "elev_max": 977.7,
    "coast_km": 2.51,
-   "road_km": 2.36
+   "road_km": 2.36,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新北市鶯歌區": {
    "pct_ge1000": 0.0,
@@ -1503,7 +1844,9 @@
    "pct_lo100_steep": 29.6,
    "elev_max": 358.8,
    "coast_km": 15.72,
-   "road_km": 1.87
+   "road_km": 1.87,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹市北區": {
    "pct_ge1000": 0.0,
@@ -1511,7 +1854,9 @@
    "pct_lo100_steep": 13.5,
    "elev_max": 108.3,
    "coast_km": 0.03,
-   "road_km": 0.03
+   "road_km": 0.03,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹市東區": {
    "pct_ge1000": 0.0,
@@ -1519,7 +1864,9 @@
    "pct_lo100_steep": 33.0,
    "elev_max": 185.4,
    "coast_km": 6.12,
-   "road_km": 0.1
+   "road_km": 0.1,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹市香山區": {
    "pct_ge1000": 0.0,
@@ -1527,7 +1874,9 @@
    "pct_lo100_steep": 46.7,
    "elev_max": 119.4,
    "coast_km": 0.01,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹縣五峰鄉": {
    "pct_ge1000": 63.0,
@@ -1535,7 +1884,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 2525.4,
    "coast_km": 23.87,
-   "road_km": 17.77
+   "road_km": 17.77,
+   "island": false,
+   "mountain_indigenous": true
   },
   "新竹縣北埔鄉": {
    "pct_ge1000": 0.3,
@@ -1543,7 +1894,9 @@
    "pct_lo100_steep": 1.1,
    "elev_max": 1347.9,
    "coast_km": 15.29,
-   "road_km": 11.48
+   "road_km": 11.48,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹縣寶山鄉": {
    "pct_ge1000": 0.0,
@@ -1551,7 +1904,9 @@
    "pct_lo100_steep": 52.2,
    "elev_max": 251.7,
    "coast_km": 5.4,
-   "road_km": 1.17
+   "road_km": 1.17,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹縣尖石鄉": {
    "pct_ge1000": 80.1,
@@ -1559,7 +1914,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 3527.1,
    "coast_km": 27.66,
-   "road_km": 19.49
+   "road_km": 19.49,
+   "island": false,
+   "mountain_indigenous": true
   },
   "新竹縣峨眉鄉": {
    "pct_ge1000": 0.0,
@@ -1567,7 +1924,9 @@
    "pct_lo100_steep": 22.3,
    "elev_max": 800.2,
    "coast_km": 9.63,
-   "road_km": 4.37
+   "road_km": 4.37,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹縣新埔鎮": {
    "pct_ge1000": 0.0,
@@ -1575,7 +1934,9 @@
    "pct_lo100_steep": 16.8,
    "elev_max": 380.1,
    "coast_km": 7.58,
-   "road_km": 1.27
+   "road_km": 1.27,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹縣新豐鄉": {
    "pct_ge1000": 0.0,
@@ -1583,7 +1944,9 @@
    "pct_lo100_steep": 22.4,
    "elev_max": 130.3,
    "coast_km": 0.0,
-   "road_km": 0.03
+   "road_km": 0.03,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹縣橫山鄉": {
    "pct_ge1000": 0.0,
@@ -1591,7 +1954,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 975.3,
    "coast_km": 21.32,
-   "road_km": 14.73
+   "road_km": 14.73,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹縣湖口鄉": {
    "pct_ge1000": 0.0,
@@ -1599,7 +1964,9 @@
    "pct_lo100_steep": 9.8,
    "elev_max": 354.1,
    "coast_km": 5.09,
-   "road_km": 0.09
+   "road_km": 0.09,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹縣竹北市": {
    "pct_ge1000": 0.0,
@@ -1607,7 +1974,9 @@
    "pct_lo100_steep": 18.0,
    "elev_max": 175.9,
    "coast_km": 0.03,
-   "road_km": 0.06
+   "road_km": 0.06,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹縣竹東鎮": {
    "pct_ge1000": 0.0,
@@ -1615,7 +1984,9 @@
    "pct_lo100_steep": 7.8,
    "elev_max": 1051.4,
    "coast_km": 11.54,
-   "road_km": 3.72
+   "road_km": 3.72,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹縣芎林鄉": {
    "pct_ge1000": 0.0,
@@ -1623,7 +1994,9 @@
    "pct_lo100_steep": 5.6,
    "elev_max": 469.4,
    "coast_km": 13.39,
-   "road_km": 5.87
+   "road_km": 5.87,
+   "island": false,
+   "mountain_indigenous": false
   },
   "新竹縣關西鎮": {
    "pct_ge1000": 0.5,
@@ -1631,7 +2004,9 @@
    "pct_lo100_steep": 1.5,
    "elev_max": 1339.8,
    "coast_km": 16.64,
-   "road_km": 6.31
+   "road_km": 6.31,
+   "island": false,
+   "mountain_indigenous": false
   },
   "桃園市中壢區": {
    "pct_ge1000": 0.0,
@@ -1639,7 +2014,9 @@
    "pct_lo100_steep": 5.3,
    "elev_max": 171.1,
    "coast_km": 6.26,
-   "road_km": 0.7
+   "road_km": 0.7,
+   "island": false,
+   "mountain_indigenous": false
   },
   "桃園市八德區": {
    "pct_ge1000": 0.0,
@@ -1647,7 +2024,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 172.5,
    "coast_km": 14.66,
-   "road_km": 0.18
+   "road_km": 0.18,
+   "island": false,
+   "mountain_indigenous": false
   },
   "桃園市大園區": {
    "pct_ge1000": 0.0,
@@ -1655,7 +2034,9 @@
    "pct_lo100_steep": 15.8,
    "elev_max": 93.2,
    "coast_km": 0.02,
-   "road_km": 0.38
+   "road_km": 0.38,
+   "island": false,
+   "mountain_indigenous": false
   },
   "桃園市大溪區": {
    "pct_ge1000": 0.0,
@@ -1663,7 +2044,9 @@
    "pct_lo100_steep": 4.6,
    "elev_max": 662.8,
    "coast_km": 20.51,
-   "road_km": 5.24
+   "road_km": 5.24,
+   "island": false,
+   "mountain_indigenous": false
   },
   "桃園市平鎮區": {
    "pct_ge1000": 0.0,
@@ -1671,7 +2054,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 278.2,
    "coast_km": 12.88,
-   "road_km": 0.35
+   "road_km": 0.35,
+   "island": false,
+   "mountain_indigenous": false
   },
   "桃園市復興區": {
    "pct_ge1000": 47.4,
@@ -1679,7 +2064,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 2440.5,
    "coast_km": 30.5,
-   "road_km": 13.95
+   "road_km": 13.95,
+   "island": false,
+   "mountain_indigenous": true
   },
   "桃園市新屋區": {
    "pct_ge1000": 0.0,
@@ -1687,7 +2074,9 @@
    "pct_lo100_steep": 10.6,
    "elev_max": 136.8,
    "coast_km": 0.0,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "桃園市桃園區": {
    "pct_ge1000": 0.0,
@@ -1695,7 +2084,9 @@
    "pct_lo100_steep": 8.5,
    "elev_max": 253.1,
    "coast_km": 9.54,
-   "road_km": 0.09
+   "road_km": 0.09,
+   "island": false,
+   "mountain_indigenous": false
   },
   "桃園市楊梅區": {
    "pct_ge1000": 0.0,
@@ -1703,7 +2094,9 @@
    "pct_lo100_steep": 1.4,
    "elev_max": 384.8,
    "coast_km": 6.59,
-   "road_km": 0.24
+   "road_km": 0.24,
+   "island": false,
+   "mountain_indigenous": false
   },
   "桃園市蘆竹區": {
    "pct_ge1000": 0.0,
@@ -1711,7 +2104,9 @@
    "pct_lo100_steep": 18.0,
    "elev_max": 256.6,
    "coast_km": 0.04,
-   "road_km": 0.09
+   "road_km": 0.09,
+   "island": false,
+   "mountain_indigenous": false
   },
   "桃園市觀音區": {
    "pct_ge1000": 0.0,
@@ -1719,7 +2114,9 @@
    "pct_lo100_steep": 16.1,
    "elev_max": 117.2,
    "coast_km": 0.01,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "桃園市龍潭區": {
    "pct_ge1000": 0.0,
@@ -1727,7 +2124,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 554.5,
    "coast_km": 18.48,
-   "road_km": 2.5
+   "road_km": 2.5,
+   "island": false,
+   "mountain_indigenous": false
   },
   "桃園市龜山區": {
    "pct_ge1000": 0.0,
@@ -1735,7 +2134,9 @@
    "pct_lo100_steep": 4.2,
    "elev_max": 403.2,
    "coast_km": 6.94,
-   "road_km": 0.12
+   "road_km": 0.12,
+   "island": false,
+   "mountain_indigenous": false
   },
   "澎湖縣七美鄉": {
    "pct_ge1000": 0.0,
@@ -1743,7 +2144,9 @@
    "pct_lo100_steep": 44.8,
    "elev_max": 64.2,
    "coast_km": 0.01,
-   "road_km": 66.01
+   "road_km": 66.01,
+   "island": true,
+   "mountain_indigenous": false
   },
   "澎湖縣望安鄉": {
    "pct_ge1000": 0.0,
@@ -1751,7 +2154,9 @@
    "pct_lo100_steep": 57.3,
    "elev_max": 73.4,
    "coast_km": 0.02,
-   "road_km": 61.8
+   "road_km": 61.8,
+   "island": true,
+   "mountain_indigenous": false
   },
   "澎湖縣湖西鄉": {
    "pct_ge1000": 0.0,
@@ -1759,7 +2164,9 @@
    "pct_lo100_steep": 25.2,
    "elev_max": 49.9,
    "coast_km": 0.04,
-   "road_km": 46.48
+   "road_km": 46.48,
+   "island": true,
+   "mountain_indigenous": false
   },
   "澎湖縣白沙鄉": {
    "pct_ge1000": 0.0,
@@ -1767,7 +2174,9 @@
    "pct_lo100_steep": 28.9,
    "elev_max": 39.0,
    "coast_km": 0.01,
-   "road_km": 54.83
+   "road_km": 54.83,
+   "island": true,
+   "mountain_indigenous": false
   },
   "澎湖縣西嶼鄉": {
    "pct_ge1000": 0.0,
@@ -1775,7 +2184,9 @@
    "pct_lo100_steep": 45.4,
    "elev_max": 60.8,
    "coast_km": 0.03,
-   "road_km": 62.1
+   "road_km": 62.1,
+   "island": true,
+   "mountain_indigenous": false
   },
   "澎湖縣馬公市": {
    "pct_ge1000": 0.0,
@@ -1783,7 +2194,9 @@
    "pct_lo100_steep": 29.9,
    "elev_max": 60.8,
    "coast_km": 0.01,
-   "road_km": 52.97
+   "road_km": 52.97,
+   "island": true,
+   "mountain_indigenous": false
   },
   "臺中市中區": {
    "pct_ge1000": 0.0,
@@ -1791,7 +2204,9 @@
    "pct_lo100_steep": 4.2,
    "elev_max": 83.9,
    "coast_km": 22.26,
-   "road_km": 9.98
+   "road_km": 9.98,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市北區": {
    "pct_ge1000": 0.0,
@@ -1799,7 +2214,9 @@
    "pct_lo100_steep": 2.8,
    "elev_max": 112.3,
    "coast_km": 19.89,
-   "road_km": 9.04
+   "road_km": 9.04,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市北屯區": {
    "pct_ge1000": 0.0,
@@ -1807,7 +2224,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 855.8,
    "coast_km": 18.14,
-   "road_km": 10.88
+   "road_km": 10.88,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市南區": {
    "pct_ge1000": 0.0,
@@ -1815,7 +2234,9 @@
    "pct_lo100_steep": 7.9,
    "elev_max": 75.2,
    "coast_km": 20.89,
-   "road_km": 5.69
+   "road_km": 5.69,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市南屯區": {
    "pct_ge1000": 0.0,
@@ -1823,7 +2244,9 @@
    "pct_lo100_steep": 10.7,
    "elev_max": 290.4,
    "coast_km": 12.49,
-   "road_km": 2.32
+   "road_km": 2.32,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市后里區": {
    "pct_ge1000": 0.0,
@@ -1831,7 +2254,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 543.8,
    "coast_km": 10.1,
-   "road_km": 4.21
+   "road_km": 4.21,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市和平區": {
    "pct_ge1000": 87.3,
@@ -1839,7 +2264,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 3883.6,
    "coast_km": 27.15,
-   "road_km": 26.54
+   "road_km": 26.54,
+   "island": false,
+   "mountain_indigenous": true
   },
   "臺中市外埔區": {
    "pct_ge1000": 0.0,
@@ -1847,7 +2274,9 @@
    "pct_lo100_steep": 4.3,
    "elev_max": 271.6,
    "coast_km": 5.92,
-   "road_km": 0.58
+   "road_km": 0.58,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市大安區": {
    "pct_ge1000": 0.0,
@@ -1855,7 +2284,9 @@
    "pct_lo100_steep": 7.2,
    "elev_max": 55.4,
    "coast_km": 0.03,
-   "road_km": 0.66
+   "road_km": 0.66,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市大甲區": {
    "pct_ge1000": 0.0,
@@ -1863,7 +2294,9 @@
    "pct_lo100_steep": 11.1,
    "elev_max": 223.2,
    "coast_km": 0.02,
-   "road_km": 0.31
+   "road_km": 0.31,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市大肚區": {
    "pct_ge1000": 0.0,
@@ -1871,7 +2304,9 @@
    "pct_lo100_steep": 22.1,
    "elev_max": 293.3,
    "coast_km": 7.09,
-   "road_km": 0.13
+   "road_km": 0.13,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市大里區": {
    "pct_ge1000": 0.0,
@@ -1879,7 +2314,9 @@
    "pct_lo100_steep": 10.8,
    "elev_max": 330.3,
    "coast_km": 22.69,
-   "road_km": 7.04
+   "road_km": 7.04,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市大雅區": {
    "pct_ge1000": 0.0,
@@ -1887,7 +2324,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 307.4,
    "coast_km": 11.1,
-   "road_km": 5.73
+   "road_km": 5.73,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市太平區": {
    "pct_ge1000": 0.4,
@@ -1895,7 +2334,9 @@
    "pct_lo100_steep": 1.7,
    "elev_max": 1202.4,
    "coast_km": 23.88,
-   "road_km": 11.46
+   "road_km": 11.46,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市新社區": {
    "pct_ge1000": 1.5,
@@ -1903,7 +2344,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1128.4,
    "coast_km": 24.48,
-   "road_km": 18.48
+   "road_km": 18.48,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市東勢區": {
    "pct_ge1000": 1.1,
@@ -1911,7 +2354,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1196.4,
    "coast_km": 18.75,
-   "road_km": 13.54
+   "road_km": 13.54,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市東區": {
    "pct_ge1000": 0.0,
@@ -1919,7 +2364,9 @@
    "pct_lo100_steep": 8.2,
    "elev_max": 96.6,
    "coast_km": 23.1,
-   "road_km": 9.73
+   "road_km": 9.73,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市梧棲區": {
    "pct_ge1000": 0.0,
@@ -1927,7 +2374,9 @@
    "pct_lo100_steep": 4.6,
    "elev_max": 11.8,
    "coast_km": 0.02,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市沙鹿區": {
    "pct_ge1000": 0.0,
@@ -1935,7 +2384,9 @@
    "pct_lo100_steep": 20.6,
    "elev_max": 301.3,
    "coast_km": 5.99,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市清水區": {
    "pct_ge1000": 0.0,
@@ -1943,7 +2394,9 @@
    "pct_lo100_steep": 7.3,
    "elev_max": 220.4,
    "coast_km": 0.03,
-   "road_km": 0.17
+   "road_km": 0.17,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市潭子區": {
    "pct_ge1000": 0.0,
@@ -1951,7 +2404,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 502.2,
    "coast_km": 17.89,
-   "road_km": 11.49
+   "road_km": 11.49,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市烏日區": {
    "pct_ge1000": 0.0,
@@ -1959,7 +2414,9 @@
    "pct_lo100_steep": 17.9,
    "elev_max": 209.6,
    "coast_km": 14.58,
-   "road_km": 0.13
+   "road_km": 0.13,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市石岡區": {
    "pct_ge1000": 0.0,
@@ -1967,7 +2424,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 579.3,
    "coast_km": 22.12,
-   "road_km": 15.95
+   "road_km": 15.95,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市神岡區": {
    "pct_ge1000": 0.0,
@@ -1975,7 +2434,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 208.2,
    "coast_km": 10.47,
-   "road_km": 4.52
+   "road_km": 4.52,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市西區": {
    "pct_ge1000": 0.0,
@@ -1983,7 +2444,9 @@
    "pct_lo100_steep": 5.4,
    "elev_max": 92.9,
    "coast_km": 19.74,
-   "road_km": 7.08
+   "road_km": 7.08,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市西屯區": {
    "pct_ge1000": 0.0,
@@ -1991,7 +2454,9 @@
    "pct_lo100_steep": 5.3,
    "elev_max": 310.8,
    "coast_km": 11.73,
-   "road_km": 4.4
+   "road_km": 4.4,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市豐原區": {
    "pct_ge1000": 0.0,
@@ -1999,7 +2464,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 592.5,
    "coast_km": 17.62,
-   "road_km": 11.62
+   "road_km": 11.62,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市霧峰區": {
    "pct_ge1000": 0.0,
@@ -2007,7 +2474,9 @@
    "pct_lo100_steep": 5.9,
    "elev_max": 766.7,
    "coast_km": 22.64,
-   "road_km": 7.41
+   "road_km": 7.41,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺中市龍井區": {
    "pct_ge1000": 0.0,
@@ -2015,7 +2484,9 @@
    "pct_lo100_steep": 12.6,
    "elev_max": 257.5,
    "coast_km": 0.05,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺北市中山區": {
    "pct_ge1000": 0.0,
@@ -2023,7 +2494,9 @@
    "pct_lo100_steep": 19.5,
    "elev_max": 199.5,
    "coast_km": 14.92,
-   "road_km": 0.26
+   "road_km": 0.26,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺北市中正區": {
    "pct_ge1000": 0.0,
@@ -2031,7 +2504,9 @@
    "pct_lo100_steep": 7.8,
    "elev_max": 45.7,
    "coast_km": 16.24,
-   "road_km": 0.26
+   "road_km": 0.26,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺北市信義區": {
    "pct_ge1000": 0.0,
@@ -2039,7 +2514,9 @@
    "pct_lo100_steep": 31.2,
    "elev_max": 373.5,
    "coast_km": 18.16,
-   "road_km": 2.08
+   "road_km": 2.08,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺北市內湖區": {
    "pct_ge1000": 0.0,
@@ -2047,7 +2524,9 @@
    "pct_lo100_steep": 42.2,
    "elev_max": 517.5,
    "coast_km": 11.44,
-   "road_km": 5.08
+   "road_km": 5.08,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺北市北投區": {
    "pct_ge1000": 1.4,
@@ -2055,7 +2534,9 @@
    "pct_lo100_steep": 14.6,
    "elev_max": 1115.8,
    "coast_km": 6.78,
-   "road_km": 0.3
+   "road_km": 0.3,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺北市南港區": {
    "pct_ge1000": 0.0,
@@ -2063,7 +2544,9 @@
    "pct_lo100_steep": 30.1,
    "elev_max": 415.0,
    "coast_km": 14.47,
-   "road_km": 5.29
+   "road_km": 5.29,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺北市士林區": {
    "pct_ge1000": 0.0,
@@ -2071,7 +2554,9 @@
    "pct_lo100_steep": 10.7,
    "elev_max": 889.7,
    "coast_km": 6.99,
-   "road_km": 1.05
+   "road_km": 1.05,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺北市大同區": {
    "pct_ge1000": 0.0,
@@ -2079,7 +2564,9 @@
    "pct_lo100_steep": 7.8,
    "elev_max": 14.4,
    "coast_km": 13.9,
-   "road_km": 0.26
+   "road_km": 0.26,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺北市大安區": {
    "pct_ge1000": 0.0,
@@ -2087,7 +2574,9 @@
    "pct_lo100_steep": 12.9,
    "elev_max": 135.2,
    "coast_km": 18.67,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺北市文山區": {
    "pct_ge1000": 0.0,
@@ -2095,7 +2584,9 @@
    "pct_lo100_steep": 41.9,
    "elev_max": 666.2,
    "coast_km": 20.09,
-   "road_km": 0.38
+   "road_km": 0.38,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺北市松山區": {
    "pct_ge1000": 0.0,
@@ -2103,7 +2594,9 @@
    "pct_lo100_steep": 5.6,
    "elev_max": 13.2,
    "coast_km": 16.58,
-   "road_km": 3.34
+   "road_km": 3.34,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺北市萬華區": {
    "pct_ge1000": 0.0,
@@ -2111,7 +2604,9 @@
    "pct_lo100_steep": 10.2,
    "elev_max": 12.3,
    "coast_km": 15.34,
-   "road_km": 0.02
+   "road_km": 0.02,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市七股區": {
    "pct_ge1000": 0.0,
@@ -2119,7 +2614,9 @@
    "pct_lo100_steep": 8.2,
    "elev_max": 10.8,
    "coast_km": 0.01,
-   "road_km": 0.58
+   "road_km": 0.58,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市下營區": {
    "pct_ge1000": 0.0,
@@ -2127,7 +2624,9 @@
    "pct_lo100_steep": 8.3,
    "elev_max": 16.3,
    "coast_km": 13.45,
-   "road_km": 1.28
+   "road_km": 1.28,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市中西區": {
    "pct_ge1000": 0.0,
@@ -2135,7 +2634,9 @@
    "pct_lo100_steep": 5.9,
    "elev_max": 19.8,
    "coast_km": 2.71,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市仁德區": {
    "pct_ge1000": 0.0,
@@ -2143,7 +2644,9 @@
    "pct_lo100_steep": 13.0,
    "elev_max": 29.7,
    "coast_km": 2.16,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市佳里區": {
    "pct_ge1000": 0.0,
@@ -2151,7 +2654,9 @@
    "pct_lo100_steep": 3.4,
    "elev_max": 17.3,
    "coast_km": 7.37,
-   "road_km": 1.09
+   "road_km": 1.09,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市六甲區": {
    "pct_ge1000": 0.0,
@@ -2159,7 +2664,9 @@
    "pct_lo100_steep": 35.0,
    "elev_max": 533.2,
    "coast_km": 19.43,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市北區": {
    "pct_ge1000": 0.0,
@@ -2167,7 +2674,9 @@
    "pct_lo100_steep": 8.5,
    "elev_max": 25.1,
    "coast_km": 3.44,
-   "road_km": 0.16
+   "road_km": 0.16,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市北門區": {
    "pct_ge1000": 0.0,
@@ -2175,7 +2684,9 @@
    "pct_lo100_steep": 16.1,
    "elev_max": 17.8,
    "coast_km": 0.02,
-   "road_km": 0.42
+   "road_km": 0.42,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市南化區": {
    "pct_ge1000": 0.3,
@@ -2183,7 +2694,9 @@
    "pct_lo100_steep": 13.0,
    "elev_max": 1169.3,
    "coast_km": 28.47,
-   "road_km": 12.74
+   "road_km": 12.74,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市南區": {
    "pct_ge1000": 0.0,
@@ -2191,7 +2704,9 @@
    "pct_lo100_steep": 9.1,
    "elev_max": 23.6,
    "coast_km": 0.02,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市善化區": {
    "pct_ge1000": 0.0,
@@ -2199,7 +2714,9 @@
    "pct_lo100_steep": 7.6,
    "elev_max": 30.8,
    "coast_km": 17.08,
-   "road_km": 0.72
+   "road_km": 0.72,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市大內區": {
    "pct_ge1000": 0.0,
@@ -2207,7 +2724,9 @@
    "pct_lo100_steep": 49.6,
    "elev_max": 401.7,
    "coast_km": 24.9,
-   "road_km": 1.39
+   "road_km": 1.39,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市學甲區": {
    "pct_ge1000": 0.0,
@@ -2215,7 +2734,9 @@
    "pct_lo100_steep": 18.9,
    "elev_max": 11.4,
    "coast_km": 3.89,
-   "road_km": 0.14
+   "road_km": 0.14,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市安南區": {
    "pct_ge1000": 0.0,
@@ -2223,7 +2744,9 @@
    "pct_lo100_steep": 10.9,
    "elev_max": 17.7,
    "coast_km": 0.02,
-   "road_km": 0.87
+   "road_km": 0.87,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市安定區": {
    "pct_ge1000": 0.0,
@@ -2231,7 +2754,9 @@
    "pct_lo100_steep": 9.1,
    "elev_max": 42.5,
    "coast_km": 10.32,
-   "road_km": 3.18
+   "road_km": 3.18,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市安平區": {
    "pct_ge1000": 0.0,
@@ -2239,7 +2764,9 @@
    "pct_lo100_steep": 6.0,
    "elev_max": 11.9,
    "coast_km": 0.01,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市官田區": {
    "pct_ge1000": 0.0,
@@ -2247,7 +2774,9 @@
    "pct_lo100_steep": 34.5,
    "elev_max": 192.4,
    "coast_km": 20.75,
-   "road_km": 0.95
+   "road_km": 0.95,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市將軍區": {
    "pct_ge1000": 0.0,
@@ -2255,7 +2784,9 @@
    "pct_lo100_steep": 6.6,
    "elev_max": 11.8,
    "coast_km": 0.01,
-   "road_km": 0.03
+   "road_km": 0.03,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市山上區": {
    "pct_ge1000": 0.0,
@@ -2263,7 +2794,9 @@
    "pct_lo100_steep": 46.6,
    "elev_max": 278.0,
    "coast_km": 22.04,
-   "road_km": 1.39
+   "road_km": 1.39,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市左鎮區": {
    "pct_ge1000": 0.0,
@@ -2271,7 +2804,9 @@
    "pct_lo100_steep": 67.0,
    "elev_max": 348.9,
    "coast_km": 22.3,
-   "road_km": 5.34
+   "road_km": 5.34,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市後壁區": {
    "pct_ge1000": 0.0,
@@ -2279,7 +2814,9 @@
    "pct_lo100_steep": 9.0,
    "elev_max": 39.7,
    "coast_km": 12.76,
-   "road_km": 0.1
+   "road_km": 0.1,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市新化區": {
    "pct_ge1000": 0.0,
@@ -2287,7 +2824,9 @@
    "pct_lo100_steep": 48.3,
    "elev_max": 166.7,
    "coast_km": 13.73,
-   "road_km": 1.02
+   "road_km": 1.02,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市新市區": {
    "pct_ge1000": 0.0,
@@ -2295,7 +2834,9 @@
    "pct_lo100_steep": 11.5,
    "elev_max": 35.2,
    "coast_km": 13.05,
-   "road_km": 0.51
+   "road_km": 0.51,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市新營區": {
    "pct_ge1000": 0.0,
@@ -2303,7 +2844,9 @@
    "pct_lo100_steep": 9.1,
    "elev_max": 20.4,
    "coast_km": 13.48,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市東區": {
    "pct_ge1000": 0.0,
@@ -2311,7 +2854,9 @@
    "pct_lo100_steep": 6.0,
    "elev_max": 30.6,
    "coast_km": 5.08,
-   "road_km": 0.16
+   "road_km": 0.16,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市東山區": {
    "pct_ge1000": 0.0,
@@ -2319,7 +2864,9 @@
    "pct_lo100_steep": 23.5,
    "elev_max": 980.3,
    "coast_km": 19.92,
-   "road_km": 0.99
+   "road_km": 0.99,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市柳營區": {
    "pct_ge1000": 0.0,
@@ -2327,7 +2874,9 @@
    "pct_lo100_steep": 22.8,
    "elev_max": 245.0,
    "coast_km": 16.77,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市楠西區": {
    "pct_ge1000": 0.3,
@@ -2335,7 +2884,9 @@
    "pct_lo100_steep": 5.2,
    "elev_max": 1128.3,
    "coast_km": 36.8,
-   "road_km": 12.36
+   "road_km": 12.36,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市歸仁區": {
    "pct_ge1000": 0.0,
@@ -2343,7 +2894,9 @@
    "pct_lo100_steep": 11.2,
    "elev_max": 36.8,
    "coast_km": 8.69,
-   "road_km": 2.94
+   "road_km": 2.94,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市永康區": {
    "pct_ge1000": 0.0,
@@ -2351,7 +2904,9 @@
    "pct_lo100_steep": 10.3,
    "elev_max": 33.4,
    "coast_km": 7.41,
-   "road_km": 0.21
+   "road_km": 0.21,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市玉井區": {
    "pct_ge1000": 0.0,
@@ -2359,7 +2914,9 @@
    "pct_lo100_steep": 36.2,
    "elev_max": 638.3,
    "coast_km": 28.3,
-   "road_km": 9.55
+   "road_km": 9.55,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市白河區": {
    "pct_ge1000": 0.6,
@@ -2367,7 +2924,9 @@
    "pct_lo100_steep": 21.6,
    "elev_max": 1239.7,
    "coast_km": 22.43,
-   "road_km": 0.55
+   "road_km": 0.55,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市西港區": {
    "pct_ge1000": 0.0,
@@ -2375,7 +2934,9 @@
    "pct_lo100_steep": 5.7,
    "elev_max": 16.1,
    "coast_km": 9.45,
-   "road_km": 3.79
+   "road_km": 3.79,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市關廟區": {
    "pct_ge1000": 0.0,
@@ -2383,7 +2944,9 @@
    "pct_lo100_steep": 53.5,
    "elev_max": 117.3,
    "coast_km": 13.23,
-   "road_km": 5.47
+   "road_km": 5.47,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市鹽水區": {
    "pct_ge1000": 0.0,
@@ -2391,7 +2954,9 @@
    "pct_lo100_steep": 10.3,
    "elev_max": 14.8,
    "coast_km": 9.28,
-   "road_km": 3.77
+   "road_km": 3.77,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市麻豆區": {
    "pct_ge1000": 0.0,
@@ -2399,7 +2964,9 @@
    "pct_lo100_steep": 12.7,
    "elev_max": 16.8,
    "coast_km": 11.33,
-   "road_km": 2.19
+   "road_km": 2.19,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺南市龍崎區": {
    "pct_ge1000": 0.0,
@@ -2407,7 +2974,9 @@
    "pct_lo100_steep": 66.2,
    "elev_max": 347.6,
    "coast_km": 17.52,
-   "road_km": 9.71
+   "road_km": 9.71,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺東縣卑南鄉": {
    "pct_ge1000": 35.1,
@@ -2415,7 +2984,9 @@
    "pct_lo100_steep": 3.7,
    "elev_max": 2721.2,
    "coast_km": 0.02,
-   "road_km": 0.02
+   "road_km": 0.02,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺東縣大武鄉": {
    "pct_ge1000": 0.0,
@@ -2423,7 +2994,9 @@
    "pct_lo100_steep": 25.7,
    "elev_max": 891.8,
    "coast_km": 0.02,
-   "road_km": 0.04
+   "road_km": 0.04,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺東縣太麻里鄉": {
    "pct_ge1000": 0.1,
@@ -2431,7 +3004,9 @@
    "pct_lo100_steep": 15.7,
    "elev_max": 1127.5,
    "coast_km": 0.03,
-   "road_km": 0.14
+   "road_km": 0.14,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺東縣延平鄉": {
    "pct_ge1000": 66.3,
@@ -2439,7 +3014,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 2937.2,
    "coast_km": 3.2,
-   "road_km": 0.46
+   "road_km": 0.46,
+   "island": false,
+   "mountain_indigenous": true
   },
   "臺東縣成功鎮": {
    "pct_ge1000": 10.5,
@@ -2447,7 +3024,9 @@
    "pct_lo100_steep": 20.4,
    "elev_max": 1679.2,
    "coast_km": 0.01,
-   "road_km": 0.05
+   "road_km": 0.05,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺東縣東河鄉": {
    "pct_ge1000": 0.6,
@@ -2455,7 +3034,9 @@
    "pct_lo100_steep": 10.4,
    "elev_max": 1509.2,
    "coast_km": 0.01,
-   "road_km": 0.08
+   "road_km": 0.08,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺東縣池上鄉": {
    "pct_ge1000": 0.1,
@@ -2463,7 +3044,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1093.9,
    "coast_km": 9.58,
-   "road_km": 0.99
+   "road_km": 0.99,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺東縣海端鄉": {
    "pct_ge1000": 83.2,
@@ -2471,7 +3054,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 3666.6,
    "coast_km": 15.98,
-   "road_km": 0.69
+   "road_km": 0.69,
+   "island": false,
+   "mountain_indigenous": true
   },
   "臺東縣臺東市": {
    "pct_ge1000": 0.0,
@@ -2479,7 +3064,9 @@
    "pct_lo100_steep": 16.6,
    "elev_max": 303.6,
    "coast_km": 0.02,
-   "road_km": 0.02
+   "road_km": 0.02,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺東縣蘭嶼鄉": {
    "pct_ge1000": 0.0,
@@ -2487,7 +3074,9 @@
    "pct_lo100_steep": 30.0,
    "elev_max": 548.1,
    "coast_km": 0.02,
-   "road_km": 63.13
+   "road_km": 63.13,
+   "island": true,
+   "mountain_indigenous": true
   },
   "臺東縣達仁鄉": {
    "pct_ge1000": 13.5,
@@ -2495,7 +3084,9 @@
    "pct_lo100_steep": 3.5,
    "elev_max": 1920.4,
    "coast_km": 0.02,
-   "road_km": 0.25
+   "road_km": 0.25,
+   "island": false,
+   "mountain_indigenous": true
   },
   "臺東縣金峰鄉": {
    "pct_ge1000": 37.6,
@@ -2503,7 +3094,9 @@
    "pct_lo100_steep": 0.4,
    "elev_max": 3084.8,
    "coast_km": 1.38,
-   "road_km": 0.98
+   "road_km": 0.98,
+   "island": false,
+   "mountain_indigenous": true
   },
   "臺東縣長濱鄉": {
    "pct_ge1000": 3.6,
@@ -2511,7 +3104,9 @@
    "pct_lo100_steep": 18.4,
    "elev_max": 1333.7,
    "coast_km": 0.0,
-   "road_km": 0.1
+   "road_km": 0.1,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺東縣關山鎮": {
    "pct_ge1000": 0.0,
@@ -2519,7 +3114,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 988.3,
    "coast_km": 9.65,
-   "road_km": 0.53
+   "road_km": 0.53,
+   "island": false,
+   "mountain_indigenous": false
   },
   "臺東縣鹿野鄉": {
    "pct_ge1000": 0.0,
@@ -2527,7 +3124,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 947.4,
    "coast_km": 6.6,
-   "road_km": 0.57
+   "road_km": 0.57,
+   "island": false,
+   "mountain_indigenous": false
   },
   "花蓮縣光復鄉": {
    "pct_ge1000": 0.4,
@@ -2535,7 +3134,9 @@
    "pct_lo100_steep": 0.2,
    "elev_max": 1198.7,
    "coast_km": 2.3,
-   "road_km": 0.38
+   "road_km": 0.38,
+   "island": false,
+   "mountain_indigenous": false
   },
   "花蓮縣卓溪鄉": {
    "pct_ge1000": 75.0,
@@ -2543,7 +3144,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 3814.9,
    "coast_km": 13.5,
-   "road_km": 0.29
+   "road_km": 0.29,
+   "island": false,
+   "mountain_indigenous": true
   },
   "花蓮縣吉安鄉": {
    "pct_ge1000": 0.7,
@@ -2551,7 +3154,9 @@
    "pct_lo100_steep": 9.8,
    "elev_max": 1317.1,
    "coast_km": 0.02,
-   "road_km": 0.61
+   "road_km": 0.61,
+   "island": false,
+   "mountain_indigenous": false
   },
   "花蓮縣壽豐鄉": {
    "pct_ge1000": 0.0,
@@ -2559,7 +3164,9 @@
    "pct_lo100_steep": 16.3,
    "elev_max": 1087.6,
    "coast_km": 0.03,
-   "road_km": 0.18
+   "road_km": 0.18,
+   "island": false,
+   "mountain_indigenous": false
   },
   "花蓮縣富里鄉": {
    "pct_ge1000": 11.6,
@@ -2567,7 +3174,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1674.6,
    "coast_km": 4.59,
-   "road_km": 0.22
+   "road_km": 0.22,
+   "island": false,
+   "mountain_indigenous": false
   },
   "花蓮縣新城鄉": {
    "pct_ge1000": 0.0,
@@ -2575,7 +3184,9 @@
    "pct_lo100_steep": 18.3,
    "elev_max": 339.5,
    "coast_km": 0.03,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "花蓮縣玉里鎮": {
    "pct_ge1000": 2.0,
@@ -2583,7 +3194,9 @@
    "pct_lo100_steep": 2.8,
    "elev_max": 1342.2,
    "coast_km": 4.77,
-   "road_km": 0.06
+   "road_km": 0.06,
+   "island": false,
+   "mountain_indigenous": false
   },
   "花蓮縣瑞穗鄉": {
    "pct_ge1000": 0.0,
@@ -2591,7 +3204,9 @@
    "pct_lo100_steep": 6.6,
    "elev_max": 1009.3,
    "coast_km": 1.63,
-   "road_km": 0.09
+   "road_km": 0.09,
+   "island": false,
+   "mountain_indigenous": false
   },
   "花蓮縣秀林鄉": {
    "pct_ge1000": 74.3,
@@ -2599,7 +3214,9 @@
    "pct_lo100_steep": 1.2,
    "elev_max": 3634.2,
    "coast_km": 0.01,
-   "road_km": 0.02
+   "road_km": 0.02,
+   "island": false,
+   "mountain_indigenous": true
   },
   "花蓮縣花蓮市": {
    "pct_ge1000": 0.0,
@@ -2607,7 +3224,9 @@
    "pct_lo100_steep": 22.3,
    "elev_max": 108.4,
    "coast_km": 0.02,
-   "road_km": 0.16
+   "road_km": 0.16,
+   "island": false,
+   "mountain_indigenous": false
   },
   "花蓮縣萬榮鄉": {
    "pct_ge1000": 71.6,
@@ -2615,7 +3234,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 3328.0,
    "coast_km": 10.92,
-   "road_km": 0.17
+   "road_km": 0.17,
+   "island": false,
+   "mountain_indigenous": true
   },
   "花蓮縣豐濱鄉": {
    "pct_ge1000": 0.0,
@@ -2623,7 +3244,9 @@
    "pct_lo100_steep": 17.1,
    "elev_max": 1124.6,
    "coast_km": 0.01,
-   "road_km": 0.12
+   "road_km": 0.12,
+   "island": false,
+   "mountain_indigenous": false
   },
   "花蓮縣鳳林鎮": {
    "pct_ge1000": 0.0,
@@ -2631,7 +3254,9 @@
    "pct_lo100_steep": 4.7,
    "elev_max": 948.1,
    "coast_km": 2.74,
-   "road_km": 0.36
+   "road_km": 0.36,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣三灣鄉": {
    "pct_ge1000": 0.0,
@@ -2639,7 +3264,9 @@
    "pct_lo100_steep": 41.5,
    "elev_max": 759.3,
    "coast_km": 7.99,
-   "road_km": 3.46
+   "road_km": 3.46,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣三義鄉": {
    "pct_ge1000": 0.0,
@@ -2647,7 +3274,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 887.5,
    "coast_km": 11.12,
-   "road_km": 7.83
+   "road_km": 7.83,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣公館鄉": {
    "pct_ge1000": 0.0,
@@ -2655,7 +3284,9 @@
    "pct_lo100_steep": 8.1,
    "elev_max": 785.0,
    "coast_km": 11.64,
-   "road_km": 7.26
+   "road_km": 7.26,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣卓蘭鎮": {
    "pct_ge1000": 2.1,
@@ -2663,7 +3294,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1230.7,
    "coast_km": 18.91,
-   "road_km": 13.81
+   "road_km": 13.81,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣南庄鄉": {
    "pct_ge1000": 20.1,
@@ -2671,7 +3304,9 @@
    "pct_lo100_steep": 0.4,
    "elev_max": 2116.4,
    "coast_km": 11.23,
-   "road_km": 7.28
+   "road_km": 7.28,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣大湖鄉": {
    "pct_ge1000": 1.5,
@@ -2679,7 +3314,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1397.8,
    "coast_km": 18.47,
-   "road_km": 13.46
+   "road_km": 13.46,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣後龍鎮": {
    "pct_ge1000": 0.0,
@@ -2687,7 +3324,9 @@
    "pct_lo100_steep": 40.8,
    "elev_max": 177.2,
    "coast_km": 0.02,
-   "road_km": 0.14
+   "road_km": 0.14,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣泰安鄉": {
    "pct_ge1000": 80.4,
@@ -2695,7 +3334,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 3881.0,
    "coast_km": 22.05,
-   "road_km": 17.68
+   "road_km": 17.68,
+   "island": false,
+   "mountain_indigenous": true
   },
   "苗栗縣獅潭鄉": {
    "pct_ge1000": 0.2,
@@ -2703,7 +3344,9 @@
    "pct_lo100_steep": 0.1,
    "elev_max": 1227.1,
    "coast_km": 14.65,
-   "road_km": 9.84
+   "road_km": 9.84,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣竹南鎮": {
    "pct_ge1000": 0.0,
@@ -2711,7 +3354,9 @@
    "pct_lo100_steep": 28.3,
    "elev_max": 101.9,
    "coast_km": 0.04,
-   "road_km": 0.05
+   "road_km": 0.05,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣苑裡鎮": {
    "pct_ge1000": 0.0,
@@ -2719,7 +3364,9 @@
    "pct_lo100_steep": 16.2,
    "elev_max": 601.6,
    "coast_km": 0.04,
-   "road_km": 0.22
+   "road_km": 0.22,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣苗栗市": {
    "pct_ge1000": 0.0,
@@ -2727,7 +3374,9 @@
    "pct_lo100_steep": 27.3,
    "elev_max": 229.8,
    "coast_km": 5.38,
-   "road_km": 0.95
+   "road_km": 0.95,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣西湖鄉": {
    "pct_ge1000": 0.0,
@@ -2735,7 +3384,9 @@
    "pct_lo100_steep": 37.7,
    "elev_max": 262.4,
    "coast_km": 2.69,
-   "road_km": 0.39
+   "road_km": 0.39,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣通霄鎮": {
    "pct_ge1000": 0.0,
@@ -2743,7 +3394,9 @@
    "pct_lo100_steep": 44.8,
    "elev_max": 522.8,
    "coast_km": 0.03,
-   "road_km": 0.08
+   "road_km": 0.08,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣造橋鄉": {
    "pct_ge1000": 0.0,
@@ -2751,7 +3404,9 @@
    "pct_lo100_steep": 75.9,
    "elev_max": 407.9,
    "coast_km": 1.87,
-   "road_km": 0.32
+   "road_km": 0.32,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣銅鑼鄉": {
    "pct_ge1000": 0.0,
@@ -2759,7 +3414,9 @@
    "pct_lo100_steep": 1.8,
    "elev_max": 847.7,
    "coast_km": 8.77,
-   "road_km": 5.98
+   "road_km": 5.98,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣頭份市": {
    "pct_ge1000": 0.0,
@@ -2767,7 +3424,9 @@
    "pct_lo100_steep": 44.6,
    "elev_max": 181.6,
    "coast_km": 3.0,
-   "road_km": 0.22
+   "road_km": 0.22,
+   "island": false,
+   "mountain_indigenous": false
   },
   "苗栗縣頭屋鄉": {
    "pct_ge1000": 0.0,
@@ -2775,7 +3434,9 @@
    "pct_lo100_steep": 44.8,
    "elev_max": 556.7,
    "coast_km": 7.98,
-   "road_km": 3.07
+   "road_km": 3.07,
+   "island": false,
+   "mountain_indigenous": false
   },
   "金門縣烈嶼鄉": {
    "pct_ge1000": 0.0,
@@ -2783,7 +3444,9 @@
    "pct_lo100_steep": 46.7,
    "elev_max": 104.5,
    "coast_km": 0.03,
-   "road_km": null
+   "road_km": null,
+   "island": true,
+   "mountain_indigenous": false
   },
   "金門縣金城鎮": {
    "pct_ge1000": 0.0,
@@ -2791,7 +3454,9 @@
    "pct_lo100_steep": 44.9,
    "elev_max": 70.5,
    "coast_km": 0.03,
-   "road_km": null
+   "road_km": null,
+   "island": true,
+   "mountain_indigenous": false
   },
   "金門縣金寧鄉": {
    "pct_ge1000": 0.0,
@@ -2799,7 +3464,9 @@
    "pct_lo100_steep": 23.6,
    "elev_max": 74.9,
    "coast_km": 0.02,
-   "road_km": null
+   "road_km": null,
+   "island": true,
+   "mountain_indigenous": false
   },
   "金門縣金沙鎮": {
    "pct_ge1000": 0.0,
@@ -2807,7 +3474,9 @@
    "pct_lo100_steep": 33.1,
    "elev_max": 249.4,
    "coast_km": 0.01,
-   "road_km": null
+   "road_km": null,
+   "island": true,
+   "mountain_indigenous": false
   },
   "金門縣金湖鎮": {
    "pct_ge1000": 0.0,
@@ -2815,7 +3484,9 @@
    "pct_lo100_steep": 43.6,
    "elev_max": 243.6,
    "coast_km": 0.02,
-   "road_km": null
+   "road_km": null,
+   "island": true,
+   "mountain_indigenous": false
   },
   "雲林縣二崙鄉": {
    "pct_ge1000": 0.0,
@@ -2823,7 +3494,9 @@
    "pct_lo100_steep": 3.9,
    "elev_max": 34.1,
    "coast_km": 12.55,
-   "road_km": 2.03
+   "road_km": 2.03,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣元長鄉": {
    "pct_ge1000": 0.0,
@@ -2831,7 +3504,9 @@
    "pct_lo100_steep": 4.1,
    "elev_max": 24.7,
    "coast_km": 13.29,
-   "road_km": 7.62
+   "road_km": 7.62,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣北港鎮": {
    "pct_ge1000": 0.0,
@@ -2839,7 +3514,9 @@
    "pct_lo100_steep": 6.0,
    "elev_max": 19.9,
    "coast_km": 12.07,
-   "road_km": 8.63
+   "road_km": 8.63,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣口湖鄉": {
    "pct_ge1000": 0.0,
@@ -2847,7 +3524,9 @@
    "pct_lo100_steep": 11.8,
    "elev_max": 8.9,
    "coast_km": 0.01,
-   "road_km": 7.91
+   "road_km": 7.91,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣古坑鄉": {
    "pct_ge1000": 8.7,
@@ -2855,7 +3534,9 @@
    "pct_lo100_steep": 3.1,
    "elev_max": 1790.0,
    "coast_km": 36.66,
-   "road_km": 3.76
+   "road_km": 3.76,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣四湖鄉": {
    "pct_ge1000": 0.0,
@@ -2863,7 +3544,9 @@
    "pct_lo100_steep": 4.5,
    "elev_max": 15.1,
    "coast_km": 0.03,
-   "road_km": 0.27
+   "road_km": 0.27,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣土庫鎮": {
    "pct_ge1000": 0.0,
@@ -2871,7 +3554,9 @@
    "pct_lo100_steep": 4.5,
    "elev_max": 24.5,
    "coast_km": 15.86,
-   "road_km": 7.52
+   "road_km": 7.52,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣大埤鄉": {
    "pct_ge1000": 0.0,
@@ -2879,7 +3564,9 @@
    "pct_lo100_steep": 6.9,
    "elev_max": 41.0,
    "coast_km": 22.63,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣崙背鄉": {
    "pct_ge1000": 0.0,
@@ -2887,7 +3574,9 @@
    "pct_lo100_steep": 4.9,
    "elev_max": 27.5,
    "coast_km": 9.21,
-   "road_km": 1.53
+   "road_km": 1.53,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣斗六市": {
    "pct_ge1000": 0.0,
@@ -2895,7 +3584,9 @@
    "pct_lo100_steep": 10.1,
    "elev_max": 508.4,
    "coast_km": 31.14,
-   "road_km": 1.18
+   "road_km": 1.18,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣斗南鎮": {
    "pct_ge1000": 0.0,
@@ -2903,7 +3594,9 @@
    "pct_lo100_steep": 12.3,
    "elev_max": 63.9,
    "coast_km": 26.83,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣東勢鄉": {
    "pct_ge1000": 0.0,
@@ -2911,7 +3604,9 @@
    "pct_lo100_steep": 5.0,
    "elev_max": 17.6,
    "coast_km": 7.16,
-   "road_km": 0.52
+   "road_km": 0.52,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣林內鄉": {
    "pct_ge1000": 0.0,
@@ -2919,7 +3614,9 @@
    "pct_lo100_steep": 8.5,
    "elev_max": 371.8,
    "coast_km": 35.24,
-   "road_km": 7.6
+   "road_km": 7.6,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣水林鄉": {
    "pct_ge1000": 0.0,
@@ -2927,7 +3624,9 @@
    "pct_lo100_steep": 4.3,
    "elev_max": 11.6,
    "coast_km": 2.85,
-   "road_km": 0.2
+   "road_km": 0.2,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣臺西鄉": {
    "pct_ge1000": 0.0,
@@ -2935,7 +3634,9 @@
    "pct_lo100_steep": 8.8,
    "elev_max": 12.3,
    "coast_km": 0.02,
-   "road_km": 0.26
+   "road_km": 0.26,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣莿桐鄉": {
    "pct_ge1000": 0.0,
@@ -2943,7 +3644,9 @@
    "pct_lo100_steep": 6.9,
    "elev_max": 79.0,
    "coast_km": 25.98,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣虎尾鎮": {
    "pct_ge1000": 0.0,
@@ -2951,7 +3654,9 @@
    "pct_lo100_steep": 5.8,
    "elev_max": 39.4,
    "coast_km": 20.2,
-   "road_km": 0.09
+   "road_km": 0.09,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣褒忠鄉": {
    "pct_ge1000": 0.0,
@@ -2959,7 +3664,9 @@
    "pct_lo100_steep": 3.9,
    "elev_max": 17.5,
    "coast_km": 11.75,
-   "road_km": 3.05
+   "road_km": 3.05,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣西螺鎮": {
    "pct_ge1000": 0.0,
@@ -2967,7 +3674,9 @@
    "pct_lo100_steep": 6.3,
    "elev_max": 42.9,
    "coast_km": 20.05,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "雲林縣麥寮鄉": {
    "pct_ge1000": 0.0,
@@ -2975,7 +3684,9 @@
    "pct_lo100_steep": 11.6,
    "elev_max": 20.4,
    "coast_km": 0.01,
-   "road_km": 0.52
+   "road_km": 0.52,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市三民區": {
    "pct_ge1000": 0.0,
@@ -2983,7 +3694,9 @@
    "pct_lo100_steep": 8.5,
    "elev_max": 53.3,
    "coast_km": 2.42,
-   "road_km": 0.23
+   "road_km": 0.23,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市仁武區": {
    "pct_ge1000": 0.0,
@@ -2991,7 +3704,9 @@
    "pct_lo100_steep": 30.2,
    "elev_max": 178.0,
    "coast_km": 5.38,
-   "road_km": 0.06
+   "road_km": 0.06,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市內門區": {
    "pct_ge1000": 0.0,
@@ -2999,7 +3714,9 @@
    "pct_lo100_steep": 33.4,
    "elev_max": 694.5,
    "coast_km": 22.59,
-   "road_km": 16.75
+   "road_km": 16.75,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市六龜區": {
    "pct_ge1000": 7.3,
@@ -3007,7 +3724,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1524.7,
    "coast_km": 38.48,
-   "road_km": 24.52
+   "road_km": 24.52,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市前金區": {
    "pct_ge1000": 0.0,
@@ -3015,7 +3734,9 @@
    "pct_lo100_steep": 3.5,
    "elev_max": 8.2,
    "coast_km": 2.71,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市前鎮區": {
    "pct_ge1000": 0.0,
@@ -3023,7 +3744,9 @@
    "pct_lo100_steep": 3.0,
    "elev_max": 9.9,
    "coast_km": 1.46,
-   "road_km": 0.05
+   "road_km": 0.05,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市大寮區": {
    "pct_ge1000": 0.0,
@@ -3031,7 +3754,9 @@
    "pct_lo100_steep": 21.1,
    "elev_max": 97.0,
    "coast_km": 5.21,
-   "road_km": 0.4
+   "road_km": 0.4,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市大樹區": {
    "pct_ge1000": 0.0,
@@ -3039,7 +3764,9 @@
    "pct_lo100_steep": 36.8,
    "elev_max": 256.7,
    "coast_km": 12.89,
-   "road_km": 0.4
+   "road_km": 0.4,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市大社區": {
    "pct_ge1000": 0.0,
@@ -3047,7 +3774,9 @@
    "pct_lo100_steep": 35.0,
    "elev_max": 224.1,
    "coast_km": 8.18,
-   "road_km": 1.01
+   "road_km": 1.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市小港區": {
    "pct_ge1000": 0.0,
@@ -3055,7 +3784,9 @@
    "pct_lo100_steep": 14.8,
    "elev_max": 144.5,
    "coast_km": 0.02,
-   "road_km": 0.17
+   "road_km": 0.17,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市岡山區": {
    "pct_ge1000": 0.0,
@@ -3063,7 +3794,9 @@
    "pct_lo100_steep": 15.2,
    "elev_max": 310.8,
    "coast_km": 2.79,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市左營區": {
    "pct_ge1000": 0.0,
@@ -3071,7 +3804,9 @@
    "pct_lo100_steep": 8.7,
    "elev_max": 157.1,
    "coast_km": 0.03,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市彌陀區": {
    "pct_ge1000": 0.0,
@@ -3079,7 +3814,9 @@
    "pct_lo100_steep": 20.0,
    "elev_max": 52.6,
    "coast_km": 0.01,
-   "road_km": 0.08
+   "road_km": 0.08,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市新興區": {
    "pct_ge1000": 0.0,
@@ -3087,7 +3824,9 @@
    "pct_lo100_steep": 0.4,
    "elev_max": 8.1,
    "coast_km": 3.55,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市旗山區": {
    "pct_ge1000": 0.0,
@@ -3095,7 +3834,9 @@
    "pct_lo100_steep": 27.6,
    "elev_max": 418.0,
    "coast_km": 18.85,
-   "road_km": 12.01
+   "road_km": 12.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市旗津區": {
    "pct_ge1000": 0.0,
@@ -3103,7 +3844,9 @@
    "pct_lo100_steep": 15.9,
    "elev_max": 49.9,
    "coast_km": 0.14,
-   "road_km": null
+   "road_km": null,
+   "island": true,
+   "mountain_indigenous": false
   },
   "高雄市杉林區": {
    "pct_ge1000": 0.0,
@@ -3111,7 +3854,9 @@
    "pct_lo100_steep": 1.7,
    "elev_max": 961.3,
    "coast_km": 33.15,
-   "road_km": 21.88
+   "road_km": 21.88,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市林園區": {
    "pct_ge1000": 0.0,
@@ -3119,7 +3864,9 @@
    "pct_lo100_steep": 15.8,
    "elev_max": 144.6,
    "coast_km": 0.03,
-   "road_km": 0.24
+   "road_km": 0.24,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市桃源區": {
    "pct_ge1000": 86.1,
@@ -3127,7 +3874,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 3942.7,
    "coast_km": 37.65,
-   "road_km": 24.91
+   "road_km": 24.91,
+   "island": false,
+   "mountain_indigenous": true
   },
   "高雄市梓官區": {
    "pct_ge1000": 0.0,
@@ -3135,7 +3884,9 @@
    "pct_lo100_steep": 5.7,
    "elev_max": 31.2,
    "coast_km": 0.02,
-   "road_km": 0.03
+   "road_km": 0.03,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市楠梓區": {
    "pct_ge1000": 0.0,
@@ -3143,7 +3894,9 @@
    "pct_lo100_steep": 13.8,
    "elev_max": 176.3,
    "coast_km": 0.03,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市橋頭區": {
    "pct_ge1000": 0.0,
@@ -3151,7 +3904,9 @@
    "pct_lo100_steep": 9.9,
    "elev_max": 48.1,
    "coast_km": 1.49,
-   "road_km": null
+   "road_km": null,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市永安區": {
    "pct_ge1000": 0.0,
@@ -3159,7 +3914,9 @@
    "pct_lo100_steep": 13.5,
    "elev_max": 15.2,
    "coast_km": 0.04,
-   "road_km": 0.05
+   "road_km": 0.05,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市湖內區": {
    "pct_ge1000": 0.0,
@@ -3167,7 +3924,9 @@
    "pct_lo100_steep": 11.6,
    "elev_max": 23.7,
    "coast_km": 1.36,
-   "road_km": 0.01
+   "road_km": 0.01,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市燕巢區": {
    "pct_ge1000": 0.0,
@@ -3175,7 +3934,9 @@
    "pct_lo100_steep": 37.4,
    "elev_max": 341.9,
    "coast_km": 8.07,
-   "road_km": 1.21
+   "road_km": 1.21,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市田寮區": {
    "pct_ge1000": 0.0,
@@ -3183,7 +3944,9 @@
    "pct_lo100_steep": 71.3,
    "elev_max": 407.8,
    "coast_km": 13.25,
-   "road_km": 5.68
+   "road_km": 5.68,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市甲仙區": {
    "pct_ge1000": 11.5,
@@ -3191,7 +3954,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 1661.3,
    "coast_km": 39.74,
-   "road_km": 23.2
+   "road_km": 23.2,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市美濃區": {
    "pct_ge1000": 0.0,
@@ -3199,7 +3964,9 @@
    "pct_lo100_steep": 12.1,
    "elev_max": 823.1,
    "coast_km": 28.44,
-   "road_km": 18.97
+   "road_km": 18.97,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市苓雅區": {
    "pct_ge1000": 0.0,
@@ -3207,7 +3974,9 @@
    "pct_lo100_steep": 3.5,
    "elev_max": 17.2,
    "coast_km": 2.35,
-   "road_km": 0.07
+   "road_km": 0.07,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市茂林區": {
    "pct_ge1000": 59.6,
@@ -3215,7 +3984,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 2770.0,
    "coast_km": 26.18,
-   "road_km": 20.99
+   "road_km": 20.99,
+   "island": false,
+   "mountain_indigenous": true
   },
   "高雄市茄萣區": {
    "pct_ge1000": 0.0,
@@ -3223,7 +3994,9 @@
    "pct_lo100_steep": 11.8,
    "elev_max": 11.2,
    "coast_km": 0.02,
-   "road_km": 0.13
+   "road_km": 0.13,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市路竹區": {
    "pct_ge1000": 0.0,
@@ -3231,7 +4004,9 @@
    "pct_lo100_steep": 10.1,
    "elev_max": 28.5,
    "coast_km": 2.45,
-   "road_km": 0.02
+   "road_km": 0.02,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市那瑪夏區": {
    "pct_ge1000": 55.4,
@@ -3239,7 +4014,9 @@
    "pct_lo100_steep": 0.0,
    "elev_max": 2471.2,
    "coast_km": 50.1,
-   "road_km": 29.08
+   "road_km": 29.08,
+   "island": false,
+   "mountain_indigenous": true
   },
   "高雄市阿蓮區": {
    "pct_ge1000": 0.0,
@@ -3247,7 +4024,9 @@
    "pct_lo100_steep": 16.4,
    "elev_max": 301.8,
    "coast_km": 9.15,
-   "road_km": 3.03
+   "road_km": 3.03,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市鳥松區": {
    "pct_ge1000": 0.0,
@@ -3255,7 +4034,9 @@
    "pct_lo100_steep": 47.4,
    "elev_max": 150.2,
    "coast_km": 6.98,
-   "road_km": 0.39
+   "road_km": 0.39,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市鳳山區": {
    "pct_ge1000": 0.0,
@@ -3263,7 +4044,9 @@
    "pct_lo100_steep": 10.4,
    "elev_max": 64.7,
    "coast_km": 3.69,
-   "road_km": 0.02
+   "road_km": 0.02,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市鹽埕區": {
    "pct_ge1000": 0.0,
@@ -3271,7 +4054,9 @@
    "pct_lo100_steep": 3.9,
    "elev_max": 5.5,
    "coast_km": 1.45,
-   "road_km": 1.18
+   "road_km": 1.18,
+   "island": false,
+   "mountain_indigenous": false
   },
   "高雄市鼓山區": {
    "pct_ge1000": 0.0,
@@ -3279,7 +4064,9 @@
    "pct_lo100_steep": 30.2,
    "elev_max": 357.4,
    "coast_km": 0.02,
-   "road_km": 0.29
+   "road_km": 0.29,
+   "island": false,
+   "mountain_indigenous": false
   }
  }
 }
