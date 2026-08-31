@@ -368,6 +368,34 @@ chk('限制時間步控制體積', FR.WAVE_STEPS, 24)
 chk('讀沿海鄉鎮清單', FR.COASTAL_TOWNS_FILE, 'coastal_towns.json')
 chk('★經 ProductURL 下載（直接要 ZIP 會 500）',
     'url = _resolve_product_url(WAVE_EP)' in _src4, True)
+# ★ 檔案型產品必須走 fileapi：datastore 對這類 dataid 回 404（實測 2026-08-31）
+chk('metadata 先試 fileapi', "f\"{FILEAPI}/{dataid}\"" in _src4, True)
+chk('帶 downloadType=WEB', "'downloadType': 'WEB'" in _src4, True)
+chk('備援也走 fileapi 不走 datastore',
+    'r = requests.get(f"{FILEAPI}/{WAVE_EP}"' in _src4, True)
+chk('FILEAPI 於檔首定義', _src4.index('FILEAPI      =') < _src4.index('def _resolve_product_url'), True)
+
+# 端到端：metadata 全 404 時，仍能由 fileapi 直接取得 zip
+_wz = '/mnt/user-data/uploads/F-A0020-001.zip'
+if os.path.exists(_wz) and os.path.exists('coastal_towns.json'):
+    _raw = open(_wz, 'rb').read()
+    def _mk4(url, **kw):
+        class _R:
+            status_code = 404 if kw.get('params', {}).get('format') == 'JSON' else 200
+            content = _raw
+            def json(self): raise ValueError('not json')
+        return _R()
+    FR.requests = types.SimpleNamespace(get=_mk4)
+    _save = FR.WAVE_STEPS; FR.WAVE_STEPS = 4
+    _w4 = FR.fetch_wave_forecast()
+    FR.WAVE_STEPS = _save
+    print(f"  端到端：{len(_w4)} 個沿海鄉鎮")
+    chk('★metadata 404 時仍取得浪高', len(_w4) >= 80, True)
+    if _w4:
+        _s4 = next(iter(_w4.values()))[0]
+        chk('含浪高值', _s4['wave'] is not None, True)
+        chk('含浪向', _s4['dir'] is not None, True)
+        chk('含週期', _s4['period'] is not None, True)
 chk('打包預報同樣經 ProductURL',
     "_burl = _resolve_product_url('F-D0047-093')" in _src4, True)
 

@@ -38,6 +38,8 @@ HISTORY_FILE = "obs_history.json"
 OUTPUT_FILE  = "data.json"
 ETR2_WEIGHTS = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1]  # R0~R6 固定權重
 BASE_URL     = "https://opendata.cwa.gov.tw/api/v1/rest/datastore"
+# 檔案型產品（zip/nc/png/格點）走 fileapi；datastore 對這類 dataid 會 404
+FILEAPI      = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi"
 OBS_URL      = f"{BASE_URL}/O-A0002-001"
 OPENMETEO    = "https://api.open-meteo.com/v1/forecast"
 
@@ -87,16 +89,26 @@ def _resolve_product_url(dataid, timeout=60):
       F-D0047-093 皆如此（與既有的 F-C0035 PNG 取法同一模式）。
     回傳 URL 字串；失敗回 None。
     """
-    try:
-        r = requests.get(f"{BASE_URL}/{dataid}",
-                         params={"Authorization": CWA_API_KEY, "format": "JSON"},
-                         timeout=timeout)
-        if r.status_code != 200:
-            print(f"    {dataid} metadata HTTP {r.status_code}")
-            return None
-        d = r.json()
-    except Exception as e:
-        print(f"    {dataid} metadata 取用失敗：{e}")
+    # ★ 檔案型產品（zip/nc/png/格點）必須走 fileapi，且帶 downloadType=WEB。
+    #   datastore 路徑對這類 dataid 會回 404 —— 系統既有的 F-C0035、O-A0038、
+    #   F-B0046 都是這個模式，此處沿用同一套取法。
+    d = None
+    for _url, _params in (
+        (f"{FILEAPI}/{dataid}", {'Authorization': CWA_API_KEY,
+                                 'downloadType': 'WEB', 'format': 'JSON'}),
+        (f"{BASE_URL}/{dataid}", {'Authorization': CWA_API_KEY, 'format': 'JSON'}),
+    ):
+        try:
+            r = requests.get(_url, params=_params, timeout=timeout)
+            if r.status_code != 200:
+                print(f"    {dataid} metadata HTTP {r.status_code}"
+                      f"（{'fileapi' if 'fileapi' in _url else 'datastore'}）")
+                continue
+            d = r.json()
+            break
+        except Exception as e:
+            print(f"    {dataid} metadata 取用失敗：{e}")
+    if d is None:
         return None
 
     def _walk(o):
@@ -156,11 +168,14 @@ def fetch_wave_forecast():
     zf = None
     for _try in range(2):
         try:
-            if url:                      # 主要路徑：S3 直接下載
+            if url:                      # 主要路徑：ProductURL（多為 S3）
                 r = requests.get(url, timeout=300)
-            else:                        # 備援：仍試 API 的 ZIP 格式
-                r = requests.get(f"{BASE_URL}/{WAVE_EP}",
-                                 params={"Authorization": CWA_API_KEY, "format": "ZIP"},
+            else:
+                # ★ 備援：直接向 fileapi 要檔案（部分產品會直接回 zip 位元組，
+                #   而非先給 metadata）。datastore 對檔案型會 404/500，不再嘗試。
+                r = requests.get(f"{FILEAPI}/{WAVE_EP}",
+                                 params={"Authorization": CWA_API_KEY,
+                                         "downloadType": "WEB", "format": "ZIP"},
                                  timeout=300)
             if r.status_code != 200:
                 print(f"    HTTP {r.status_code}（{_try+1}/2）")
@@ -1363,9 +1378,10 @@ def fetch_all_pop_bundle(counties_needed):
             if _burl:
                 r = requests.get(_burl, timeout=180)
             else:
-                r = requests.get(BUNDLE_URL,
-                                 params={"Authorization": CWA_API_KEY, "format": "ZIP"},
-                                 timeout=120)
+                r = requests.get(f"{FILEAPI}/F-D0047-093",
+                                 params={"Authorization": CWA_API_KEY,
+                                         "downloadType": "WEB", "format": "ZIP"},
+                                 timeout=180)
             if r.status_code == 200:
                 zf = _zip.ZipFile(_io.BytesIO(r.content))
                 break
@@ -2370,7 +2386,6 @@ def fetch_typhoon_qpf():
 # 介接策略（來源探測；成功後記憶於 CWA_QPF_SRC_FILE，之後直取）：
 #   A. fileapi 指標檔 F-C0035-015/017/023/024（JSON 內含 uri → 下載 zip/csv）
 #   B. fileapi ZIP 掃描 F-C0035-013..030（找 zip 內 *QPF6h*.csv）
-FILEAPI = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi"
 CWA_QPF_SRC_FILE = "cwa_qpf_source.json"
 QPF_GRID = dict(lon0=117.56, lat0=20.8, dlon=0.0245, dlat=0.0226, nx=260, ny=260)
 # TWD67 → WGS84 近似位移（TWD67 經度較小約0.0083°、緯度較大約0.0019°；2.5km格點取最近點足夠）
