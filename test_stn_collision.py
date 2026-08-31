@@ -388,7 +388,7 @@ chk('浪向', _sg[0]['dir'], '東北')
 chk('蒲福風級', _sg[0]['bf'], 7)
 chk('★">= 6" 解析為 6.0', _sg[1]['wave'], 6.0)
 chk('★只有 DataTime 時補區間', _sg[1]['end'] != _sg[1]['start'], True)
-chk('端點為鄉鎮沿海預報', FR.COASTAL_EP, 'F-D0047-095')
+chk('端點為鄉鎮沿海預報', FR.COASTAL_EP, 'F-A0085-002')
 chk('輸出含 wave_fcst 欄位',
     "'wave_fcst': wave_fcst" in io.open('fetch_rainfall.py', encoding='utf-8').read(), True)
 
@@ -431,6 +431,18 @@ for _k, _v, _want in [('WaveHeight','2.5',2.5), ('WaveHeightRange','2~3',3.0),
 _src = io.open('fetch_rainfall.py', encoding='utf-8').read()
 chk('找不到節點時印出 records 鍵', '找不到 Location 節點' in _src, True)
 chk('無浪高值時印出氣象因子與值鍵', '個預報點但無浪高值' in _src, True)
+
+
+print('\n=== 浪高端點：實測結果固化 ===')
+# ★ 2026-08-30 實測：F-D0047-095/096、F-A0085-001 皆 404，
+#   只有 F-A0085-002 回 200 且含 Locations。
+_src2 = io.open('fetch_rainfall.py', encoding='utf-8').read()
+chk('★首選端點為實測有效的 F-A0085-002',
+    FR.COASTAL_EP_CANDIDATES[0], 'F-A0085-002')
+chk('保留其他候選作備援', len(FR.COASTAL_EP_CANDIDATES) >= 3, True)
+chk('支援多種 WeatherElement 鍵名', 'weatherElements' in _src2, True)
+chk('無氣象因子時印出 Location 實際鍵', 'Location 節點的實際鍵' in _src2, True)
+chk('打包檔失敗會重試三次', '打包檔三次皆失敗' in _src2, True)
 
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)

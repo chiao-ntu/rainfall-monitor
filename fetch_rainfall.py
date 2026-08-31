@@ -70,7 +70,10 @@ COUNTY_EP_7D = {
 #   （F-D0047-095_096.pdf「海象_鄉鎮沿海-鄉鎮沿海預報」），但**文件檔名未必等於
 #   API 的 dataid**。故依序嘗試多個候選，第一個回傳有效資料者即採用，
 #   並把每個候選的 HTTP 狀態與 records 鍵印出來，便於一次定位。
-COASTAL_EP_CANDIDATES = ['F-D0047-095', 'F-D0047-096', 'F-A0085-001', 'F-A0085-002']
+# ★ 實測（2026-08-30）：F-D0047-095/096 與 F-A0085-001 皆回 404，
+#   只有 F-A0085-002 回 200 且含 Locations，故置於首位。
+#   先前誤用 095 是從官方 PDF 檔名推得，文件檔名 ≠ API dataid。
+COASTAL_EP_CANDIDATES = ['F-A0085-002', 'F-A0085-001', 'F-D0047-095', 'F-D0047-096']
 COASTAL_EP = COASTAL_EP_CANDIDATES[0]
 
 
@@ -148,12 +151,21 @@ def fetch_wave_forecast():
                 print(f"    Locations[0] 鍵：{list(wrap[0].keys())[:8]}")
             return {}
         _dbg_elems = set()
+        _dbg_loc_keys = set()
         for loc in locs:
             name = (loc.get('LocationName') or loc.get('locationName') or '').strip()
             if not name:
                 continue
             segs = {}
-            for we in loc.get('WeatherElement', loc.get('weatherElement', [])):
+            # ★ 實測 F-A0085-002 回 29 個預報點但 WeatherElement 為空 →
+            #   氣象因子的鍵名與鄉鎮預報不同。故列舉多種變體，
+            #   全數落空時把 Location 的實際鍵印出來供比對。
+            _we_list = (loc.get('WeatherElement') or loc.get('weatherElement')
+                        or loc.get('WeatherElements') or loc.get('weatherElements')
+                        or loc.get('Weather') or loc.get('weather') or [])
+            if not _we_list and not _dbg_loc_keys:
+                _dbg_loc_keys.update(list(loc.keys())[:12])
+            for we in _we_list:
                 for t in we.get('Time', we.get('time', [])):
                     def _first(*keys):
                         for k in keys:
@@ -218,6 +230,16 @@ def fetch_wave_forecast():
     else:
         # 有 Location 但取不到浪高 → 印出實際的氣象因子名稱與值鍵，供比對
         print(f"    有 {len(locs)} 個預報點但無浪高值；氣象因子：{sorted(_dbg_elems)[:12]}")
+        if _dbg_loc_keys:
+            print(f"    ★ Location 節點的實際鍵：{sorted(_dbg_loc_keys)}")
+            try:
+                _l = locs[0]
+                for _k in _l.keys():
+                    _v = _l[_k]
+                    if isinstance(_v, list) and _v and isinstance(_v[0], dict):
+                        print(f"      {_k}[0] 鍵：{list(_v[0].keys())[:10]}")
+            except Exception:
+                pass
         try:
             _l0 = locs[0]
             _w0 = (_l0.get('WeatherElement') or _l0.get('weatherElement') or [])
@@ -1323,16 +1345,24 @@ def fetch_all_pop_bundle(counties_needed):
         return None
     import io as _io, zipfile as _zip
     print("抓取全臺打包預報（F-D0047-093）...")
-    try:
-        r = requests.get(BUNDLE_URL,
-                         params={"Authorization": CWA_API_KEY, "format": "ZIP"},
-                         timeout=120)
-        if r.status_code != 200:
-            print(f"    HTTP {r.status_code} → 改用逐縣市抓取")
-            return None
-        zf = _zip.ZipFile(_io.BytesIO(r.content))
-    except Exception as e:
-        print(f"    打包檔取得失敗（{e}）→ 改用逐縣市抓取")
+    # ★ 實測遇過 HTTP 500（CWA 端暫時性錯誤）。打包檔是主要路徑，
+    #   失敗會退回 44 次逐縣市呼叫（較慢且較脆弱），故值得重試兩次。
+    zf = None
+    for _try in range(3):
+        try:
+            r = requests.get(BUNDLE_URL,
+                             params={"Authorization": CWA_API_KEY, "format": "ZIP"},
+                             timeout=120)
+            if r.status_code == 200:
+                zf = _zip.ZipFile(_io.BytesIO(r.content))
+                break
+            print(f"    HTTP {r.status_code}（{_try+1}/3）")
+        except Exception as e:
+            print(f"    打包檔取得失敗（{_try+1}/3）：{e}")
+        if _try < 2:
+            time.sleep(5)
+    if zf is None:
+        print("    打包檔三次皆失敗 → 改用逐縣市抓取")
         return None
 
     # 縣市代碼 → 縣市名（由檔內 LocationsName 取得，不必自行維護對照表）
