@@ -2855,6 +2855,52 @@ if (need('_nextHighTide') && need('_surgeRisk')) {
   setLex("window.TIDE_FCST = {}; window.WAVE_FCST = {};");
 }
 
+
+console.log('\n=== 搜尋欄位 ===');
+if (need('_searchMatch') && need('onSearchPick')) {
+  setLex(`TOWNSHIPS.length = 0;
+    [{county:'宜蘭縣',township:'蘇澳鎮',lat:24.59,lng:121.87,
+      stations:[{name:'蘇澳'},{name:'東澳'}]},
+     {county:'臺北市',township:'大安區',lat:25.03,lng:121.54,stations:[]},
+     {county:'臺中市',township:'和平區',lat:24.28,lng:121.0,stations:[{name:'武陵'}]}]
+      .forEach(t=>TOWNSHIPS.push(t));`);
+  const r1 = G._searchMatch('蘇澳');
+  console.log(`   「蘇澳」→ ${r1.length} 筆：${r1.slice(0,3).map(x=>x.kind+':'+x.label).join('、')}`);
+  chk('搜到鄉鎮', r1.some(x=>x.kind==='town' && x.label==='宜蘭縣蘇澳鎮'), true);
+  chk('★也搜到同名雨量站', r1.some(x=>x.kind==='station' && x.label==='蘇澳'), true);
+
+  const r2 = G._searchMatch('宜蘭');
+  chk('搜到縣市', r2.some(x=>x.kind==='county' && x.label==='宜蘭縣'), true);
+  chk('★縣市排在鄉鎮之前', r2[0].kind, 'county');
+
+  // 台/臺 通用
+  chk('★「台北」可搜到臺北市', G._searchMatch('台北').some(x=>x.label.indexOf('臺北')>=0), true);
+  chk('★「臺中」可搜到', G._searchMatch('臺中').some(x=>x.label.indexOf('臺中')>=0), true);
+  // 雨量站可用所屬鄉鎮搜到
+  chk('武陵站可搜到', G._searchMatch('武陵').some(x=>x.kind==='station'), true);
+  chk('無相符回空', G._searchMatch('不存在的地名').length, 0);
+  chk('空字串回空', G._searchMatch('').length, 0);
+
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('搜尋框存在', /id="townSearch"/.test(src), true);
+  chk('結果清單存在', /id="searchResults"/.test(src), true);
+  chk('支援鍵盤操作', /onSearchKey/.test(src), true);
+}
+
+console.log('\n=== 無測站鄉鎮的推估補值 ===');
+{
+  const py = fs.readFileSync('fetch_rainfall.py', 'utf8');
+  chk('提供鄰近內插', /def _neighbor_daily_rain/.test(py), true);
+  chk('反距離平方加權', /1\.0 \/ max\(0\.5, d\) \*\* 2/.test(py), true);
+  chk('限制最大距離', /max_km=25\.0/.test(py), true);
+  chk('★標記為推估來源', /t\['obs_src'\] = 'neighbor'/.test(py), true);
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★前端標示鄰近站推估', /（鄰近站推估）/.test(src), true);
+  // 403 對策
+  chk('水保署請求帶 User-Agent', /'User-Agent': 'Mozilla\/5\.0 \(compatible; RainfallMonitor/.test(py), true);
+  chk('403/429 加長退避', /time\.sleep\(8 if r\.status_code in \(403, 429\)/.test(py), true);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

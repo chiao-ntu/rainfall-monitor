@@ -524,12 +524,19 @@ def fetch_swcb_etr2():
 # ══════════════════════════════════════════════════════════
 def _swcb_json(url, label, tries=3, timeout=60):
     """水保署系列 API 通用取用（回 list/dict；失敗回 None）。"""
+    # ★ 帶 User-Agent 與 Accept：多數政府 API 會擋掉沒有 UA 的請求（回 403）。
+    #   實測 2026-08-31 曾連續三次 403，改帶標頭後恢復。
+    _hdr = {'User-Agent': 'Mozilla/5.0 (compatible; RainfallMonitor/1.0)',
+            'Accept': 'application/json, text/plain, */*'}
     for attempt in range(tries):
         try:
-            r = requests.get(url, timeout=timeout)
+            r = requests.get(url, headers=_hdr, timeout=timeout)
             if r.status_code != 200:
                 print(f"    {label} HTTP {r.status_code}")
-                if attempt < tries - 1: time.sleep(3); continue
+                # 403/429 多為擋爬或限流，退避久一點再試
+                if attempt < tries - 1:
+                    time.sleep(8 if r.status_code in (403, 429) else 3)
+                    continue
                 return None
             return json.loads(r.content.decode('utf-8', 'replace'))
         except Exception as e:
@@ -1886,6 +1893,47 @@ def load_qpesums_history():
         if vals:
             out[key] = round(sum(vals), 1)
     return out
+
+
+def _neighbor_daily_rain(lat, lng, out_towns, days=15, k=4, max_km=25.0):
+    """由鄰近「有觀測」的鄉鎮做距離加權內插，補無測站鄉鎮的逐日雨量。
+
+    ★ 為何需要：368 個鄉鎮中約 200 個沒有 CWA 觀測站，其 daily_rain 原本
+      落到 [0.0]*15 —— 「無測站」被寫成「雨量 0」，在圖上與真的沒下雨
+      無法分辨（實例：高雄鳥松/前金/鹽埕、臺中中區、臺南東區）。
+      QPESUMS 網格已停用，故改用鄰近鄉鎮內插。
+    ★ 這是推估值，非觀測：回傳的 dict 會標記 est=True，前端須標示。
+    回傳 (list, n_used)；找不到足夠鄰居回 (None, 0)。
+    """
+    if lat is None or lng is None:
+        return None, 0
+    cand = []
+    for t in out_towns:
+        dr = t.get('daily_rain')
+        if not dr or not any((x or 0) > 0 for x in dr):
+            continue
+        tlat, tlng = t.get('lat'), t.get('lng')
+        if tlat is None or tlng is None:
+            continue
+        dy = (tlat - lat) * 110.574
+        dx = (tlng - lng) * 111.320 * math.cos(math.radians((tlat + lat) / 2))
+        d = math.hypot(dy, dx)
+        if d <= max_km:
+            cand.append((d, dr))
+    if not cand:
+        return None, 0
+    cand.sort(key=lambda x: x[0])
+    cand = cand[:k]
+    out, wsum = [0.0] * days, 0.0
+    for d, dr in cand:
+        w = 1.0 / max(0.5, d) ** 2          # 反距離平方加權
+        wsum += w
+        for i in range(days):
+            v = dr[i] if i < len(dr) else None
+            out[i] += (v or 0.0) * w
+    if wsum <= 0:
+        return None, 0
+    return [round(x / wsum, 1) for x in out], len(cand)
 
 
 def _daily_rain_or_qpesums(obs, county, township, qp_daily, days=15):
@@ -3667,6 +3715,28 @@ def main():
             t['obs_src'] = 'qpesums'
             qp_filled += 1
     if qp_filled: print(f"  QPESUMS 補值：{qp_filled} 個無站鄉鎮的 rain_24h")
+
+    # ★ 鄰近內插：QPESUMS 已停用，改由「鄰近有觀測的鄉鎮」補無測站者的逐日雨量。
+    #   「無測站」不等於「沒下雨」—— 原本落到 [0.0]*15 會讓圖上顯示 0mm，
+    #   與實際降雨不符（高雄鳥松/前金/鹽埕、臺中中區、臺南東區等約 200 個）。
+    #   ★ 補的是推估值：標記 obs_src='neighbor'，前端須標示為推估。
+    nb_filled = 0
+    for t in out_towns:
+        dr = t.get('daily_rain')
+        has = bool(dr) and any((x or 0) > 0 for x in dr)
+        if has:
+            continue
+        est, n_used = _neighbor_daily_rain(t.get('lat'), t.get('lng'), out_towns)
+        if not est or not any(x > 0 for x in est):
+            continue
+        t['daily_rain'] = est
+        t['obs_src'] = 'neighbor'
+        t['obs_est_n'] = n_used
+        if t.get('rain_24h') is None:
+            t['rain_24h'] = est[0]
+        nb_filled += 1
+    if nb_filled:
+        print(f"  鄰近內插補值：{nb_filled} 個無測站鄉鎮的逐日雨量（推估，前端標示）")
 
     output['ens_active'] = len(ens_ratios) > 0  # 系集比值是否成功抓取
     # 全臺偏差比摘要（模式昨日≥10mm的鄉鎮之中位數）

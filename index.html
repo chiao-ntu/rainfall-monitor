@@ -410,8 +410,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <div id="sb" style="transition:width 0.25s ease;position:relative;display:flex;flex-direction:column;overflow:hidden">
 
   <!-- 固定標題：縣市鄉鎮 -->
-  <h3 id="iTitle" style="font-size:15px;font-weight:700;color:#6bc8e8;padding:12px 14px 8px;
-    border-bottom:1px solid #1a3348;flex-shrink:0;cursor:default;margin:0">點選鄉鎮查看詳情</h3>
+  <h3 id="iTitle" style="font-size:15px;font-weight:700;color:#6bc8e8;padding:12px 14px 4px;
+    cursor:default;margin:0">點選鄉鎮查看詳情</h3>
+
+  <!-- 搜尋：縣市／鄉鎮／雨量站 -->
+  <div style="padding:0 14px 8px;border-bottom:1px solid #1a3348;flex-shrink:0;position:relative">
+    <input id="townSearch" type="text" autocomplete="off" placeholder="搜尋縣市／鄉鎮／雨量站…"
+      oninput="onSearchInput(this.value)" onkeydown="onSearchKey(event)"
+      onfocus="onSearchInput(this.value)"
+      style="width:100%;box-sizing:border-box;font-size:12px;padding:5px 7px;
+      background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px;outline:none">
+    <div id="searchResults" style="display:none;position:absolute;left:14px;right:14px;top:32px;
+      z-index:1200;max-height:280px;overflow-y:auto;background:#08182a;
+      border:1px solid #2a5070;border-radius:4px;box-shadow:0 4px 14px rgba(0,0,0,.6)"></div>
+  </div>
 
   <!-- 可捲動的分區內容 -->
   <div id="sb-scroll" style="overflow-y:auto;flex:1;padding:0 4px">
@@ -1277,6 +1289,124 @@ function _isCoastal(t){
   if(!t) return false;
   return TOWN_COASTAL.has((t.county||'') + (t.township||''));
 }
+
+// ══════════════════════════════════════════════════════════
+//  搜尋：縣市／鄉鎮／雨量站
+//  ★ 索引在首次搜尋時建立並快取；資料更新後自動重建。
+// ══════════════════════════════════════════════════════════
+let _searchIdx = null, _searchIdxKey = '', _searchSel = -1;
+function _buildSearchIndex(){
+  const key = (TOWNSHIPS ? TOWNSHIPS.length : 0) + '|' + (window._dataGenAt || '');
+  if(_searchIdx && _searchIdxKey === key) return _searchIdx;
+  const rows = [];
+  const seenCty = new Set();
+  (TOWNSHIPS || []).forEach(t=>{
+    if(!t || !t.township) return;
+    rows.push({kind:'town', label:(t.county||'') + t.township,
+               sub:(TOWN_ZONE[(t.county||'')+t.township] || ''), t});
+    if(t.county && !seenCty.has(t.county)){
+      seenCty.add(t.county);
+      rows.push({kind:'county', label:t.county, sub:'縣市', county:t.county});
+    }
+    // 雨量站（同一鄉鎮下）
+    (t.stations || []).forEach(st=>{
+      if(!st || !st.name) return;
+      rows.push({kind:'station', label:st.name,
+                 sub:(t.county||'') + t.township, t, station:st});
+    });
+  });
+  _searchIdx = rows; _searchIdxKey = key;
+  return rows;
+}
+function _searchMatch(q){
+  q = (q || '').trim();
+  if(!q) return [];
+  const idx = _buildSearchIndex();
+  const norm = x => (x || '').replace(/台/g, '臺');
+  const nq = norm(q);
+  const hit = [];
+  for(const r of idx){
+    const L = norm(r.label);
+    let score = -1;
+    if(L === nq) score = 0;                    // 完全相同
+    else if(L.startsWith(nq)) score = 1;       // 開頭相符
+    else if(L.indexOf(nq) >= 0) score = 2;     // 包含
+    else if(norm(r.sub).indexOf(nq) >= 0) score = 3;  // 所屬地區相符
+    if(score >= 0) hit.push({r, score});
+    if(hit.length > 400) break;
+  }
+  const order = {county:0, town:1, station:2};
+  hit.sort((a,b)=> a.score - b.score
+                || order[a.r.kind] - order[b.r.kind]
+                || a.r.label.localeCompare(b.r.label));
+  return hit.slice(0, 40).map(x=>x.r);
+}
+function onSearchInput(v){
+  const box = document.getElementById('searchResults');
+  if(!box) return;
+  const rows = _searchMatch(v);
+  _searchSel = -1;
+  if(!rows.length){ box.style.display = 'none'; box.innerHTML = ''; return; }
+  const ico = {county:'▣', town:'▪', station:'☂'};
+  box.innerHTML = rows.map((r, i)=>
+    `<div class="sr-item" data-i="${i}" onclick="onSearchPick(${i})"
+      style="padding:5px 8px;font-size:12px;color:#cfe4f5;cursor:pointer;
+      border-bottom:1px solid #12283c">
+      <span style="color:#6bc8e8">${ico[r.kind]}</span> ${r.label}
+      <span style="color:#7a94ac;font-size:10px">　${r.sub}</span></div>`).join('');
+  box.style.display = 'block';
+  box._rows = rows;
+}
+function _searchHighlight(){
+  const box = document.getElementById('searchResults');
+  if(!box) return;
+  [...box.querySelectorAll('.sr-item')].forEach((el, i)=>{
+    el.style.background = (i === _searchSel) ? '#14344e' : 'transparent';
+  });
+}
+function onSearchKey(e){
+  const box = document.getElementById('searchResults');
+  if(!box || box.style.display === 'none') return;
+  const n = (box._rows || []).length;
+  if(e.key === 'ArrowDown'){ _searchSel = Math.min(n-1, _searchSel+1); _searchHighlight(); e.preventDefault(); }
+  else if(e.key === 'ArrowUp'){ _searchSel = Math.max(0, _searchSel-1); _searchHighlight(); e.preventDefault(); }
+  else if(e.key === 'Enter'){ onSearchPick(_searchSel < 0 ? 0 : _searchSel); e.preventDefault(); }
+  else if(e.key === 'Escape'){ box.style.display = 'none'; }
+}
+function onSearchPick(i){
+  const box = document.getElementById('searchResults');
+  const rows = box && box._rows;
+  if(!rows || !rows[i]) return;
+  const r = rows[i];
+  box.style.display = 'none';
+  const inp = document.getElementById('townSearch');
+  if(inp) inp.value = r.label;
+  if(r.kind === 'county'){
+    // 縮放到該縣市的範圍
+    const pts = [];
+    (TOWN_GEO.features || []).forEach(f=>{
+      if((f.properties || {}).COUNTYNAME !== r.county) return;
+      const g = f.geometry;
+      const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+      polys.forEach(poly=>(poly[0] || []).forEach(c=>pts.push([c[1], c[0]])));
+    });
+    if(pts.length) map.fitBounds(L.latLngBounds(pts), {padding:[30,30]});
+    return;
+  }
+  const t = r.t;
+  if(!t) return;
+  if(t.lat != null && t.lng != null) map.setView([t.lat, t.lng], 11);
+  selected = t;
+  try{ renderLayer(); }catch(e){}
+  try{ updateInfo(t); }catch(e){}
+}
+// 點空白處收合搜尋結果
+document.addEventListener('click', e=>{
+  const box = document.getElementById('searchResults');
+  const inp = document.getElementById('townSearch');
+  if(!box || !inp) return;
+  if(e.target !== inp && !box.contains(e.target)) box.style.display = 'none';
+});
 
 function _townZone(t){
   if(!t) return '平地';
@@ -2384,7 +2514,9 @@ function renderLayer(){
           tooltipHtml = mode==='wind'
             ? `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>` + _windTipHtml(t)
             : `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
-            `全天累積雨量：${dayRain!=null?dayRain+' mm':'—'}<br>`+
+            `全天累積雨量：${dayRain!=null?dayRain+' mm':'—'}`+
+            (t.obs_src==='neighbor'
+              ? '<span style="color:#e8a860;font-size:9px">（鄰近站推估）</span>' : '')+`<br>`+
             // ★ 與未來6h段一致：補上最大時雨量與其警示級別
             `最大時雨量：${_maxHourRow(t, 0, 3)}<br>`+
             `ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) +

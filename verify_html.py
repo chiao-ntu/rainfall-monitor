@@ -45,6 +45,7 @@ MUST = ['getAccum', 'setWin', 'onSlider', '_spanAccum', '_hourlyBars', '_futuHou
         '_tempSeries', '_waveSeries', '_dayMax', '_buildWaveIndex', '_maxHourRow',
         '_longSwell', '_waveDirText', '_onshore', '_isCoastal',
         '_nextHighTide', '_surgeRisk',
+        '_buildSearchIndex', '_searchMatch', 'onSearchInput', 'onSearchPick', 'onSearchKey',
         '_logModeDistribution',
         'drawTempDayChart', 'drawTempHourChart', 'drawWaveDayChart', 'drawWaveHourChart',
         '_bfColor', '_wsToBf', '_gustFactor',
@@ -70,7 +71,7 @@ for tag in ['</html>', '</body>', '<div id="map"']:
 # --- 4. 關鍵功能字串 ---
 MUST_STR = ['TOWN_GEO', 'TYPHOON_TRACK', 'DEBRIS_ALERTS', 'typhoon-panel-body',
             'typhoon-legend-wrap', 'typhoon-legend-toggle', 'TW_WARN_EXCLUDE',
-            'bTownName', 'townNameScope', 'bWind', 'bTemp', 'bWave', 'cv-wind-day', 'cv-wind-day-gust', 'cv-wind-day-est',
+            'bTownName', 'townNameScope', 'bWind', 'bTemp', 'bWave', 'townSearch', 'searchResults', 'cv-wind-day', 'cv-wind-day-gust', 'cv-wind-day-est',
             'cv-wind-hr', 'cv-wind-hr-gust', 'cv-wind-hr-est',
             'cv-temp-day', 'cv-temp-hr', 'cv-wave-day', 'cv-wave-hr',
             'debris-panel-body', 'landslide-panel-body', 'typhoon-legend',
