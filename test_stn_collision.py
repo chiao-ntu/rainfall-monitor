@@ -484,8 +484,36 @@ print('\n=== 抗故障：殘缺資料不得覆蓋好資料 ===')
 #   對防災系統而言比「不更新」更危險。
 _src6 = io.open('fetch_rainfall.py', encoding='utf-8').read()
 chk('★寫檔前有健全性檢查', '中止寫檔：資料明顯退化' in _src6, True)
-chk('與前一輪比對 ETR2 鄉鎮數', "_pe >= 50 and _cur_etr2 < _pe * 0.3" in _src6, True)
-chk('觀測全失效時中止', '本輪無任何 ETR2 觀測' in _src6, True)
+chk('★用絕對門檻（非僅相對比較）', 'ETR2 鄉鎮數過低' in _src6, True)
+chk('觀測全失效時中止', '本輪未取得任何觀測站資料' in _src6, True)
+chk('PoP 覆蓋率把關', 'PoP 覆蓋率過低' in _src6, True)
+chk('風力覆蓋率把關', '風力預報覆蓋率過低' in _src6, True)
+chk('說明壞資料會變新常態', '壞資料反而變成新常態' in _src6, True)
+
+# 實測判斷行為（含連兩輪失敗的實際情境）
+import textwrap as _tw
+_i = _src6.index('    def _n_etr2(d):'); _j = _src6.index('    if _abort:')
+_snip = _tw.dedent(_src6[_i:_j])
+def _guard(cur, prev, sta, pop, wind):
+    _ns = {'out_towns': [{'etr2_pct': 1.0} for _ in range(cur)],
+           '_prev': {'townships': [{'etr2_pct': 1.0} for _ in range(prev)]} if prev is not None else None,
+           'alert_table': {i: 1 for i in range(159)},
+           'stations': [1] * sta, 'pop3d': {i: 1 for i in range(pop)},
+           'WIND_FCST': {'A': {i: 1 for i in range(wind)}}, '_abort': []}
+    exec(_snip, {}, _ns)
+    return _ns['_abort']
+chk('正常資料放行', _guard(156, 156, 1300, 725, 368), [])
+chk('★觀測全失敗中止', len(_guard(0, 156, 0, 725, 368)) > 0, True)
+chk('★連兩輪失敗仍中止（壞資料不得成為基準）',
+    len(_guard(0, 0, 0, 186, 127)) > 0, True)
+chk('PoP 不足中止', len(_guard(156, 156, 1300, 186, 368)) > 0, True)
+chk('輕微波動放行', _guard(120, 156, 1300, 700, 360), [])
+
+print('\n=== 抗故障：熔斷 ===')
+chk('提供熔斷機制', '_CWA_TRIPPED' in _src6, True)
+chk('熔斷門檻已設定', '_CWA_TRIP_AT     = 8' in _src6, True)
+chk('成功即重置連續失敗', '_CWA_FAIL_STREAK[0] = 0' in _src6, True)
+chk('說明為何要快速失敗', '繼續苦等沒有意義' in _src6, True)
 chk('說明比不更新更危險', '比「不更新」更危險' in _src6, True)
 
 print('\n=== 抗故障：CWA 請求節流 ===')

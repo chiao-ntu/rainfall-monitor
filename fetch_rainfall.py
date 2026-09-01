@@ -61,12 +61,23 @@ def _cwa_session():
             pass
     return _CWA_SESSION
 
+# 熔斷：連續失敗達門檻後，暫時跳過該主機的請求
+#   ★ 實測 2026-09-01 兩輪各跑 20-30 分鐘 —— CWA 不穩時每個請求都要等滿
+#     逾時（20~60 秒），46 個 dataid 的掃描光逾時就數百秒。
+#     連續失敗代表主機端問題，繼續苦等沒有意義，快速失敗讓其他來源
+#     仍能正常抓取，總時間才可控。
+_CWA_FAIL_STREAK = [0]
+_CWA_TRIP_AT     = 8        # 連續失敗幾次後熔斷
+_CWA_TRIPPED     = [False]
+
 def cwa_get(url, **kw):
-    """GET：打 CWA 主機時自動節流＋連線重用，其他主機照舊。
+    """GET：打 CWA 主機時自動節流＋連線重用＋熔斷，其他主機照舊。
 
     ★ 以 URL 判斷而非逐一改呼叫點：全檔有 26 處 requests.get，
       逐一替換容易漏改，且日後新增的呼叫也會自動受益。
     """
+    if 'opendata.cwa.gov.tw' in url and _CWA_TRIPPED[0]:
+        raise requests.exceptions.ConnectionError('CWA 熔斷中（連續失敗過多，本輪跳過）')
     # ★ 測試會替換模組層的 requests；若此處直接用 Session 就繞過了替換，
     #   使測試環境與正式行為不一致。故僅在 requests 為真實模組時啟用 Session。
     _real = getattr(requests, '__name__', '') == 'requests'
@@ -76,7 +87,17 @@ def cwa_get(url, **kw):
             time.sleep(gap)
         _CWA_LAST_REQ[0] = time.time()
         if _real:
-            return _cwa_session().get(url, **kw)
+            try:
+                r = _cwa_session().get(url, **kw)
+            except Exception:
+                _CWA_FAIL_STREAK[0] += 1
+                if _CWA_FAIL_STREAK[0] >= _CWA_TRIP_AT and not _CWA_TRIPPED[0]:
+                    _CWA_TRIPPED[0] = True
+                    print(f"    ★ CWA 連續失敗 {_CWA_FAIL_STREAK[0]} 次 → 熔斷，"
+                          f"本輪跳過其餘 CWA 請求（避免每次等滿逾時）")
+                raise
+            _CWA_FAIL_STREAK[0] = 0        # 成功即重置
+            return r
     return requests.get(url, **kw)
 
 
@@ -3908,14 +3929,29 @@ def main():
 
     _cur_etr2 = sum(1 for t in out_towns if t.get('etr2_pct') is not None)
     _abort = []
-    if _prev:
+
+    # ★ 絕對門檻優先（不可只用「與前一輪比較」）：
+    #   實測 2026-09-01 連兩輪失敗 —— 第一輪寫出 ETR2=0 的壞資料後，
+    #   第二輪拿它當基準，相對比較就永遠不會觸發，壞資料反而變成新常態。
+    #   靜態警戒表有 159 個鄉鎮，正常情況下絕大多數應有 ETR2 值。
+    _static_n = len(alert_table) if alert_table else 159
+    if _cur_etr2 < max(20, _static_n * 0.25):
+        _abort.append(f"ETR2 鄉鎮數過低：{_cur_etr2}（靜態表 {_static_n}）")
+    if not stations:
+        _abort.append("本輪未取得任何觀測站資料")
+    # PoP 覆蓋率（正常 700+；逐縣市部分失敗時會明顯偏低）
+    if len(pop3d) and len(pop3d) < 300:
+        _abort.append(f"PoP 覆蓋率過低：{len(pop3d)} 鄉鎮")
+    # 風力/氣溫（正常 368）
+    if WIND_FCST and sum(len(v) for v in WIND_FCST.values()) < 200:
+        _abort.append(f"風力預報覆蓋率過低："
+                      f"{sum(len(v) for v in WIND_FCST.values())} 鄉鎮")
+
+    # 其次才是與前一輪的相對比較（抓漸進式退化）
+    if _prev and not _abort:
         _pe = _n_etr2(_prev)
-        # 有 ETR2 的鄉鎮數掉到前一輪的三成以下 → 視為抓取失敗
         if _pe >= 50 and _cur_etr2 < _pe * 0.3:
             _abort.append(f"ETR2 鄉鎮數 {_pe} → {_cur_etr2}")
-        # 觀測站完全失效
-        if _cur_etr2 == 0 and _pe > 0:
-            _abort.append("本輪無任何 ETR2 觀測")
     if _abort:
         print("\n★★ 中止寫檔：資料明顯退化，保留前一輪 data.json")
         for _a in _abort:
