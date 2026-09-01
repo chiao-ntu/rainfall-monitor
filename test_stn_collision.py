@@ -6,7 +6,9 @@
   武陵/武陵w、關山/關山w、南庄/南庄w、外大坪/外大坪w、寒溪/寒溪s、雙溪/雙溪tp
 舊版無條件建立正規化鍵，使兩站塌成同一鍵，對站時可能取到另一站的值。
 """
-import io, json, os, sys, types
+import io, tempfile, json, os, sys, types
+import tempfile
+from datetime import datetime, timezone, timedelta
 os.environ.setdefault('CWA_API_KEY', 'dummy')
 import fetch_qpesums_hourly as H
 
@@ -531,6 +533,65 @@ _n_cwa = _src6.count('cwa_get(')
 _n_raw = _src6.count('requests.get(')
 print(f'  呼叫點：cwa_get {_n_cwa-1} 處、原生 requests.get {_n_raw} 處')
 chk('★呼叫點已全面改用節流版', _n_raw, 1)
+
+
+print('\n=== 誤差追蹤（CMPF 第二階段）===')
+# ★ 對應 NOAA National Blend of Models 的做法：以觀測校正各模式，
+#   並依地形分群（NBM 稱 supplemental locations）。現階段只累積不回饋。
+_tf = '/home/claude/terrain_zones_official.json'
+if os.path.exists(_tf):
+    _zn = json.load(io.open(_tf, encoding='utf-8'))['zones']
+    _now = datetime.now(timezone.utc) + timedelta(hours=8)
+    _tw = []
+    for _k, _z in list(_zn.items())[:80]:
+        if _z == '山區':   _o, _m = 120.0, 80.0     # 模式低估
+        elif _z == '平地': _o, _m = 30.0, 50.0      # 模式高估
+        else:               _o, _m = 60.0, 60.0     # 準確
+        _tw.append({'county': _k[:3], 'township': _k[3:],
+                    'daily_rain': [0.0, _o] + [0.0] * 13,
+                    'model_yday': {'best': _m, 'ecmwf': _m, 'gfs': _m, 'icon': _m}})
+    _cwd = os.getcwd()
+    _tmp = tempfile.mkdtemp(); os.chdir(_tmp)
+    try:
+        _sk = FR.update_model_skill(_tw, _zn, _now)
+        chk('寫出誤差追蹤檔', os.path.exists(FR.SKILL_FILE), True)
+        _sm = FR.summarize_model_skill(_sk, _now)
+        chk('★分地形統計', sorted(_sm.keys()) == sorted(set(
+            _z for _k, _z in list(_zn.items())[:80])), True)
+        _mt = _sm.get('山區', {}).get('best', {}).get('short', {})
+        _pl = _sm.get('平地', {}).get('best', {}).get('short', {})
+        print(f"  山區偏差比 {_mt.get('bias')}（模式低估）、"
+              f"平地 {_pl.get('bias')}（模式高估）")
+        chk('★山區偏差比 >1（正確識別低估）', _mt.get('bias', 0) > 1.2, True)
+        chk('★平地偏差比 <1（正確識別高估）', 0 < _pl.get('bias', 9) < 0.8, True)
+        chk('含 MAE', _mt.get('mae', 0) > 0, True)
+        chk('記錄樣本數', _mt.get('n', 0) > 0, True)
+        # 以下兩項各自用乾淨目錄，避免沿用前面已寫入的同日記錄
+        _yk = (_now - timedelta(days=1)).strftime('%Y-%m-%d')
+        # 無雨日不列入（比值無意義）
+        os.chdir(tempfile.mkdtemp())
+        _dry = [{'county': '南投縣', 'township': '仁愛鄉',
+                 'daily_rain': [0.0, 2.0] + [0.0] * 13,
+                 'model_yday': {'best': 1.0}}]
+        _sk2 = FR.update_model_skill(_dry, {'南投縣仁愛鄉': '山區'}, _now)
+        chk('★無雨日不計入（避免稀釋偏差）',
+            (_sk2.get('days') or {}).get(_yk, {}), {})
+        # 推估補值的鄉鎮不列入校驗
+        os.chdir(tempfile.mkdtemp())
+        _est = [{'county': '高雄市', 'township': '鹽埕區', 'obs_src': 'neighbor',
+                 'daily_rain': [0.0, 100.0] + [0.0] * 13,
+                 'model_yday': {'best': 50.0}}]
+        _sk3 = FR.update_model_skill(_est, {'高雄市鹽埕區': '沿海地區'}, _now)
+        chk('★推估值不列入校驗',
+            (_sk3.get('days') or {}).get(_yk, {}), {})
+    finally:
+        os.chdir(_cwd)
+    _src7 = io.open('fetch_rainfall.py', encoding='utf-8').read()
+    chk('短期7天/長期30天分開統計', "('short', 7), ('long', 30)" in _src7, True)
+    chk('保留 45 天樣本', 'SKILL_KEEP_DAYS = 45' in _src7, True)
+    chk('四模式昨日回算', 'def fetch_models_yesterday' in _src7, True)
+    chk('輸出含 model_skill', "output['model_skill']" in _src7, True)
+    chk('★現階段不回饋修正', '現階段只累積與呈現，不回饋修正預測' in _src7, True)
 
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)

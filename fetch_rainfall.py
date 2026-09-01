@@ -2203,6 +2203,55 @@ def apply_ensemble_ratio(qpf, maxh, county, ens_ratios, kind):
 
 
 # ── 昨日模式偏差比（動態偏差比 v1，顯示層） ────────
+def fetch_models_yesterday(townships):
+    """抓四個模式各自的昨日 24h 雨量，供誤差追蹤逐來源比對。
+
+    ★ 與 fetch_model_yesterday 的差別：後者只取 best_match 一個模式（供
+      既有的 bias_24h 使用），此處一次取四個模式，用於建立
+      「逐來源 × 逐地形」的誤差表。以 models 參數一次帶回，不增加請求數。
+    回傳 {key: {'best':x, 'ecmwf':x, 'gfs':x, 'icon':x}}
+    """
+    print("抓取四模式昨日回算（誤差追蹤基準）...")
+    lats = [t.get('lat', 0) for t in townships]
+    lngs = [t.get('lng', 0) for t in townships]
+    MODELS = {'best': 'best_match', 'ecmwf': 'ecmwf_ifs025',
+              'gfs': 'gfs_seamless', 'icon': 'icon_seamless'}
+    out = {}
+    for tag, mid in MODELS.items():
+        params = {
+            'latitude':  ','.join(str(x) for x in lats),
+            'longitude': ','.join(str(x) for x in lngs),
+            'hourly':    'precipitation',
+            'past_days': 2,
+            'forecast_days': 1,
+            'models':    mid,
+            'timezone':  'Asia/Taipei',
+        }
+        raw = None
+        for attempt in range(2):
+            try:
+                r = cwa_get(OPENMETEO, params=params, timeout=120)
+                if r.status_code == 429:
+                    time.sleep(5 * (attempt + 1)); continue
+                r.raise_for_status(); raw = r.json(); break
+            except Exception as e:
+                if attempt == 1:
+                    print(f"    {tag} 失敗（不影響其他模式）：{e}")
+        if raw is None:
+            continue
+        for i, loc in enumerate(raw if isinstance(raw, list) else [raw]):
+            key = f"{lats[i]:.4f}_{lngs[i]:.4f}"
+            precip = loc.get('hourly', {}).get('precipitation', [])
+            if len(precip) < 48:
+                continue
+            out.setdefault(key, {})[tag] = round(
+                sum(v or 0.0 for v in precip[24:48]), 1)
+    if out:
+        _n = {m: sum(1 for v in out.values() if m in v) for m in MODELS}
+        print(f"    四模式昨日值：{_n}")
+    return out
+
+
 def fetch_model_yesterday(townships):
     """
     抓 best_match 昨日24h模式雨量（past_days=1），供計算
@@ -2253,6 +2302,123 @@ def calc_bias_24h(daily_rain, model_yday):
     if model_yday is None or model_yday < 10.0:
         return None
     return round(max(0.2, min(8.0, obs_yday / model_yday)), 2)
+
+
+# ══════════════════════════════════════════════════════════
+#  誤差追蹤（CMPF 第二階段）
+#  ★ 目的：累積「逐來源 × 逐地形 × 逐前置時間」的預測誤差，
+#    作為第三階段動態加權的依據。
+#  ★ 方法對應 NOAA National Blend of Models：以分析場（此處為測站觀測）
+#    校正各模式，並依地形相似性分群 —— NBM 稱之為 supplemental locations。
+#  ★ 現階段只累積與呈現，不回饋修正預測；待樣本足夠再啟用加權。
+TERRAIN_FILE = "terrain_zones_official.json"   # 地形分類（山區/淺山/沿海/平地）
+SKILL_FILE = "model_skill.json"
+SKILL_KEEP_DAYS = 45        # 保留天數：短期權重看7天、長期基準看30天，留餘裕
+
+
+def update_model_skill(out_towns, zones, now_tpe):
+    """把「昨日各模式預測 vs 實際觀測」記入誤差追蹤表。
+
+    結構：{"days": {"2026-09-01": {"山區": {"ecmwf": {"n":31,"sum_obs":..,
+                                                     "sum_mod":..,"sum_ae":..}}}}}
+      n       樣本數（該地形有效比對的鄉鎮數）
+      sum_obs 觀測總量、sum_mod 模式總量 → 相除得偏差比（系統性高估/低估）
+      sum_ae  絕對誤差總和 → 除以 n 得 MAE（離散程度）
+    ★ 只納入「模式或觀測其一 ≥10mm」的樣本：無雨日的比值沒有意義，
+      全部納入會被大量 0/0 稀釋成 1.0，看不出真實偏差。
+    """
+    yday = (now_tpe - timedelta(days=1)).strftime('%Y-%m-%d')
+    skill = {'days': {}}
+    if os.path.exists(SKILL_FILE):
+        try:
+            with open(SKILL_FILE, encoding='utf-8') as f:
+                skill = json.load(f) or {'days': {}}
+        except Exception:
+            skill = {'days': {}}
+    skill.setdefault('days', {})
+
+    MODELS = ('best', 'ecmwf', 'gfs', 'icon')
+    day = {}
+    n_used = 0
+    for t in out_towns:
+        key = (t.get('county') or '') + (t.get('township') or '')
+        zone = zones.get(key) or '平地'
+        obs = (t.get('daily_rain') or [None, None])[1]      # [1] = 昨天
+        if obs is None:
+            continue
+        # 推估補值的鄉鎮不列入校驗（那本身就是推估，不是觀測）
+        if t.get('obs_src') in ('neighbor', 'qpesums'):
+            continue
+        for m in MODELS:
+            mv = (t.get('model_yday') or {}).get(m)
+            if mv is None:
+                continue
+            if obs < 10.0 and mv < 10.0:      # 無雨日：比值無意義
+                continue
+            d = day.setdefault(zone, {}).setdefault(m, {
+                'n': 0, 'sum_obs': 0.0, 'sum_mod': 0.0, 'sum_ae': 0.0})
+            d['n'] += 1
+            d['sum_obs'] += obs
+            d['sum_mod'] += mv
+            d['sum_ae'] += abs(obs - mv)
+            n_used += 1
+    if not day:
+        print("  誤差追蹤：昨日無足夠降雨樣本（雨量偏低時不計）")
+        return skill
+
+    for z in day:
+        for m in day[z]:
+            for k in ('sum_obs', 'sum_mod', 'sum_ae'):
+                day[z][m][k] = round(day[z][m][k], 1)
+    skill['days'][yday] = day
+
+    cut = (now_tpe - timedelta(days=SKILL_KEEP_DAYS)).strftime('%Y-%m-%d')
+    skill['days'] = {k: v for k, v in skill['days'].items() if k >= cut}
+    skill['updated'] = now_tpe.isoformat()
+    try:
+        with open(SKILL_FILE, 'w', encoding='utf-8') as f:
+            json.dump(skill, f, ensure_ascii=False, separators=(',', ':'))
+        _zs = '、'.join(f"{z}{sum(v['n'] for v in day[z].values())}" for z in sorted(day))
+        print(f"  誤差追蹤：{yday} 記錄 {n_used} 筆比對（{_zs}），"
+              f"累積 {len(skill['days'])} 天")
+    except Exception as e:
+        print(f"  誤差追蹤寫入失敗：{e}")
+    return skill
+
+
+def summarize_model_skill(skill, now_tpe):
+    """彙整近期誤差 → {地形: {模式: {bias, mae, n, days}}}。
+
+    bias = Σ觀測 / Σ模式（>1 代表模式低估，<1 代表高估）
+    ★ 分短期(7天)與長期(30天)：短期反應當前天氣型態，長期抓系統性偏差。
+      單用 7 天會被單一事件帶偏，故最終權重取 0.6×短期 + 0.4×長期。
+    """
+    out = {}
+    for span, days in (('short', 7), ('long', 30)):
+        cut = (now_tpe - timedelta(days=days)).strftime('%Y-%m-%d')
+        agg = {}
+        for d, zmap in (skill.get('days') or {}).items():
+            if d < cut:
+                continue
+            for z, mmap in zmap.items():
+                for m, v in mmap.items():
+                    a = agg.setdefault(z, {}).setdefault(m, {
+                        'n': 0, 'sum_obs': 0.0, 'sum_mod': 0.0,
+                        'sum_ae': 0.0, 'days': 0})
+                    a['n'] += v.get('n', 0)
+                    a['sum_obs'] += v.get('sum_obs', 0.0)
+                    a['sum_mod'] += v.get('sum_mod', 0.0)
+                    a['sum_ae'] += v.get('sum_ae', 0.0)
+                    a['days'] += 1
+        for z, mmap in agg.items():
+            for m, a in mmap.items():
+                if a['n'] < 5 or a['sum_mod'] <= 0:
+                    continue      # 樣本太少不給結論
+                out.setdefault(z, {}).setdefault(m, {})[span] = {
+                    'bias': round(max(0.2, min(5.0, a['sum_obs'] / a['sum_mod'])), 3),
+                    'mae': round(a['sum_ae'] / a['n'], 1),
+                    'n': a['n'], 'days': a['days']}
+    return out
 
 
 # ── 颱風期 QPF 格點 ──────────────────────────────
@@ -3356,6 +3522,8 @@ def main():
     ens_ratios = fetch_ensemble_ratios(static_list)
     time.sleep(2)
     model_yday = fetch_model_yesterday(static_list)
+    time.sleep(2)
+    models_yday = fetch_models_yesterday(static_list)
 
     # 基準時間
     h=(now_tpe.hour//6)*6
@@ -3512,6 +3680,8 @@ def main():
             'maxh_hi':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'hi')[1],
             'maxh_lo':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'lo')[1],
             'bias_24h':  calc_bias_24h(obs.get('daily_rain', [0.0]*15), model_yday.get(f"{lat:.4f}_{lng:.4f}")),
+            # 四模式昨日值（供誤差追蹤逐來源比對；前端不直接顯示）
+            'model_yday': models_yday.get(f"{lat:.4f}_{lng:.4f}"),
             'qpesums_1h':  qpesums_at(qp_grid, lat, lng),
             'qpesums_24h': qp_24h.get(f"{county}{township}"),
             'qpf_cwa':   qpf_cwa,
@@ -3916,6 +4086,29 @@ def main():
         nb_filled += 1
     if nb_filled:
         print(f"  鄰近內插補值：{nb_filled} 個無測站鄉鎮的逐日雨量（推估，前端標示）")
+
+    # ── 誤差追蹤（CMPF 第二階段）──────────────────────
+    #   累積「逐來源 × 逐地形」的預測誤差；現階段只記錄與呈現，
+    #   不回饋修正預測。待樣本足夠（短期7天/長期30天）再啟用動態加權。
+    try:
+        _zones = {}
+        if os.path.exists(TERRAIN_FILE):
+            with open(TERRAIN_FILE, encoding='utf-8') as _f:
+                _tz = json.load(_f)
+            _zones = _tz.get('zones', _tz) if isinstance(_tz, dict) else {}
+        _skill = update_model_skill(out_towns, _zones, now_tpe)
+        output['model_skill'] = summarize_model_skill(_skill, now_tpe)
+        if output['model_skill']:
+            for _z, _mm in sorted(output['model_skill'].items()):
+                _parts = []
+                for _m, _sp in sorted(_mm.items()):
+                    _s = _sp.get('short') or _sp.get('long')
+                    if _s:
+                        _parts.append(f"{_m} 偏差{_s['bias']:.2f}/MAE{_s['mae']:.0f}")
+                if _parts:
+                    print(f"    {_z}：{'、'.join(_parts)}")
+    except Exception as _e:
+        print(f"  誤差追蹤失敗（不影響其他）：{_e}")
 
     output['ens_active'] = len(ens_ratios) > 0  # 系集比值是否成功抓取
     # 全臺偏差比摘要（模式昨日≥10mm的鄉鎮之中位數）
