@@ -2377,7 +2377,8 @@ if (need('_waveColor') && need('_waveOf') && need('_waveRow')) {
   chk('圖例支援氣溫', /temp: '氣溫\(°C\)'/.test(src), true);
   chk('圖例支援浪高', /wave: '浪高'/.test(src), true);
   // ★ 未來6h 視窗補齊後為 4 處（今天／過去／未來／未來6h段）
-  chk('tooltip 四處都加入', (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 4);
+  // 五處：今天／過去／未來／未來6h／（warn|etr|risk）合併分支
+  chk('tooltip 五處都加入', (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 5);
   setLex("mode='rain'; window.WAVE_FCST={}; window.TEMP_FCST={};");
 }
 
@@ -2464,7 +2465,7 @@ if (need('_tempSeries') && need('_waveSeries') && need('drawTempDayChart')) {
   chk('氣溫允許負值', /allowNeg:true/.test(src), true);
   chk('放大分派含四張圖', /canvasId === 'cv-temp-day'[\s\S]{0,400}canvasId === 'cv-wave-hr'/.test(src), true);
   chk('★未來6h tooltip 補齊要素',
-      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 4);
+      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 5);
   setLex("window.TEMP_FCST={}; window.WAVE_FCST={};");
 }
 
@@ -2479,8 +2480,9 @@ console.log('\n=== 級距上色與 tooltip 補齊 ===');
   chk('圖例說明線色含義', /'預報（線色＝級距色）'/.test(src), true);
   // 全日 tooltip 補上最大時雨量
   chk('★全日 tooltip 含最大時雨量', /_maxHourRow\(t, 0, 3\)/.test(src), true);
+  // 三處：過去／未來／（warn|etr|risk）合併分支
   chk('★過去/未來 tooltip 含最大時雨量',
-      (src.match(/_maxHourRow\(t, segFrom, segTo\)/g)||[]).length, 2);
+      (src.match(/_maxHourRow\(t, segFrom, segTo\)/g)||[]).length, 3);
 }
 if (need('_maxHourRow')) {
   setLex(`TMAP['南投縣仁愛鄉'] = Object.assign(TMAP['南投縣仁愛鄉']||{},
@@ -3070,7 +3072,7 @@ if (need('_modeHeadRow')) {
       (src.match(/_modeHeadRow\(t\)/g)||[]).length >= 4, true);
   chk('說明不必切圖層', /使用者不必為了/.test(src), true);
   chk('完整欄位仍在（風力/氣溫/浪高列）',
-      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 4);
+      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 5);
 
   // 各 mode 的標頭內容
   const now = Date.now();
@@ -3082,7 +3084,8 @@ if (need('_modeHeadRow')) {
     window.WAVE_FCST = {'宜蘭縣蘇澳鎮':[${JSON.stringify(seg({wave:2.5,dir:60,period:9}))}]};
     windKind='mean';`);
   const t = getLex("TMAP['宜蘭縣蘇澳鎮']");
-  [['wind', /6 級/], ['temp', /28°C/], ['wave', /2\.5 m/]].forEach(([m, re])=>{
+  [['wind', /6 級/], ['temp', /28°C/], ['wave', /2\.5 m/],
+   ['etr', /ETR2/], ['risk', /風險/], ['warn', /警特報|豪雨|大雨/]].forEach(([m, re])=>{
     setLex(`mode='${m}';`);
     const h = G._modeHeadRow(t);
     console.log(`   mode=${m} → ${h.replace(/<[^>]*>/g,'').trim()}`);
@@ -3095,6 +3098,36 @@ if (need('_modeHeadRow')) {
   setLex("mode='wave';");
   chk('★內陸標示非沿海', /非沿海/.test(G._modeHeadRow(inland)), true);
   setLex("mode='rain'; window.WIND_FCST={}; window.TEMP_FCST={}; window.WAVE_FCST={};");
+}
+
+
+console.log('\n=== ETR2／風險／警特報 tooltip 亦須完整 ===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★三者合併為完整版分支',
+      /mode==='warn' \|\| mode==='etr' \|\| mode==='risk'/.test(src), true);
+  chk('不再只給一兩行',
+      /tooltipHtml = `<b>\$\{p\.COUNTYNAME\} \$\{p\.TOWNNAME\}<\/b><br>ETR2%：/.test(src), false);
+  chk('含累積雨量', /\$\{_isPast \? '觀測' : '預測'\}累積雨量/.test(src), true);
+  chk('含最大時雨量', /最大時雨量：\$\{_maxHourRow\(t, segFrom, segTo\)\}/.test(src), true);
+  chk('含風力/氣溫/浪高',
+      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 5);
+  chk('警特報另附研判摘要', /mode==='warn'\s*\n\s*\? `<br><span style="font-size:10px">\$\{_warnSummaryHtml/.test(src), true);
+  chk('標頭支援 warn', /if\(mode === 'warn'\)\{/.test(src), true);
+  chk('標頭支援 etr', /if\(mode === 'etr'\)\{/.test(src), true);
+  chk('標頭支援 risk', /if\(mode === 'risk'\)\{/.test(src), true);
+
+  // 標頭呼叫 getAccum，須確認不會無窮遞迴
+  setLex(`TMAP['南投縣仁愛鄉'] = Object.assign(TMAP['南投縣仁愛鄉']||{},
+    {county:'南投縣', township:'仁愛鄉'});`);
+  const t2 = getLex("TMAP['南投縣仁愛鄉']");
+  let deep = false;
+  ['etr','risk','warn'].forEach(m=>{
+    setLex(`mode='${m}';`);
+    try { G._modeHeadRow(t2); } catch(e){ deep = true; console.log('   ', m, e.message.slice(0,60)); }
+  });
+  chk('★標頭不致無窮遞迴', deep, false);
+  setLex("mode='rain';");
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`

@@ -2481,15 +2481,20 @@ function renderLayer(){
           `CWA定量降水預報色階：`+
           (col?`<span style="color:${col};font-weight:700;text-shadow:0 0 2px #000">${label}</span>`:'—')+
           `<br><span style="font-size:9px;color:#88a">（官方圖判讀色階，非精確數值）</span>`;
-      } else if(mode==='warn'){
-        const lv = totalRain || 0;
-        tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
-          `本視窗警特報：${lv>0?`<span style="color:${WARN_COLORS[lv]};font-weight:700">${WARN_NAMES[lv]}</span>`:'未達標準'}<br>`+
-          `<span style="font-size:10px">${_warnSummaryHtml(t)}</span>`;
-      } else if(mode==='etr'){
-        tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>ETR2%：${etrStr}<br>風險指標：${_windowRisk(t)}`;
-      } else if(mode==='risk'){
-        tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>風險指標：${totalRain!=null?totalRain.toFixed(1):'—'}`;
+      } else if(mode==='warn' || mode==='etr' || mode==='risk'){
+        // ★ 這三個 mode 原本只給一兩行，切到該圖層就看不到雨量、風力、
+        //   氣溫、浪高等資訊。改為與其他 mode 相同的完整欄位，
+        //   該 mode 的主值以標頭呈現（_modeHeadRow）。
+        const _isPast = winKey.startsWith('past');
+        tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b>` + _modeHeadRow(t) + `<br>`+
+          `${_isPast ? '觀測' : '預測'}累積雨量：${rainStr} ｜ `+
+          `ETR2%${_isPast ? '' : '（預估）'}：${etrStr}<br>`+
+          `最大時雨量：${_maxHourRow(t, segFrom, segTo)}<br>`+
+          _etr2NowRow(t) + `風險指標：${_windowRisk(t)}`+
+          // 警特報模式另附本視窗的研判摘要（其他 mode 不需要這麼細）
+          (mode==='warn'
+            ? `<br><span style="font-size:10px">${_warnSummaryHtml(t)}</span>` : '')+
+          _windRow(t) + _tempRow(t) + _waveRow(t);
       } else if(isFuture6h){
         // 未來6h段：只看該獨立時段的降雨強度（不累加），用於判斷哪裡容易下大雨
         const startH = segFrom*6, endH = (segTo+1)*6;
@@ -6392,6 +6397,25 @@ function _modeHeadRow(t){
     if(v.wave == null) return '<span style="color:#8a9aaa;font-size:10px">　非沿海</span>';
     return `<span style="font-size:10px">　浪高 <b style="color:${_waveColor(v.wave)}">`
          + `${v.wave.toFixed(1)} m</b></span>`;
+  }
+  if(mode === 'warn'){
+    const acc = getAccum(t);
+    const lv = acc && acc.totalRain ? acc.totalRain : 0;
+    return lv > 0
+      ? `<span style="font-size:10px">　<b style="color:${WARN_COLORS[lv]}">${WARN_NAMES[lv]}</b></span>`
+      : '<span style="color:#8a9aaa;font-size:10px">　未達警特報標準</span>';
+  }
+  if(mode === 'etr'){
+    const acc = getAccum(t);
+    const v = acc && acc.etrPct;
+    return (v == null) ? '<span style="color:#8a9aaa;font-size:10px">　ETR2 無資料</span>'
+         : `<span style="font-size:10px">　ETR2 <b>${v.toFixed(0)}%</b></span>`;
+  }
+  if(mode === 'risk'){
+    const acc = getAccum(t);
+    const v = acc && acc.totalRain;
+    return (v == null) ? '<span style="color:#8a9aaa;font-size:10px">　風險無資料</span>'
+         : `<span style="font-size:10px">　風險 <b>${v.toFixed(1)}</b></span>`;
   }
   return '';
 }
