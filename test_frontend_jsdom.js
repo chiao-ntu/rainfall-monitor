@@ -3288,6 +3288,94 @@ if (need('_blendQpf')) {
   setLex("window.MODEL_SKILL={};");
 }
 
+
+console.log('\n=== 融合明細：切模式即顯示 ===');
+if (need('_blendOverviewHtml') && need('renderBlendDetail')) {
+  setLex(`document.body.insertAdjacentHTML('beforeend',
+    '<div id="sec-blend"></div><div id="blend-detail"></div>');
+    forecastModel='blend'; window.MODEL_SKILL={};`);
+  // 未選鄉鎮 + 無樣本
+  G.renderBlendDetail(null);
+  const disp = getLex("document.getElementById('sec-blend').style.display");
+  const h0 = getLex("document.getElementById('blend-detail').innerHTML");
+  chk('★未選鄉鎮仍顯示面板', disp, 'block');
+  chk('無樣本時說明等權重', /以等權重融合四個模式/.test(h0), true);
+  chk('提示可點鄉鎮看細節', /點選任一鄉鎮/.test(h0), true);
+
+  // 未選鄉鎮 + 有樣本 → 顯示全臺概況
+  setLex(`window.MODEL_SKILL = {
+    '山區': {best:{short:{bias:1.42, mae:12, n:40}}, gfs:{short:{bias:1.80, mae:35, n:40}}},
+    '平地': {best:{short:{bias:0.85, mae:8, n:60}}}};`);
+  G.renderBlendDetail(null);
+  const h1 = getLex("document.getElementById('blend-detail').innerHTML");
+  const p1 = h1.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+  console.log(`   ${p1.slice(0,140)}`);
+  chk('★顯示各地形概況', /山區/.test(p1) && /平地/.test(p1), true);
+  chk('顯示偏差比', /1\.42/.test(p1), true);
+  chk('★標出該地形最準的模式', /最準/.test(p1), true);
+
+  // 非融合模式仍應隱藏
+  setLex("forecastModel='best';");
+  G.renderBlendDetail(null);
+  chk('非融合模式隱藏', getLex("document.getElementById('sec-blend').style.display"), 'none');
+
+  // 離散度小數一位
+  const mk = v => new Array(60).fill(v);
+  setLex(`TMAP['南投縣仁愛鄉'] = Object.assign(TMAP['南投縣仁愛鄉']||{}, {
+      county:'南投縣', township:'仁愛鄉',
+      qpf_best: ${JSON.stringify(mk(3.333))}, qpf_ecmwf: ${JSON.stringify(mk(7.777))},
+      qpf_gfs: ${JSON.stringify(mk(5.555))}, qpf_icon: ${JSON.stringify(mk(9.999))}});
+    forecastModel='blend'; segFrom=0; segTo=3;`);
+  const sp = G._blendSpread(getLex("TMAP['南投縣仁愛鄉']"), 0, 3);
+  console.log(`   離散度：${sp.min} ~ ${sp.max}（平均 ${sp.mean}）`);
+  const dp = x => (String(x).split('.')[1] || '').length;
+  chk('★min 取小數一位', dp(sp.min) <= 1, true);
+  chk('★max 取小數一位', dp(sp.max) <= 1, true);
+  chk('mean 取小數一位', dp(sp.mean) <= 1, true);
+  setLex("forecastModel='best'; window.MODEL_SKILL={};");
+}
+
+
+console.log('\n=== 樣本累積進度可見 ===');
+if (need('_blendOverviewHtml')) {
+  setLex(`document.body.insertAdjacentHTML('beforeend',
+    '<div id="sec-blend"></div><div id="blend-detail"></div>');
+    forecastModel='blend'; window.MODEL_SKILL={};
+    window.SKILL_PROGRESS={days_total:3, days_7:3, days_30:3,
+      first:'2026-08-30', last:'2026-09-01', active:false};`);
+  G.renderBlendDetail(null);
+  const h = getLex("document.getElementById('blend-detail').innerHTML");
+  const p = h.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+  console.log(`   ${p.slice(0,120)}`);
+  chk('★顯示累積天數', /已累積 3 天/.test(p), true);
+  chk('顯示起始日', /2026-08-30 起/.test(p), true);
+  chk('★說明啟用門檻', /樣本數達 10 筆以上才會啟用差異化權重/.test(p), true);
+
+  // 有樣本但未達門檻 → 明確標示仍為等權重
+  setLex(`window.MODEL_SKILL = {'山區': {best:{short:{bias:1.3, mae:15, n:6}}}};
+    window.SKILL_PROGRESS={days_total:2, days_7:2, days_30:2,
+      first:'2026-08-31', last:'2026-09-01', active:false};`);
+  G.renderBlendDetail(null);
+  const p2 = getLex("document.getElementById('blend-detail').innerHTML")
+    .replace(/<[^>]*>/g,' ').replace(/\s+/g,' ');
+  chk('★未達門檻時明確標示', /樣本未達 10 筆，仍以等權重運作/.test(p2), true);
+
+  // 已啟用 → 不再顯示警語
+  setLex(`window.SKILL_PROGRESS={days_total:12, days_7:7, days_30:12,
+      first:'2026-08-21', last:'2026-09-01', active:true};
+    window.MODEL_SKILL = {'山區': {best:{short:{bias:1.3, mae:15, n:40}}}};`);
+  G.renderBlendDetail(null);
+  const p3 = getLex("document.getElementById('blend-detail').innerHTML")
+    .replace(/<[^>]*>/g,' ').replace(/\s+/g,' ');
+  chk('已啟用時不顯示警語', /樣本未達 10 筆/.test(p3), false);
+  chk('仍顯示累積進度', /已累積 12 天/.test(p3), true);
+
+  const py = fs.readFileSync('fetch_rainfall.py', 'utf8');
+  chk('後端輸出累積進度', /output\['skill_progress'\]/.test(py), true);
+  chk('判斷是否已啟用', /'active': any\(sp\.get\('n', 0\) >= 10/.test(py), true);
+  setLex("forecastModel='best'; window.MODEL_SKILL={}; window.SKILL_PROGRESS=null;");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

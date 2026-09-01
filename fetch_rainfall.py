@@ -4104,6 +4104,20 @@ def main():
             _zones = _tz.get('zones', _tz) if isinstance(_tz, dict) else {}
         _skill = update_model_skill(out_towns, _zones, now_tpe)
         output['model_skill'] = summarize_model_skill(_skill, now_tpe)
+        # 累積進度：讓前端能說明「還要多久權重才會分化」
+        _days_all = sorted((_skill.get('days') or {}).keys())
+        _n7 = sum(1 for d in _days_all
+                  if d >= (now_tpe - timedelta(days=7)).strftime('%Y-%m-%d'))
+        _n30 = sum(1 for d in _days_all
+                   if d >= (now_tpe - timedelta(days=30)).strftime('%Y-%m-%d'))
+        output['skill_progress'] = {
+            'days_total': len(_days_all), 'days_7': _n7, 'days_30': _n30,
+            'first': _days_all[0] if _days_all else '',
+            'last': _days_all[-1] if _days_all else '',
+            # 樣本足夠與否：任一地形任一模式的 n≥10 才會啟用差異化權重
+            'active': any(sp.get('n', 0) >= 10
+                          for z in (output['model_skill'] or {}).values()
+                          for m in z.values() for sp in m.values())}
         if output['model_skill']:
             for _z, _mm in sorted(output['model_skill'].items()):
                 _parts = []

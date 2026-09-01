@@ -1520,12 +1520,62 @@ function _blendQpf(t){
 // ④ 模式離散度 → 信心度（各模式在該時窗的差異）
 // 融合校正明細（右側狀態列）：列出各模式的權重、偏差比與近期表現，
 //   讓使用者知道「這個數字是怎麼算出來的」——防災判讀需要可追溯。
+// 全臺概況：未選鄉鎮時顯示各地形的模式表現，讓使用者一切換就有資訊。
+function _blendOverviewHtml(){
+  const sk = window.MODEL_SKILL || {};
+  const zones = Object.keys(sk);
+  const pg = window.SKILL_PROGRESS;
+  const pgLine = pg
+    ? `<div style="color:#7a94ac;font-size:10px;margin-top:4px">
+        已累積 ${pg.days_total} 天（近 7 天 ${pg.days_7}、近 30 天 ${pg.days_30}）`
+      + (pg.first ? `　${pg.first} 起` : '') + '</div>'
+    : '';
+  if(!zones.length){
+    return '<div style="color:#9fc8e8">尚無實測校正樣本，目前以等權重融合四個模式。</div>'
+         + pgLine
+         + '<div style="color:#7a94ac;font-size:10px;margin-top:4px">'
+         + '每日累積一次；短期權重看 7 天、長期基準看 30 天。<br>'
+         + '樣本數達 10 筆以上才會啟用差異化權重。<br>'
+         + '點選任一鄉鎮可查看該地的融合細節。</div>';
+  }
+  const NAMES = {best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS', icon:'ICON'};
+  const rows = zones.sort().map(z=>{
+    const mm = sk[z] || {};
+    // 取該地形表現最好（MAE 最小）的模式
+    let bestM = null, bestMae = Infinity;
+    const parts = [];
+    Object.keys(mm).forEach(m=>{
+      const sp = mm[m].short || mm[m].long;
+      if(!sp) return;
+      if(sp.mae < bestMae){ bestMae = sp.mae; bestM = m; }
+      parts.push(`${NAMES[m] || m} ${sp.bias.toFixed(2)}`);
+    });
+    if(!parts.length) return '';
+    return `<div style="margin-bottom:3px">
+      <span style="color:#9fc8e8">${z}</span>
+      <span style="color:#8a9aaa;font-size:10px">　偏差比 ${parts.join('・')}</span>
+      ${bestM ? `<br><span style="font-size:10px;color:#8ad8a0">　最準：${NAMES[bestM] || bestM}
+        （MAE ${bestMae.toFixed(0)}mm）</span>` : ''}</div>`;
+  }).filter(Boolean);
+  return `<div style="color:#9fc8e8;font-size:10px;margin-bottom:5px">
+      全臺各地形的模式表現（偏差比 &gt;1 代表模式低估）`
+    + (pg && !pg.active
+        ? '<br><span style="color:#e8a860">樣本未達 10 筆，仍以等權重運作</span>' : '')
+    + '</div>'
+    + rows.join('') + pgLine
+    + '<div style="color:#7a94ac;font-size:10px;margin-top:5px">'
+    + '點選任一鄉鎮可查看該地的加權明細與官方研判比對。</div>';
+}
+
 function renderBlendDetail(t){
   const el = document.getElementById('blend-detail');
   const sec = document.getElementById('sec-blend');
   if(!el || !sec) return;
-  if(forecastModel !== 'blend' || !t){ sec.style.display = 'none'; return; }
+  if(forecastModel !== 'blend'){ sec.style.display = 'none'; return; }
   sec.style.display = 'block';
+  // ★ 未選鄉鎮時：顯示全臺各地形的校正概況，切到融合模式立即看得到，
+  //   不必先點某個鄉鎮。點選後再切換為該鄉鎮的細節。
+  if(!t){ el.innerHTML = _blendOverviewHtml(); return; }
 
   const zone = _townZone(t) || '—';
   const rows = [];
@@ -1611,7 +1661,8 @@ function _blendSpread(t, segFrom, segTo){
   const max = Math.max(...sums), min = Math.min(...sums);
   // 相對離散度：範圍 / 平均（平均很小時無意義）
   const rel = mean >= 5 ? (max - min) / mean : null;
-  return {mean: Math.round(mean*10)/10, min, max, rel,
+  return {mean: Math.round(mean*10)/10,
+          min: Math.round(min*10)/10, max: Math.round(max*10)/10, rel,
           level: rel == null ? null : rel < 0.5 ? '高' : rel < 1.2 ? '中' : '低'};
 }
 
@@ -3659,6 +3710,7 @@ async function tryLoadLive(){
     window.WAVE_FCST = d.wave_fcst || {};   // 沿海浪高（僅沿海鄉鎮）
     window.TIDE_FCST = d.tide_fcst || {};   // 鄉鎮潮汐（滿潮/乾潮時刻與潮高）
     window.MODEL_SKILL = d.model_skill || {};        // 逐地形×逐模式的近期誤差
+    window.SKILL_PROGRESS = d.skill_progress || null;   // 樣本累積進度
     window.FORECASTER_PRECIP = d.forecaster_precip || {};  // 官方研判雨量區間
     if(Object.keys(window.MODEL_SKILL).length){
       const _z0 = Object.keys(window.MODEL_SKILL)[0];
