@@ -3369,6 +3369,22 @@ async function tryLoadLive(){
     if(!r.ok) throw new Error(`data.json HTTP ${r.status}`);
     const d=await r.json();
     console.log('data.json 載入：', d.township_count, '個鄉鎮，來源：', d.source);
+    // ★ 歷史雨量診斷：過去視圖依賴 daily_rain（[0]=今天、[1]=昨天…）。
+    //   若後端某輪觀測抓取失敗，該輪產出的 data.json 會缺過去資料，
+    //   前端表現為「過去兩天沒有數值」。此處直接印出實際覆蓋情形。
+    try{
+      const _tw = d.townships || [];
+      const _cov = [];
+      for(let i=0; i<8; i++){
+        _cov.push(_tw.filter(t=>(t.daily_rain||[])[i] != null).length);
+      }
+      console.log(`daily_rain 覆蓋（[0]=今天）：${_cov.join('/')}　共 ${_tw.length} 鄉鎮`);
+      const _bad = _cov.slice(0,3).filter(n=>n < _tw.length*0.3).length;
+      if(_bad) console.warn(`※ 過去 3 天中有 ${_bad} 天覆蓋率偏低，`
+        + '可能是該輪後端觀測抓取失敗（下次成功執行會補回）');
+      if(d.stale_layers) console.warn('※ 以下圖層沿用前一輪資料：',
+        Object.keys(d.stale_layers).join('、'));
+    }catch(e){}
 
     // 除錯：檢查問題鄉鎮是否存在於 data.json
     const checkList = [['高雄市','鳥松區'],['高雄市','前金區'],['高雄市','鹽埕區'],
