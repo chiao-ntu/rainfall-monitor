@@ -37,6 +37,49 @@ ALL_TOWNSHIPS_FILE = "all_townships.json"  # 全台368個行政區（含座標�
 HISTORY_FILE = "obs_history.json"
 OUTPUT_FILE  = "data.json"
 ETR2_WEIGHTS = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1]  # R0~R6 固定權重
+# ── CWA 請求節流 ────────────────────────────────────────────
+#   ★ 實測 2026-09-01：短時間內連續請求 opendata.cwa.gov.tw（尤其掃描
+#     46 個 dataid 的探測迴圈）會被大量 Connection reset / timeout 打回，
+#     導致該輪幾乎所有資料抓不到。故對同一主機的請求做最小間隔節流，
+#     並改用 Session 重用連線（避免每次重新握手加重負擔）。
+_CWA_LAST_REQ = [0.0]
+_CWA_MIN_GAP  = 0.35            # 秒；約 3 req/s
+_CWA_SESSION  = None
+
+def _cwa_session():
+    global _CWA_SESSION
+    if _CWA_SESSION is None:
+        _CWA_SESSION = requests.Session()
+        _CWA_SESSION.headers.update({
+            'User-Agent': 'Mozilla/5.0 (compatible; RainfallMonitor/1.0)',
+            'Connection': 'keep-alive'})
+        try:
+            from requests.adapters import HTTPAdapter
+            _CWA_SESSION.mount('https://', HTTPAdapter(pool_connections=4,
+                                                       pool_maxsize=4))
+        except Exception:
+            pass
+    return _CWA_SESSION
+
+def cwa_get(url, **kw):
+    """GET：打 CWA 主機時自動節流＋連線重用，其他主機照舊。
+
+    ★ 以 URL 判斷而非逐一改呼叫點：全檔有 26 處 requests.get，
+      逐一替換容易漏改，且日後新增的呼叫也會自動受益。
+    """
+    # ★ 測試會替換模組層的 requests；若此處直接用 Session 就繞過了替換，
+    #   使測試環境與正式行為不一致。故僅在 requests 為真實模組時啟用 Session。
+    _real = getattr(requests, '__name__', '') == 'requests'
+    if 'opendata.cwa.gov.tw' in url:
+        gap = _CWA_MIN_GAP - (time.time() - _CWA_LAST_REQ[0])
+        if gap > 0:
+            time.sleep(gap)
+        _CWA_LAST_REQ[0] = time.time()
+        if _real:
+            return _cwa_session().get(url, **kw)
+    return requests.get(url, **kw)
+
+
 BASE_URL     = "https://opendata.cwa.gov.tw/api/v1/rest/datastore"
 # 檔案型產品（zip/nc/png/格點）走 fileapi；datastore 對這類 dataid 會 404
 FILEAPI      = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi"
@@ -99,7 +142,7 @@ def _resolve_product_url(dataid, timeout=60):
         (f"{BASE_URL}/{dataid}", {'Authorization': CWA_API_KEY, 'format': 'JSON'}),
     ):
         try:
-            r = requests.get(_url, params=_params, timeout=timeout)
+            r = cwa_get(_url, params=_params, timeout=timeout)
             if r.status_code != 200:
                 print(f"    {dataid} metadata HTTP {r.status_code}"
                       f"（{'fileapi' if 'fileapi' in _url else 'datastore'}）")
@@ -153,7 +196,7 @@ def fetch_tide_forecast():
     txt = None
     for _try in range(2):
         try:
-            r = requests.get(f"{FILEAPI}/{TIDE_EP}",
+            r = cwa_get(f"{FILEAPI}/{TIDE_EP}",
                              params={"Authorization": CWA_API_KEY,
                                      "downloadType": "WEB", "format": "XML"},
                              timeout=120)
@@ -245,11 +288,11 @@ def fetch_wave_forecast():
     for _try in range(2):
         try:
             if url:                      # 主要路徑：ProductURL（多為 S3）
-                r = requests.get(url, timeout=300)
+                r = cwa_get(url, timeout=300)
             else:
                 # ★ 備援：直接向 fileapi 要檔案（部分產品會直接回 zip 位元組，
                 #   而非先給 metadata）。datastore 對檔案型會 404/500，不再嘗試。
-                r = requests.get(f"{FILEAPI}/{WAVE_EP}",
+                r = cwa_get(f"{FILEAPI}/{WAVE_EP}",
                                  params={"Authorization": CWA_API_KEY,
                                          "downloadType": "WEB", "format": "ZIP"},
                                  timeout=300)
@@ -396,7 +439,7 @@ def fetch_debris_alerts():
     data = None
     for attempt in range(3):
         try:
-            r = requests.get(SWCB_RAIN_URL, timeout=60)
+            r = cwa_get(SWCB_RAIN_URL, timeout=60)
             if r.status_code != 200:
                 if attempt < 2: time.sleep(3); continue
                 return {}
@@ -456,7 +499,7 @@ def fetch_swcb_etr2():
     data = None
     for attempt in range(3):
         try:
-            r = requests.get(SWCB_RAIN_URL, timeout=60)
+            r = cwa_get(SWCB_RAIN_URL, timeout=60)
             if r.status_code != 200:
                 print(f"    HTTP {r.status_code}")
                 if attempt < 2: time.sleep(3); continue
@@ -530,7 +573,7 @@ def _swcb_json(url, label, tries=3, timeout=60):
             'Accept': 'application/json, text/plain, */*'}
     for attempt in range(tries):
         try:
-            r = requests.get(url, headers=_hdr, timeout=timeout)
+            r = cwa_get(url, headers=_hdr, timeout=timeout)
             if r.status_code != 200:
                 print(f"    {label} HTTP {r.status_code}")
                 # 403/429 多為擋爬或限流，退避久一點再試
@@ -928,7 +971,7 @@ def fetch_obs():
     raw = None
     for attempt in range(2):
         try:
-            r = requests.get(OBS_URL, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=30)
+            r = cwa_get(OBS_URL, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=30)
             r.raise_for_status(); raw = r.json(); break
         except Exception as e:
             if attempt == 0: print(f"  第1次失敗，重試：{e}")
@@ -1240,7 +1283,7 @@ def fetch_pop_county(county, ep_code, is_3day):
     """抓單一縣市的鄉鎮 PoP 資料（逐縣市備援路徑；主要路徑為打包檔）"""
     url = f"{BASE_URL}/{ep_code}"
     try:
-        r = requests.get(url, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=15)
+        r = cwa_get(url, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=15)
         if r.status_code==404: return {}
         r.raise_for_status(); raw=r.json()
     except Exception as e: return {}
@@ -1459,9 +1502,9 @@ def fetch_all_pop_bundle(counties_needed):
     for _try in range(3):
         try:
             if _burl:
-                r = requests.get(_burl, timeout=180)
+                r = cwa_get(_burl, timeout=180)
             else:
-                r = requests.get(f"{FILEAPI}/F-D0047-093",
+                r = cwa_get(f"{FILEAPI}/F-D0047-093",
                                  params={"Authorization": CWA_API_KEY,
                                          "downloadType": "WEB", "format": "ZIP"},
                                  timeout=180)
@@ -1633,7 +1676,7 @@ def fetch_openmeteo_model(townships, model='best_match'):
 
     for attempt in range(3):
         try:
-            r = requests.get(OPENMETEO, params=params, timeout=120)
+            r = cwa_get(OPENMETEO, params=params, timeout=120)
             if r.status_code == 429:
                 wait = 5 * (attempt+1)
                 print(f"    429限流，等待{wait}秒後重試...")
@@ -1716,7 +1759,7 @@ def fetch_radar_qpf_1h(townships):
     print("抓取 F-B0046 未來1h雷達定量降雨預報...")
     for attempt in range(3):
         try:
-            r = requests.get(FB0046_URL, params={'Authorization': CWA_API_KEY,
+            r = cwa_get(FB0046_URL, params={'Authorization': CWA_API_KEY,
                              'downloadType': 'WEB', 'format': 'JSON'}, timeout=60)
             if r.status_code != 200:
                 print(f"    HTTP {r.status_code}"); 
@@ -1784,7 +1827,7 @@ def fetch_qpesums_grid():
     if not CWA_API_KEY:
         return None
     try:
-        r = requests.get(QPESUMS_URL, params={'Authorization': CWA_API_KEY,
+        r = cwa_get(QPESUMS_URL, params={'Authorization': CWA_API_KEY,
                                               'downloadType':'WEB','format':'JSON'}, timeout=90)
         r.raise_for_status()
         ds = r.json().get('cwaopendata', {}).get('dataset', {})
@@ -1839,7 +1882,7 @@ def fetch_qpesums_grid():
             print("    QPESUMS 找不到 ProductURL 且無內嵌網格")
             return None
         print(f"    QPESUMS ProductURL：{str(url)[:100]}")
-        r2 = requests.get(url, timeout=120)
+        r2 = cwa_get(url, timeout=120)
         r2.raise_for_status()
         data = r2.content
         print(f"    下載：{len(data)} bytes，Content-Type={r2.headers.get('Content-Type','?')[:40]}，開頭={data[:60]!r}")
@@ -2060,7 +2103,7 @@ def fetch_ensemble_ratios(townships):
     }
     for attempt in range(3):
         try:
-            r = requests.get(ENSEMBLE_API, params=params, timeout=120)
+            r = cwa_get(ENSEMBLE_API, params=params, timeout=120)
             if r.status_code == 429:
                 time.sleep(5*(attempt+1)); continue
             r.raise_for_status(); raw = r.json()
@@ -2145,7 +2188,7 @@ def fetch_model_yesterday(townships):
     }
     for attempt in range(3):
         try:
-            r = requests.get(OPENMETEO, params=params, timeout=120)
+            r = cwa_get(OPENMETEO, params=params, timeout=120)
             if r.status_code == 429:
                 time.sleep(5*(attempt+1)); continue
             r.raise_for_status(); raw = r.json()
@@ -2197,7 +2240,7 @@ def fetch_gust_forecast():
         return {}
     url = f"{BASE_URL}/W-C0034-002"
     try:
-        r = requests.get(url, params={"Authorization": CWA_API_KEY, "format": "JSON"},
+        r = cwa_get(url, params={"Authorization": CWA_API_KEY, "format": "JSON"},
                          timeout=20)
         if r.status_code != 200:
             return {}
@@ -2267,7 +2310,7 @@ def fetch_typhoon_track():
     doc = None
     for attempt in range(3):
         try:
-            r = requests.get(f"{BASE_URL}/W-C0034-005",
+            r = cwa_get(f"{BASE_URL}/W-C0034-005",
                              params={'Authorization': CWA_API_KEY, 'format': 'JSON'},
                              timeout=45)
             if r.status_code != 200:
@@ -2358,7 +2401,7 @@ def fetch_typhoon_warning():
     doc = None
     for attempt in range(3):
         try:
-            r = requests.get(f"{BASE_URL}/W-C0034-001",
+            r = cwa_get(f"{BASE_URL}/W-C0034-001",
                              params={'Authorization': CWA_API_KEY, 'format': 'JSON'},
                              timeout=45)
             if r.status_code != 200:
@@ -2493,7 +2536,7 @@ def fetch_forecaster_precip():
         if not url:
             continue
         try:
-            r = requests.get(url, timeout=60)
+            r = cwa_get(url, timeout=60)
             if r.status_code != 200:
                 print(f"    {ep} 內容 HTTP {r.status_code}")
                 continue
@@ -2560,7 +2603,7 @@ def fetch_typhoon_qpf():
     for i, url in enumerate(QPF_TYPHOON):
         label = f"{i*6}-{(i+1)*6}h"
         try:
-            r = requests.get(url, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=20)
+            r = cwa_get(url, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=20)
             if r.status_code == 404: continue
             r.raise_for_status(); raw=r.json()
             # ★ 實際結構為 cwaopendata.Dataset（使用者提供原始檔實測 2026-09-01）；
@@ -2720,7 +2763,7 @@ def fetch_cwa_routine_qpf(now_tpe):
         if did in seen: continue
         seen.add(did)
         try:
-            r = requests.get(f"{FILEAPI}/{did}", params={'Authorization': CWA_API_KEY,
+            r = cwa_get(f"{FILEAPI}/{did}", params={'Authorization': CWA_API_KEY,
                              'downloadType': 'WEB', 'format': 'JSON'}, timeout=20)
             if r.status_code != 200:
                 _scan_fail += 1
@@ -2748,7 +2791,7 @@ def fetch_cwa_routine_qpf(now_tpe):
             for u in uris:
                 ul = u.lower()
                 if '.zip' in ul or ('csv' in ul and '.png' not in ul):
-                    r2 = requests.get(u, timeout=120)
+                    r2 = cwa_get(u, timeout=120)
                     if r2.status_code != 200: continue
                     if r2.content[:2] == b'PK':
                         got = _try_zip_bytes(r2.content, did, u.rsplit('/',1)[-1])
@@ -2807,7 +2850,7 @@ def fetch_cwa_routine_qpf(now_tpe):
         _saved_sample = False
         for did, u, rdesc in png_uris[:16]:
             try:
-                r = requests.get(u, timeout=60)
+                r = cwa_get(u, timeout=60)
                 if r.status_code != 200 or r.content[:8] != b'\x89PNG\r\n\x1a\n':
                     continue
                 w, h = struct.unpack('>II', r.content[16:24])
@@ -3069,7 +3112,7 @@ def fetch_official_warnings():
              'others':{縣市:[非降雨類特報名]}}；失敗回 None"""
     if not CWA_API_KEY: return None
     try:
-        r = requests.get(f"{BASE_URL}/W-C0033-001",
+        r = cwa_get(f"{BASE_URL}/W-C0033-001",
                          params={'Authorization': CWA_API_KEY, 'format': 'JSON'}, timeout=20)
         r.raise_for_status()
         raw = r.json()
@@ -3846,6 +3889,39 @@ def main():
     bias_vals = sorted(t['bias_24h'] for t in out_towns if t.get('bias_24h') is not None)
     output['bias_24h_median'] = bias_vals[len(bias_vals)//2] if bias_vals else None
     output['bias_24h_n'] = len(bias_vals)
+
+    # ★ 寫檔前健全性檢查：CWA 開放資料偶發大規模連線失敗（實測 2026-09-01
+    #   幾乎所有請求 Connection reset），此時各欄位會大量為空。若照常寫出，
+    #   等於用殘缺資料覆蓋前一輪的完整資料 —— 對防災系統而言比「不更新」更危險。
+    #   故與前一輪比對關鍵指標，明顯退化就中止寫檔，保留前一份。
+    _prev = None
+    if os.path.exists(OUTPUT_FILE):
+        try:
+            with open(OUTPUT_FILE, encoding='utf-8') as _f:
+                _prev = json.load(_f)
+        except Exception:
+            _prev = None
+
+    def _n_etr2(d):
+        return sum(1 for t in (d.get('townships') or [])
+                   if t.get('etr2_pct') is not None) if d else 0
+
+    _cur_etr2 = sum(1 for t in out_towns if t.get('etr2_pct') is not None)
+    _abort = []
+    if _prev:
+        _pe = _n_etr2(_prev)
+        # 有 ETR2 的鄉鎮數掉到前一輪的三成以下 → 視為抓取失敗
+        if _pe >= 50 and _cur_etr2 < _pe * 0.3:
+            _abort.append(f"ETR2 鄉鎮數 {_pe} → {_cur_etr2}")
+        # 觀測站完全失效
+        if _cur_etr2 == 0 and _pe > 0:
+            _abort.append("本輪無任何 ETR2 觀測")
+    if _abort:
+        print("\n★★ 中止寫檔：資料明顯退化，保留前一輪 data.json")
+        for _a in _abort:
+            print(f"   - {_a}")
+        print("   （多為 CWA 開放資料暫時性故障，下次排程會自動恢復）")
+        return
 
     with open(OUTPUT_FILE,'w',encoding='utf-8') as f:
         json.dump(output,f,ensure_ascii=False,separators=(',',':'))

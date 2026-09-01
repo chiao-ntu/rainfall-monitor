@@ -372,7 +372,7 @@ chk('★經 ProductURL 下載（直接要 ZIP 會 500）',
 chk('metadata 先試 fileapi', "f\"{FILEAPI}/{dataid}\"" in _src4, True)
 chk('帶 downloadType=WEB', "'downloadType': 'WEB'" in _src4, True)
 chk('備援也走 fileapi 不走 datastore',
-    'r = requests.get(f"{FILEAPI}/{WAVE_EP}"' in _src4, True)
+    'r = cwa_get(f"{FILEAPI}/{WAVE_EP}"' in _src4, True)
 chk('FILEAPI 於檔首定義', _src4.index('FILEAPI      =') < _src4.index('def _resolve_product_url'), True)
 
 # 端到端：metadata 全 404 時，仍能由 fileapi 直接取得 zip
@@ -476,6 +476,28 @@ if os.path.exists(_t24) and os.path.exists(_tal):
     chk('已處理 xsi 命名空間前綴', '帶 xsi: 命名空間前綴' in _src5, True)
     chk('輸出含 forecaster_precip', "'forecaster_precip': fc_precip" in _src5, True)
     chk('★載明不用於 ETR2 判定', '不用於 ETR2 警戒判定' in _src5, True)
+
+
+print('\n=== 抗故障：殘缺資料不得覆蓋好資料 ===')
+# ★ 實測 2026-09-01：CWA 開放資料大規模連線失敗，該輪 ETR2 由 156 掉到 0，
+#   但 data.json 仍照常寫出，等於用殘缺資料覆蓋可用資料 ——
+#   對防災系統而言比「不更新」更危險。
+_src6 = io.open('fetch_rainfall.py', encoding='utf-8').read()
+chk('★寫檔前有健全性檢查', '中止寫檔：資料明顯退化' in _src6, True)
+chk('與前一輪比對 ETR2 鄉鎮數', "_pe >= 50 and _cur_etr2 < _pe * 0.3" in _src6, True)
+chk('觀測全失效時中止', '本輪無任何 ETR2 觀測' in _src6, True)
+chk('說明比不更新更危險', '比「不更新」更危險' in _src6, True)
+
+print('\n=== 抗故障：CWA 請求節流 ===')
+chk('提供節流函式', 'def cwa_get(url, **kw):' in _src6, True)
+chk('僅對 CWA 主機節流', "'opendata.cwa.gov.tw' in url" in _src6, True)
+chk('使用 Session 重用連線', 'requests.Session()' in _src6, True)
+chk('節流間隔已設定', '_CWA_MIN_GAP  = 0.35' in _src6, True)
+chk('尊重測試替換的 requests', "getattr(requests, '__name__', '') == 'requests'" in _src6, True)
+_n_cwa = _src6.count('cwa_get(')
+_n_raw = _src6.count('requests.get(')
+print(f'  呼叫點：cwa_get {_n_cwa-1} 處、原生 requests.get {_n_raw} 處')
+chk('★呼叫點已全面改用節流版', _n_raw, 1)
 
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)
