@@ -3015,6 +3015,52 @@ console.log('\n=== 色帶須裁切到 Y 軸範圍 ===');
   chk('風級白帶自 0 起算', bf[0].lo, 0);
 }
 
+
+console.log('\n=== 氣溫／浪高圖需含過去段 ===');
+if (need('_envHistPts') && need('_tempSeries') && need('_waveSeries')) {
+  const now = Date.now();
+  const hk = ms => { const d = new Date(ms + 8*3600e3);
+    return d.toISOString().slice(0,13); };
+  // 過去 3 小時的歷史快照
+  const hist = {};
+  [-3,-2,-1].forEach(h=>{
+    hist[hk(now + h*3600e3)] = {
+      '宜蘭縣蘇澳鎮': {t: 25 + h, wave: 1.0 + Math.abs(h)*0.2, dir:60, period:8}};
+  });
+  const fut = [1,2].map(h=>({start:new Date(now+h*3600e3).toISOString(),
+                             end:new Date(now+(h+3)*3600e3).toISOString(),
+                             t:28, wave:2.0, dir:70, period:9}));
+  setLex(`TMAP['宜蘭縣蘇澳鎮'] = {county:'宜蘭縣', township:'蘇澳鎮', lat:24.59, lng:121.87};
+    window.ENV_HIST = ${JSON.stringify(hist)};
+    window.TEMP_FCST = {'宜蘭縣':{'蘇澳鎮': ${JSON.stringify(fut)}}};
+    window.WAVE_FCST = {'宜蘭縣蘇澳鎮': ${JSON.stringify(fut)}};`);
+  const t = getLex("TMAP['宜蘭縣蘇澳鎮']");
+
+  const ts = G._tempSeries(t), ws = G._waveSeries(t);
+  const tPast = ts.filter(p=>p.ms < now).length, tFut = ts.filter(p=>p.ms >= now).length;
+  const wPast = ws.filter(p=>p.ms < now).length, wFut = ws.filter(p=>p.ms >= now).length;
+  console.log(`   氣溫序列：過去 ${tPast} 點、未來 ${tFut} 點`);
+  console.log(`   浪高序列：過去 ${wPast} 點、未來 ${wFut} 點`);
+  chk('★氣溫圖含過去段', tPast, 3);
+  chk('氣溫圖含預報段', tFut, 2);
+  chk('★浪高圖含過去段', wPast, 3);
+  chk('浪高圖含預報段', wFut, 2);
+  chk('依時間排序', ts.every((p,i)=>i===0 || p.ms >= ts[i-1].ms), true);
+  chk('歷史點有標記', ts[0].hist, true);
+  // 無歷史時不應出錯
+  setLex("window.ENV_HIST = {};");
+  chk('無歷史時只剩預報段', G._tempSeries(t).length, 2);
+  chk('內陸無浪高歷史', G._envHistPts({county:'南投縣',township:'仁愛鄉'}, 'wave').length, 0);
+
+  const py = fs.readFileSync('fetch_qpesums_hourly.py', 'utf8');
+  chk('後端有氣溫/浪高歷史累積', /def update_env_history/.test(py), true);
+  chk('滾動保留 72 小時', /hours=72/.test(py), true);
+  chk('已接入每小時排程', /update_env_history\(now\)/.test(py), true);
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('前端載入 env_hist.json', /fetch\('env_hist\.json\?t='/.test(src), true);
+  setLex("window.TEMP_FCST = {}; window.WAVE_FCST = {}; window.ENV_HIST = {};");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

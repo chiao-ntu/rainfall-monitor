@@ -3519,6 +3519,19 @@ async function tryLoadLive(){
       }
     }catch(e){ console.warn('wind_hist.json 載入失敗（圖表僅顯示預報段）：', e.message); }
 
+    // ── 氣溫／浪高歷史：env_hist.json（同樣由每小時腳本累積）──
+    //   先前只有風力有歷史，氣溫與浪高圖的「現在」之前整片空白，
+    //   與風力圖不一致；補上後三張圖的過去段呈現方式才一致。
+    window.ENV_HIST = {};
+    try{
+      const er = await fetch('env_hist.json?t='+Date.now());
+      if(er.ok){
+        const ed = await er.json();
+        window.ENV_HIST = ed.hours || {};
+        console.log('env_hist.json 載入：', Object.keys(window.ENV_HIST).length, '小時');
+      }
+    }catch(e){ console.warn('env_hist.json 載入失敗（氣溫/浪高圖僅顯示預報段）：', e.message); }
+
     // 雷達1h QPF 發布時間顯示
     const _rt = document.getElementById('radar-time');
     if(_rt){
@@ -6170,22 +6183,47 @@ function drawWindHourChart(t, canvasId, kind){
 //    只換 Y 軸語意與色帶，避免兩套繪圖邏輯分歧。
 //    線條顏色刻意與風力（青）區隔：氣溫橘、浪高藍。
 // ══════════════════════════════════════════════════════════
+// 由 env_hist.json 取回過去 48h 的逐時快照
+//   ★ 與 _windSeries 同一模式：CWA 無過去預報，故由本系統累積。
+function _envHistPts(t, field){
+  const hist = window.ENV_HIST || {};
+  const key = (t.county||'') + (t.township||'');
+  const cut = Date.now() - 48*3600e3;
+  const out = [];
+  Object.keys(hist).sort().forEach(hk=>{
+    const rec = (hist[hk] || {})[key];
+    if(!rec || rec[field] == null) return;
+    const ms = Date.parse(hk + ':00:00+08:00');
+    if(!isFinite(ms) || ms < cut) return;
+    out.push({ms, bf: rec[field], ws: rec[field], hist: true,
+              dir: rec.dir, period: rec.period});
+  });
+  return out;
+}
 function _tempSeries(t){
   const segs = ((window.TEMP_FCST || {})[t.county] || {})[t.township] || [];
-  return segs.map(x=>{
+  const past = _envHistPts(t, 't');
+  const fut = segs.map(x=>{
     const v = (x.t != null) ? x.t
             : (x.tmax != null && x.tmin != null) ? (x.tmax + x.tmin) / 2 : null;
     const ms = Date.parse(x.start || '');
     return (v == null || !isFinite(ms)) ? null : {ms, bf:v, ws:v, tmax:x.tmax, tmin:x.tmin};
-  }).filter(Boolean).sort((a,b)=>a.ms-b.ms);
+  }).filter(Boolean);
+  // 歷史在前、預報在後；同一時刻以預報為準（去重）
+  const seen = new Set(fut.map(p=>p.ms));
+  return past.filter(p=>!seen.has(p.ms)).concat(fut).sort((a,b)=>a.ms-b.ms);
 }
 function _waveSeries(t){
   const idx = _buildWaveIndex();
   const segs = idx[(t.county||'') + (t.township||'')] || [];
-  return segs.map(x=>{
+  const past = _envHistPts(t, 'wave');
+  const fut = segs.map(x=>{
     const ms = Date.parse(x.start || '');
-    return (x.wave == null || !isFinite(ms)) ? null : {ms, bf:x.wave, ws:x.wave};
-  }).filter(Boolean).sort((a,b)=>a.ms-b.ms);
+    return (x.wave == null || !isFinite(ms)) ? null
+         : {ms, bf:x.wave, ws:x.wave, dir:x.dir, period:x.period};
+  }).filter(Boolean);
+  const seen = new Set(fut.map(p=>p.ms));
+  return past.filter(p=>!seen.has(p.ms)).concat(fut).sort((a,b)=>a.ms-b.ms);
 }
 function _dayMax(pts){
   const byDay = {};

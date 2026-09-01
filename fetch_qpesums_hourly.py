@@ -477,6 +477,98 @@ def write_etr2_now(swcb, now_tpe):
           + ("｜最高：" + "、".join(f"{k} {v['pct']*100:.0f}%" for k, v in top) if top else ""))
 
 
+ENV_HIST_FILE = "env_hist.json"     # 氣溫與浪高的歷史快照
+
+
+def update_env_history(now_tpe):
+    """把當前的氣溫與浪高預報存成歷史快照，供圖表呈現過去兩天。
+
+    ★ 為何需要：與風力同理 —— CWA 只提供未來預報，沒有「過去的預報」查詢。
+      先前只做了風力，氣溫與浪高圖因此只有「現在」之後的線段，
+      過去段整片空白，與風力圖不一致。
+    結構：{"hours": {"2026-09-01T19": {"南投縣仁愛鄉": {"t":26.0},
+                                       "宜蘭縣蘇澳鎮": {"wave":1.5,"dir":60,"period":9}}}}
+    """
+    if not os.path.exists("data.json"):
+        print("    找不到 data.json，跳過氣溫/浪高歷史")
+        return
+    try:
+        with open("data.json", encoding='utf-8') as f:
+            d = json.load(f)
+    except Exception as e:
+        print(f"    data.json 讀取失敗：{e}")
+        return
+
+    tf = d.get('temp_fcst') or {}
+    vf = d.get('wave_fcst') or {}
+    if not tf and not vf:
+        print("    data.json 無 temp_fcst／wave_fcst，跳過")
+        return
+
+    hist = {'hours': {}}
+    if os.path.exists(ENV_HIST_FILE):
+        try:
+            with open(ENV_HIST_FILE, encoding='utf-8') as f:
+                hist = json.load(f) or {'hours': {}}
+        except Exception:
+            hist = {'hours': {}}
+    hist.setdefault('hours', {})
+
+    hkey = now_tpe.strftime('%Y-%m-%dT%H')
+    now_iso = now_tpe.isoformat()
+
+    def _seg_at(segs):
+        """取涵蓋「現在」的那一段；沒有就取最接近的前一段。"""
+        best = None
+        for sg in segs or []:
+            st, en = sg.get('start') or '', sg.get('end') or ''
+            if st <= now_iso <= en:
+                return sg
+            if st <= now_iso:
+                best = sg
+        return best
+
+    snap = {}
+    for cty, towns in tf.items():
+        for twn, segs in (towns or {}).items():
+            sg = _seg_at(segs)
+            if not sg:
+                continue
+            v = sg.get('t')
+            if v is None and sg.get('tmax') is not None and sg.get('tmin') is not None:
+                v = (sg['tmax'] + sg['tmin']) / 2
+            if v is not None:
+                snap.setdefault(cty + twn, {})['t'] = round(float(v), 1)
+    # 浪高的鍵已是「縣市+鄉鎮」
+    for key, segs in vf.items():
+        sg = _seg_at(segs)
+        if not sg or sg.get('wave') is None:
+            continue
+        rec = snap.setdefault(key, {})
+        rec['wave'] = sg['wave']
+        if sg.get('dir') is not None:    rec['dir'] = sg['dir']
+        if sg.get('period') is not None: rec['period'] = sg['period']
+
+    if not snap:
+        print("    本時無可存的氣溫/浪高值")
+        return
+    hist['hours'][hkey] = snap
+
+    # 滾動保留 72 小時
+    cut = (now_tpe - timedelta(hours=72)).strftime('%Y-%m-%dT%H')
+    hist['hours'] = {k: v for k, v in hist['hours'].items() if k >= cut}
+    hist['updated'] = now_tpe.isoformat()
+    try:
+        with open(ENV_HIST_FILE, 'w', encoding='utf-8') as f:
+            json.dump(hist, f, ensure_ascii=False, separators=(',', ':'))
+        n_t = sum(1 for v in snap.values() if 't' in v)
+        n_w = sum(1 for v in snap.values() if 'wave' in v)
+        print(f"    已寫 {ENV_HIST_FILE}：氣溫 {n_t} 鄉鎮、浪高 {n_w} 鄉鎮、"
+              f"序列 {len(hist['hours'])} 小時")
+    except Exception as e:
+        print(f"    {ENV_HIST_FILE} 寫入失敗：{e}")
+
+
 def update_wind_history(now_tpe):
     """把 data.json 內的當前風力預報存成歷史快照，供圖表呈現過去兩天。
 
@@ -703,6 +795,12 @@ def main():
         print(f"    逐時快照失敗（不影響 radar.json）：{e}")
 
     # ── 颱風路徑與警報單（每小時更新，獨立於雨量流程成敗）──
+    print("氣溫／浪高歷史累積...")
+    try:
+        update_env_history(now)
+    except Exception as e:
+        print(f"    氣溫/浪高歷史失敗（不影響其他）：{e}")
+
     print("風力歷史累積...")
     try:
         update_wind_history(now)
