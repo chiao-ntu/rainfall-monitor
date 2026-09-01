@@ -2982,6 +2982,39 @@ console.log('\n=== 逐圖層保留（部分失敗不留空）===');
   chk('熔斷門檻已放寬至 25', /_CWA_TRIP_AT     = 25/.test(py), true);
 }
 
+
+console.log('\n=== 色帶須裁切到 Y 軸範圍 ===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('第一帶不再固定由 minBf 起算', /const bLo = \(i === 0\) \? -Infinity : BANDS\[i-1\]\.max/.test(src), true);
+  chk('與軸範圍取交集', /const lo = Math\.max\(bLo, minBf\);/.test(src), true);
+  chk('完全在範圍外則不畫', /if\(!\(hi > lo\)\) return;/.test(src), true);
+  chk('說明泛白成因', /整個橫軸附近泛白/.test(src), true);
+
+  // 實測：氣溫軸 20~40 不得出現 <0°C 的白帶
+  const TEMP = getLex('TEMP_BANDS');
+  const drawn = (minBf, maxBf, BANDS) => {
+    const out = [];
+    BANDS.forEach((b, i) => {
+      const bLo = (i === 0) ? -Infinity : BANDS[i-1].max;
+      const lo = Math.max(bLo, minBf), hi = Math.min(b.max, maxBf);
+      if (hi > lo) out.push({color: b.color, lo, hi});
+    });
+    return out;
+  };
+  const warm = drawn(20, 40, TEMP);
+  console.log(`   氣溫軸 20~40 → ${warm.length} 條帶，最低帶 ${warm[0].lo}~${warm[0].hi}`);
+  chk('★不含 <0°C 白帶', warm.some(x => x.color === '#FFFFFF'), false);
+  chk('最低帶自軸下界起算', warm[0].lo, 20);
+  chk('最高帶不超過軸上界', warm[warm.length-1].hi, 40);
+  // 低溫情境仍應有白帶
+  const cold = drawn(-5, 15, TEMP);
+  chk('軸含負值時白帶存在', cold.some(x => x.color === '#FFFFFF'), true);
+  // 風級：0 起算不受影響
+  const bf = drawn(0, 12, getLex('BF_BANDS'));
+  chk('風級白帶自 0 起算', bf[0].lo, 0);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

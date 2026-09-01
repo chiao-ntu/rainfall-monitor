@@ -5999,12 +5999,18 @@ function _drawWindChart(cvId, pts, opt){
   const X = ms => pL + iw * ((ms - t0) / Math.max(1, t1 - t0));
   const Y = bf => pT + ih * (1 - (bf - minBf) / Math.max(1, maxBf - minBf));
   // 風級色帶背景（與地圖同一組色，一眼對應）
+  // ★ 色帶須裁切到 Y 軸實際範圍內。
+  //   原本第一帶固定由 minBf 起算，氣溫的第一帶是「<0°C 白色」，
+  //   當軸下界是 20°C 時那條白帶仍會從 20 畫起 → 整個橫軸附近泛白。
+  //   正確做法：每一帶用自己的上下界，再與 [minBf, maxBf] 取交集。
   BANDS.forEach((b, i)=>{
-    const lo = i === 0 ? minBf : BANDS[i-1].max;
-    if(lo >= maxBf) return;
-    const hi = Math.min(b.max, maxBf);
+    const bLo = (i === 0) ? -Infinity : BANDS[i-1].max;
+    const bHi = b.max;
+    const lo = Math.max(bLo, minBf);
+    const hi = Math.min(bHi, maxBf);
+    if(!(hi > lo)) return;                    // 完全落在軸範圍外
     ctx.fillStyle = b.color; ctx.globalAlpha = 0.13;
-    ctx.fillRect(pL, Y(hi), iw, Y(lo)-Y(hi));
+    ctx.fillRect(pL, Y(hi), iw, Y(lo) - Y(hi));
     ctx.globalAlpha = 1;
   });
   // 格線 + Y 軸刻度（比照雨量圖：右對齊、單位標於軸頂）
