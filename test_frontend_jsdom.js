@@ -3206,6 +3206,57 @@ if (need('_blendQpf') && need('_skillOf') && need('_blendSpread')) {
   setLex("window.MODEL_SKILL={}; window.FORECASTER_PRECIP={};");
 }
 
+
+console.log('\n=== 融合校正明細（可追溯）===');
+if (need('renderBlendDetail')) {
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★融合按鈕在最左', /id="mBlend"[\s\S]{0,140}id="mCwa"/.test(src), true);
+  chk('提供明細區塊', /id="sec-blend"/.test(src), true);
+  chk('標明方法依據', /NOAA National Blend of Models、Met Office IMPROVER/.test(src), true);
+  chk('★標明 CMPF 為自訂名稱', /CMPF 為本系統自訂名稱，非既有標準術語/.test(src), true);
+  chk('切模式時同步更新', /renderBlendDetail\(selected\)/.test(src), true);
+
+  const mk = v => new Array(60).fill(v);
+  setLex(`document.body.insertAdjacentHTML('beforeend',
+    '<div id="sec-blend"></div><div id="blend-detail"></div>');
+    TMAP['南投縣仁愛鄉'] = Object.assign(TMAP['南投縣仁愛鄉']||{}, {
+      county:'南投縣', township:'仁愛鄉',
+      qpf_best: ${JSON.stringify(mk(10))}, qpf_ecmwf: ${JSON.stringify(mk(20))},
+      qpf_gfs: ${JSON.stringify(mk(30))}, qpf_icon: ${JSON.stringify(mk(40))}});
+    window.MODEL_SKILL = {'山區': {
+      best:  {short:{bias:1.5, mae:10, n:30}},
+      ecmwf: {short:{bias:1.0, mae:50, n:30}}}};
+    window.FORECASTER_PRECIP = {'24h': {title:'測試事件', areas:
+      {'南投縣': {mountain:{lo:150, hi:250}}}}};
+    forecastModel='blend'; segFrom=0; segTo=3; window._dataGenAt='b1';`);
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+  let threw = false;
+  try { G.renderBlendDetail(t); } catch(e){ threw = true; console.log('   ', e.message); }
+  chk('繪製不拋錯', threw, false);
+  const html = getLex("document.getElementById('blend-detail').innerHTML");
+  const plain = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  console.log(`   ${plain.slice(0, 150)}`);
+  chk('★顯示地形分群', /山區/.test(plain), true);
+  chk('★顯示各模式權重', /%/.test(plain), true);
+  chk('★顯示偏差比與方向', /偏差 1\.50（低估）/.test(plain), true);
+  chk('顯示樣本數', /n=30/.test(plain), true);
+  chk('樣本不足者標示', /樣本不足/.test(plain), true);
+  chk('★顯示官方研判區間', /150–250 mm/.test(plain), true);
+  chk('顯示離散度與信心', /信心/.test(plain), true);
+
+  // 非融合模式應隱藏
+  setLex("forecastModel='best';");
+  G.renderBlendDetail(t);
+  chk('★非融合模式隱藏面板',
+      getLex("document.getElementById('sec-blend').style.display"), 'none');
+  // 無樣本時提示累積中
+  setLex("forecastModel='blend'; window.MODEL_SKILL={};");
+  G.renderBlendDetail(t);
+  chk('★無樣本時提示累積中',
+      /樣本累積中/.test(getLex("document.getElementById('blend-detail').innerHTML")), true);
+  setLex("forecastModel='best'; window.MODEL_SKILL={}; window.FORECASTER_PRECIP={};");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

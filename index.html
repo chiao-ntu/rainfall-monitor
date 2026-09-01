@@ -243,10 +243,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <!-- 預報模式選擇列（未來時段才顯示） -->
   <div class="ctrl-row" id="model-row-wrap" style="display:none">
     <div class="bg" id="model-row">
-      <button class="b model-btn"    id="mCwa"   onclick="setModel('cwa')">CWA</button>
-      <button class="b model-btn on" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
       <button class="b model-btn"    id="mBlend" onclick="setModel('blend')"
         style="border-color:#c8a45a;color:#f0c878">融合</button>
+      <button class="b model-btn"    id="mCwa"   onclick="setModel('cwa')">CWA</button>
+      <button class="b model-btn on" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
       <button class="b model-btn"    id="mEcmwf" onclick="setModel('ecmwf')">ECMWF</button>
       <button class="b model-btn"    id="mGfs"   onclick="setModel('gfs')">GFS</button>
       <button class="b model-btn"    id="mIcon"  onclick="setModel('icon')">ICON</button>
@@ -575,6 +575,19 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           onmousemove="showChartTooltip(event,'cv-wind-hr-est')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
           ● 為氣象署逐3小時官方預報時間點，其間曲線為內插（僅供視覺化，非官方值）</div>
+      </div>
+    </div>
+
+    <!-- 區塊：融合校正明細（僅融合模式顯示） -->
+    <div class="sec" id="sec-blend" style="display:none">
+      <div class="sec-h" onclick="toggleSec('blend')">
+        <span>融合校正明細</span><span class="sec-arrow" id="arrow-blend">▸</span>
+      </div>
+      <div class="sec-body" id="body-blend" style="display:none">
+        <div id="blend-detail" style="font-size:11px;color:#cfe4f5;line-height:1.7"></div>
+        <div style="font-size:9px;color:#3a6080;margin-top:6px">
+          方法依據：NOAA National Blend of Models、Met Office IMPROVER。<br>
+          CMPF 為本系統自訂名稱，非既有標準術語。</div>
       </div>
     </div>
 
@@ -1496,6 +1509,75 @@ function _blendQpf(t){
 }
 
 // ④ 模式離散度 → 信心度（各模式在該時窗的差異）
+// 融合校正明細（右側狀態列）：列出各模式的權重、偏差比與近期表現，
+//   讓使用者知道「這個數字是怎麼算出來的」——防災判讀需要可追溯。
+function renderBlendDetail(t){
+  const el = document.getElementById('blend-detail');
+  const sec = document.getElementById('sec-blend');
+  if(!el || !sec) return;
+  if(forecastModel !== 'blend' || !t){ sec.style.display = 'none'; return; }
+  sec.style.display = 'block';
+
+  const zone = _townZone(t) || '—';
+  const rows = [];
+  const sks = {}, ws = {};
+  let anySkill = false;
+  BLEND_MODELS.forEach(m=>{
+    if(!Array.isArray(t[MODEL_FIELD[m]])) return;
+    const s = _skillOf(t, m);
+    sks[m] = s;
+    if(s && s.mae != null && s.n >= 10){ ws[m] = 1 / (s.mae + 5); anySkill = true; }
+    else ws[m] = null;
+  });
+  const avail = Object.keys(sks);
+  if(anySkill){
+    const vals = avail.map(m=>ws[m]).filter(x=>x != null);
+    const avg = vals.reduce((a,b)=>a+b,0) / vals.length;
+    avail.forEach(m=>{ if(ws[m] == null) ws[m] = avg * 0.7; });
+  } else {
+    avail.forEach(m=>{ ws[m] = 1; });
+  }
+  const wSum = avail.reduce((a,m)=>a + ws[m], 0) || 1;
+
+  const NAMES = {best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS', icon:'ICON'};
+  avail.forEach(m=>{
+    const s = sks[m];
+    const pct = (ws[m] / wSum * 100).toFixed(0);
+    const bias = (s && s.bias != null && s.n >= 10)
+      ? `偏差 ${s.bias.toFixed(2)}${s.bias > 1.05 ? '（低估）' : s.bias < 0.95 ? '（高估）' : ''}`
+      : '<span style="color:#7a94ac">樣本不足</span>';
+    const mae = (s && s.mae != null && s.n >= 10)
+      ? `MAE ${s.mae.toFixed(0)}mm・n=${s.n}` : '';
+    rows.push(`<div style="display:flex;justify-content:space-between">
+      <span>${NAMES[m] || m}</span>
+      <span><b style="color:#f0c878">${pct}%</b>
+        <span style="color:#8a9aaa;font-size:10px">　${bias}　${mae}</span></span></div>`);
+  });
+
+  const sp = _blendSpread(t, segFrom, segTo);
+  const rg = _officialRange(t, '24h');
+  let extra = '';
+  if(sp && sp.level){
+    extra += `<div style="margin-top:5px">模式離散：${sp.min}–${sp.max} mm
+      　信心 <b>${sp.level}</b></div>`;
+  }
+  if(rg){
+    const acc = getAccum(t);
+    const v = acc && acc.totalRain;
+    const out = (v == null) ? null : v < rg.lo ? '低於' : v > rg.hi ? '高於' : null;
+    extra += `<div style="margin-top:3px">官方研判（${rg.region === 'mountain' ? '山區' : '平地'}）：
+      ${rg.lo}–${rg.hi} mm`
+      + (out ? `　<span style="color:#e8a860">本系統${out}</span>` : '　<span style="color:#8a9aaa">相符</span>')
+      + `</div><div style="font-size:9px;color:#7a94ac">${rg.title}</div>`;
+  } else {
+    extra += `<div style="margin-top:3px;color:#7a94ac;font-size:10px">
+      官方研判區間：平時不發布（豪雨/颱風事件期間才有）</div>`;
+  }
+  el.innerHTML = `<div style="color:#9fc8e8;font-size:10px;margin-bottom:4px">
+      地形分群：${zone}${anySkill ? '' : '　（樣本累積中，暫以等權重運作）'}</div>`
+    + rows.join('') + extra;
+}
+
 function _blendSpread(t, segFrom, segTo){
   const sums = [];
   BLEND_MODELS.forEach(m=>{
@@ -2823,6 +2905,9 @@ function updateInfo(t){
     if(hEl) hEl.style.display = hasWind ? 'block' : 'none';
     if(hasWind) drawAllWindCharts(t);
 
+    // 融合校正明細（僅融合模式顯示）
+    try{ renderBlendDetail(t); }catch(e){ console.warn('融合明細失敗', e); }
+
     // 氣溫圖：有預報資料才顯示
     const hasTemp = _tempSeries(t).length > 0;
     const tEl = document.getElementById('sec-temp');
@@ -3798,6 +3883,8 @@ function setModel(m){
   const el=document.getElementById(btnMap[m]); if(el) el.classList.add('on');
   const note = document.getElementById('model-src-note');
   if(note) note.textContent = MODEL_NOTE[m] || '';
+  // 切到/離開融合模式時同步更新右側明細
+  try{ if(typeof renderBlendDetail === 'function') renderBlendDetail(selected); }catch(e){}
   // ★ 同 setWin：切模式後左側四面板與警戒圖層也要依新模式重算
   hideNoData();
   _refreshAfterFactorChange();
