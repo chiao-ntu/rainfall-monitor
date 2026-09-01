@@ -2466,6 +2466,93 @@ def fetch_typhoon_warning():
         return []
 
 
+# 預報員研判之地區雨量區間（豪雨/颱風事件期間發布）
+#   F-C0034-006 → 24hPrecipTable.xml（未來24小時）
+#   F-C0034-007 → AllPrecipTable.xml（事件總雨量）
+#   ★ 不限颱風：實測樣本標題為「0822低壓帶及西南風豪雨事件」，
+#     豪雨事件亦發布，適用範圍比名稱所示更廣。
+#   ★ 內容為縣市級的區間（如 0-80mm），且分 flat／mountain，
+#     正好對應本系統的地形分類：山區/淺山吃 mountain，平地/沿海吃 flat。
+FORECASTER_QPF_EPS = {'24h': 'F-C0034-006', 'total': 'F-C0034-007'}
+
+
+def fetch_forecaster_precip():
+    """預報員研判的地區雨量區間 → {kind: {'title','start','end','areas':{地區:{flat/mountain:[lo,hi]}}}}。
+
+    用途（不覆蓋精細資料）：
+      ○ 當 QPF 的上下界參考、與模式預測比對
+      ○ UI 顯示官方研判供對照
+      ✗ 不用於 ETR2 警戒判定 —— 那有官方逐站警戒值，比縣市級區間精確得多
+    """
+    if not CWA_API_KEY:
+        return {}
+    print("抓取預報員研判雨量區間（F-C0034）...")
+    out = {}
+    for kind, ep in FORECASTER_QPF_EPS.items():
+        url = _resolve_product_url(ep, timeout=60)
+        if not url:
+            continue
+        try:
+            r = requests.get(url, timeout=60)
+            if r.status_code != 200:
+                print(f"    {ep} 內容 HTTP {r.status_code}")
+                continue
+            txt = r.content.decode('utf-8', 'replace')
+        except Exception as e:
+            print(f"    {ep} 內容取用失敗：{e}")
+            continue
+        rec = _parse_precip_table(txt)
+        if rec and rec.get('areas'):
+            out[kind] = rec
+            n_area = len(rec['areas'])
+            n_mt = sum(1 for v in rec['areas'].values() if 'mountain' in v)
+            print(f"    {kind}：{rec.get('title','')[:24]}｜{n_area} 個地區"
+                  f"（含山區細分 {n_mt}）")
+    if not out:
+        print("    無研判區間（平時不發布，僅豪雨/颱風事件期間）")
+    return out
+
+
+def _parse_precip_table(txt):
+    """解析 24hPrecipTable / AllPrecipTable 的 XML。"""
+    import xml.etree.ElementTree as ET
+    # ★ 這兩份 XML 帶 xsi: 命名空間前綴（xsi:noNamespaceSchemaLocation），
+    #   只清 xmlns 宣告會讓前綴變成未綁定而解析失敗，故連帶屬性一起清。
+    clean = re.sub(r'\s+xmlns(:\w+)?="[^"]*"', '', txt)
+    clean = re.sub(r'\s+\w+:\w+="[^"]*"', '', clean)
+    try:
+        root = ET.fromstring(clean)
+    except Exception as e:
+        print(f"    研判區間 XML 解析失敗：{e}")
+        return None
+    def _txt(tag, parent=None):
+        el = (parent if parent is not None else root).find(f'.//{tag}')
+        return (el.text or '').strip() if el is not None and el.text else ''
+    ti = root.find('.//TextInformation')
+    rec = {'title': _txt('Title', ti) or _txt('BulletinName'),
+           'issue': _txt('IssueTime', ti),
+           'valid': _txt('TitleEdit', ti),
+           'note':  _txt('Annotate', ti),
+           'areas': {}}
+    for a in root.iter('AreaForecastData'):
+        name = (a.get('area') or '').strip()
+        if not name:
+            continue
+        d = {}
+        for p in a.findall('Precipitation'):
+            reg = (p.get('region') or 'flat').strip()
+            try:
+                lo = float((p.findtext('LowerBound') or '').strip())
+                hi = float((p.findtext('UpperBound') or '').strip())
+            except (TypeError, ValueError):
+                continue
+            d[reg] = {'lo': lo, 'hi': hi,
+                      'hl': (p.findtext('IsHighlight') or '').strip() == 'True'}
+        if d:
+            rec['areas'][name] = d
+    return rec
+
+
 def fetch_typhoon_qpf():
     if not CWA_API_KEY: return []
     print("抓取颱風 QPF（F-C0041）...")
@@ -2476,21 +2563,32 @@ def fetch_typhoon_qpf():
             r = requests.get(url, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=20)
             if r.status_code == 404: continue
             r.raise_for_status(); raw=r.json()
-            dataset = raw.get("records",{}).get("dataset",[])
-            if not dataset: continue
-            ct = dataset[0].get("contents",{}).get("contentText","")
+            # ★ 實際結構為 cwaopendata.Dataset（使用者提供原始檔實測 2026-09-01）；
+            #   舊寫法用 records.dataset 取不到內容，故颱風期間亦拿不到格點。
+            ds = (raw.get("cwaopendata", {}) or {}).get("Dataset")
+            if ds:
+                ct  = ((ds.get("Contents", {}) or {}).get("Content", {}) or {}).get("ContentText", "")
+                dsi = ds.get("DatasetInfo", {}) or {}
+            else:
+                dataset = raw.get("records", {}).get("dataset", [])
+                if not dataset: continue
+                ct  = dataset[0].get("contents", {}).get("contentText", "")
+                dsi = dataset[0].get("datasetInfo", dataset[0].get("DatasetInfo", {})) or {}
             if not ct: continue
-            # 擷取時間窗（供日曆段對齊；缺則前端/組裝端退回舊索引法）
-            dsi = dataset[0].get("datasetInfo", dataset[0].get("DatasetInfo", {})) or {}
-            st_str = dsi.get("startTime", dsi.get("StartTime", ""))
+            st_str = dsi.get("StartTime", dsi.get("startTime", ""))
+            # ★ 內容為 130×130 攤平的 16,900 個以逗號分隔的值（不是每列一行）；
+            #   舊寫法依換行切列，只會得到 1 列。
+            #   格點：第1行 20.8N 起、dlat 0.045；第1列 117.56E 起、dlon 0.049（TWD67）
+            flat = [x for x in ct.replace("\n", ",").split(",") if x.strip()]
+            if len(flat) < 16900: continue
             pts = []
-            for ri, row in enumerate(ct.strip().split("\n")):
+            for idx in range(16900):
+                ri, ci = divmod(idx, 130)
                 lat_pt = 20.8 + ri * 0.045
-                for ci, v in enumerate(row.split(",")):
-                    lng_pt = 117.56 + ci * 0.049
-                    if 21.5<=lat_pt<=26.5 and 119<=lng_pt<=123:
-                        try: pts.append((lat_pt, lng_pt, float(v)))
-                        except: pass
+                lng_pt = 117.56 + ci * 0.049
+                if 21.5 <= lat_pt <= 26.5 and 119 <= lng_pt <= 123:
+                    try: pts.append((lat_pt, lng_pt, float(flat[idx])))
+                    except (TypeError, ValueError): pass
             typhoon_segs.append({"label":label,"points":pts,"start":st_str})
         except Exception as e:
             pass
@@ -3124,6 +3222,7 @@ def main():
     # 沿海浪高（僅 120 個沿海預報點）
     wave_fcst     = fetch_wave_forecast() if CWA_API_KEY else {}
     tide_fcst     = fetch_tide_forecast() if CWA_API_KEY else {}
+    fc_precip     = fetch_forecaster_precip() if CWA_API_KEY else {}
     debris_alerts = fetch_debris_alerts()
     # 雙軌：現況紅黃走官方發布值、未來推估自算
     official_alerts = fetch_official_alerts()
@@ -3682,6 +3781,10 @@ def main():
         # 鄉鎮潮汐預報（F-A0021-001）：滿潮/乾潮時刻、潮高(cm,相對當地均潮位)、潮差級別
         #   ★ 暴潮溢淹風險＝滿潮 × 大浪同時發生，故需與 wave_fcst 併看
         'tide_fcst': tide_fcst,
+        # 預報員研判之地區雨量區間（F-C0034，豪雨/颱風事件期間才發布）
+        #   {24h|total: {title, valid, areas:{地區:{flat|mountain:{lo,hi,hl}}}}}
+        #   ★ 縣市級區間，供上下界參考與比對；不覆蓋逐站 ETR2 等精細資料
+        'forecaster_precip': fc_precip,
         # 雙軌警戒：off_* ＝官方發布（權威）、est_* ＝系統推估（前端須標示）
         'debris_alerts': debris_alerts,        # 土石流逐潛勢溪流
         'landslide_alerts': landslide_alerts,  # 大規模崩塌逐警戒區
@@ -3750,7 +3853,7 @@ def main():
     #   或「某支 API 全數失敗」能從 log 一眼看出，不必等前端回報。
     _chk = [('wind_fcst', WIND_FCST), ('temp_fcst', TEMP_FCST),
             ('wave_fcst', wave_fcst), ('gust_fcst', gust_fcst),
-            ('tide_fcst', tide_fcst)]
+            ('tide_fcst', tide_fcst), ('forecaster_precip', fc_precip)]
     _msg = []
     for _k, _v in _chk:
         _n = sum(len(x) for x in _v.values()) if isinstance(_v, dict) and _v \

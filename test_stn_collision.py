@@ -413,5 +413,69 @@ for _name, _meta, _want in [
     FR.requests = types.SimpleNamespace(get=lambda *a, _m=_meta, **k: _MR(_m))
     chk(f'解析 {_name}', FR._resolve_product_url('X'), _want)
 
+
+print('\n=== 颱風格點 QPF（F-C0041）解析修正 ===')
+# ★ 舊寫法有兩個 bug：用 records.dataset（實際是 cwaopendata.Dataset）、
+#   依換行切列（實際是 130×130 攤平的 16,900 個逗號分隔值）。
+#   兩者都會讓颱風期間拿不到格點 —— 而那正是最需要精細預報的時候。
+_qf = [f'/mnt/user-data/uploads/F-C0041-{n:03d}.json' for n in range(1, 9)]
+if all(os.path.exists(f) for f in _qf):
+    _qd = [json.load(io.open(f, encoding='utf-8')) for f in _qf]
+    _qit = iter(_qd)
+    def _mkq(*a, **k):
+        class _R:
+            status_code = 200
+            def raise_for_status(self): pass
+            def json(self): return next(_qit)
+        return _R()
+    FR.requests = types.SimpleNamespace(get=_mkq)
+    _segs = FR.fetch_typhoon_qpf()
+    chk('★解析出 8 段（48 小時）', len(_segs), 8)
+    if _segs:
+        _p = _segs[0]['points']
+        chk('臺灣範圍格點數合理', 8000 < len(_p) < 11000, True)
+        chk('首段有起始時間', _segs[0]['start'][:4], '2026')
+        _mx = max(_p, key=lambda x: x[2])
+        print(f"  首段最大 {_mx[2]:.1f}mm @ {_mx[0]:.2f}N {_mx[1]:.2f}E")
+        chk('數值合理（非全零）', _mx[2] > 10, True)
+        chk('緯度在臺灣範圍', 21.5 <= _mx[0] <= 26.5, True)
+
+print('\n=== 預報員研判雨量區間（F-C0034）===')
+_t24 = '/mnt/user-data/uploads/24hPrecipTable.xml'
+_tal = '/mnt/user-data/uploads/AllPrecipTable.xml'
+if os.path.exists(_t24) and os.path.exists(_tal):
+    _tb = {'F-C0034-006': open(_t24, 'rb').read(),
+           'F-C0034-007': open(_tal, 'rb').read()}
+    _st = {'ep': None}
+    def _mkt(url, **k):
+        class _R:
+            status_code = 200
+            def json(self):
+                _st['ep'] = url.rsplit('/', 1)[-1]
+                return {"cwaopendata": {"Dataset": {"Resource":
+                        {"ProductURL": "https://x/" + _st['ep']}}}}
+            @property
+            def content(self): return _tb.get(_st['ep'], b'')
+        return _R()
+    FR.requests = types.SimpleNamespace(get=_mkt)
+    _fp = FR.fetch_forecaster_precip()
+    chk('取得 24h 與總雨量兩份', sorted(_fp.keys()), ['24h', 'total'])
+    if '24h' in _fp:
+        _a = _fp['24h']['areas']
+        chk('地區數', len(_a), 24)
+        chk('★區分平地與山區', 'mountain' in _a.get('臺北市', {}), True)
+        chk('基隆僅平地', list(_a.get('基隆市', {}).keys()), ['flat'])
+        _pt = _a.get('屏東縣', {}).get('mountain', {})
+        print(f"  屏東山區 24h {_pt.get('lo')}-{_pt.get('hi')}mm、"
+              f"總雨量 {_fp['total']['areas']['屏東縣']['mountain']['hi']}mm")
+        chk('屏東山區有數值', _pt.get('hi', 0) > 0, True)
+        chk('總雨量高於24h',
+            _fp['total']['areas']['屏東縣']['mountain']['hi'] >= _pt.get('hi', 0), True)
+    chk('★不限颱風（豪雨事件亦發布）', '豪雨事件' in _fp['24h']['title'], True)
+    _src5 = io.open('fetch_rainfall.py', encoding='utf-8').read()
+    chk('已處理 xsi 命名空間前綴', '帶 xsi: 命名空間前綴' in _src5, True)
+    chk('輸出含 forecaster_precip', "'forecaster_precip': fc_precip" in _src5, True)
+    chk('★載明不用於 ETR2 判定', '不用於 ETR2 警戒判定' in _src5, True)
+
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)
