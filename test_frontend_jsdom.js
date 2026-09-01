@@ -2943,6 +2943,45 @@ console.log('\n=== renderLayer 座標快取 ===');
   chk('座標已轉為 [lat,lng]', s0[0] > 20 && s0[0] < 26 && s0[1] > 118, true);
 }
 
+
+console.log('\n=== Y 軸留白（折線不貼上緣）===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('提供留白計算', /const pad  = Math\.max\(o\.padMin != null \? o\.padMin : 2, span \* 0\.2\)/.test(src), true);
+  chk('氣溫軸步距 5°C', (src.match(/axisStep:5, padMin:3/g)||[]).length, 2);
+  chk('浪高軸步距 1m', (src.match(/axisStep:1, padMin:0\.5/g)||[]).length, 2);
+  chk('說明貼上緣的問題', /資料頂端貼著上緣會看不到數值與尖峰形狀/.test(src), true);
+
+  // 峰值應落在畫面中段（55%~90%）
+  const calc = (vMax, vMin, allowNeg, step, padMin) => {
+    const span = Math.max(1, vMax - (allowNeg ? vMin : 0));
+    const pad = Math.max(padMin != null ? padMin : 2, span * 0.2);
+    step = step || 2;
+    const maxBf = Math.max(step * 2, Math.ceil((vMax + pad) / step) * step);
+    const minBf = allowNeg ? Math.floor((vMin - pad) / step) * step : 0;
+    return (vMax - minBf) / (maxBf - minBf);
+  };
+  [['風力9級', calc(9, 3, false, 2), 0.55, 0.9],
+   ['風力13級', calc(13, 4, false, 2), 0.55, 0.9],
+   ['氣溫24-33', calc(33, 24, true, 5, 3), 0.5, 0.9],
+   ['浪高3.2m', calc(3.2, 0.5, false, 1, 0.5), 0.55, 0.9]].forEach(([n, r, lo, hi])=>{
+    console.log(`   ${n}：峰值位於 ${(r*100).toFixed(0)}% 高度`);
+    chk(`★${n} 峰值不貼上緣`, r >= lo && r <= hi, true);
+  });
+}
+
+console.log('\n=== 逐圖層保留（部分失敗不留空）===');
+{
+  const py = fs.readFileSync('fetch_rainfall.py', 'utf8');
+  chk('★某層失敗沿用前一輪', /沿用前一輪資料（本輪該層抓取失敗）/.test(py), true);
+  chk('標記為非本次更新', /stale_layers/.test(py), true);
+  chk('涵蓋所有新圖層',
+      /'wave_fcst', 'tide_fcst', 'forecaster_precip',\s*\n\s*'wind_fcst', 'temp_fcst', 'gust_fcst'/.test(py), true);
+  chk('★熔斷改為冷卻後自動恢復', py.indexOf('s 結束，恢復嘗試') > 0, true);
+  chk('說明不放棄官方資料', /不放棄官方資料/.test(py), true);
+  chk('熔斷門檻已放寬至 25', /_CWA_TRIP_AT     = 25/.test(py), true);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

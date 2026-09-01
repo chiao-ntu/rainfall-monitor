@@ -5985,9 +5985,16 @@ function _drawWindChart(cvId, pts, opt){
   const BANDS = o.bands || BF_BANDS;
   const vals = pts.map(p=>p.bf);
   const vMax = Math.max(...vals), vMin = Math.min(...vals);
-  const maxBf = Math.max(4, Math.ceil(vMax / 2) * 2);
-  // 氣溫可能為負，Y 軸下界需跟著調整（浪高與風級最低為 0）
-  const minBf = o.allowNeg ? Math.min(0, Math.floor(vMin / 2) * 2) : 0;
+  // ★ Y 軸留白：資料頂端貼著上緣會看不到數值與尖峰形狀。
+  //   在最大值之上保留約 20%（至少 2 個單位）的空間，讓折線落在畫面中段。
+  //   氣溫另需下界留白（可能為負且範圍窄）。
+  const span = Math.max(1, vMax - (o.allowNeg ? vMin : 0));
+  const pad  = Math.max(o.padMin != null ? o.padMin : 2, span * 0.2);
+  const aStep = o.axisStep || 2;              // 命名避開下方既有的 step
+  const maxBf = Math.max(aStep * 2, Math.ceil((vMax + pad) / aStep) * aStep);
+  const minBf = o.allowNeg
+    ? Math.floor((vMin - pad) / aStep) * aStep
+    : 0;
   const t0 = pts[0].ms, t1 = pts[pts.length-1].ms || (t0+1);
   const X = ms => pL + iw * ((ms - t0) / Math.max(1, t1 - t0));
   const Y = bf => pT + ih * (1 - (bf - minBf) / Math.max(1, maxBf - minBf));
@@ -6187,25 +6194,25 @@ function drawTempDayChart(t, canvasId){
   _drawWindChart(canvasId || 'cv-temp-day', _dayMax(_tempSeries(t)), {
     markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'各日最高',
     bands:TEMP_BANDS, axisTitle:'氣溫(°C)', lineColor:'#ff9a4a', allowNeg:true,
-    title:`${t.county}${t.township} 逐日氣溫預測（過去2天＋未來7天）`, bandLine:true});
+    title:`${t.county}${t.township} 逐日氣溫預測（過去2天＋未來7天）`, bandLine:true, axisStep:5, padMin:3});
 }
 function drawTempHourChart(t, canvasId){
   _drawWindChart(canvasId || 'cv-temp-hr', _smoothSeries(_tempSeries(t), 2), {
     markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'官方時間點',
     bands:TEMP_BANDS, axisTitle:'氣溫(°C)', lineColor:'#ff9a4a', allowNeg:true,
-    title:`${t.county}${t.township} 逐時氣溫預測（過去2天＋未來3天）`, bandLine:true});
+    title:`${t.county}${t.township} 逐時氣溫預測（過去2天＋未來3天）`, bandLine:true, axisStep:5, padMin:3});
 }
 function drawWaveDayChart(t, canvasId){
   _drawWindChart(canvasId || 'cv-wave-day', _dayMax(_waveSeries(t)), {
     markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'各日最大',
     bands:WAVE_BANDS, axisTitle:'浪高(m)', lineColor:'#5aa8ff',
-    title:`${t.county}${t.township} 逐日浪高預測`, bandLine:true});
+    title:`${t.county}${t.township} 逐日浪高預測`, bandLine:true, axisStep:1, padMin:0.5});
 }
 function drawWaveHourChart(t, canvasId){
   _drawWindChart(canvasId || 'cv-wave-hr', _smoothSeries(_waveSeries(t), 2), {
     markKey:true, nowMs:Date.now(), county:t.county, dotLabel:'官方時間點',
     bands:WAVE_BANDS, axisTitle:'浪高(m)', lineColor:'#5aa8ff',
-    title:`${t.county}${t.township} 逐時浪高預測`, bandLine:true});
+    title:`${t.county}${t.township} 逐時浪高預測`, bandLine:true, axisStep:1, padMin:0.5});
 }
 
 function drawAllWindCharts(t){

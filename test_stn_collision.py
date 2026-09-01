@@ -492,10 +492,14 @@ chk('說明壞資料會變新常態', '壞資料反而變成新常態' in _src6,
 
 # 實測判斷行為（含連兩輪失敗的實際情境）
 import textwrap as _tw
-_i = _src6.index('    def _n_etr2(d):'); _j = _src6.index('    if _abort:')
+# 只取「守衛判斷」那段（逐層保留在其前，需另行測試）
+_i = _src6.index('    _cur_etr2 = sum(1 for t in out_towns'); _j = _src6.index('    if _abort:')
 _snip = _tw.dedent(_src6[_i:_j])
 def _guard(cur, prev, sta, pop, wind):
-    _ns = {'out_towns': [{'etr2_pct': 1.0} for _ in range(cur)],
+    def _ne(d):
+        return sum(1 for t in (d.get('townships') or [])
+                   if t.get('etr2_pct') is not None) if d else 0
+    _ns = {'_n_etr2': _ne, 'out_towns': [{'etr2_pct': 1.0} for _ in range(cur)],
            '_prev': {'townships': [{'etr2_pct': 1.0} for _ in range(prev)]} if prev is not None else None,
            'alert_table': {i: 1 for i in range(159)},
            'stations': [1] * sta, 'pop3d': {i: 1 for i in range(pop)},
@@ -511,7 +515,8 @@ chk('輕微波動放行', _guard(120, 156, 1300, 700, 360), [])
 
 print('\n=== 抗故障：熔斷 ===')
 chk('提供熔斷機制', '_CWA_TRIPPED' in _src6, True)
-chk('熔斷門檻已設定', '_CWA_TRIP_AT     = 8' in _src6, True)
+chk('熔斷門檻已放寬（官方資料無可取代）', '_CWA_TRIP_AT     = 25' in _src6, True)
+chk('★冷卻後自動恢復而非整輪放棄', '_CWA_COOLDOWN' in _src6, True)
 chk('成功即重置連續失敗', '_CWA_FAIL_STREAK[0] = 0' in _src6, True)
 chk('說明為何要快速失敗', '繼續苦等沒有意義' in _src6, True)
 chk('說明比不更新更危險', '比「不更新」更危險' in _src6, True)

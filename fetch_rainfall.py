@@ -66,9 +66,14 @@ def _cwa_session():
 #     逾時（20~60 秒），46 個 dataid 的掃描光逾時就數百秒。
 #     連續失敗代表主機端問題，繼續苦等沒有意義，快速失敗讓其他來源
 #     仍能正常抓取，總時間才可控。
+# ★ 設計取捨（使用者指定）：CWA 官方資料無可取代，寧可執行久一點也要取得。
+#   故熔斷門檻放寬，且熔斷後仍會「冷卻再試」而非整輪放棄 ——
+#   先前設 8 次即永久跳過，會讓伺服器短暫抽風就整輪失去官方資料。
 _CWA_FAIL_STREAK = [0]
-_CWA_TRIP_AT     = 8        # 連續失敗幾次後熔斷
+_CWA_TRIP_AT     = 25       # 連續失敗達此數才暫停（放寬）
 _CWA_TRIPPED     = [False]
+_CWA_COOLDOWN    = 45       # 暫停後冷卻秒數，之後再試一輪
+_CWA_TRIP_TIME   = [0.0]
 
 def cwa_get(url, **kw):
     """GET：打 CWA 主機時自動節流＋連線重用＋熔斷，其他主機照舊。
@@ -77,7 +82,13 @@ def cwa_get(url, **kw):
       逐一替換容易漏改，且日後新增的呼叫也會自動受益。
     """
     if 'opendata.cwa.gov.tw' in url and _CWA_TRIPPED[0]:
-        raise requests.exceptions.ConnectionError('CWA 熔斷中（連續失敗過多，本輪跳過）')
+        # 冷卻期過了就恢復嘗試（伺服器多為短暫抽風，不該整輪放棄官方資料）
+        if time.time() - _CWA_TRIP_TIME[0] >= _CWA_COOLDOWN:
+            _CWA_TRIPPED[0] = False
+            _CWA_FAIL_STREAK[0] = 0
+            print(f"    ★ CWA 冷卻 {_CWA_COOLDOWN}s 結束，恢復嘗試")
+        else:
+            raise requests.exceptions.ConnectionError('CWA 冷卻中（稍後自動恢復）')
     # ★ 測試會替換模組層的 requests；若此處直接用 Session 就繞過了替換，
     #   使測試環境與正式行為不一致。故僅在 requests 為真實模組時啟用 Session。
     _real = getattr(requests, '__name__', '') == 'requests'
@@ -93,8 +104,9 @@ def cwa_get(url, **kw):
                 _CWA_FAIL_STREAK[0] += 1
                 if _CWA_FAIL_STREAK[0] >= _CWA_TRIP_AT and not _CWA_TRIPPED[0]:
                     _CWA_TRIPPED[0] = True
-                    print(f"    ★ CWA 連續失敗 {_CWA_FAIL_STREAK[0]} 次 → 熔斷，"
-                          f"本輪跳過其餘 CWA 請求（避免每次等滿逾時）")
+                    _CWA_TRIP_TIME[0] = time.time()
+                    print(f"    ★ CWA 連續失敗 {_CWA_FAIL_STREAK[0]} 次 → 冷卻 "
+                          f"{_CWA_COOLDOWN}s 後自動恢復（不放棄官方資料）")
                 raise
             _CWA_FAIL_STREAK[0] = 0        # 成功即重置
             return r
@@ -3926,6 +3938,29 @@ def main():
     def _n_etr2(d):
         return sum(1 for t in (d.get('townships') or [])
                    if t.get('etr2_pct') is not None) if d else 0
+
+    # ★ 逐圖層保留：某一層抓取失敗時，沿用前一輪的值而非留空。
+    #   CWA 常有個別產品短暫不可用；整輪中止太粗暴（其他層明明是好的），
+    #   留空又會讓該圖層在前端整個消失。折衷是「保留上一份並標記時間」。
+    if _prev:
+        _keep = []
+        for _k in ('wave_fcst', 'tide_fcst', 'forecaster_precip',
+                   'wind_fcst', 'temp_fcst', 'gust_fcst'):
+            _now_v = output.get(_k)
+            _old_v = _prev.get(_k)
+            _n_now = sum(len(v) for v in _now_v.values()) if isinstance(_now_v, dict) \
+                     and _now_v and isinstance(next(iter(_now_v.values())), dict) \
+                     else len(_now_v or {})
+            _n_old = sum(len(v) for v in _old_v.values()) if isinstance(_old_v, dict) \
+                     and _old_v and isinstance(next(iter(_old_v.values())), dict) \
+                     else len(_old_v or {})
+            if _n_now == 0 and _n_old > 0:
+                output[_k] = _old_v
+                output.setdefault('stale_layers', {})[_k] = _prev.get('base_time', '')
+                _keep.append(f"{_k}({_n_old})")
+        if _keep:
+            print(f"  ⚠ 沿用前一輪資料（本輪該層抓取失敗）：{'、'.join(_keep)}")
+            print(f"    前端會標示為「非本次更新」")
 
     _cur_etr2 = sum(1 for t in out_towns if t.get('etr2_pct') is not None)
     _abort = []
