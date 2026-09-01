@@ -245,6 +245,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div class="bg" id="model-row">
       <button class="b model-btn"    id="mCwa"   onclick="setModel('cwa')">CWA</button>
       <button class="b model-btn on" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
+      <button class="b model-btn"    id="mBlend" onclick="setModel('blend')"
+        style="border-color:#c8a45a;color:#f0c878">融合</button>
       <button class="b model-btn"    id="mEcmwf" onclick="setModel('ecmwf')">ECMWF</button>
       <button class="b model-btn"    id="mGfs"   onclick="setModel('gfs')">GFS</button>
       <button class="b model-btn"    id="mIcon"  onclick="setModel('icon')">ICON</button>
@@ -797,9 +799,11 @@ const MODEL_FIELD = {
   hi:    'qpf_hi',
   lo:    'qpf_lo',
   cwa:   'qpf_cwa',
+  blend: 'qpf_blend',   // 融合（CMPF）：由 _blendQpf 動態計算，非後端欄位
 };
 const MODEL_NOTE = {
   best:  '',
+  blend: '多源校正融合（CMPF）· 依近期實測誤差動態加權',
   ecmwf: 'ECMWF IFS 0.25° · 時效 10 天',
   gfs:   'NOAA GFS · 時效 16 天',
   icon:  'DWD ICON · 時效 7 天',
@@ -1408,6 +1412,125 @@ document.addEventListener('click', e=>{
   if(e.target !== inp && !box.contains(e.target)) box.style.display = 'none';
 });
 
+// ══════════════════════════════════════════════════════════
+//  融合模式 CMPF（Calibrated Multi-source Precipitation Forecast）
+//  ★ 概念與作業依據：NOAA National Blend of Models（NBM）與英國
+//    Met Office IMPROVER —— 多源合併（blending）＋ 偏差校正（calibration）。
+//    本系統的 CMPF 為自訂名稱，非既有標準術語，但組成方法皆有文獻依據。
+//  ★ 四層處理：
+//    ① 逐地形偏差校正：以 model_skill 的偏差比修正各模式（NBM 用分析場，
+//       本系統用測站觀測；地形分群對應 NBM 的 supplemental locations）
+//    ② 動態加權：近期 MAE 越小權重越高；樣本不足時退回等權重
+//    ③ 官方研判區間比對：超出 F-C0034 區間時標示，但不強制夾回 ——
+//       有數據支撐的分歧比盲從更有價值，且可作為與官方討論的依據
+//    ④ 離散度：各模式差異大代表不確定性高，供 UI 標示信心度
+// ══════════════════════════════════════════════════════════
+const BLEND_MODELS = ['best', 'ecmwf', 'gfs', 'icon'];
+
+// 取某鄉鎮、某模式的近期表現 → {bias, mae, n}
+function _skillOf(t, model){
+  const sk = window.MODEL_SKILL || {};
+  const zone = _townZone(t);
+  const z = sk[zone] || {};
+  const m = z[model];
+  if(!m) return null;
+  // 短期(7天)反應當前天氣型態、長期(30天)抓系統性偏差
+  const sh = m.short, lo = m.long;
+  if(!sh && !lo) return null;
+  const mix = (a, b) => (a == null) ? b : (b == null) ? a : a * 0.6 + b * 0.4;
+  return {
+    bias: mix(sh && sh.bias, lo && lo.bias),
+    mae:  mix(sh && sh.mae,  lo && lo.mae),
+    n:    (sh && sh.n) || (lo && lo.n) || 0,
+    zone
+  };
+}
+
+// 融合後的 QPF 陣列（與其他模式同格式：60 個 6h 段）
+function _blendQpf(t){
+  const arrs = {}, sk = {};
+  BLEND_MODELS.forEach(m=>{
+    const a = t[MODEL_FIELD[m]];
+    if(Array.isArray(a) && a.length){ arrs[m] = a; sk[m] = _skillOf(t, m); }
+  });
+  const avail = Object.keys(arrs);
+  if(!avail.length) return t.qpf_best || [];
+  if(avail.length === 1) return arrs[avail[0]];
+
+  // ② 動態加權：MAE 越小權重越高（w = 1/(MAE+ε)）；無樣本者退回等權重
+  const W = {};
+  let anySkill = false;
+  avail.forEach(m=>{
+    const s = sk[m];
+    if(s && s.mae != null && s.n >= 10){ W[m] = 1 / (s.mae + 5); anySkill = true; }
+    else W[m] = null;
+  });
+  if(anySkill){
+    // 有樣本者用實測權重，其餘給平均權重（不因缺樣本而完全排除）
+    const vals = avail.map(m=>W[m]).filter(x=>x != null);
+    const avg = vals.reduce((a,b)=>a+b, 0) / vals.length;
+    avail.forEach(m=>{ if(W[m] == null) W[m] = avg * 0.7; });
+  } else {
+    avail.forEach(m=>{ W[m] = 1; });        // 樣本不足 → 等權重
+  }
+  const wSum = avail.reduce((a,m)=>a + W[m], 0) || 1;
+
+  const n = Math.max(...avail.map(m=>arrs[m].length));
+  const out = [];
+  for(let i = 0; i < n; i++){
+    let acc = 0, wa = 0;
+    avail.forEach(m=>{
+      const v = arrs[m][i];
+      if(v == null) return;
+      // ① 逐地形偏差校正（bias = Σ觀測/Σ模式，>1 代表模式低估）
+      const s = sk[m];
+      const corrected = (s && s.bias && s.n >= 10)
+        ? v * Math.max(0.5, Math.min(2.0, s.bias))   // 限幅避免極端校正
+        : v;
+      acc += corrected * W[m];
+      wa += W[m];
+    });
+    out.push(wa > 0 ? Math.round(acc / wa * 10) / 10 : null);
+  }
+  return out;
+}
+
+// ④ 模式離散度 → 信心度（各模式在該時窗的差異）
+function _blendSpread(t, segFrom, segTo){
+  const sums = [];
+  BLEND_MODELS.forEach(m=>{
+    const a = t[MODEL_FIELD[m]];
+    if(!Array.isArray(a)) return;
+    let s = 0, has = false;
+    for(let i = Math.max(0, segFrom); i <= Math.max(0, segTo); i++){
+      if(a[i] != null){ s += a[i]; has = true; }
+    }
+    if(has) sums.push(s);
+  });
+  if(sums.length < 2) return null;
+  const mean = sums.reduce((a,b)=>a+b, 0) / sums.length;
+  const max = Math.max(...sums), min = Math.min(...sums);
+  // 相對離散度：範圍 / 平均（平均很小時無意義）
+  const rel = mean >= 5 ? (max - min) / mean : null;
+  return {mean: Math.round(mean*10)/10, min, max, rel,
+          level: rel == null ? null : rel < 0.5 ? '高' : rel < 1.2 ? '中' : '低'};
+}
+
+// ③ 與官方研判區間比對（F-C0034；豪雨/颱風事件期間才有）
+function _officialRange(t, kind){
+  const fp = (window.FORECASTER_PRECIP || {})[kind || '24h'];
+  if(!fp || !fp.areas) return null;
+  const area = fp.areas[t.county];
+  if(!area) return null;
+  // 山區/淺山吃 mountain，平地/沿海吃 flat（依系統地形分類）
+  const z = _townZone(t);
+  const reg = (z === '山區' || z === '淺山區') ? 'mountain' : 'flat';
+  const v = area[reg] || area.flat || area.mountain;
+  if(!v) return null;
+  return {lo: v.lo, hi: v.hi, region: reg, hl: v.hl,
+          title: fp.title || '', valid: fp.valid || ''};
+}
+
 function _townZone(t){
   if(!t) return '平地';
   const z = (typeof TOWN_ZONE !== 'undefined' && TOWN_ZONE)
@@ -1482,7 +1605,17 @@ function getQpfArr(t, qpfField){
   //   不套全域倍率、不套情境加成/倍率。出事時這是可以引述的官方數據。
   //   情境中某日若選 CWA，該日同樣不受調整（見下方迴圈的 isCwa 判斷）。
   if(qpfField === 'qpf_cwa' && !scn) return t.qpf_cwa || [];
-  const base = t[qpfField] || t.qpf_15d || new Array(60).fill(0);
+  // ★ 融合（CMPF）為動態計算，非後端欄位，故在此組出基底陣列。
+  //   結果快取於 t 上（同一輪資料不會變），避免每次重繪重算 368 次。
+  if(qpfField === 'qpf_blend'){
+    if(!t._blendCache || t._blendKey !== (window._dataGenAt || '')){
+      t._blendCache = _blendQpf(t);
+      t._blendKey = window._dataGenAt || '';
+    }
+    if(!scn) return t._blendCache;
+  }
+  const base = (qpfField === 'qpf_blend' ? t._blendCache : t[qpfField])
+             || t.qpf_15d || new Array(60).fill(0);
   const gf = _qpfFactor();
 
   if(!scn){
@@ -3423,6 +3556,15 @@ async function tryLoadLive(){
     window.TEMP_FCST = d.temp_fcst || {};   // 鄉鎮氣溫（逐3小時）
     window.WAVE_FCST = d.wave_fcst || {};   // 沿海浪高（僅沿海鄉鎮）
     window.TIDE_FCST = d.tide_fcst || {};   // 鄉鎮潮汐（滿潮/乾潮時刻與潮高）
+    window.MODEL_SKILL = d.model_skill || {};        // 逐地形×逐模式的近期誤差
+    window.FORECASTER_PRECIP = d.forecaster_precip || {};  // 官方研判雨量區間
+    if(Object.keys(window.MODEL_SKILL).length){
+      const _z0 = Object.keys(window.MODEL_SKILL)[0];
+      console.log('model_skill 載入：', Object.keys(window.MODEL_SKILL).join('、'),
+        '（融合模式將依此動態加權）');
+    }else{
+      console.log('model_skill 尚無資料（融合模式暫以等權重運作，待樣本累積）');
+    }
     // 區分「欄位不存在（後端未更新）」與「欄位存在但為空（API 無資料）」
     window._dataHasWaveField = Object.prototype.hasOwnProperty.call(d, 'wave_fcst');
     window.GUST_FCST = d.gust_fcst || {};
@@ -3649,10 +3791,10 @@ function clearBtns(){
 
 function setModel(m){
   forecastModel = m;
-  ['mBest','mEcmwf','mGfs','mIcon','mHi','mLo','mCwa'].forEach(id=>{
+  ['mBest','mEcmwf','mGfs','mIcon','mHi','mLo','mCwa','mBlend'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.classList.remove('on');
   });
-  const btnMap={best:'mBest',ecmwf:'mEcmwf',gfs:'mGfs',icon:'mIcon',hi:'mHi',lo:'mLo',cwa:'mCwa'};
+  const btnMap={best:'mBest',ecmwf:'mEcmwf',gfs:'mGfs',icon:'mIcon',hi:'mHi',lo:'mLo',cwa:'mCwa',blend:'mBlend'};
   const el=document.getElementById(btnMap[m]); if(el) el.classList.add('on');
   const note = document.getElementById('model-src-note');
   if(note) note.textContent = MODEL_NOTE[m] || '';
@@ -6397,6 +6539,24 @@ function _modeHeadRow(t){
     if(v.wave == null) return '<span style="color:#8a9aaa;font-size:10px">　非沿海</span>';
     return `<span style="font-size:10px">　浪高 <b style="color:${_waveColor(v.wave)}">`
          + `${v.wave.toFixed(1)} m</b></span>`;
+  }
+  if(forecastModel === 'blend'){
+    // 融合模式：標示信心度（各模式離散度）與官方研判區間的關係
+    const sp = _blendSpread(t, segFrom, segTo);
+    const rg = _officialRange(t, '24h');
+    let h = '';
+    if(sp && sp.level) h += `<span style="font-size:10px">　信心 <b>${sp.level}</b></span>`;
+    if(rg){
+      const acc = getAccum(t);
+      const v = acc && acc.totalRain;
+      if(v != null){
+        const out = v < rg.lo ? '低於' : v > rg.hi ? '高於' : null;
+        h += out
+          ? `<span style="color:#e8a860;font-size:10px">　${out}官方研判 ${rg.lo}-${rg.hi}mm</span>`
+          : `<span style="color:#8a9aaa;font-size:10px">　符合官方研判</span>`;
+      }
+    }
+    if(h) return h;
   }
   if(mode === 'warn'){
     const acc = getAccum(t);

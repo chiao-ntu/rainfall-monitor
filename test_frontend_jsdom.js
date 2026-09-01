@@ -3130,6 +3130,82 @@ console.log('\n=== ETR2／風險／警特報 tooltip 亦須完整 ===');
   setLex("mode='rain';");
 }
 
+
+console.log('\n=== 融合模式 CMPF ===');
+if (need('_blendQpf') && need('_skillOf') && need('_blendSpread')) {
+  const mk = v => new Array(60).fill(v);
+  setLex(`TMAP['南投縣仁愛鄉'] = Object.assign(TMAP['南投縣仁愛鄉']||{}, {
+      county:'南投縣', township:'仁愛鄉',
+      qpf_best: ${JSON.stringify(mk(10))}, qpf_ecmwf: ${JSON.stringify(mk(20))},
+      qpf_gfs: ${JSON.stringify(mk(30))}, qpf_icon: ${JSON.stringify(mk(40))}});
+    window.MODEL_SKILL = {}; window._dataGenAt='t1';`);
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+
+  // 無樣本 → 等權重（10+20+30+40）/4 = 25
+  const eq = G._blendQpf(t);
+  console.log(`   無樣本（等權重）：${eq[0]} mm`);
+  chk('★樣本不足退回等權重', eq[0], 25);
+
+  // 有樣本 → MAE 小者權重高、且套用偏差校正
+  setLex(`window.MODEL_SKILL = {'山區': {
+      best:  {short:{bias:1.5, mae:10, n:30}},
+      ecmwf: {short:{bias:1.0, mae:50, n:30}},
+      gfs:   {short:{bias:1.0, mae:50, n:30}},
+      icon:  {short:{bias:1.0, mae:50, n:30}}}};
+    window._dataGenAt='t2';`);
+  const sk = G._skillOf(t, 'best');
+  console.log(`   best 在山區：偏差比 ${sk.bias}、MAE ${sk.mae}、n=${sk.n}`);
+  chk('取得地形別表現', sk.zone, '山區');
+  chk('偏差比正確', sk.bias, 1.5);
+  const w = G._blendQpf(t);
+  console.log(`   加權後：${w[0]} mm（best 校正後 15、MAE最小權重最高）`);
+  chk('★MAE 小者權重高（結果偏向 best 的校正值）', w[0] < 25, true);
+  chk('★已套用偏差校正（>10 原值）', w[0] > 10, true);
+
+  // 偏差限幅：極端值不得放大過頭
+  setLex(`window.MODEL_SKILL = {'山區': {best:{short:{bias:9.0, mae:5, n:30}}}};
+    window._dataGenAt='t3';`);
+  const cap = G._blendQpf(t);
+  console.log(`   極端偏差比 9.0 → ${cap[0]} mm（限幅 2.0 內）`);
+  chk('★偏差校正有限幅', cap[0] <= 10 * 2.0 + 30, true);
+
+  // 離散度 → 信心度
+  const sp = G._blendSpread(t, 0, 3);
+  console.log(`   離散度：平均 ${sp.mean}、範圍 ${sp.min}~${sp.max}、信心 ${sp.level}`);
+  chk('計算離散度', sp.min < sp.max, true);
+  chk('★差異大→信心低', sp.level, '低');
+  // 四模式一致 → 信心高
+  setLex(`TMAP['南投縣仁愛鄉'].qpf_ecmwf = ${JSON.stringify(mk(10))};
+    TMAP['南投縣仁愛鄉'].qpf_gfs = ${JSON.stringify(mk(11))};
+    TMAP['南投縣仁愛鄉'].qpf_icon = ${JSON.stringify(mk(10))};`);
+  chk('★一致→信心高', G._blendSpread(getLex("TMAP['南投縣仁愛鄉']"), 0, 3).level, '高');
+
+  // 官方研判區間對應（山區吃 mountain）
+  setLex(`window.FORECASTER_PRECIP = {'24h': {title:'測試事件', areas:
+      {'南投縣': {mountain:{lo:150, hi:250}, flat:{lo:50, hi:100}}}}};`);
+  const rg = G._officialRange(t, '24h');
+  console.log(`   官方研判：${rg.region} ${rg.lo}-${rg.hi}mm`);
+  chk('★山區吃 mountain 值', rg.region, 'mountain');
+  chk('區間正確', [rg.lo, rg.hi], [150, 250]);
+  // ★ 南投縣境內幾乎全為山區/淺山，故另用雲林斗六市（平地）驗 flat 分支
+  setLex(`window.FORECASTER_PRECIP['24h'].areas['雲林縣'] =
+    {mountain:{lo:150, hi:250}, flat:{lo:50, hi:100}};`);
+  const flat = G._officialRange({county:'雲林縣', township:'斗六市'}, '24h');
+  console.log(`   斗六市（平地）→ ${flat.region} ${flat.lo}-${flat.hi}mm`);
+  chk('★平地吃 flat 值', flat.region, 'flat');
+  chk('flat 區間正確', [flat.lo, flat.hi], [50, 100]);
+  chk('無官方區間時回 null（平時不發布）',
+      G._officialRange({county:'不存在縣', township:'x'}, '24h'), null);
+
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('提供融合按鈕', /id="mBlend"/.test(src), true);
+  chk('setModel 支援 blend', /blend:'mBlend'/.test(src), true);
+  chk('★標明為自訂名稱非既有標準', /本系統的 CMPF 為自訂名稱，非既有標準術語/.test(src), true);
+  chk('★不強制夾回官方區間', /但不強制夾回/.test(src), true);
+  chk('結果有快取', /t\._blendCache/.test(src), true);
+  setLex("window.MODEL_SKILL={}; window.FORECASTER_PRECIP={};");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);
