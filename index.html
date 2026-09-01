@@ -2343,20 +2343,24 @@ function renderLayer(){
   if(countyLayer){map.removeLayer(countyLayer);countyLayer=null;}
   if(!TOWN_GEO||!COUNTY_GEO) return;
 
-  // 除錯：只在第一次渲染時檢查問題鄉鎮的 GeoJSON key 是否能在 TMAP 找到
-  if(!window.__renderLayerDebugDone){
-    window.__renderLayerDebugDone = true;
-    const checkNames = ['鳥松區','前金區','鹽埕區','芬園鄉'];
-    TOWN_GEO.features.forEach(feat=>{
-      const p = feat.properties;
-      if(checkNames.includes(p.TOWNNAME)){
-        const key = p.COUNTYNAME + p.TOWNNAME;
-        console.log(`  [除錯] GeoJSON: ${key} → TMAP查找結果:`, TMAP[key] ? '找到' : '找不到！');
-      }
-    });
-  }
-
+  // ★ 座標轉換結果快取：TOWN_GEO / COUNTY_GEO 是固定圖資，
+  //   但原本每次重繪都把 36,516 個座標點重算一遍（實測 4.5ms，
+  //   加上 Leaflet 建構與繪製是這個的數倍）。改為只算一次。
   const toLL = ring => ring.map(([lng,lat])=>[lat,lng]);
+  if(!window._llCache){
+    window._llCache = new WeakMap();
+    console.log('座標快取已建立（首次重繪後生效）');
+  }
+  const llOf = feat => {
+    let c = window._llCache.get(feat);
+    if(c) return c;
+    const g = feat.geometry;
+    c = (g.type === 'Polygon')
+      ? {type:'Polygon', rings: g.coordinates.map(toLL)}
+      : {type:'MultiPolygon', parts: g.coordinates.map(part => part.map(toLL))};
+    window._llCache.set(feat, c);
+    return c;
+  };
 
   // 鄉鎮層（淡細線）
   townLayer = L.layerGroup();
@@ -2437,16 +2441,12 @@ function renderLayer(){
       fillColor, fillOpacity: _hideFill ? 0.02 : fillOp,
       smoothFactor: 0  // 停用Leaflet的路徑平滑，避免縮放時端點偏移
     };
-    let poly;
-    const g = feat.geometry;
-    if(g.type==='Polygon'){
-      poly = L.polygon(g.coordinates.map(toLL), opts);
-    } else {
-      // MultiPolygon：Leaflet 的 L.polygon 原生支援多個獨立多邊形
-      // 格式：[[ring1...], [ring2...]]（每個 part 取其外環）
-      const multiCoords = g.coordinates.map(part => toLL(part[0]));
-      poly = L.polygon(multiCoords, opts);
-    }
+    // 使用快取的座標（見 llOf 說明）
+    const _c = llOf(feat);
+    const poly = (_c.type === 'Polygon')
+      ? L.polygon(_c.rings, opts)
+      // MultiPolygon：Leaflet 原生支援多個獨立多邊形（每個 part 取其外環）
+      : L.polygon(_c.parts.map(part => part[0]), opts);
     if(t){
       const acc2 = getAccum(t);
       const {totalRain, etrPct} = acc2;
@@ -2545,11 +2545,11 @@ function renderLayer(){
   countyLayer = L.layerGroup();
   COUNTY_GEO.features.forEach(feat=>{
     const opts={color:'#000000',weight:1,fill:false,opacity:0.7,interactive:false};
-    const g = feat.geometry;
-    if(g.type==='Polygon'){
-      L.polygon(g.coordinates.map(toLL),opts).addTo(countyLayer);
+    const _c = llOf(feat);                 // 座標快取（同鄉鎮層）
+    if(_c.type === 'Polygon'){
+      L.polygon(_c.rings, opts).addTo(countyLayer);
     } else {
-      g.coordinates.forEach(part=>L.polygon(part.map(toLL),opts).addTo(countyLayer));
+      _c.parts.forEach(part => L.polygon(part, opts).addTo(countyLayer));
     }
   });
   countyLayer.addTo(map);

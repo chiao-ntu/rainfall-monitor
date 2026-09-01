@@ -2901,6 +2901,48 @@ console.log('\n=== 無測站鄉鎮的推估補值 ===');
   chk('403/429 加長退避', /time\.sleep\(8 if r\.status_code in \(403, 429\)/.test(py), true);
 }
 
+
+console.log('\n=== renderLayer 座標快取 ===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('提供座標快取', /window\._llCache = new WeakMap\(\)/.test(src), true);
+  chk('鄉鎮層使用快取', /const _c = llOf\(feat\);\s*\n\s*const poly/.test(src), true);
+  chk('縣市層使用快取', /const _c = llOf\(feat\);\s*\/\/ 座標快取/.test(src), true);
+  chk('★已移除每次執行的除錯碼', /__renderLayerDebugDone/.test(src), false);
+  chk('說明快取原因', /每次重繪都把 36,516 個座標點重算一遍/.test(src), true);
+
+  // 實測快取效益
+  const GEO = getLex('TOWN_GEO');
+  const toLL = ring => ring.map(([lng, lat]) => [lat, lng]);
+  const cache = new WeakMap();
+  const llOf = feat => {
+    let c = cache.get(feat); if (c) return c;
+    const g = feat.geometry;
+    c = (g.type === 'Polygon') ? {type:'Polygon', rings:g.coordinates.map(toLL)}
+      : {type:'MultiPolygon', parts:g.coordinates.map(p => p.map(toLL))};
+    cache.set(feat, c); return c;
+  };
+  let t0 = Date.now();
+  for (let i = 0; i < 10; i++) GEO.features.forEach(llOf);
+  const first = Date.now() - t0;
+  t0 = Date.now();
+  for (let i = 0; i < 20; i++) GEO.features.forEach(llOf);
+  const cached = Date.now() - t0;
+  console.log(`   首次 10 次 ${first}ms、快取後 20 次 ${cached}ms`);
+  chk('快取命中後幾乎零成本', cached <= 3, true);
+
+  // 正確性：同物件重用、MultiPolygon 完整保留
+  const f = GEO.features[0];
+  chk('同 feature 回傳同物件', llOf(f) === llOf(f), true);
+  const q = GEO.features.find(x => x.properties.TOWNNAME === '旗津區');
+  chk('★旗津 MultiPolygon 未遺漏（17 parts）', llOf(q).parts.length, 17);
+  const poly1 = GEO.features.find(x => x.geometry.type === 'Polygon');
+  chk('Polygon 型別正確', llOf(poly1).type, 'Polygon');
+  // 座標順序：GeoJSON [lng,lat] → Leaflet [lat,lng]
+  const s0 = llOf(poly1).rings[0][0];
+  chk('座標已轉為 [lat,lng]', s0[0] > 20 && s0[0] < 26 && s0[1] > 118, true);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);
