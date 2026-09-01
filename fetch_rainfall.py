@@ -3622,6 +3622,10 @@ def main():
                 if _v is not None:
                     _cwa_by_idx[_idx] = _v
                     qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = qpf_icon[_idx] = _v
+        # ★ 記錄哪些段是「官方值覆蓋」：這些段四個模式被寫成同一個數值，
+        #   融合模式若照常加權會失去意義（等於自己跟自己平均），
+        #   故前端在這些段直接採用官方值並標示來源。
+        _official_segs = sorted(_cwa_by_idx.keys())
         qpf_cwa = []
         if _cwa_by_idx:
             _max_idx = max(_cwa_by_idx)
@@ -3679,6 +3683,8 @@ def main():
             'qpf_lo':    apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'lo')[0],
             'maxh_hi':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'hi')[1],
             'maxh_lo':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'lo')[1],
+            # 官方值覆蓋的段索引（CWA 常態圖判讀 + 颱風格點）
+            'official_segs': _official_segs,
             'bias_24h':  calc_bias_24h(obs.get('daily_rain', [0.0]*15), model_yday.get(f"{lat:.4f}_{lng:.4f}")),
             # 四模式昨日值（供誤差追蹤逐來源比對；前端不直接顯示）
             'model_yday': models_yday.get(f"{lat:.4f}_{lng:.4f}"),

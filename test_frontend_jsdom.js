@@ -3213,7 +3213,12 @@ if (need('renderBlendDetail')) {
   chk('★融合按鈕在最左', /id="mBlend"[\s\S]{0,140}id="mCwa"/.test(src), true);
   chk('提供明細區塊', /id="sec-blend"/.test(src), true);
   chk('標明方法依據', /NOAA National Blend of Models、Met Office IMPROVER/.test(src), true);
-  chk('★標明 CMPF 為自訂名稱', /CMPF 為本系統自訂名稱，非既有標準術語/.test(src), true);
+  chk('★標明 CMPF 完整名稱',
+      /CMPF：Calibrated Multi-source Precipitation Forecast/.test(src), true);
+  chk('附中文譯名', /（校正式多源降水預報）/.test(src), true);
+  chk('標明為自訂名稱', /本系統自訂名稱，非既有標準術語/.test(src), true);
+  chk('★明細位於測站清單之後（最下方）',
+      src.indexOf('id="sec-stations"') < src.indexOf('id="sec-blend"'), true);
   chk('切模式時同步更新', /renderBlendDetail\(selected\)/.test(src), true);
 
   const mk = v => new Array(60).fill(v);
@@ -3255,6 +3260,32 @@ if (need('renderBlendDetail')) {
   chk('★無樣本時提示累積中',
       /樣本累積中/.test(getLex("document.getElementById('blend-detail').innerHTML")), true);
   setLex("forecastModel='best'; window.MODEL_SKILL={}; window.FORECASTER_PRECIP={};");
+}
+
+
+console.log('\n=== 融合須尊重官方值覆蓋段 ===');
+if (need('_blendQpf')) {
+  const mk = v => new Array(60).fill(v);
+  setLex(`TMAP['南投縣仁愛鄉'] = Object.assign(TMAP['南投縣仁愛鄉']||{}, {
+      county:'南投縣', township:'仁愛鄉',
+      qpf_best: ${JSON.stringify(mk(10))}, qpf_ecmwf: ${JSON.stringify(mk(20))},
+      qpf_gfs: ${JSON.stringify(mk(30))}, qpf_icon: ${JSON.stringify(mk(40))},
+      qpf_cwa: ${JSON.stringify(mk(99))}, official_segs: [0, 1, 2]});
+    window.MODEL_SKILL = {}; window._dataGenAt='off1';`);
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+  const b = G._blendQpf(t);
+  console.log(`   官方段[0-2]：${b[0]}/${b[1]}/${b[2]}　非官方段[3]：${b[3]}`);
+  chk('★官方段直接採用官方值', b[0], 99);
+  chk('官方段不做加權', b[2], 99);
+  chk('★非官方段仍走加權', b[3], 25);
+
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('說明為何不加權', /加權等於自己跟自己平均，沒有意義/.test(src), true);
+  chk('明細標示官方段', /本視窗有 \$\{nOff\} 段採用官方值/.test(src), true);
+  const py = fs.readFileSync('fetch_rainfall.py', 'utf8');
+  chk('後端輸出 official_segs', /'official_segs': _official_segs/.test(py), true);
+  chk('★說明颱風格點會覆蓋四模式', /四個模式被寫成同一個數值/.test(py), true);
+  setLex("window.MODEL_SKILL={};");
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`

@@ -578,19 +578,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
     </div>
 
-    <!-- 區塊：融合校正明細（僅融合模式顯示） -->
-    <div class="sec" id="sec-blend" style="display:none">
-      <div class="sec-h" onclick="toggleSec('blend')">
-        <span>融合校正明細</span><span class="sec-arrow" id="arrow-blend">▸</span>
-      </div>
-      <div class="sec-body" id="body-blend" style="display:none">
-        <div id="blend-detail" style="font-size:11px;color:#cfe4f5;line-height:1.7"></div>
-        <div style="font-size:9px;color:#3a6080;margin-top:6px">
-          方法依據：NOAA National Blend of Models、Met Office IMPROVER。<br>
-          CMPF 為本系統自訂名稱，非既有標準術語。</div>
-      </div>
-    </div>
-
     <!-- 區塊：氣溫預測（預設收合） -->
     <div class="sec" id="sec-temp" style="display:none">
       <div class="sec-h" onclick="toggleSec('temp')">
@@ -635,6 +622,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>觀測站清單</span><span class="sec-arrow" id="arrow-stations">▸</span>
       </div>
       <div class="sec-body" id="body-stations" style="display:none"></div>
+    </div>
+
+    <!-- 區塊：融合校正明細（僅融合模式顯示） -->
+    <div class="sec" id="sec-blend" style="display:none">
+      <div class="sec-h" onclick="toggleSec('blend')">
+        <span>融合校正明細</span><span class="sec-arrow" id="arrow-blend">▸</span>
+      </div>
+      <div class="sec-body" id="body-blend" style="display:none">
+        <div id="blend-detail" style="font-size:11px;color:#cfe4f5;line-height:1.7"></div>
+        <div style="font-size:9px;color:#3a6080;margin-top:6px">
+          方法依據：NOAA National Blend of Models、Met Office IMPROVER。<br>
+          CMPF：Calibrated Multi-source Precipitation Forecast<br>
+          （校正式多源降水預報）—— 本系統自訂名稱，非既有標準術語。</div>
+      </div>
     </div>
   </div>
 
@@ -1490,7 +1491,15 @@ function _blendQpf(t){
 
   const n = Math.max(...avail.map(m=>arrs[m].length));
   const out = [];
+  // ★ 官方值覆蓋的段（CWA 判讀圖／颱風格點）：四模式已被寫成同一數值，
+  //   加權等於自己跟自己平均，沒有意義。此處直接採用官方值。
+  const offSet = new Set(t.official_segs || []);
   for(let i = 0; i < n; i++){
+    if(offSet.has(i)){
+      const ov = (t.qpf_cwa || [])[i];
+      out.push(ov != null ? ov : (arrs[avail[0]] || [])[i]);
+      continue;
+    }
     let acc = 0, wa = 0;
     avail.forEach(m=>{
       const v = arrs[m][i];
@@ -1557,6 +1566,14 @@ function renderBlendDetail(t){
   const sp = _blendSpread(t, segFrom, segTo);
   const rg = _officialRange(t, '24h');
   let extra = '';
+  // 若本視窗落在官方值覆蓋的段，明確標示（該段不做加權）
+  const offs = new Set(t.official_segs || []);
+  let nOff = 0;
+  for(let i = Math.max(0, segFrom); i <= Math.max(0, segTo); i++) if(offs.has(i)) nOff++;
+  if(nOff){
+    extra += `<div style="margin-top:5px;color:#8ad8a0">
+      本視窗有 ${nOff} 段採用官方值（CWA 判讀圖／颱風格點），該段不做加權</div>`;
+  }
   if(sp && sp.level){
     extra += `<div style="margin-top:5px">模式離散：${sp.min}–${sp.max} mm
       　信心 <b>${sp.level}</b></div>`;
