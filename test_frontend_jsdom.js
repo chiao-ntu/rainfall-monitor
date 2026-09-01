@@ -3061,6 +3061,42 @@ if (need('_envHistPts') && need('_tempSeries') && need('_waveSeries')) {
   setLex("window.TEMP_FCST = {}; window.WAVE_FCST = {}; window.ENV_HIST = {};");
 }
 
+
+console.log('\n=== 各 mode 的 tooltip 應一致完整 ===');
+if (need('_modeHeadRow')) {
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★不再以簡化版取代完整內容', /mode==='wind'\s*\n\s*\? `<b>\$\{p\.COUNTYNAME\}/.test(src), false);
+  chk('四種視窗皆加上模式標頭',
+      (src.match(/_modeHeadRow\(t\)/g)||[]).length >= 4, true);
+  chk('說明不必切圖層', /使用者不必為了/.test(src), true);
+  chk('完整欄位仍在（風力/氣溫/浪高列）',
+      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 4);
+
+  // 各 mode 的標頭內容
+  const now = Date.now();
+  const seg = o => Object.assign({start:new Date(now-3600e3).toISOString(),
+                                 end:new Date(now+3*3600e3).toISOString()}, o);
+  setLex(`TMAP['宜蘭縣蘇澳鎮'] = {county:'宜蘭縣', township:'蘇澳鎮', lat:24.59, lng:121.87};
+    window.WIND_FCST = {'宜蘭縣':{'蘇澳鎮':[${JSON.stringify(seg({ws:12,bf:6}))}]}};
+    window.TEMP_FCST = {'宜蘭縣':{'蘇澳鎮':[${JSON.stringify(seg({t:28}))}]}};
+    window.WAVE_FCST = {'宜蘭縣蘇澳鎮':[${JSON.stringify(seg({wave:2.5,dir:60,period:9}))}]};
+    windKind='mean';`);
+  const t = getLex("TMAP['宜蘭縣蘇澳鎮']");
+  [['wind', /6 級/], ['temp', /28°C/], ['wave', /2\.5 m/]].forEach(([m, re])=>{
+    setLex(`mode='${m}';`);
+    const h = G._modeHeadRow(t);
+    console.log(`   mode=${m} → ${h.replace(/<[^>]*>/g,'').trim()}`);
+    chk(`${m} 標頭含主值`, re.test(h), true);
+  });
+  setLex("mode='rain';");
+  chk('雨量模式無額外標頭', G._modeHeadRow(t), '');
+  // 無資料時的表現
+  const inland = {county:'南投縣', township:'仁愛鄉'};
+  setLex("mode='wave';");
+  chk('★內陸標示非沿海', /非沿海/.test(G._modeHeadRow(inland)), true);
+  setLex("mode='rain'; window.WIND_FCST={}; window.TEMP_FCST={}; window.WAVE_FCST={};");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

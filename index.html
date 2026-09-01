@@ -2499,7 +2499,7 @@ function renderLayer(){
                                 maxIntensity>=100?'豪雨':maxIntensity>=40?'大雨':'未達警示';
         // ★ 未來6h段的 tooltip 先前少了 ETR2%、官方現值與氣象要素，
         //   與「今天／逐日」視窗資訊量落差很大；此處補齊為同一組欄位。
-        tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
+        tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b>` + _modeHeadRow(t) + `<br>`+
           `時段：+${startH}h ~ +${endH}h<br>`+
           `該時段累積雨量：${rainStr}<br>`+
           `最大時雨量：${maxIntensity.toFixed(1)} mm/h（${intensityLabel}）<br>`+
@@ -2511,9 +2511,10 @@ function renderLayer(){
         if(winKey === 'today'){
           // 今天：只顯示全天累積雨量（00-24時QPF）、ETR2%、風險指標
           const dayRain = totalRain;   // 與地圖著色同一權威值（getAccum，模式感知）
-          tooltipHtml = mode==='wind'
-            ? `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>` + _windTipHtml(t)
-            : `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>`+
+          // ★ 各 mode 一律顯示同一組完整欄位，不再因切換圖層而只剩一行。
+          //   目前檢視的項目另以標頭標示（_modeHeadRow），使用者不必為了
+          //   看細節而在圖層間切來切去。
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b>` + _modeHeadRow(t) + `<br>`+
             `全天累積雨量：${dayRain!=null?dayRain+' mm':'—'}`+
             (t.obs_src==='neighbor'
               ? '<span style="color:#e8a860;font-size:9px">（鄰近站推估）</span>' : '')+`<br>`+
@@ -2522,11 +2523,11 @@ function renderLayer(){
             `ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) +
             `風險指標：${riskIndicatorHtml(t,3)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
         } else if(winKey.startsWith('past')){
-          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>觀測累積雨量：${rainStr} ｜ ETR2%：${etrStr}<br>`+
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b>` + _modeHeadRow(t) + `<br>觀測累積雨量：${rainStr} ｜ ETR2%：${etrStr}<br>`+
             `最大時雨量：${_maxHourRow(t, segFrom, segTo)}<br>`+
             _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
         } else {
-          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b><br>預測累積雨量：${rainStr} ｜ ETR2%（預估）：${etrStr}<br>`+
+          tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b>` + _modeHeadRow(t) + `<br>預測累積雨量：${rainStr} ｜ ETR2%（預估）：${etrStr}<br>`+
             `最大時雨量：${_maxHourRow(t, segFrom, segTo)}<br>`+
             _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
         }
@@ -6366,6 +6367,33 @@ function _windRow(t){
     h += `<span style="color:#8a9aaa">　陣風推估 ${est.bf} 級</span>`;
   }
   return h;
+}
+
+// 目前檢視模式的標頭：把該 mode 的主值放在鄉鎮名旁邊，
+//   其餘欄位仍完整顯示（雨量、ETR2、風險、風力、氣溫、浪高、潮汐…）。
+function _modeHeadRow(t){
+  if(mode === 'wind'){
+    const w = _windOf(t);
+    const nm = {mean:'平均風', gust:'陣風', gust_est:'陣風推估'}[windKind] || '風力';
+    if(w.bf == null) return `<span style="color:#8a9aaa;font-size:10px">　${nm}無資料</span>`;
+    const b = BF_BANDS.find(x=>w.bf < x.max) || BF_BANDS[BF_BANDS.length-1];
+    return `<span style="font-size:10px">　${nm} <b style="color:${b.color}">${w.bf} 級</b></span>`
+         + (windKind === 'gust_est'
+            ? '<span style="color:#e8a860;font-size:9px">（推估）</span>' : '');
+  }
+  if(mode === 'temp'){
+    const v = _tempOf(t);
+    if(v.t == null) return '<span style="color:#8a9aaa;font-size:10px">　氣溫無資料</span>';
+    return `<span style="font-size:10px">　氣溫 <b style="color:${_tempColor(v.t)}">`
+         + `${v.t.toFixed(0)}°C</b></span>`;
+  }
+  if(mode === 'wave'){
+    const v = _waveOf(t);
+    if(v.wave == null) return '<span style="color:#8a9aaa;font-size:10px">　非沿海</span>';
+    return `<span style="font-size:10px">　浪高 <b style="color:${_waveColor(v.wave)}">`
+         + `${v.wave.toFixed(1)} m</b></span>`;
+  }
+  return '';
 }
 
 function _windTipHtml(t){
