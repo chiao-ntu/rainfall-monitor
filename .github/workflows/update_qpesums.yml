@@ -43,8 +43,8 @@ jobs:
           #   即用即棄的，沒 commit 就等於沒寫，逐時序列永遠停在 1 小時、暖機不會完成。
           if [ ! -f radar.json ] && [ ! -f rain_hourly.json ] \
              && [ ! -f etr2_now.json ] && [ ! -f typhoon_now.json ] \
-             && [ ! -f wind_hist.json ]; then
-            echo "五份每小時資料都不存在，跳過 commit"
+             && [ ! -f wind_hist.json ] && [ ! -f env_hist.json ]; then
+            echo "六份每小時資料都不存在，跳過 commit"
             exit 0
           fi
           git config user.name  "github-actions[bot]"
@@ -56,6 +56,7 @@ jobs:
           [ -f etr2_now.json ]    && git add etr2_now.json     # ETR2 官方現值（鄉鎮級）
           [ -f typhoon_now.json ] && git add typhoon_now.json  # 颱風路徑＋警報單（每小時）
           [ -f wind_hist.json ]   && git add wind_hist.json    # 風力歷史（滾動72h）
+          [ -f env_hist.json ]    && git add env_hist.json     # 氣溫/浪高歷史（滾動72h）
           [ -f qpesums_history.json ] && git add qpesums_history.json  # 若存在也一併（相容舊資料）
           if git diff --staged --quiet; then
             echo "無變更，跳過"
