@@ -680,6 +680,36 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
     </div>
 
+    <!-- 區塊：全臺排行（前 20） -->
+    <div class="sec" id="sec-rank" style="display:none">
+      <div class="sec-h" onclick="toggleSec('rank')">
+        <span>全臺排行</span><span class="sec-arrow" id="arrow-rank">▸</span>
+      </div>
+      <div class="sec-body" id="body-rank" style="display:none">
+        <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:5px">
+          <select id="rank-metric" onchange="renderRankList()"
+            style="flex:1;min-width:110px;font-size:11px;padding:3px;
+            background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+            <option value="obs_rain">觀測累積雨量</option>
+            <option value="qpf_rain">預測累積雨量</option>
+            <option value="obs_etr">觀測 ETR2%</option>
+            <option value="qpf_etr">預估 ETR2%</option>
+          </select>
+          <select id="rank-zone" onchange="renderRankList()"
+            style="flex:1;min-width:90px;font-size:11px;padding:3px;
+            background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+            <option value="">全部地形</option>
+            <option value="山區">山區</option>
+            <option value="淺山區">淺山區</option>
+            <option value="平地">平地</option>
+            <option value="沿海地區">沿海地區</option>
+          </select>
+        </div>
+        <div id="rank-list" style="font-size:11px;color:#cfe4f5;max-height:300px;
+          overflow-y:auto"></div>
+      </div>
+    </div>
+
     <!-- 區塊：融合校正明細（僅融合模式顯示） -->
     <div class="sec" id="sec-blend" style="display:none">
       <div class="sec-h" onclick="toggleSec('blend')">
@@ -1704,7 +1734,7 @@ function _scatterBase(cv, o){
   const isZoom = o.isZoom;
   const fs = isZoom ? 15 : 9;
   const pL = isZoom ? 90 : 42, pR = isZoom ? 40 : 14;
-  const pT = isZoom ? 46 : 12, pB = isZoom ? 56 : 26;
+  const pT = isZoom ? 46 : 12, pB = isZoom ? 76 : 42;   // 底部留白給圖例
   const iw = cv.width - pL - pR, ih = cv.height - pT - pB;
   const X = v => pL + iw * ((v - o.x0) / Math.max(1e-9, o.x1 - o.x0));
   const Y = v => pT + ih * (1 - (v - o.y0) / Math.max(1e-9, o.y1 - o.y0));
@@ -1746,7 +1776,7 @@ function drawElevRainChart(t, canvasId){
     (tt.stations || []).forEach(st=>{
       const e = st.elev, v = (st.daily_rain || [])[0];
       if(e == null || v == null) return;
-      pts.push({e, v, mine: here.has(st.sid), name: st.name});
+      pts.push({e, v, mine: here.has(st.sid), name: st.name, town: tt});
     });
   });
   if(!pts.length){
@@ -1761,8 +1791,11 @@ function drawElevRainChart(t, canvasId){
   const vMax = Math.max(20, Math.ceil(Math.max(...pts.map(p=>p.v))/20)*20);
   const B = _scatterBase(cv, {isZoom, x0:0, x1:eMax, y0:0, y1:vMax,
     xLabel:'海拔 (m)', yLabel:'今日累積雨量 (mm)',
-    title:'海拔與雨量分布（地形雨效應）'});
+    title:'海拔與雨量分布（地形雨效應）'
+      + (t ? `　— ${t.county}${t.township}（藍圈）` : '')});
+  const hitsE = [];
   pts.forEach(p=>{
+    hitsE.push({x: B.X(p.e), y: B.Y(p.v), town: p.town});
     const col = (RAIN_SCALE.find(b=>p.v < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color;
     B.ctx.fillStyle = col;
     B.ctx.globalAlpha = p.mine ? 1 : 0.42;
@@ -1774,19 +1807,48 @@ function drawElevRainChart(t, canvasId){
     }
     B.ctx.globalAlpha = 1;
   });
+  _bindScatterClick(cv, hitsE);
   B.ctx.fillStyle = '#7a94ac'; B.ctx.font = `${B.fs}px sans-serif`;
-  B.ctx.textAlign = 'left';
-  B.ctx.fillText(`全臺 ${pts.length} 站　藍圈＝本鄉鎮`, B.pL + 4, B.pT + B.fs + 2);
+  B.ctx.textAlign = 'center';
+  B.ctx.fillText(`全臺 ${pts.length} 站　藍圈＝本鄉鎮測站　點選圖上任一點可跳至該地`,
+                 cv.width/2, cv.height - (isZoom ? 8 : 4));
 }
 
 // ── ETR2 vs 雨量（依地形著色）──────────────────────
 //   ★ 能看出「同樣雨量下，山區的土壤含水量反應是否更劇烈」，
 //     這直接關係坡地警戒判準的合理性。
+// 點擊散佈圖上的點 → 跳到該鄉鎮／測站
+//   ★ 原本要另外翻找「這個點是哪裡」，互動化後直接對位。
+function _bindScatterClick(cv, hits){
+  cv._hits = hits;
+  if(cv._scatterBound) return;
+  cv._scatterBound = true;
+  cv.addEventListener('click', ev=>{
+    const r = cv.getBoundingClientRect();
+    const mx = (ev.clientX - r.left) * (cv.width / r.width);
+    const my = (ev.clientY - r.top) * (cv.height / r.height);
+    let best = null, bd = 1e9;
+    (cv._hits || []).forEach(h=>{
+      const d = Math.hypot(h.x - mx, h.y - my);
+      if(d < bd){ bd = d; best = h; }
+    });
+    if(!best || bd > 14) return;        // 沒點到任何點位
+    ev.stopPropagation();               // 不要同時觸發放大
+    const tt = best.town;
+    if(!tt) return;
+    if(tt.lat != null && tt.lng != null) map.setView([tt.lat, tt.lng], 11);
+    selected = tt;
+    try{ renderLayer(); }catch(e){}
+    try{ updateInfo(tt); }catch(e){}
+  }, true);
+}
+
 function drawEtrPhaseChart(t, canvasId){
   const cv = document.getElementById(canvasId || 'cv-etrphase');
   if(!cv) return;
   const isZoom = (canvasId === 'chart-zoom-canvas');
-  const ZC = {'山區':'#ff6a4a', '淺山區':'#ffb84a', '沿海地區':'#4aa8ff', '平地':'#7ee8a8'};
+  // ★ 用純色（同 RAIN_SCALE）：先前紅/橘、綠/藍過近，放大後仍難分辨。
+  const ZC = {'山區':'#FF0000', '淺山區':'#FFFF00', '平地':'#00FF00', '沿海地區':'#00FFFF'};
   const key = t ? (t.county||'') + (t.township||'') : '';
   const pts = [];
   (TOWNSHIPS || []).forEach(tt=>{
@@ -1794,7 +1856,7 @@ function drawEtrPhaseChart(t, canvasId){
     const e = tt.etr2_pct;
     if(v == null || e == null) return;
     const k = (tt.county||'') + (tt.township||'');
-    pts.push({v, e: e*100, zone: _townZone(tt) || '平地', mine: k === key});
+    pts.push({v, e: e*100, zone: _townZone(tt) || '平地', mine: k === key, town: tt});
   });
   if(!pts.length){
     const ctx = cv.getContext('2d');
@@ -1808,7 +1870,8 @@ function drawEtrPhaseChart(t, canvasId){
   const eMax = Math.max(120, Math.ceil(Math.max(...pts.map(p=>p.e))/50)*50);
   const B = _scatterBase(cv, {isZoom, x0:0, x1:vMax, y0:0, y1:eMax,
     xLabel:'今日累積雨量 (mm)', yLabel:'ETR2 (%)',
-    yFmt: v=>v.toFixed(0)+'%', title:'ETR2 與雨量關係（依地形）'});
+    yFmt: v=>v.toFixed(0)+'%',
+    title:'ETR2 與雨量關係（依地形）' + (t ? `　— ${t.county}${t.township}（白圈）` : '')});
   // 警戒線 100%
   if(eMax > 100){
     B.ctx.strokeStyle = '#ff4444'; B.ctx.setLineDash([4,3]); B.ctx.lineWidth = 1;
@@ -1817,8 +1880,10 @@ function drawEtrPhaseChart(t, canvasId){
     B.ctx.fillStyle = '#ff4444'; B.ctx.textAlign = 'left';
     B.ctx.fillText('警戒值', B.pL + 3, B.Y(100) - 3);
   }
+  const hits = [];
   pts.forEach(p=>{
-    B.ctx.fillStyle = ZC[p.zone] || '#7ee8a8';
+    hits.push({x: B.X(p.v), y: B.Y(p.e), town: p.town});
+    B.ctx.fillStyle = ZC[p.zone] || '#00FF00';
     B.ctx.globalAlpha = p.mine ? 1 : 0.5;
     B.ctx.beginPath();
     B.ctx.arc(B.X(p.v), B.Y(p.e), p.mine ? (isZoom?8:5) : (isZoom?4:2.4), 0, Math.PI*2);
@@ -1826,15 +1891,21 @@ function drawEtrPhaseChart(t, canvasId){
     if(p.mine){ B.ctx.strokeStyle='#fff'; B.ctx.lineWidth=isZoom?2:1.2; B.ctx.stroke(); }
     B.ctx.globalAlpha = 1;
   });
-  // 圖例
-  let lx = B.pL + 4, ly = B.pT + B.fs + 2;
-  B.ctx.textAlign = 'left'; B.ctx.font = `${B.fs}px sans-serif`;
-  Object.keys(ZC).forEach(z=>{
+  _bindScatterClick(cv, hits);
+  // 圖例置於底部（比照風力／浪高圖的排版）
+  const items = Object.keys(ZC);
+  B.ctx.font = `${B.fs}px sans-serif`;
+  const wUnit = items.map(z=>B.ctx.measureText(z).width + (isZoom ? 34 : 22));
+  let lx = (cv.width - wUnit.reduce((a,b)=>a+b, 0)) / 2;
+  const ly = cv.height - (isZoom ? 8 : 4);
+  items.forEach((z, i)=>{
     B.ctx.fillStyle = ZC[z];
-    B.ctx.beginPath(); B.ctx.arc(lx + 3, ly - B.fs*0.3, 3, 0, Math.PI*2); B.ctx.fill();
-    B.ctx.fillStyle = '#7a94ac';
-    B.ctx.fillText(z, lx + 9, ly);
-    lx += B.ctx.measureText(z).width + (isZoom ? 30 : 20);
+    B.ctx.beginPath();
+    B.ctx.arc(lx + 4, ly - B.fs*0.32, isZoom?5:3.2, 0, Math.PI*2); B.ctx.fill();
+    B.ctx.strokeStyle = '#0a1a28'; B.ctx.lineWidth = 1; B.ctx.stroke();
+    B.ctx.fillStyle = '#7a94ac'; B.ctx.textAlign = 'left';
+    B.ctx.fillText(z, lx + (isZoom?12:9), ly);
+    lx += wUnit[i];
   });
 }
 
@@ -1899,6 +1970,64 @@ function drawMarginChart(t, canvasId){
     ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
     ctx.fillText('全臺最接近警戒的雨量站', cv.width/2, 26);
   }
+}
+
+// ══════════════════════════════════════════════════════════
+//  全臺排行（前 20）
+//  ★ 圖形看趨勢、列表看名次；兩者互補。可依地形篩選，點選即跳至該地。
+// ══════════════════════════════════════════════════════════
+function renderRankList(){
+  const el = document.getElementById('rank-list');
+  if(!el) return;
+  const metric = (document.getElementById('rank-metric') || {}).value || 'obs_rain';
+  const zoneF = (document.getElementById('rank-zone') || {}).value || '';
+  const cur = selected ? (selected.county||'') + (selected.township||'') : '';
+
+  const rows = [];
+  (TOWNSHIPS || []).forEach(tt=>{
+    const z = _townZone(tt) || '平地';
+    if(zoneF && z !== zoneF) return;
+    let v = null, unit = 'mm';
+    if(metric === 'obs_rain')      v = (tt.daily_rain || [])[0];
+    else if(metric === 'qpf_rain'){
+      const acc = getAccum(tt); v = acc && acc.totalRain;
+    }
+    else if(metric === 'obs_etr'){ v = tt.etr2_now != null ? tt.etr2_now * 100 : null; unit = '%'; }
+    else if(metric === 'qpf_etr'){ v = tt.etr2_pct != null ? tt.etr2_pct * 100 : null; unit = '%'; }
+    if(v == null || !isFinite(v)) return;
+    rows.push({t: tt, z, v, unit,
+               k: (tt.county||'') + (tt.township||'')});
+  });
+  rows.sort((a,b)=>b.v - a.v);
+  const top = rows.slice(0, 20);
+  if(!top.length){
+    el.innerHTML = '<div style="color:#7a94ac">此條件下無資料</div>';
+    return;
+  }
+  const ZC = {'山區':'#FF0000', '淺山區':'#FFFF00', '平地':'#00FF00', '沿海地區':'#00FFFF'};
+  const vMax = top[0].v || 1;
+  el.innerHTML = top.map((r, i)=>{
+    const w = Math.max(2, r.v / vMax * 100);
+    const hi = r.k === cur;
+    return `<div onclick="_rankPick('${r.k.replace(/'/g, "")}')"
+      style="cursor:pointer;padding:2px 3px;border-radius:2px;
+      background:${hi ? '#14344e' : 'transparent'}">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span><span style="color:#7a94ac;font-size:10px">${String(i+1).padStart(2,' ')}.</span>
+          <span style="color:${ZC[r.z]};font-size:9px">●</span> ${r.k}</span>
+        <b style="color:#cfe4f5">${r.v.toFixed(r.unit==='%'?0:1)}${r.unit}</b>
+      </div>
+      <div style="height:2px;background:${ZC[r.z]};width:${w}%;opacity:.5"></div>
+    </div>`;
+  }).join('');
+}
+function _rankPick(key){
+  const tt = (TOWNSHIPS || []).find(x=>(x.county||'') + (x.township||'') === key);
+  if(!tt) return;
+  if(tt.lat != null && tt.lng != null) map.setView([tt.lat, tt.lng], 11);
+  selected = tt;
+  try{ renderLayer(); }catch(e){}
+  try{ updateInfo(tt); }catch(e){}
 }
 
 function renderBlendDetail(t){
@@ -3339,6 +3468,11 @@ function updateInfo(t){
     const mEl = document.getElementById('sec-margin');
     if(mEl) mEl.style.display = hasMg ? 'block' : 'none';
     if(hasMg){ try{ drawMarginChart(t); }catch(e){ console.warn('警戒餘裕圖失敗', e); } }
+
+    // 全臺排行
+    const rEl = document.getElementById('sec-rank');
+    if(rEl) rEl.style.display = (TOWNSHIPS||[]).length ? 'block' : 'none';
+    try{ renderRankList(); }catch(e){ console.warn('排行失敗', e); }
 
     // 融合校正明細（僅融合模式顯示）
     try{ renderBlendDetail(t); }catch(e){ console.warn('融合明細失敗', e); }

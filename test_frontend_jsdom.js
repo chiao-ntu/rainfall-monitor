@@ -3456,7 +3456,7 @@ if (need('drawElevRainChart') && need('drawEtrPhaseChart') && need('drawMarginCh
 
   const src = fs.readFileSync('index.html', 'utf8');
   chk('★海拔圖以全臺為底', /全臺 \$\{pts\.length\} 站　藍圈＝本鄉鎮/.test(src), true);
-  chk('★ETR2 圖依地形著色', /'山區':'#ff6a4a'/.test(src), true);
+  chk('★ETR2 圖依地形著色（純色）', /'山區':'#FF0000', '淺山區':'#FFFF00'/.test(src), true);
   chk('ETR2 圖有警戒線', /B\.ctx\.fillText\('警戒值'/.test(src), true);
   chk('★餘裕圖以測站為單位', /rows\.push\(\{name: st\.name, town: k/.test(src), true);
   chk('餘裕圖有 0 線（警戒值）', /\/\/ 0 線＝警戒值/.test(src), true);
@@ -3472,6 +3472,54 @@ if (need('drawElevRainChart') && need('drawEtrPhaseChart') && need('drawMarginCh
   chk('測站排名改為長條圖', /量值大小的比較用長條比點更直觀/.test(src), true);
   chk('後端輸出測站座標與海拔', /'elev':      _elev/.test(
       fs.readFileSync('fetch_rainfall.py', 'utf8')), true);
+}
+
+
+console.log('\n=== 圖表色彩、圖例與互動 ===');
+if (need('renderRankList') && need('_bindScatterClick')) {
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★地形用純色（山區紅）', /'山區':'#FF0000'/.test(src), true);
+  chk('★淺山黃', /'淺山區':'#FFFF00'/.test(src), true);
+  chk('★平地綠', /'平地':'#00FF00'/.test(src), true);
+  chk('★沿海藍', /'沿海地區':'#00FFFF'/.test(src), true);
+  chk('說明混淆問題', /先前紅\/橘、綠\/藍過近/.test(src), true);
+  chk('★圖例移至底部', /圖例置於底部（比照風力／浪高圖的排版）/.test(src), true);
+  chk('★標題帶所選鄉鎮', /— \$\{t\.county\}\$\{t\.township\}（白圈）/.test(src), true);
+  chk('海拔圖標題帶鄉鎮', /（藍圈）/.test(src), true);
+  chk('★可點選跳至該地', /點選圖上任一點可跳至該地/.test(src), true);
+  chk('點擊有距離門檻（避免誤觸）', /if\(!best \|\| bd > 14\) return;/.test(src), true);
+
+  // 排行榜
+  setLex(`document.body.insertAdjacentHTML('beforeend',
+    '<select id="rank-metric"><option value="obs_rain">x</option></select>' +
+    '<select id="rank-zone"><option value="">x</option></select>' +
+    '<div id="rank-list"></div>');
+    TOWNSHIPS.length = 0;
+    [{county:'南投縣', township:'仁愛鄉', lat:24.0, lng:121.1,
+      daily_rain:[220], etr2_pct:1.35, etr2_now:1.28},
+     {county:'臺北市', township:'大安區', lat:25.03, lng:121.54,
+      daily_rain:[15], etr2_pct:0.22, etr2_now:0.20},
+     {county:'宜蘭縣', township:'蘇澳鎮', lat:24.59, lng:121.87,
+      daily_rain:[160], etr2_pct:0.95, etr2_now:0.91}].forEach(x=>TOWNSHIPS.push(x));`);
+  let rthrew = false;
+  try { G.renderRankList(); } catch(e){ rthrew = true; console.log('   ', e.message); }
+  chk('排行繪製不拋錯', rthrew, false);
+  const html = getLex("document.getElementById('rank-list').innerHTML");
+  const plain = html.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+  console.log(`   ${plain.slice(0,110)}`);
+  chk('★依數值由大到小', plain.indexOf('仁愛鄉') < plain.indexOf('蘇澳鎮'), true);
+  chk('顯示數值與單位', /220\.0mm/.test(plain), true);
+  chk('★可點選（有 onclick）', /_rankPick/.test(html), true);
+  chk('提供四種指標', /obs_rain[\s\S]{0,300}qpf_etr/.test(src), true);
+  chk('★可依地形篩選', /rank-zone/.test(src), true);
+  chk('限前 20 名', /rows\.slice\(0, 20\)/.test(src), true);
+
+  // 地形篩選
+  setLex(`document.getElementById('rank-zone').innerHTML =
+    '<option value="山區" selected>山區</option>';`);
+  G.renderRankList();
+  const h2 = getLex("document.getElementById('rank-list').innerHTML");
+  chk('★篩選後僅含該地形', /大安區/.test(h2), false);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
