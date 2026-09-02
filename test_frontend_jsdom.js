@@ -3522,6 +3522,64 @@ if (need('renderRankList') && need('_bindScatterClick')) {
   chk('★篩選後僅含該地形', /大安區/.test(h2), false);
 }
 
+
+console.log('\n=== 圖表清晰度與版面 ===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★依 devicePixelRatio 設定緩衝區', /cv\.width = Math\.round\(w \* dpr\)/.test(src), true);
+  chk('繪圖座標系縮回 CSS 尺寸', /ctx\.setTransform\(dpr, 0, 0, dpr, 0, 0\)/.test(src), true);
+  chk('說明發糊成因', /瀏覽器會在 2x 螢幕上把它拉伸/.test(src), true);
+  chk('★X 軸標題與圖例分列', /X 軸標題放在刻度下方、圖例之上/.test(src), true);
+  chk('點擊命中改用 CSS 座標', /繪圖座標系已縮回 CSS 尺寸/.test(src), true);
+
+  // 區塊順序
+  const order = [...src.matchAll(/<!-- 區塊：([^ （]+)/g)].map(m=>m[1]);
+  console.log(`   順序：${order.slice(0,9).join(' → ')}`);
+  chk('★排行在最上', order[0], '全臺排行');
+  chk('★融合明細在最下', order[order.length-1], '融合校正明細');
+  const idx = n => order.indexOf(n);
+  chk('★雨量早於 ETR2', idx('現況觀測') < idx('ETR2'), true);
+  chk('★ETR2 早於風力', idx('ETR2') < idx('逐日風力預測'), true);
+  chk('★風力早於浪高', idx('逐日風力預測') < idx('浪高預測'), true);
+  chk('★浪高早於氣溫', idx('浪高預測') < idx('氣溫預測'), true);
+  // 圖層按鈕：浪高在氣溫之前
+  chk('★浪高按鈕在氣溫之前',
+      src.indexOf('id="bWave"') < src.indexOf('id="bTemp"'), true);
+}
+
+console.log('\n=== 複製與 CSV 匯出 ===');
+if (need('copyRankList') && need('downloadAllCsv')) {
+  setLex(`document.body.insertAdjacentHTML('beforeend',
+    '<select id="rank-metric"><option value="obs_rain">觀測累積雨量</option></select>' +
+    '<select id="rank-zone"><option value="" selected>全部地形</option></select>' +
+    '<div id="rank-list"></div><div id="rank-msg"></div>');
+    TOWNSHIPS.length = 0;
+    [{county:'南投縣', township:'仁愛鄉', lat:24.0, lng:121.1, daily_rain:[220,80],
+      etr2_pct:1.35, etr2_now:1.28, alert_val:200,
+      qpf_best:new Array(60).fill(5), qpf_ecmwf:new Array(60).fill(6),
+      qpf_gfs:new Array(60).fill(7), qpf_icon:new Array(60).fill(8),
+      qpf_cwa:new Array(60).fill(9)},
+     {county:'臺北市', township:'大安區', lat:25.03, lng:121.54, daily_rain:[15,5],
+      etr2_pct:0.22, etr2_now:0.20, alert_val:150}].forEach(x=>TOWNSHIPS.push(x));
+    segFrom=0; segTo=3; window._dataGenAt='2026-09-02T12:00';
+    document.getElementById('rank-zone').value='';`);
+  G.renderRankList();
+  let cthrew = false;
+  try { G.copyRankList(); } catch(e){ cthrew = true; console.log('   ', e.message); }
+  chk('複製不拋錯', cthrew, false);
+  chk('★記錄目前排行供複製', getLex('(window._rankRows||[]).length'), 2);
+
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('複製含指標與地形標題', /前 \$\{rows\.length\} 名/.test(src), true);
+  chk('複製含資料時間', /資料時間 \$\{window\._dataGenAt\}/.test(src), true);
+  chk('★有 clipboard 失敗的退路', /_copyFallback/.test(src), true);
+  chk('★CSV 含各模式欄位', /\$\{nm\}_本視窗mm/.test(src), true);
+  chk('CSV 含六種模式', /\['融合','blend'\][\s\S]{0,200}\['CWA官方','cwa'\]/.test(src), true);
+  chk('CSV 含風力氣溫浪高', /'浪週期s'/.test(src), true);
+  chk('★CSV 有 BOM（Excel 可讀）', src.indexOf('ufeff') > 0, true);
+  chk('CSV 正確跳脫引號', /s\.replace\(\/"\/g, '""'\)/.test(src), true);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

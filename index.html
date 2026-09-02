@@ -150,8 +150,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bRisk"  onclick="setMode('risk')" style="border-color:#3a8a5a;color:#7ee8a8">風險指標</button>
       <button class="b"    id="bWarn"  onclick="setMode('warn')" style="border-color:#3a8a5a;color:#7ee8a8">警特報</button>
       <button class="b"    id="bWind"  onclick="setMode('wind')" style="border-color:#3a8a5a;color:#7ee8a8">風力預測</button>
-      <button class="b"    id="bTemp"  onclick="setMode('temp')" style="border-color:#3a8a5a;color:#7ee8a8">氣溫</button>
       <button class="b"    id="bWave"  onclick="setMode('wave')" style="border-color:#3a8a5a;color:#7ee8a8">浪高</button>
+      <button class="b"    id="bTemp"  onclick="setMode('temp')" style="border-color:#3a8a5a;color:#7ee8a8">氣溫</button>
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
         style="border-color:#1a4060;color:#8ac8e8">🏷 鄉鎮市區</button>
       <select id="townNameScope" onchange="setTownNameScope(this.value)"
@@ -469,6 +469,46 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
     </div>
 
+    <!-- 區塊：全臺排行（前 20） -->
+    <div class="sec" id="sec-rank" style="display:none">
+      <div class="sec-h" onclick="toggleSec('rank')">
+        <span>全臺排行</span><span class="sec-arrow" id="arrow-rank">▸</span>
+      </div>
+      <div class="sec-body" id="body-rank" style="display:none">
+        <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:5px">
+          <select id="rank-metric" onchange="renderRankList()"
+            style="flex:1;min-width:110px;font-size:11px;padding:3px;
+            background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+            <option value="obs_rain">觀測累積雨量</option>
+            <option value="qpf_rain">預測累積雨量</option>
+            <option value="obs_etr">觀測 ETR2%</option>
+            <option value="qpf_etr">預估 ETR2%</option>
+          </select>
+          <select id="rank-zone" onchange="renderRankList()"
+            style="flex:1;min-width:90px;font-size:11px;padding:3px;
+            background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+            <option value="">全部地形</option>
+            <option value="山區">山區</option>
+            <option value="淺山區">淺山區</option>
+            <option value="平地">平地</option>
+            <option value="沿海地區">沿海地區</option>
+          </select>
+        </div>
+        <div id="rank-list" style="font-size:11px;color:#cfe4f5;max-height:300px;
+          overflow-y:auto"></div>
+        <div style="display:flex;gap:4px;margin-top:5px">
+          <button onclick="copyRankList()" style="flex:1;font-size:11px;padding:3px;
+            background:#0d2438;color:#9fc8e8;border:1px solid #2a5070;border-radius:3px;
+            cursor:pointer">📋 複製此排行</button>
+          <button onclick="downloadAllCsv()" style="flex:1;font-size:11px;padding:3px;
+            background:#0d2438;color:#9fc8e8;border:1px solid #2a5070;border-radius:3px;
+            cursor:pointer">⬇ 下載 CSV</button>
+        </div>
+        <div id="rank-msg" style="font-size:10px;color:#8ad8a0;margin-top:3px;
+          min-height:13px"></div>
+      </div>
+    </div>
+
     <!-- 區塊：現況觀測（預設展開） -->
     <div class="sec" id="sec-obs" style="display:none">
       <div class="sec-h" onclick="toggleSec('obs')">
@@ -483,14 +523,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>QPF 預測</span><span class="sec-arrow" id="arrow-qpf">▾</span>
       </div>
       <div class="sec-body" id="body-qpf"></div>
-    </div>
-
-    <!-- 區塊：風險指標（預設展開） -->
-    <div class="sec" id="sec-risk" style="display:none">
-      <div class="sec-h" onclick="toggleSec('risk')">
-        <span>風險指標</span><span class="sec-arrow" id="arrow-risk">▾</span>
-      </div>
-      <div class="sec-body" id="body-risk"></div>
     </div>
 
     <!-- 區塊：逐日趨勢（預設收合） -->
@@ -530,98 +562,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         </div>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">行政區整體最大值代表；點擊圖表可放大／縮小</div>
       </div>
-    </div>
-
-    <!-- 區塊：逐日風力預測（預設收合） -->
-    <div class="sec" id="sec-windday" style="display:none">
-      <div class="sec-h" onclick="toggleSec('windday')">
-        <span>逐日風力預測（7天）</span><span class="sec-arrow" id="arrow-windday">▸</span>
-      </div>
-      <div class="sec-body" id="body-windday" style="display:none">
-        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">平均風</div>
-        <canvas id="cv-wind-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-day')"
-          onmousemove="showChartTooltip(event,'cv-wind-day')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風</div>
-        <canvas id="cv-wind-day-gust" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-day-gust')"
-          onmousemove="showChartTooltip(event,'cv-wind-day-gust')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風推估</div>
-        <canvas id="cv-wind-day-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-day-est')"
-          onmousemove="showChartTooltip(event,'cv-wind-day-est')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          各日最大風級；點擊圖表可放大／縮小</div>
-      </div>
-    </div>
-
-    <!-- 區塊：逐時風力預測（預設收合） -->
-    <div class="sec" id="sec-windhr" style="display:none">
-      <div class="sec-h" onclick="toggleSec('windhr')">
-        <span>逐時風力預測（3天）</span><span class="sec-arrow" id="arrow-windhr">▸</span>
-      </div>
-      <div class="sec-body" id="body-windhr" style="display:none">
-        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">平均風</div>
-        <canvas id="cv-wind-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-hr')"
-          onmousemove="showChartTooltip(event,'cv-wind-hr')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風</div>
-        <canvas id="cv-wind-hr-gust" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-hr-gust')"
-          onmousemove="showChartTooltip(event,'cv-wind-hr-gust')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風推估</div>
-        <canvas id="cv-wind-hr-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-hr-est')"
-          onmousemove="showChartTooltip(event,'cv-wind-hr-est')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          ● 為氣象署逐3小時官方預報時間點，其間曲線為內插（僅供視覺化，非官方值）</div>
-      </div>
-    </div>
-
-    <!-- 區塊：氣溫預測（預設收合） -->
-    <div class="sec" id="sec-temp" style="display:none">
-      <div class="sec-h" onclick="toggleSec('temp')">
-        <span>氣溫預測</span><span class="sec-arrow" id="arrow-temp">▸</span>
-      </div>
-      <div class="sec-body" id="body-temp" style="display:none">
-        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">逐日（各日最高/最低）</div>
-        <canvas id="cv-temp-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-temp-day')"
-          onmousemove="showChartTooltip(event,'cv-temp-day')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">逐時</div>
-        <canvas id="cv-temp-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-temp-hr')"
-          onmousemove="showChartTooltip(event,'cv-temp-hr')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          ● 為氣象署逐3小時官方預報時間點；點擊圖表可放大／縮小</div>
-      </div>
-    </div>
-
-    <!-- 區塊：浪高預測（僅沿海鄉鎮，預設收合） -->
-    <div class="sec" id="sec-wave" style="display:none">
-      <div class="sec-h" onclick="toggleSec('wave')">
-        <span>浪高預測</span><span class="sec-arrow" id="arrow-wave">▸</span>
-      </div>
-      <div class="sec-body" id="body-wave" style="display:none">
-        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">逐日（各日最大）</div>
-        <canvas id="cv-wave-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wave-day')"
-          onmousemove="showChartTooltip(event,'cv-wave-day')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">逐時</div>
-        <canvas id="cv-wave-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wave-hr')"
-          onmousemove="showChartTooltip(event,'cv-wave-hr')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          僅沿海預報點有資料；● 為官方預報時間點</div>
-      </div>
-    </div>
-
-    <!-- 區塊：測站清單（預設收合） -->
-    <div class="sec" id="sec-stations" style="display:none">
-      <div class="sec-h" onclick="toggleSec('stations')">
-        <span>觀測站清單</span><span class="sec-arrow" id="arrow-stations">▸</span>
-      </div>
-      <div class="sec-body" id="body-stations" style="display:none"></div>
     </div>
 
     <!-- 區塊：測站雨量排名（Cleveland dot plot） -->
@@ -680,34 +620,104 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
     </div>
 
-    <!-- 區塊：全臺排行（前 20） -->
-    <div class="sec" id="sec-rank" style="display:none">
-      <div class="sec-h" onclick="toggleSec('rank')">
-        <span>全臺排行</span><span class="sec-arrow" id="arrow-rank">▸</span>
+    <!-- 區塊：風險指標（預設展開） -->
+    <div class="sec" id="sec-risk" style="display:none">
+      <div class="sec-h" onclick="toggleSec('risk')">
+        <span>風險指標</span><span class="sec-arrow" id="arrow-risk">▾</span>
       </div>
-      <div class="sec-body" id="body-rank" style="display:none">
-        <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:5px">
-          <select id="rank-metric" onchange="renderRankList()"
-            style="flex:1;min-width:110px;font-size:11px;padding:3px;
-            background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
-            <option value="obs_rain">觀測累積雨量</option>
-            <option value="qpf_rain">預測累積雨量</option>
-            <option value="obs_etr">觀測 ETR2%</option>
-            <option value="qpf_etr">預估 ETR2%</option>
-          </select>
-          <select id="rank-zone" onchange="renderRankList()"
-            style="flex:1;min-width:90px;font-size:11px;padding:3px;
-            background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
-            <option value="">全部地形</option>
-            <option value="山區">山區</option>
-            <option value="淺山區">淺山區</option>
-            <option value="平地">平地</option>
-            <option value="沿海地區">沿海地區</option>
-          </select>
-        </div>
-        <div id="rank-list" style="font-size:11px;color:#cfe4f5;max-height:300px;
-          overflow-y:auto"></div>
+      <div class="sec-body" id="body-risk"></div>
+    </div>
+
+    <!-- 區塊：逐日風力預測（預設收合） -->
+    <div class="sec" id="sec-windday" style="display:none">
+      <div class="sec-h" onclick="toggleSec('windday')">
+        <span>逐日風力預測（7天）</span><span class="sec-arrow" id="arrow-windday">▸</span>
       </div>
+      <div class="sec-body" id="body-windday" style="display:none">
+        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">平均風</div>
+        <canvas id="cv-wind-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-day')"
+          onmousemove="showChartTooltip(event,'cv-wind-day')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風</div>
+        <canvas id="cv-wind-day-gust" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-day-gust')"
+          onmousemove="showChartTooltip(event,'cv-wind-day-gust')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風推估</div>
+        <canvas id="cv-wind-day-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-day-est')"
+          onmousemove="showChartTooltip(event,'cv-wind-day-est')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          各日最大風級；點擊圖表可放大／縮小</div>
+      </div>
+    </div>
+
+    <!-- 區塊：逐時風力預測（預設收合） -->
+    <div class="sec" id="sec-windhr" style="display:none">
+      <div class="sec-h" onclick="toggleSec('windhr')">
+        <span>逐時風力預測（3天）</span><span class="sec-arrow" id="arrow-windhr">▸</span>
+      </div>
+      <div class="sec-body" id="body-windhr" style="display:none">
+        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">平均風</div>
+        <canvas id="cv-wind-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-hr')"
+          onmousemove="showChartTooltip(event,'cv-wind-hr')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風</div>
+        <canvas id="cv-wind-hr-gust" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-hr-gust')"
+          onmousemove="showChartTooltip(event,'cv-wind-hr-gust')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風推估</div>
+        <canvas id="cv-wind-hr-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-hr-est')"
+          onmousemove="showChartTooltip(event,'cv-wind-hr-est')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          ● 為氣象署逐3小時官方預報時間點，其間曲線為內插（僅供視覺化，非官方值）</div>
+      </div>
+    </div>
+
+    <!-- 區塊：浪高預測（僅沿海鄉鎮，預設收合） -->
+    <div class="sec" id="sec-wave" style="display:none">
+      <div class="sec-h" onclick="toggleSec('wave')">
+        <span>浪高預測</span><span class="sec-arrow" id="arrow-wave">▸</span>
+      </div>
+      <div class="sec-body" id="body-wave" style="display:none">
+        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">逐日（各日最大）</div>
+        <canvas id="cv-wave-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wave-day')"
+          onmousemove="showChartTooltip(event,'cv-wave-day')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">逐時</div>
+        <canvas id="cv-wave-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wave-hr')"
+          onmousemove="showChartTooltip(event,'cv-wave-hr')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          僅沿海預報點有資料；● 為官方預報時間點</div>
+      </div>
+    </div>
+
+    <!-- 區塊：氣溫預測（預設收合） -->
+    <div class="sec" id="sec-temp" style="display:none">
+      <div class="sec-h" onclick="toggleSec('temp')">
+        <span>氣溫預測</span><span class="sec-arrow" id="arrow-temp">▸</span>
+      </div>
+      <div class="sec-body" id="body-temp" style="display:none">
+        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">逐日（各日最高/最低）</div>
+        <canvas id="cv-temp-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-temp-day')"
+          onmousemove="showChartTooltip(event,'cv-temp-day')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">逐時</div>
+        <canvas id="cv-temp-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-temp-hr')"
+          onmousemove="showChartTooltip(event,'cv-temp-hr')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          ● 為氣象署逐3小時官方預報時間點；點擊圖表可放大／縮小</div>
+      </div>
+    </div>
+
+    <!-- 區塊：測站清單（預設收合） -->
+    <div class="sec" id="sec-stations" style="display:none">
+      <div class="sec-h" onclick="toggleSec('stations')">
+        <span>觀測站清單</span><span class="sec-arrow" id="arrow-stations">▸</span>
+      </div>
+      <div class="sec-body" id="body-stations" style="display:none"></div>
     </div>
 
     <!-- 區塊：融合校正明細（僅融合模式顯示） -->
@@ -1669,10 +1679,8 @@ function drawStnRankChart(t, canvasId){
     .sort((a,b)=>b.v - a.v)
     .slice(0, 14);                      // 太多會擠成一團
   const isZoom = (canvasId === 'chart-zoom-canvas');
-  cv.width = cv.offsetWidth || 300;
-  cv.height = cv.offsetHeight || 220;
-  const ctx = cv.getContext('2d');
-  ctx.clearRect(0, 0, cv.width, cv.height);
+  const F = _fitCanvas(cv, 300, 220);
+  const ctx = F.ctx, CW = F.w, CH = F.h;
   if(!rows.length){
     ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
     ctx.fillText('此鄉鎮無雨量站資料', 12, 24);
@@ -1681,7 +1689,7 @@ function drawStnRankChart(t, canvasId){
   const fs = isZoom ? 16 : 10;
   const pL = isZoom ? 190 : 78, pR = isZoom ? 60 : 26;
   const pT = isZoom ? 40 : 16, pB = isZoom ? 46 : 22;
-  const iw = cv.width - pL - pR, ih = cv.height - pT - pB;
+  const iw = CW - pL - pR, ih = CH - pT - pB;
   const vMax = Math.max(10, Math.ceil(Math.max(...rows.map(r=>r.v)) * 1.15 / 10) * 10);
   const X = v => pL + iw * (v / vMax);
   const Y = i => pT + (ih / rows.length) * (i + 0.5);
@@ -1693,9 +1701,9 @@ function drawStnRankChart(t, canvasId){
   const step = vMax <= 50 ? 10 : vMax <= 200 ? 50 : 100;
   for(let v = 0; v <= vMax; v += step){
     ctx.beginPath(); ctx.moveTo(X(v), pT); ctx.lineTo(X(v), pT + ih); ctx.stroke();
-    ctx.fillText(String(v), X(v), cv.height - pB + fs + 2);
+    ctx.fillText(String(v), X(v), CH - pB + fs + 2);
   }
-  ctx.fillText('累積雨量 (mm)', pL + iw/2, cv.height - 3);
+  ctx.fillText('累積雨量 (mm)', pL + iw/2, CH - 3);
 
   // 每列：站名 + 導引線 + 點
   ctx.textAlign = 'right';
@@ -1719,23 +1727,36 @@ function drawStnRankChart(t, canvasId){
   if(isZoom){
     ctx.fillStyle = '#6bc8e8'; ctx.font = 'bold 20px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`${t.county}${t.township} 測站雨量排名（今日累積）`, cv.width/2, 26);
+    ctx.fillText(`${t.county}${t.township} 測站雨量排名（今日累積）`, CW/2, 26);
   }
 }
 
 // ══════════════════════════════════════════════════════════
 //  共用：散佈圖底稿（軸線、格線、標題）
 // ══════════════════════════════════════════════════════════
-function _scatterBase(cv, o){
-  cv.width = cv.offsetWidth || 300;
-  cv.height = cv.offsetHeight || 200;
+// ★ 高解析螢幕的清晰度：canvas 的 width/height 是「像素緩衝區」大小，
+//   若只設成 CSS 尺寸，瀏覽器會在 2x 螢幕上把它拉伸 → 線條與文字發糊。
+//   正確做法是緩衝區乘上 devicePixelRatio，再把繪圖座標系縮回 CSS 尺寸。
+function _fitCanvas(cv, fallbackW, fallbackH){
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const w = cv.offsetWidth || fallbackW || 300;
+  const h = cv.offsetHeight || fallbackH || 200;
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
   const ctx = cv.getContext('2d');
-  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);   // 之後都用 CSS 座標作圖
+  ctx.clearRect(0, 0, w, h);
+  return {ctx, w, h};
+}
+
+function _scatterBase(cv, o){
+  const F = _fitCanvas(cv, 300, 200);
+  const ctx = F.ctx, CW = F.w, CH = F.h;
   const isZoom = o.isZoom;
   const fs = isZoom ? 15 : 9;
   const pL = isZoom ? 90 : 42, pR = isZoom ? 40 : 14;
   const pT = isZoom ? 46 : 12, pB = isZoom ? 76 : 42;   // 底部留白給圖例
-  const iw = cv.width - pL - pR, ih = cv.height - pT - pB;
+  const iw = CW - pL - pR, ih = CH - pT - pB;
   const X = v => pL + iw * ((v - o.x0) / Math.max(1e-9, o.x1 - o.x0));
   const Y = v => pT + ih * (1 - (v - o.y0) / Math.max(1e-9, o.y1 - o.y0));
   ctx.strokeStyle = '#12283c'; ctx.lineWidth = 1;
@@ -1754,14 +1775,15 @@ function _scatterBase(cv, o){
     ctx.fillText(o.yFmt ? o.yFmt(v) : v.toFixed(0), pL - 5, Y(v) + fs*0.35);
   }
   ctx.textAlign = 'center';
-  ctx.fillText(o.xLabel || '', pL + iw/2, cv.height - 4);
+  // X 軸標題放在刻度下方、圖例之上（原本兩者疊在同一行）
+  ctx.fillText(o.xLabel || '', pL + iw/2, pT + ih + fs*2 + 8);
   ctx.save(); ctx.translate(isZoom ? 22 : 11, pT + ih/2); ctx.rotate(-Math.PI/2);
   ctx.fillText(o.yLabel || '', 0, 0); ctx.restore();
   if(isZoom && o.title){
     ctx.fillStyle = '#6bc8e8'; ctx.font = 'bold 19px sans-serif';
-    ctx.fillText(o.title, cv.width/2, 28);
+    ctx.fillText(o.title, CW/2, 28);
   }
-  return {ctx, X, Y, pL, pT, iw, ih, fs, isZoom};
+  return {ctx, X, Y, pL, pT, iw, ih, fs, isZoom, CW, CH};
 }
 
 // ── 海拔 vs 雨量（地形雨效應）──────────────────────
@@ -1780,11 +1802,9 @@ function drawElevRainChart(t, canvasId){
     });
   });
   if(!pts.length){
-    const ctx = cv.getContext('2d');
-    cv.width = cv.offsetWidth || 300; cv.height = cv.offsetHeight || 200;
-    ctx.clearRect(0,0,cv.width,cv.height);
-    ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
-    ctx.fillText('尚無測站海拔資料（需部署 station_elev.json）', 12, 24);
+    const F = _fitCanvas(cv, 300, 200);
+    F.ctx.fillStyle = '#5a7a95'; F.ctx.font = `${isZoom?18:11}px sans-serif`;
+    F.ctx.fillText('尚無測站海拔資料（需部署 station_elev.json）', 12, 24);
     return;
   }
   const eMax = Math.max(500, Math.ceil(Math.max(...pts.map(p=>p.e))/500)*500);
@@ -1810,8 +1830,8 @@ function drawElevRainChart(t, canvasId){
   _bindScatterClick(cv, hitsE);
   B.ctx.fillStyle = '#7a94ac'; B.ctx.font = `${B.fs}px sans-serif`;
   B.ctx.textAlign = 'center';
-  B.ctx.fillText(`全臺 ${pts.length} 站　藍圈＝本鄉鎮測站　點選圖上任一點可跳至該地`,
-                 cv.width/2, cv.height - (isZoom ? 8 : 4));
+  B.ctx.fillText(`全臺 ${pts.length} 站　藍圈＝本鄉鎮　點選圖上任一點可跳至該地`,
+                 B.CW/2, B.CH - (isZoom ? 10 : 5));
 }
 
 // ── ETR2 vs 雨量（依地形著色）──────────────────────
@@ -1825,8 +1845,9 @@ function _bindScatterClick(cv, hits){
   cv._scatterBound = true;
   cv.addEventListener('click', ev=>{
     const r = cv.getBoundingClientRect();
-    const mx = (ev.clientX - r.left) * (cv.width / r.width);
-    const my = (ev.clientY - r.top) * (cv.height / r.height);
+    // 繪圖座標系已縮回 CSS 尺寸，故直接用相對位置即可
+    const mx = ev.clientX - r.left;
+    const my = ev.clientY - r.top;
     let best = null, bd = 1e9;
     (cv._hits || []).forEach(h=>{
       const d = Math.hypot(h.x - mx, h.y - my);
@@ -1859,11 +1880,9 @@ function drawEtrPhaseChart(t, canvasId){
     pts.push({v, e: e*100, zone: _townZone(tt) || '平地', mine: k === key, town: tt});
   });
   if(!pts.length){
-    const ctx = cv.getContext('2d');
-    cv.width = cv.offsetWidth || 300; cv.height = cv.offsetHeight || 200;
-    ctx.clearRect(0,0,cv.width,cv.height);
-    ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
-    ctx.fillText('尚無 ETR2 資料', 12, 24);
+    const F = _fitCanvas(cv, 300, 200);
+    F.ctx.fillStyle = '#5a7a95'; F.ctx.font = `${isZoom?18:11}px sans-serif`;
+    F.ctx.fillText('尚無 ETR2 資料', 12, 24);
     return;
   }
   const vMax = Math.max(20, Math.ceil(Math.max(...pts.map(p=>p.v))/20)*20);
@@ -1896,8 +1915,8 @@ function drawEtrPhaseChart(t, canvasId){
   const items = Object.keys(ZC);
   B.ctx.font = `${B.fs}px sans-serif`;
   const wUnit = items.map(z=>B.ctx.measureText(z).width + (isZoom ? 34 : 22));
-  let lx = (cv.width - wUnit.reduce((a,b)=>a+b, 0)) / 2;
-  const ly = cv.height - (isZoom ? 8 : 4);
+  let lx = (B.CW - wUnit.reduce((a,b)=>a+b, 0)) / 2;
+  const ly = B.CH - (isZoom ? 10 : 5);
   items.forEach((z, i)=>{
     B.ctx.fillStyle = ZC[z];
     B.ctx.beginPath();
@@ -1927,9 +1946,8 @@ function drawMarginChart(t, canvasId){
   });
   rows.sort((a,b)=>b.margin - a.margin);
   const top = rows.slice(0, isZoom ? 20 : 10);
-  cv.width = cv.offsetWidth || 300; cv.height = cv.offsetHeight || 200;
-  const ctx = cv.getContext('2d');
-  ctx.clearRect(0,0,cv.width,cv.height);
+  const F = _fitCanvas(cv, 300, 200);
+  const ctx = F.ctx, CW = F.w, CH = F.h;
   if(!top.length){
     ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
     ctx.fillText('尚無測站 ETR2 資料', 12, 24);
@@ -1938,7 +1956,7 @@ function drawMarginChart(t, canvasId){
   const fs = isZoom ? 15 : 9;
   const pL = isZoom ? 210 : 92, pR = isZoom ? 60 : 30;
   const pT = isZoom ? 44 : 14, pB = isZoom ? 48 : 22;
-  const iw = cv.width - pL - pR, ih = cv.height - pT - pB;
+  const iw = CW - pL - pR, ih = CH - pT - pB;
   const lo = Math.min(-20, Math.floor(Math.min(...top.map(r=>r.margin))/20)*20);
   const hi = Math.max(20, Math.ceil(Math.max(...top.map(r=>r.margin))/20)*20);
   const X = v => pL + iw * ((v - lo) / (hi - lo));
@@ -1946,12 +1964,12 @@ function drawMarginChart(t, canvasId){
   ctx.font = `${fs}px sans-serif`; ctx.textAlign = 'center';
   for(let v = lo; v <= hi; v += Math.max(20, Math.round((hi-lo)/4/20)*20)){
     ctx.beginPath(); ctx.moveTo(X(v), pT); ctx.lineTo(X(v), pT+ih); ctx.stroke();
-    ctx.fillText((v>0?'+':'')+v, X(v), cv.height - pB + fs + 2);
+    ctx.fillText((v>0?'+':'')+v, X(v), CH - pB + fs + 2);
   }
   // 0 線＝警戒值
   ctx.strokeStyle = '#ff4444'; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.moveTo(X(0), pT); ctx.lineTo(X(0), pT+ih); ctx.stroke();
-  ctx.fillText('距警戒值 (%)', pL + iw/2, cv.height - 3);
+  ctx.fillText('距警戒值 (%)', pL + iw/2, CH - 3);
   top.forEach((r, i)=>{
     const y = pT + (ih/top.length)*(i+0.5);
     const bh = Math.max(4, (ih/top.length)*0.6);
@@ -1968,7 +1986,7 @@ function drawMarginChart(t, canvasId){
   });
   if(isZoom){
     ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
-    ctx.fillText('全臺最接近警戒的雨量站', cv.width/2, 26);
+    ctx.fillText('全臺最接近警戒的雨量站', CW/2, 26);
   }
 }
 
@@ -1976,6 +1994,91 @@ function drawMarginChart(t, canvasId){
 //  全臺排行（前 20）
 //  ★ 圖形看趨勢、列表看名次；兩者互補。可依地形篩選，點選即跳至該地。
 // ══════════════════════════════════════════════════════════
+// 複製當下排行（純文字，可直接貼到報告或通訊軟體）
+function copyRankList(){
+  const rows = window._rankRows || [];
+  const metric = (document.getElementById('rank-metric') || {});
+  const zone = (document.getElementById('rank-zone') || {});
+  const mLabel = metric.options ? metric.options[metric.selectedIndex].text : '';
+  const zLabel = (zone.value ? zone.options[zone.selectedIndex].text : '全部地形');
+  const head = `${mLabel}　${zLabel}　前 ${rows.length} 名` +
+               (window._dataGenAt ? `（資料時間 ${window._dataGenAt}）` : '');
+  const body = rows.map((r, i)=>
+    `${String(i+1).padStart(2)}. ${r.k}　${r.v.toFixed(r.unit==='%'?0:1)}${r.unit}　${r.z}`
+  ).join('\n');
+  _copyText(head + '\n' + body, `已複製 ${rows.length} 筆`);
+}
+function _copyText(txt, okMsg){
+  const msg = document.getElementById('rank-msg');
+  const done = ()=>{ if(msg){ msg.textContent = okMsg; setTimeout(()=>msg.textContent='', 2500); } };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(done).catch(()=>_copyFallback(txt, done));
+  } else _copyFallback(txt, done);
+}
+function _copyFallback(txt, done){
+  const ta = document.createElement('textarea');
+  ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); done(); }catch(e){}
+  document.body.removeChild(ta);
+}
+
+// 下載完整 CSV：各鄉鎮 × 各模式 × 各圖層的數據
+//   ★ 一次給全部，方便另行分析或存查；欄位以「來源」分組便於閱讀。
+function downloadAllCsv(){
+  const cols = [
+    ['縣市', t=>t.county], ['鄉鎮', t=>t.township], ['地形', t=>_townZone(t) || ''],
+    ['緯度', t=>t.lat], ['經度', t=>t.lng],
+    ['今日觀測雨量mm', t=>(t.daily_rain||[])[0]],
+    ['昨日觀測雨量mm', t=>(t.daily_rain||[])[1]],
+    ['觀測來源', t=>t.obs_src || '測站'],
+    ['ETR2官方現值%', t=>t.etr2_now != null ? (t.etr2_now*100).toFixed(1) : ''],
+    ['ETR2預估%', t=>t.etr2_pct != null ? (t.etr2_pct*100).toFixed(1) : ''],
+    ['警戒值mm', t=>t.alert_val],
+  ];
+  // 各模式的本視窗累積
+  const MODELS = [['融合','blend'], ['CWA+ECMWF','best'], ['ECMWF','ecmwf'],
+                  ['GFS','gfs'], ['ICON','icon'], ['CWA官方','cwa']];
+  MODELS.forEach(([nm, m])=>{
+    cols.push([`${nm}_本視窗mm`, t=>{
+      const f = MODEL_FIELD[m];
+      const a = (f === 'qpf_blend') ? _blendQpf(t) : (t[f] || []);
+      let s = 0, has = false;
+      for(let i = Math.max(0, segFrom); i <= Math.max(0, segTo); i++){
+        if(a[i] != null){ s += a[i]; has = true; }
+      }
+      return has ? s.toFixed(1) : '';
+    }]);
+  });
+  cols.push(['風力級', t=>{ const w = _windOf(t); return w.bf != null ? w.bf : ''; }]);
+  cols.push(['風速ms', t=>{ const w = _windOf(t); return w.ws != null ? w.ws.toFixed(1) : ''; }]);
+  cols.push(['氣溫C', t=>{ const v = _tempOf(t); return v.t != null ? v.t.toFixed(1) : ''; }]);
+  cols.push(['浪高m', t=>{ const v = _waveOf(t); return v.wave != null ? v.wave.toFixed(1) : ''; }]);
+  cols.push(['浪向度', t=>{ const v = _waveOf(t); return v.dir != null ? v.dir : ''; }]);
+  cols.push(['浪週期s', t=>{ const v = _waveOf(t); return v.period != null ? v.period : ''; }]);
+
+  const esc = v => {
+    if(v == null) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [cols.map(c=>esc(c[0])).join(',')];
+  (TOWNSHIPS || []).forEach(t=>{
+    lines.push(cols.map(c=>{ try{ return esc(c[1](t)); }catch(e){ return ''; } }).join(','));
+  });
+  // BOM 讓 Excel 正確判讀 UTF-8
+  const blob = new Blob(['\ufeff' + lines.join('\n')], {type:'text/csv;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const ts = (window._dataGenAt || new Date().toISOString()).replace(/[:T]/g,'').slice(0,13);
+  a.href = url; a.download = `rainfall_${ts}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  const msg = document.getElementById('rank-msg');
+  if(msg){ msg.textContent = `已下載 ${(TOWNSHIPS||[]).length} 筆 × ${cols.length} 欄`;
+           setTimeout(()=>msg.textContent='', 3000); }
+}
+
 function renderRankList(){
   const el = document.getElementById('rank-list');
   if(!el) return;
@@ -2000,6 +2103,7 @@ function renderRankList(){
   });
   rows.sort((a,b)=>b.v - a.v);
   const top = rows.slice(0, 20);
+  window._rankRows = top;          // 供「複製此排行」使用
   if(!top.length){
     el.innerHTML = '<div style="color:#7a94ac">此條件下無資料</div>';
     return;
