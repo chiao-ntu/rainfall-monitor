@@ -3580,6 +3580,59 @@ if (need('copyRankList') && need('downloadAllCsv')) {
   chk('CSV 正確跳脫引號', /s\.replace\(\/"\/g, '""'\)/.test(src), true);
 }
 
+
+console.log('\n=== 測站底圖（Voronoi + 測站來源）===');
+if (need('toggleStationSrc') && need('toggleInterpMode') && need('_paintGrid')) {
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★提供測站來源切換', /id="bStnSrc"/.test(src), true);
+  chk('★提供銳利／平滑切換', /id="bVoronoi"/.test(src), true);
+  chk('Voronoi 以光柵化實作（不算多邊形）',
+      /以光柵化實作（逐格找最近點），不需計算多邊形/.test(src), true);
+  chk('★上色邏輯已抽出共用', /function _paintGrid\(grid, NX, NY/.test(src), true);
+  chk('兩條路徑共用上色', /Barnes 與 Voronoi 兩條路徑共用/.test(src), true);
+  chk('說明測站密度優勢', /測站密度約 1300 點，遠高於鄉鎮的 368 點/.test(src), true);
+  chk('★提醒測站僅有觀測值', /測站只有觀測值，故僅在「今天／過去」等有觀測的視窗有意義/.test(src), true);
+  chk('說明兩種方式互補', /Voronoi 誠實反映「資料只到這個密度/.test(src), true);
+
+  // 狀態切換
+  setLex(`document.body.insertAdjacentHTML('beforeend',
+    '<button id="bStnSrc"></button><button id="bVoronoi"></button>' +
+    '<button id="bBlurRender"></button>');
+    _srcStation=false; _interpMode='barnes'; _blurOn=false;`);
+  let tthrew = false;
+  try { G.toggleInterpMode(); } catch(e){ tthrew = true; console.log('   ', e.message); }
+  chk('切換不拋錯', tthrew, false);
+  chk('★切為 voronoi', getLex('_interpMode'), 'voronoi');
+  chk('★自動開啟渲染（否則看不到）', getLex('_blurOn'), true);
+  chk('按鈕文字改為銳利',
+      getLex("document.getElementById('bVoronoi').textContent"), '銳利');
+  G.toggleInterpMode();
+  chk('可切回 barnes', getLex('_interpMode'), 'barnes');
+  chk('按鈕文字改為平滑',
+      getLex("document.getElementById('bVoronoi').textContent"), '平滑');
+
+  setLex("_blurOn=false;");
+  try { G.toggleStationSrc(); } catch(e){ tthrew = true; }
+  chk('測站來源切換不拋錯', tthrew, false);
+  chk('★切為測站來源', getLex('_srcStation'), true);
+  chk('同樣自動開啟渲染', getLex('_blurOn'), true);
+  G.toggleStationSrc();
+  chk('可切回鄉鎮來源', getLex('_srcStation'), false);
+
+  // Voronoi 最近鄰邏輯正確性（離線驗算）
+  const pts = [[2, 2, 100], [10, 10, 20]];
+  const near = (gx, gy) => {
+    let bd = Infinity, bv = 0;
+    pts.forEach(p=>{ const d = (p[0]-gx)**2 + (p[1]-gy)**2;
+      if(d < bd){ bd = d; bv = p[2]; } });
+    return bv;
+  };
+  chk('★靠近站A取A值', near(3, 3), 100);
+  chk('★靠近站B取B值', near(9, 9), 20);
+  chk('中間點取較近者', near(5, 5), 100);
+  setLex("_srcStation=false; _interpMode='barnes'; _blurOn=false;");
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

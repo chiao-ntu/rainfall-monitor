@@ -192,6 +192,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       style="border-color:#5a3a8a;color:#b08ae8">自訂色階級距</button>
     <button class="b" id="bBlurRender" onclick="toggleBlurRender()"
       style="border-color:#3a7a8a;color:#7ad8e8">渲染</button>
+    <button class="b" id="bStnSrc" onclick="toggleStationSrc()"
+      style="border-color:#8a6a3a;color:#e8c87a" title="以雨量站實測位置取代鄉鎮質心">測站</button>
+    <button class="b" id="bVoronoi" onclick="toggleInterpMode()"
+      style="border-color:#8a6a3a;color:#e8c87a" title="最近鄰分割（邊界銳利）／客觀分析（平滑）">銳利</button>
     <button class="b" onclick="downloadRangeCsv()"
       style="border-color:#2a7a4a;color:#5ad88a">⬇ CSV</button>
     <a href="taiwan_blank_map.html" target="_blank" class="b"
@@ -924,6 +928,10 @@ const MODEL_NOTE = {
 let selected = null;
 let townLayer = null, countyLayer = null;
 let _blurOn = false;  // 渲染（邊界漸層）開關
+// 渲染來源與方式（測站底圖）
+//   _srcStation：以雨量站（約1300點）取代鄉鎮質心（368點）作為輸入
+//   _interpMode：'barnes' 平滑客觀分析｜'voronoi' 最近鄰（邊界銳利）
+let _srcStation = false, _interpMode = 'barnes';
 let _cwaQpfActive = false;  // 前48h是否為CWA QPF覆蓋
 
 // 右側欄收合/展開
@@ -9321,63 +9329,9 @@ let _interpOverlay = null;
 const INTERP_BOUNDS = [[21.7, 119.2], [25.45, 122.05]];  // 本島+澎湖
 const _mercY = lat => Math.log(Math.tan(Math.PI/4 + lat*Math.PI/360));
 
-function renderInterpolated(){
-  if(!_blurOn) return;
-  const [ [lat0,lng0], [lat1,lng1] ] = INTERP_BOUNDS;
-  const my0=_mercY(lat0), my1=_mercY(lat1);
-  const NX=144, NY=192, UP=10, W=NX*UP, H=NY*UP;  // 1440×1920：IDW網格與輸出同步細緻化
-
-  // 1. 蒐集鄉鎮點（canvas座標 + 數值）
-  const pts=[];
-  TOWNSHIPS.forEach(t=>{
-    if(t.lat==null||t.lng==null) return;
-    if(t.lat<lat0-0.1||t.lat>lat1+0.1||t.lng<lng0-0.1||t.lng>lng1+0.1) return;  // 金馬除外
-    const acc=getAccum(t);
-    const v=acc&&acc.totalRain!=null?acc.totalRain:null;
-    if(v===null) return;
-    pts.push([ (t.lng-lng0)/(lng1-lng0)*NX, (1-(_mercY(t.lat)-my0)/(my1-my0))*NY, v ]);
-  });
-  if(pts.length<10) return;
-
-  // 2. Barnes 兩遍客觀分析（氣象標準做法；消除IDW的同心圓斑，保留雨帶空間結構）
-  //    第一遍：高斯權重取得平滑趨勢面；第二遍：以站點殘差恢復局部細節
-  const KAPPA = 12;                 // 初始平滑尺度（網格單位²；cell≈2.2km，e-folding≈7.6km）
-  const GAMMA = 0.2;                // 第二遍收斂係數（參數掃描：極值恢復61%、雨帶結構最清晰）
-  const CUT1 = 9.2*KAPPA, CUT2 = 9.2*KAPPA*GAMMA;   // 權重<1e-4 截斷半徑²
-  const nP = pts.length;
-
-  function barnesPass(px, py, kappa, cut, useResid, resid){
-    let num=0, den=0, minD2=1e18, minK=0;
-    for(let k=0;k<nP;k++){
-      const dx=px-pts[k][0], dy=py-pts[k][1];
-      const d2=dx*dx+dy*dy;
-      if(d2<minD2){ minD2=d2; minK=k; }
-      if(d2>cut) continue;
-      const w=Math.exp(-d2/kappa);
-      num += w*(useResid ? resid[k] : pts[k][2]);
-      den += w;
-    }
-    if(den===0) return useResid ? 0 : pts[minK][2];  // 孤立區域退回最近站值
-    return num/den;
-  }
-
-  // 第一遍：站點位置的分析值（供殘差）
-  const F1s=new Float64Array(nP), resid=new Float64Array(nP);
-  for(let k=0;k<nP;k++) F1s[k]=barnesPass(pts[k][0], pts[k][1], KAPPA, CUT1, false, null);
-  for(let k=0;k<nP;k++) resid[k]=pts[k][2]-F1s[k];
-
-  // 網格：第一遍 + 第二遍殘差修正
-  const grid=new Float32Array(NX*NY);
-  for(let gy=0; gy<NY; gy++){
-    for(let gx=0; gx<NX; gx++){
-      const px=gx+0.5, py=gy+0.5;
-      const f1=barnesPass(px, py, KAPPA, CUT1, false, null);
-      const f2=barnesPass(px, py, KAPPA*GAMMA, CUT2, true, resid);
-      grid[gy*NX+gx]=Math.max(0, f1+f2);   // 雨量不為負
-    }
-  }
-
-  // 3. 雙線性上採樣 + 離散色階著色
+// 共用：把網格塗成色帶並疊到地圖（Barnes 與 Voronoi 兩條路徑共用）
+function _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1){
+  // 雙線性上採樣 + 離散色階著色
   const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
   const ctx=cv.getContext('2d');
   const img=ctx.createImageData(W,H), d=img.data;
@@ -9432,6 +9386,146 @@ function renderInterpolated(){
     _interpOverlay=L.imageOverlay(url, INTERP_BOUNDS,
       {pane:'townPane', opacity:1.0, interactive:false, className:'interp-crisp'}).addTo(map);
   }
+}
+
+function renderInterpolated(){
+  if(!_blurOn) return;
+  const [ [lat0,lng0], [lat1,lng1] ] = INTERP_BOUNDS;
+  const my0=_mercY(lat0), my1=_mercY(lat1);
+  const NX=144, NY=192, UP=10, W=NX*UP, H=NY*UP;  // 1440×1920：IDW網格與輸出同步細緻化
+
+  // 1. 蒐集資料點（canvas座標 + 數值）
+  //    ★ 兩種來源：鄉鎮質心（預設）或雨量站實測位置。
+  //      測站密度遠高於鄉鎮（約 1300 vs 368），空間細節更真實；
+  //      但只有觀測值，故僅在「今天／過去」等有觀測的視窗才有意義。
+  const pts=[];
+  const inBox = (la, lo) => !(la<lat0-0.1||la>lat1+0.1||lo<lng0-0.1||lo>lng1+0.1);
+  const toXY = (la, lo) => [ (lo-lng0)/(lng1-lng0)*NX,
+                             (1-(_mercY(la)-my0)/(my1-my0))*NY ];
+  if(_srcStation){
+    TOWNSHIPS.forEach(t=>{
+      (t.stations||[]).forEach(st=>{
+        const v = (st.daily_rain||[])[0];
+        if(v==null || st.lat==null || st.lng==null) return;
+        if(!inBox(st.lat, st.lng)) return;
+        const xy = toXY(st.lat, st.lng);
+        pts.push([xy[0], xy[1], v]);
+      });
+    });
+  } else {
+    TOWNSHIPS.forEach(t=>{
+      if(t.lat==null||t.lng==null) return;
+      if(!inBox(t.lat, t.lng)) return;  // 金馬除外
+      const acc=getAccum(t);
+      const v=acc&&acc.totalRain!=null?acc.totalRain:null;
+      if(v===null) return;
+      const xy = toXY(t.lat, t.lng);
+      pts.push([xy[0], xy[1], v]);
+    });
+  }
+  if(pts.length<10) return;
+
+  // ★ Voronoi（最近鄰）路徑：每格取最近資料點的值，不做平滑。
+  //   邊界銳利，明確表達「這一區以哪個站為準」——追責任時比平滑場誠實。
+  //   以光柵化實作（逐格找最近點），不需計算多邊形，成本與 IDW 相當。
+  if(_interpMode === 'voronoi'){
+    const grid = new Float32Array(NX*NY);
+    for(let gy=0; gy<NY; gy++){
+      for(let gx=0; gx<NX; gx++){
+        let bd = Infinity, bv = 0;
+        for(let k=0; k<pts.length; k++){
+          const dx = pts[k][0]-gx, dy = pts[k][1]-gy;
+          const d = dx*dx + dy*dy;
+          if(d < bd){ bd = d; bv = pts[k][2]; }
+        }
+        grid[gy*NX+gx] = bv;
+      }
+    }
+    _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1);
+    return;
+  }
+
+  // 2. Barnes 兩遍客觀分析（氣象標準做法；消除IDW的同心圓斑，保留雨帶空間結構）
+  //    第一遍：高斯權重取得平滑趨勢面；第二遍：以站點殘差恢復局部細節
+  const KAPPA = 12;                 // 初始平滑尺度（網格單位²；cell≈2.2km，e-folding≈7.6km）
+  const GAMMA = 0.2;                // 第二遍收斂係數（參數掃描：極值恢復61%、雨帶結構最清晰）
+  const CUT1 = 9.2*KAPPA, CUT2 = 9.2*KAPPA*GAMMA;   // 權重<1e-4 截斷半徑²
+  const nP = pts.length;
+
+  function barnesPass(px, py, kappa, cut, useResid, resid){
+    let num=0, den=0, minD2=1e18, minK=0;
+    for(let k=0;k<nP;k++){
+      const dx=px-pts[k][0], dy=py-pts[k][1];
+      const d2=dx*dx+dy*dy;
+      if(d2<minD2){ minD2=d2; minK=k; }
+      if(d2>cut) continue;
+      const w=Math.exp(-d2/kappa);
+      num += w*(useResid ? resid[k] : pts[k][2]);
+      den += w;
+    }
+    if(den===0) return useResid ? 0 : pts[minK][2];  // 孤立區域退回最近站值
+    return num/den;
+  }
+
+  // 第一遍：站點位置的分析值（供殘差）
+  const F1s=new Float64Array(nP), resid=new Float64Array(nP);
+  for(let k=0;k<nP;k++) F1s[k]=barnesPass(pts[k][0], pts[k][1], KAPPA, CUT1, false, null);
+  for(let k=0;k<nP;k++) resid[k]=pts[k][2]-F1s[k];
+
+  // 網格：第一遍 + 第二遍殘差修正
+  const grid=new Float32Array(NX*NY);
+  for(let gy=0; gy<NY; gy++){
+    for(let gx=0; gx<NX; gx++){
+      const px=gx+0.5, py=gy+0.5;
+      const f1=barnesPass(px, py, KAPPA, CUT1, false, null);
+      const f2=barnesPass(px, py, KAPPA*GAMMA, CUT2, true, resid);
+      grid[gy*NX+gx]=Math.max(0, f1+f2);   // 雨量不為負
+    }
+  }
+
+  _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1);
+
+}
+
+// 測站底圖：以雨量站實測位置作為渲染輸入
+//   ★ 測站密度約 1300 點，遠高於鄉鎮的 368 點，空間細節更真實。
+//     但測站只有觀測值，故僅在「今天／過去」等有觀測的視窗有意義；
+//     未來視窗仍應以鄉鎮的預報值為準。
+function toggleStationSrc(){
+  _srcStation = !_srcStation;
+  const b = document.getElementById('bStnSrc');
+  if(b) b.classList.toggle('on', _srcStation);
+  if(_srcStation && !_blurOn){       // 沒開渲染看不到效果，順手開啟
+    _blurOn = true;
+    const rb = document.getElementById('bBlurRender');
+    if(rb) rb.classList.add('on');
+  }
+  const n = (TOWNSHIPS||[]).reduce((a,t)=>a + (t.stations||[])
+              .filter(x=>x.lat!=null && (x.daily_rain||[])[0]!=null).length, 0);
+  console.log(_srcStation
+    ? `渲染來源改為雨量站（${n} 站有位置與觀測值）`
+    : '渲染來源改回鄉鎮質心（368 點）');
+  renderLayer();
+}
+// 切換 Voronoi（銳利）／Barnes（平滑）
+//   兩者互補：Voronoi 誠實反映「資料只到這個密度、這區以哪站為準」；
+//   Barnes 呈現推估的連續場，適合看雨帶結構與趨勢。
+function toggleInterpMode(){
+  _interpMode = (_interpMode === 'barnes') ? 'voronoi' : 'barnes';
+  const b = document.getElementById('bVoronoi');
+  if(b){
+    b.classList.toggle('on', _interpMode === 'voronoi');
+    b.textContent = (_interpMode === 'voronoi') ? '銳利' : '平滑';
+  }
+  if(!_blurOn){
+    _blurOn = true;
+    const rb = document.getElementById('bBlurRender');
+    if(rb) rb.classList.add('on');
+  }
+  console.log(_interpMode === 'voronoi'
+    ? '渲染方式：Voronoi 最近鄰（邊界銳利，明示各站勢力範圍）'
+    : '渲染方式：Barnes 客觀分析（平滑連續場）');
+  renderLayer();
 }
 
 function toggleBlurRender(){
