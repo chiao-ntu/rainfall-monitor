@@ -2377,8 +2377,8 @@ if (need('_waveColor') && need('_waveOf') && need('_waveRow')) {
   chk('圖例支援氣溫', /temp: '氣溫\(°C\)'/.test(src), true);
   chk('圖例支援浪高', /wave: '浪高'/.test(src), true);
   // ★ 未來6h 視窗補齊後為 4 處（今天／過去／未來／未來6h段）
-  // 五處：今天／過去／未來／未來6h／（warn|etr|risk）合併分支
-  chk('tooltip 五處都加入', (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 5);
+  // 六處：今天／過去／未來／未來6h／（warn|etr|risk）／散佈圖 tooltip
+  chk('tooltip 六處都加入', (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 6);
   setLex("mode='rain'; window.WAVE_FCST={}; window.TEMP_FCST={};");
 }
 
@@ -2465,7 +2465,7 @@ if (need('_tempSeries') && need('_waveSeries') && need('drawTempDayChart')) {
   chk('氣溫允許負值', /allowNeg:true/.test(src), true);
   chk('放大分派含四張圖', /canvasId === 'cv-temp-day'[\s\S]{0,400}canvasId === 'cv-wave-hr'/.test(src), true);
   chk('★未來6h tooltip 補齊要素',
-      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 5);
+      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 6);
   setLex("window.TEMP_FCST={}; window.WAVE_FCST={};");
 }
 
@@ -3074,7 +3074,7 @@ if (need('_modeHeadRow')) {
       (src.match(/_modeHeadRow\(t\)/g)||[]).length >= 4, true);
   chk('說明不必切圖層', /使用者不必為了/.test(src), true);
   chk('完整欄位仍在（風力/氣溫/浪高列）',
-      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 5);
+      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 6);
 
   // 各 mode 的標頭內容
   const now = Date.now();
@@ -3113,7 +3113,7 @@ console.log('\n=== ETR2／風險／警特報 tooltip 亦須完整 ===');
   chk('含累積雨量', /\$\{_isPast \? '觀測' : '預測'\}累積雨量/.test(src), true);
   chk('含最大時雨量', /最大時雨量：\$\{_maxHourRow\(t, segFrom, segTo\)\}/.test(src), true);
   chk('含風力/氣溫/浪高',
-      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 5);
+      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 6);
   chk('警特報另附研判摘要', /mode==='warn'\s*\n\s*\? `<br><span style="font-size:10px">\$\{_warnSummaryHtml/.test(src), true);
   chk('標頭支援 warn', /if\(mode === 'warn'\)\{/.test(src), true);
   chk('標頭支援 etr', /if\(mode === 'etr'\)\{/.test(src), true);
@@ -3487,7 +3487,7 @@ if (need('renderRankList') && need('_bindScatterClick')) {
   chk('★標題帶所選鄉鎮', /— \$\{t\.county\}\$\{t\.township\}（白圈）/.test(src), true);
   chk('海拔圖標題帶鄉鎮', /（藍圈）/.test(src), true);
   chk('★可點選跳至該地', /點選圖上任一點可跳至該地/.test(src), true);
-  chk('點擊有距離門檻（避免誤觸）', /if\(!best \|\| bd > 14\) return;/.test(src), true);
+  chk('點擊有距離門檻（避免誤觸）', /const lim = cv\._isZoom \? 22 : 14;/.test(src), true);
 
   // 排行榜
   setLex(`document.body.insertAdjacentHTML('beforeend',
@@ -3631,6 +3631,50 @@ if (need('toggleStationSrc') && need('toggleInterpMode') && need('_paintGrid')) 
   chk('★靠近站B取B值', near(9, 9), 20);
   chk('中間點取較近者', near(5, 5), 100);
   setLex("_srcStation=false; _interpMode='barnes'; _blurOn=false;");
+}
+
+
+console.log('\n=== 散佈圖互動與側欄全螢幕 ===');
+if (need('_scatterTipHtml') && need('focusStation') && need('toggleSidebarFull')) {
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★放大後可點選點位', /cv\._isZoom \? 22 : 14/.test(src), true);
+  chk('★放大後有 tooltip', /id="scatter-tip"/.test(src), true);
+  chk('tooltip 與地圖同組欄位',
+      /_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)[\s\S]{0,80}點選可跳至該地/.test(src), true);
+  chk('點選後關閉放大檢視', /cv\._isZoom && typeof closeChartZoom/.test(src), true);
+  chk('★測站清單可點選定位', /row\.addEventListener\('click', \(\)=> focusStation\(s\)\)/.test(src), true);
+  chk('★測站排名長條可點選', /cv\._stnHits/.test(src), true);
+  chk('★側欄全螢幕按鈕', /id="sb-full"/.test(src), true);
+  chk('全螢幕後重繪圖表', /if\(selected\) updateInfo\(selected\)/.test(src), true);
+  chk('★測站清單移到雨量排名之後',
+      src.indexOf('區塊：測站雨量排名') < src.indexOf('區塊：測站清單'), true);
+  chk('觀測 ETR2 改用 getObsEtr', /metric === 'obs_etr'\)\{ v = getObsEtr\(tt\)/.test(src), true);
+  chk('CSV 也用 getObsEtr', /const v = getObsEtr\(t\); return v != null/.test(src), true);
+  chk('不再引用不存在的 etr2_now 欄位', /tt\.etr2_now/.test(src), false);
+
+  // tooltip 內容
+  setLex(`document.body.insertAdjacentHTML('beforeend','<div id="scatter-tip"></div>');
+    TMAP['南投縣仁愛鄉'] = Object.assign(TMAP['南投縣仁愛鄉']||{},
+      {county:'南投縣', township:'仁愛鄉', daily_rain:[135], etr2_pct:1.12,
+       lat:24.0, lng:121.1});`);
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+  const tip = G._scatterTipHtml(t).replace(/<[^>]*>/g,' ').replace(/\s+/g,' ');
+  console.log(`   ${tip.slice(0,100)}`);
+  chk('tooltip 含鄉鎮名', /仁愛鄉/.test(tip), true);
+  chk('tooltip 含雨量', /135 mm/.test(tip), true);
+  chk('★tooltip 含官方 ETR2', /112%/.test(tip), true);
+  chk('提示可點選', /點選可跳至該地/.test(tip), true);
+
+  // 全螢幕切換
+  setLex(`document.body.insertAdjacentHTML('beforeend',
+    '<div id="sb"></div><div id="map"></div><button id="sb-full"></button>');`);
+  let fthrew = false;
+  try { G.toggleSidebarFull(); } catch(e){ fthrew = true; console.log('   ', e.message); }
+  chk('全螢幕切換不拋錯', fthrew, false);
+  chk('★側欄展開為全寬', getLex("document.getElementById('sb').style.width"), '100%');
+  chk('地圖隱藏', getLex("document.getElementById('map').style.display"), 'none');
+  G.toggleSidebarFull();
+  chk('可還原', getLex("document.getElementById('sb').style.width"), '');
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`

@@ -388,6 +388,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     </div>
   </div>
   <!-- 觀測站組體雨量圖（懸停顯示，固定於右下方避免遮擋） -->
+  <!-- 散佈圖 tooltip（放大檢視時顯示點位詳情） -->
+  <div id="scatter-tip" style="display:none;position:fixed;z-index:3200;
+    background:rgba(8,20,34,.96);border:1px solid #2a5070;border-radius:4px;
+    padding:6px 9px;font-size:12px;color:#cfe4f5;line-height:1.6;
+    pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,.6);max-width:230px"></div>
+
   <!-- 圖表全螢幕放大 modal -->
   <div id="chart-zoom-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;
     background:rgba(4,8,14,0.92);z-index:3000;cursor:zoom-out;
@@ -408,6 +414,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div id="hyeto-sub"></div>
     <canvas id="hyeto-canvas" style="display:none"></canvas>
   </div>
+  <button id="sb-full" onclick="toggleSidebarFull()" title="側欄全螢幕/還原"
+    style="align-self:stretch;z-index:500;background:#091520;border:1px solid #1a3348;
+    border-right:none;border-radius:4px 0 0 4px;color:#e8c87a;cursor:pointer;padding:0 3px;
+    font-size:12px;line-height:1;writing-mode:vertical-rl;letter-spacing:2px;
+    flex-shrink:0;margin-bottom:2px">⛶</button>
   <button id="sb-toggle" onclick="toggleSidebar()" title="收合/展開側欄"
     style="align-self:stretch;z-index:500;background:#091520;border:1px solid #1a3348;border-right:none;
     border-radius:4px 0 0 4px;color:#6bc8e8;cursor:pointer;padding:0 3px;
@@ -582,6 +593,14 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
     </div>
 
+    <!-- 區塊：測站清單（預設收合） -->
+    <div class="sec" id="sec-stations" style="display:none">
+      <div class="sec-h" onclick="toggleSec('stations')">
+        <span>觀測站清單</span><span class="sec-arrow" id="arrow-stations">▸</span>
+      </div>
+      <div class="sec-body" id="body-stations" style="display:none"></div>
+    </div>
+
     <!-- 區塊：地形與雨量關係（散佈圖） -->
     <div class="sec" id="sec-elevrain" style="display:none">
       <div class="sec-h" onclick="toggleSec('elevrain')">
@@ -714,14 +733,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
           ● 為氣象署逐3小時官方預報時間點；點擊圖表可放大／縮小</div>
       </div>
-    </div>
-
-    <!-- 區塊：測站清單（預設收合） -->
-    <div class="sec" id="sec-stations" style="display:none">
-      <div class="sec-h" onclick="toggleSec('stations')">
-        <span>觀測站清單</span><span class="sec-arrow" id="arrow-stations">▸</span>
-      </div>
-      <div class="sec-body" id="body-stations" style="display:none"></div>
     </div>
 
     <!-- 區塊：融合校正明細（僅融合模式顯示） -->
@@ -1142,6 +1153,47 @@ function updateEtrAlertPanel(){
   body.innerHTML = h + _etrHistHtml(curSet);
   _prevEtrSet = curSet;
 }
+// 側欄全螢幕：資訊多時單看側欄比較清楚
+//   ★ 只改寬度不動 DOM 結構，避免圖表因重新掛載而需重繪整批。
+let _sbFull = false;
+// 地圖上標示單一測站的位置（點選測站清單時使用）
+let _stnMarker = null;
+function focusStation(st){
+  if(!st || st.lat == null || st.lng == null) return;
+  map.setView([st.lat, st.lng], 13);
+  if(_stnMarker){ try{ map.removeLayer(_stnMarker); }catch(e){} }
+  const v = (st.daily_rain || [])[0];
+  const col = (v != null)
+    ? (RAIN_SCALE.find(b=>v < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color
+    : '#9fc8e8';
+  _stnMarker = L.circleMarker([st.lat, st.lng], {
+    radius: 7, color: '#ffff44', weight: 2, fillColor: col, fillOpacity: 0.9,
+    pane: 'markerPane'
+  }).addTo(map);
+  const pct = st.etr2_pct != null ? (st.etr2_pct * 100).toFixed(0) + '%' : '—';
+  _stnMarker.bindTooltip(
+    `<b>${st.name}</b><br>今日累積：${v != null ? v + ' mm' : '—'}<br>`
+    + `ETR2%：${pct}<br>警戒值：${st.alert_val != null ? st.alert_val + ' mm' : '—'}`
+    + (st.elev != null ? `<br>海拔：${st.elev.toFixed(0)} m` : ''),
+    {permanent: false, direction: 'top'}).openTooltip();
+  // 30 秒後自動移除，避免殘留干擾判讀
+  setTimeout(()=>{ if(_stnMarker){ try{ map.removeLayer(_stnMarker); }catch(e){}
+                                   _stnMarker = null; } }, 30000);
+}
+
+function toggleSidebarFull(){
+  _sbFull = !_sbFull;
+  const sb = document.getElementById('sb');
+  const mp = document.getElementById('map');
+  const b = document.getElementById('sb-full');
+  if(sb) sb.style.width = _sbFull ? '100%' : '';
+  if(mp) mp.style.display = _sbFull ? 'none' : '';
+  if(b){ b.textContent = _sbFull ? '⛷' : '⛶'; b.classList.toggle('on', _sbFull); }
+  // 寬度變了，圖表要重繪（canvas 依 offsetWidth 決定緩衝區大小）
+  setTimeout(()=>{ try{ if(selected) updateInfo(selected); }catch(e){} }, 260);
+  if(!_sbFull) setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 280);
+}
+
 function toggleSidebar(){
   sidebarOpen = !sidebarOpen;
   const sb  = document.getElementById('sb');
@@ -1682,7 +1734,7 @@ function drawStnRankChart(t, canvasId){
   if(!cv || !t) return;
   const rows = (t.stations || [])
     .map(st=>({name: st.name || '', v: (st.daily_rain || [])[0],
-               etr: st.etr2_pct}))
+               etr: st.etr2_pct, st}))
     .filter(x=>x.name && x.v != null)
     .sort((a,b)=>b.v - a.v)
     .slice(0, 14);                      // 太多會擠成一團
@@ -1699,6 +1751,7 @@ function drawStnRankChart(t, canvasId){
   const pT = isZoom ? 40 : 16, pB = isZoom ? 46 : 22;
   const iw = CW - pL - pR, ih = CH - pT - pB;
   const vMax = Math.max(10, Math.ceil(Math.max(...rows.map(r=>r.v)) * 1.15 / 10) * 10);
+  const hits = [];
   const X = v => pL + iw * (v / vMax);
   const Y = i => pT + (ih / rows.length) * (i + 0.5);
 
@@ -1731,7 +1784,24 @@ function drawStnRankChart(t, canvasId){
     ctx.fillStyle = '#cfe4f5'; ctx.textAlign = 'left';
     ctx.fillText(r.v.toFixed(0), X(r.v) + (isZoom ? 11 : 7), y + fs*0.35);
     ctx.textAlign = 'right';
+    hits.push({x: (pL + X(r.v))/2, y, st: r.st, w: X(r.v) - pL, h: bh});
   });
+  // 點選長條 → 定位到該測站
+  cv._stnHits = hits;
+  if(!cv._stnBound){
+    cv._stnBound = true;
+    cv.addEventListener('click', ev=>{
+      const rc = cv.getBoundingClientRect();
+      const my = ev.clientY - rc.top;
+      let best = null;
+      (cv._stnHits || []).forEach(h=>{ if(Math.abs(h.y - my) <= h.h) best = h; });
+      if(best && best.st && best.st.lat != null){
+        ev.stopPropagation();
+        if(typeof closeChartZoom === 'function'){ try{ closeChartZoom(); }catch(e){} }
+        focusStation(best.st);
+      }
+    }, true);
+  }
   if(isZoom){
     ctx.fillStyle = '#6bc8e8'; ctx.font = 'bold 20px sans-serif';
     ctx.textAlign = 'center';
@@ -1835,7 +1905,8 @@ function drawElevRainChart(t, canvasId){
     }
     B.ctx.globalAlpha = 1;
   });
-  _bindScatterClick(cv, hitsE);
+  cv._cssW = B.CW; cv._cssH = B.CH;
+  _bindScatterClick(cv, hitsE, isZoom);
   B.ctx.fillStyle = '#7a94ac'; B.ctx.font = `${B.fs}px sans-serif`;
   B.ctx.textAlign = 'center';
   B.ctx.fillText(`全臺 ${pts.length} 站　藍圈＝本鄉鎮　點選圖上任一點可跳至該地`,
@@ -1847,29 +1918,70 @@ function drawElevRainChart(t, canvasId){
 //     這直接關係坡地警戒判準的合理性。
 // 點擊散佈圖上的點 → 跳到該鄉鎮／測站
 //   ★ 原本要另外翻找「這個點是哪裡」，互動化後直接對位。
-function _bindScatterClick(cv, hits){
+function _scatterHitAt(cv, ev){
+  const r = cv.getBoundingClientRect();
+  // 繪圖座標系已縮回 CSS 尺寸；放大版的 CSS 尺寸與繪圖尺寸也一致
+  const mx = (ev.clientX - r.left) * ((cv._cssW || r.width) / r.width);
+  const my = (ev.clientY - r.top) * ((cv._cssH || r.height) / r.height);
+  let best = null, bd = 1e9;
+  (cv._hits || []).forEach(h=>{
+    const d = Math.hypot(h.x - mx, h.y - my);
+    if(d < bd){ bd = d; best = h; }
+  });
+  const lim = cv._isZoom ? 22 : 14;     // 放大版點位間距大，命中半徑放寬
+  return (best && bd <= lim) ? best : null;
+}
+function _bindScatterClick(cv, hits, isZoom){
   cv._hits = hits;
+  cv._isZoom = !!isZoom;
   if(cv._scatterBound) return;
   cv._scatterBound = true;
   cv.addEventListener('click', ev=>{
-    const r = cv.getBoundingClientRect();
-    // 繪圖座標系已縮回 CSS 尺寸，故直接用相對位置即可
-    const mx = ev.clientX - r.left;
-    const my = ev.clientY - r.top;
-    let best = null, bd = 1e9;
-    (cv._hits || []).forEach(h=>{
-      const d = Math.hypot(h.x - mx, h.y - my);
-      if(d < bd){ bd = d; best = h; }
-    });
-    if(!best || bd > 14) return;        // 沒點到任何點位
-    ev.stopPropagation();               // 不要同時觸發放大
+    const best = _scatterHitAt(cv, ev);
+    if(!best || !best.town) return;
+    ev.stopPropagation();               // 不要同時觸發放大／關閉
     const tt = best.town;
-    if(!tt) return;
     if(tt.lat != null && tt.lng != null) map.setView([tt.lat, tt.lng], 11);
     selected = tt;
+    // 放大檢視時先關閉，才看得到地圖
+    if(cv._isZoom && typeof closeChartZoom === 'function'){
+      try{ closeChartZoom(); }catch(e){}
+    }
     try{ renderLayer(); }catch(e){}
     try{ updateInfo(tt); }catch(e){}
   }, true);
+  // ★ 放大檢視時提供 tooltip：小圖點位太密不易辨識，放大後
+  //   停留即可看到該點是哪個鄉鎮與其詳細數值（同地圖上的 tooltip）。
+  cv.addEventListener('mousemove', ev=>{
+    const tip = document.getElementById('scatter-tip');
+    if(!tip) return;
+    const best = _scatterHitAt(cv, ev);
+    if(!best || !best.town){ tip.style.display = 'none'; cv.style.cursor = 'zoom-in'; return; }
+    const tt = best.town;
+    tip.innerHTML = _scatterTipHtml(tt);
+    tip.style.display = 'block';
+    tip.style.left = Math.min(window.innerWidth - 230, ev.clientX + 14) + 'px';
+    tip.style.top  = Math.min(window.innerHeight - 150, ev.clientY + 14) + 'px';
+    cv.style.cursor = 'pointer';
+  });
+  cv.addEventListener('mouseleave', ()=>{
+    const tip = document.getElementById('scatter-tip');
+    if(tip) tip.style.display = 'none';
+  });
+}
+// 散佈圖 tooltip 內容：與地圖上的 tooltip 同一組欄位
+function _scatterTipHtml(t){
+  const acc = getAccum(t);
+  const rain = (t.daily_rain || [])[0];
+  const obs = getObsEtr(t);
+  return `<b>${t.county} ${t.township}</b>`
+    + `<span style="color:#8a9aaa;font-size:10px">　${_townZone(t) || ''}</span><br>`
+    + `今日累積雨量：${rain != null ? rain + ' mm' : '—'}<br>`
+    + `ETR2%（預估）：${acc && acc.etrPct != null ? acc.etrPct.toFixed(0) + '%' : '—'}<br>`
+    + (obs != null ? `ETR2%官方現值：<b>${obs.toFixed(0)}%</b><br>` : '')
+    + `風險指標：${_windowRisk(t)}`
+    + _windRow(t) + _tempRow(t) + _waveRow(t)
+    + '<br><span style="color:#6bc8e8;font-size:10px">點選可跳至該地</span>';
 }
 
 function drawEtrPhaseChart(t, canvasId){
@@ -1918,7 +2030,8 @@ function drawEtrPhaseChart(t, canvasId){
     if(p.mine){ B.ctx.strokeStyle='#fff'; B.ctx.lineWidth=isZoom?2:1.2; B.ctx.stroke(); }
     B.ctx.globalAlpha = 1;
   });
-  _bindScatterClick(cv, hits);
+  cv._cssW = B.CW; cv._cssH = B.CH;
+  _bindScatterClick(cv, hits, isZoom);
   // 圖例置於底部（比照風力／浪高圖的排版）
   const items = Object.keys(ZC);
   B.ctx.font = `${B.fs}px sans-serif`;
@@ -2040,7 +2153,7 @@ function downloadAllCsv(){
     ['今日觀測雨量mm', t=>(t.daily_rain||[])[0]],
     ['昨日觀測雨量mm', t=>(t.daily_rain||[])[1]],
     ['觀測來源', t=>t.obs_src || '測站'],
-    ['ETR2官方現值%', t=>t.etr2_now != null ? (t.etr2_now*100).toFixed(1) : ''],
+    ['ETR2官方現值%', t=>{ const v = getObsEtr(t); return v != null ? v.toFixed(1) : ''; }],
     ['ETR2預估%', t=>t.etr2_pct != null ? (t.etr2_pct*100).toFixed(1) : ''],
     ['警戒值mm', t=>t.alert_val],
   ];
@@ -2103,7 +2216,8 @@ function renderRankList(){
     else if(metric === 'qpf_rain'){
       const acc = getAccum(tt); v = acc && acc.totalRain;
     }
-    else if(metric === 'obs_etr'){ v = tt.etr2_now != null ? tt.etr2_now * 100 : null; unit = '%'; }
+    // ★ 官方現值須用 getObsEtr()（已回百分比），沒有 t.etr2_now 這個欄位
+    else if(metric === 'obs_etr'){ v = getObsEtr(tt); unit = '%'; }
     else if(metric === 'qpf_etr'){ v = tt.etr2_pct != null ? tt.etr2_pct * 100 : null; unit = '%'; }
     if(v == null || !isFinite(v)) return;
     rows.push({t: tt, z, v, unit,
@@ -3620,11 +3734,18 @@ function updateInfo(t){
       row.addEventListener('mouseenter', (e)=> showHyetograph(t, s, e));
       row.addEventListener('mousemove',  (e)=> positionHyetograph(e));
       row.addEventListener('mouseleave', hideHyetograph);
+      // ★ 點選測站 → 地圖定位到該站實際位置並標示
+      if(s.lat != null && s.lng != null){
+        row.title = '點選可定位到此測站';
+        row.addEventListener('click', ()=> focusStation(s));
+      }
       wrap.appendChild(row);
     });
     const note = document.createElement('div');
     note.style.cssText = 'font-size:10px;color:#3a6080;margin-top:4px';
-    note.textContent = `共 ${t.stations.length} 個測站，警戒值取最大值（滑鼠移到測站可看雨量趨勢圖）`;
+    const _nLoc = t.stations.filter(x=>x.lat != null).length;
+    note.textContent = `共 ${t.stations.length} 個測站，警戒值取最大值`
+      + `（滑鼠移到測站可看雨量趨勢圖${_nLoc ? '、點選可定位' : ''}）`;
     wrap.appendChild(note);
   } else {
     document.getElementById('sec-stations').style.display = 'none';
