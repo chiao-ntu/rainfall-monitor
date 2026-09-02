@@ -3376,6 +3376,57 @@ if (need('_blendOverviewHtml')) {
   setLex("forecastModel='best'; window.MODEL_SKILL={}; window.SKILL_PROGRESS=null;");
 }
 
+
+console.log('\n=== 測站雨量排名（Cleveland dot plot）===');
+if (need('drawStnRankChart')) {
+  setLex(`document.body.insertAdjacentHTML('beforeend','<canvas id="cv-stnrank"></canvas>');
+    TMAP['南投縣仁愛鄉'] = Object.assign(TMAP['南投縣仁愛鄉']||{}, {
+      county:'南投縣', township:'仁愛鄉', stations:[
+        {name:'翠峰', daily_rain:[35.5]}, {name:'廬山', daily_rain:[128.0]},
+        {name:'合歡山', daily_rain:[8.2]}, {name:'清境', daily_rain:[62.1]},
+        {name:'無值站', daily_rain:[null]}]});`);
+  const t = getLex("TMAP['南投縣仁愛鄉']");
+  let threw = false;
+  try { G.drawStnRankChart(t); G.drawStnRankChart(t, 'chart-zoom-canvas'); }
+  catch(e){ threw = true; console.log('   ', e.message); }
+  chk('繪製不拋錯（含放大）', threw, false);
+
+  // 排序與過濾邏輯
+  const rows = (t.stations||[])
+    .map(st=>({name:st.name, v:(st.daily_rain||[])[0]}))
+    .filter(x=>x.name && x.v != null).sort((a,b)=>b.v-a.v);
+  console.log(`   排序後：${rows.map(r=>r.name+' '+r.v).join('、')}`);
+  chk('★依雨量由大到小', rows[0].name, '廬山');
+  chk('最小值在最後', rows[rows.length-1].name, '合歡山');
+  chk('★排除無值測站', rows.some(r=>r.name==='無值站'), false);
+
+  // 無測站鄉鎮不應出錯
+  let t2 = false;
+  try { G.drawStnRankChart({county:'x', township:'y', stations:[]}); }
+  catch(e){ t2 = true; }
+  chk('無測站時不拋錯', t2, false);
+
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('僅有測站時顯示區塊', /sEl\.style\.display = hasStn \? 'block' : 'none'/.test(src), true);
+  chk('色階同累積雨量', /RAIN_SCALE\.find\(b=>r\.v < b\.max\)/.test(src), true);
+  chk('★有導引線（點狀圖特徵）', /Cleveland dot plot 的特徵/.test(src), true);
+  chk('限制顯示筆數', /\.slice\(0, 14\)/.test(src), true);
+}
+
+console.log('\n=== 情境編輯器支援融合 ===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★情境選單含融合', /blend:'融合'/.test(src), true);
+  chk('★名稱恢復為 CWA+ECMWF', /best:'CWA\+ECMWF'/.test(src), true);
+  chk('不再叫「綜合」', /best:'綜合'/.test(src), false);
+  chk('★融合為動態計算（非後端欄位）',
+      /融合是動態計算，沒有對應的後端欄位/.test(src), true);
+  chk('情境沿用融合快取', /rule\.model === 'blend'[\s\S]{0,200}t\._blendCache/.test(src), true);
+  const labels = getLex('SCN_MODEL_LABEL');
+  console.log(`   情境模式：${Object.values(labels).join('、')}`);
+  chk('選項齊全', Object.keys(labels).length, 9);
+}
+
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
                          : '\n全部通過');
 process.exit(fails.length ? 1 : 0);

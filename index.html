@@ -624,6 +624,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div class="sec-body" id="body-stations" style="display:none"></div>
     </div>
 
+    <!-- 區塊：測站雨量排名（Cleveland dot plot） -->
+    <div class="sec" id="sec-stnrank" style="display:none">
+      <div class="sec-h" onclick="toggleSec('stnrank')">
+        <span>測站雨量排名</span><span class="sec-arrow" id="arrow-stnrank">▸</span>
+      </div>
+      <div class="sec-body" id="body-stnrank" style="display:none">
+        <canvas id="cv-stnrank" style="width:100%;height:220px;display:block;
+          background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-stnrank')"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          該鄉鎮各雨量站的今日累積，依雨量排序；色階同累積雨量圖層</div>
+      </div>
+    </div>
+
     <!-- 區塊：融合校正明細（僅融合模式顯示） -->
     <div class="sec" id="sec-blend" style="display:none">
       <div class="sec-h" onclick="toggleSec('blend')">
@@ -1567,6 +1581,76 @@ function _blendOverviewHtml(){
     + '點選任一鄉鎮可查看該地的加權明細與官方研判比對。</div>';
 }
 
+// ══════════════════════════════════════════════════════════
+//  測站雨量排名（Cleveland dot plot）
+//  ★ 相較長條圖更乾淨易讀：每站一個點，一眼看出雨勢最猛的測站與極端值。
+//    資料來自 t.stations（該鄉鎮的官方雨量站，含今日累積）。
+// ══════════════════════════════════════════════════════════
+function drawStnRankChart(t, canvasId){
+  const cv = document.getElementById(canvasId || 'cv-stnrank');
+  if(!cv || !t) return;
+  const rows = (t.stations || [])
+    .map(st=>({name: st.name || '', v: (st.daily_rain || [])[0],
+               etr: st.etr2_pct}))
+    .filter(x=>x.name && x.v != null)
+    .sort((a,b)=>b.v - a.v)
+    .slice(0, 14);                      // 太多會擠成一團
+  const isZoom = (canvasId === 'chart-zoom-canvas');
+  cv.width = cv.offsetWidth || 300;
+  cv.height = cv.offsetHeight || 220;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if(!rows.length){
+    ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
+    ctx.fillText('此鄉鎮無雨量站資料', 12, 24);
+    return;
+  }
+  const fs = isZoom ? 16 : 10;
+  const pL = isZoom ? 190 : 78, pR = isZoom ? 60 : 26;
+  const pT = isZoom ? 40 : 16, pB = isZoom ? 46 : 22;
+  const iw = cv.width - pL - pR, ih = cv.height - pT - pB;
+  const vMax = Math.max(10, Math.ceil(Math.max(...rows.map(r=>r.v)) * 1.15 / 10) * 10);
+  const X = v => pL + iw * (v / vMax);
+  const Y = i => pT + (ih / rows.length) * (i + 0.5);
+
+  // 格線與刻度
+  ctx.strokeStyle = '#12283c'; ctx.lineWidth = 1;
+  ctx.fillStyle = '#5a7a95'; ctx.font = `${fs}px sans-serif`;
+  ctx.textAlign = 'center';
+  const step = vMax <= 50 ? 10 : vMax <= 200 ? 50 : 100;
+  for(let v = 0; v <= vMax; v += step){
+    ctx.beginPath(); ctx.moveTo(X(v), pT); ctx.lineTo(X(v), pT + ih); ctx.stroke();
+    ctx.fillText(String(v), X(v), cv.height - pB + fs + 2);
+  }
+  ctx.fillText('累積雨量 (mm)', pL + iw/2, cv.height - 3);
+
+  // 每列：站名 + 導引線 + 點
+  ctx.textAlign = 'right';
+  rows.forEach((r, i)=>{
+    const y = Y(i);
+    ctx.fillStyle = '#9fc8e8'; ctx.font = `${fs}px sans-serif`;
+    ctx.fillText(r.name.slice(0, isZoom ? 14 : 6), pL - 6, y + fs*0.35);
+    // 導引線（Cleveland dot plot 的特徵，幫助橫向對位）
+    ctx.strokeStyle = '#16324a'; ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(pL, y); ctx.lineTo(X(r.v), y); ctx.stroke();
+    ctx.setLineDash([]);
+    // 點：色階同累積雨量圖層
+    const col = (RAIN_SCALE.find(b=>r.v < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(X(r.v), y, isZoom ? 7 : 4, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#0a1a28'; ctx.lineWidth = 1; ctx.stroke();
+    // 數值
+    ctx.fillStyle = '#cfe4f5'; ctx.textAlign = 'left';
+    ctx.fillText(r.v.toFixed(0), X(r.v) + (isZoom ? 11 : 7), y + fs*0.35);
+    ctx.textAlign = 'right';
+  });
+  if(isZoom){
+    ctx.fillStyle = '#6bc8e8'; ctx.font = 'bold 20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${t.county}${t.township} 測站雨量排名（今日累積）`, cv.width/2, 26);
+  }
+}
+
 function renderBlendDetail(t){
   const el = document.getElementById('blend-detail');
   const sec = document.getElementById('sec-blend');
@@ -1785,7 +1869,16 @@ function getQpfArr(t, qpfField){
     let arr = base, isCwa = (qpfField === 'qpf_cwa');
     if(rule && rule.model && MODEL_FIELD[rule.model]){
       isCwa = (rule.model === 'cwa');
-      arr = t[MODEL_FIELD[rule.model]] || base;
+      // ★ 融合是動態計算，沒有對應的後端欄位，須另行組出（並沿用快取）
+      if(rule.model === 'blend'){
+        if(!t._blendCache || t._blendKey !== (window._dataGenAt || '')){
+          t._blendCache = _blendQpf(t);
+          t._blendKey = window._dataGenAt || '';
+        }
+        arr = t._blendCache || base;
+      } else {
+        arr = t[MODEL_FIELD[rule.model]] || base;
+      }
     }
     let v = arr[s];
     if(v == null){ out[s] = null; continue; }
@@ -2066,8 +2159,8 @@ function scnApplyAndClose(){
   }
 }
 
-const SCN_MODEL_LABEL = {'':'沿用上方', best:'綜合', ecmwf:'ECMWF', gfs:'GFS',
-  icon:'ICON', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'};
+const SCN_MODEL_LABEL = {'':'沿用上方', blend:'融合', best:'CWA+ECMWF',
+  ecmwf:'ECMWF', gfs:'GFS', icon:'ICON', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'};
 
 // TOWN_ZONE 未產生時，_townZone() 退路只會回「山區／平地」，
 // 因此「淺山區／沿海地區」兩列目前對不到任何鄉鎮——在 UI 上標記出來，
@@ -2972,6 +3065,14 @@ function updateInfo(t){
     if(dEl) dEl.style.display = hasWind ? 'block' : 'none';
     if(hEl) hEl.style.display = hasWind ? 'block' : 'none';
     if(hasWind) drawAllWindCharts(t);
+
+    // 測站雨量排名：有雨量站才顯示
+    const hasStn = (t.stations || []).some(st=>(st.daily_rain||[])[0] != null);
+    const sEl = document.getElementById('sec-stnrank');
+    if(sEl) sEl.style.display = hasStn ? 'block' : 'none';
+    if(hasStn){
+      try{ drawStnRankChart(t); }catch(e){ console.warn('測站排名圖失敗', e); }
+    }
 
     // 融合校正明細（僅融合模式顯示）
     try{ renderBlendDetail(t); }catch(e){ console.warn('融合明細失敗', e); }
@@ -8242,6 +8343,7 @@ function _redrawZoom(){
 function toggleChartZoom(canvasId){
   const needsSelected = (canvasId==='cv'||canvasId==='cv-district-hyeto'
                        ||canvasId.startsWith('cv-wind-')
+                       ||canvasId.startsWith('cv-stnrank')
                        ||canvasId.startsWith('cv-temp-')
                        ||canvasId.startsWith('cv-wave-'));
   if(needsSelected && !selected) return;
@@ -8262,6 +8364,7 @@ function toggleChartZoom(canvasId){
     'cv-wind-hr': selected ? `${selected.county}${selected.township} 逐時風力預測（平均風）` : '',
     'cv-wind-hr-gust': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風）` : '',
     'cv-wind-hr-est': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風推估）` : '',
+    'cv-stnrank': selected ? `${selected.county}${selected.township} 測站雨量排名` : '',
     'cv-temp-day': selected ? `${selected.county}${selected.township} 逐日氣溫預測` : '',
     'cv-temp-hr': selected ? `${selected.county}${selected.township} 逐時氣溫預測` : '',
     'cv-wave-day': selected ? `${selected.county}${selected.township} 逐日浪高預測` : '',
@@ -8273,7 +8376,9 @@ function toggleChartZoom(canvasId){
   if(titleEl) titleEl.textContent = titleMap[canvasId] || '';
   _zoomCanvasType = canvasId;
 
-  if(canvasId === 'cv-temp-day' && selected){
+  if(canvasId === 'cv-stnrank' && selected){
+    drawStnRankChart(selected, 'chart-zoom-canvas');
+  } else if(canvasId === 'cv-temp-day' && selected){
     drawTempDayChart(selected, 'chart-zoom-canvas');
   } else if(canvasId === 'cv-temp-hr' && selected){
     drawTempHourChart(selected, 'chart-zoom-canvas');
