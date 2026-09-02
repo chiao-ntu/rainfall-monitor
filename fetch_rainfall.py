@@ -1123,7 +1123,10 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
 
     # 若 obs 是空字典（該鄉鎮完全無觀測站資料），直接回傳原站清單（無ETR2%）
     if not obs_station_ids:
-        return [{'name': st.get('name',''), 'alert_val': st.get('alert_val'),
+        # ★ 早退路徑同樣要帶座標與海拔欄位，否則該鄉鎮的測站在前端
+        #   會缺 sid/lat/lng/elev，海拔散佈圖與測站底圖就取不到它們。
+        return [{'name': st.get('name',''), 'sid': '', 'lat': None, 'lng': None,
+                 'elev': None, 'alert_val': st.get('alert_val'),
                  'village': st.get('village',''), 'etr2': None, 'etr2_pct': None,
                  'daily_rain': [0.0]*15} for st in excel_stations]
 
@@ -1180,7 +1183,7 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
         daily    = station_daily.get(sid, [0.0]*15) if sid else [0.0]*15
         # ★ 帶上座標與海拔：供前端做「海拔 vs 雨量」散佈圖與測站底圖著色。
         #   海拔查自 station_elev.json（由 20m DTM 離線產生，見 build_station_elev.py）。
-        _sinfo = (stations or {}).get(sid) or {}
+        _sinfo = (all_stations or {}).get(sid) or {}
         _elev = (STATION_ELEV or {}).get(sid)
         enriched.append({
             'name':      name,

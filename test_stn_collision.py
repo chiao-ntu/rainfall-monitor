@@ -593,5 +593,54 @@ if os.path.exists(_tf):
     chk('輸出含 model_skill', "output['model_skill']" in _src7, True)
     chk('★現階段不回饋修正', '現階段只累積與呈現，不回饋修正預測' in _src7, True)
 
+
+print('\n=== 靜態檢查：未定義名稱 ===')
+# ★ 實測 2026-09-02：新增測站座標時把參數名寫成 stations（實為 all_stations），
+#   語法正確、compile 也過，但執行到才 NameError 而中斷整輪。
+#   symtable 能在不執行的情況下抓出這類錯誤，故納入常態檢查。
+import symtable as _symtable, builtins as _builtins
+for _f in ('fetch_rainfall.py', 'fetch_qpesums_hourly.py'):
+    if not os.path.exists(_f):
+        continue
+    _src = io.open(_f, encoding='utf-8').read()
+    _st = _symtable.symtable(_src, _f, 'exec')
+    _g = set(_st.get_identifiers()) | set(dir(_builtins))
+    _bad = []
+    def _walk(tab, path=''):
+        for sym in tab.get_symbols():
+            n = sym.get_name()
+            if (sym.is_referenced() and not sym.is_assigned()
+                    and not sym.is_parameter() and not sym.is_global()
+                    and not sym.is_imported() and not sym.is_free()
+                    and n not in _g):
+                _bad.append(f'{path or tab.get_name()}() → {n}')
+        for ch in tab.get_children():
+            _walk(ch, (path + '/' + ch.get_name()) if path else ch.get_name())
+    _walk(_st)
+    if _bad:
+        print(f'  {_f} 未定義名稱：')
+        for b in _bad[:10]:
+            print(f'    {b}')
+    chk(f'{_f} 無未定義名稱', _bad, [])
+
+
+print('\n=== 測站座標與海拔（兩條路徑一致）===')
+FR.STATION_ELEV = {'C0H9A0': 2100.5}
+_ex = [{'name': '翠峰', 'alert_val': 200, 'village': '某村'}]
+_as = {'C0H9A0': {'name': '翠峰', 'lat': 24.09, 'lng': 121.17}}
+_r1 = FR.enrich_stations_with_etr2(
+    _ex, {'station_etr2': {'C0H9A0': 150.0}, 'stations': ['C0H9A0'],
+          'station_daily': {'C0H9A0': [12.0] + [0.0] * 14}}, _as, 200)[0]
+chk('★正常路徑帶 sid', _r1.get('sid'), 'C0H9A0')
+chk('正常路徑帶座標', [_r1.get('lat'), _r1.get('lng')], [24.09, 121.17])
+chk('★正常路徑帶海拔', _r1.get('elev'), 2100.5)
+chk('ETR2% 仍正確', _r1.get('etr2_pct'), 0.75)
+# 無觀測站的早退路徑（欄位須齊全，否則前端取不到）
+_r2 = FR.enrich_stations_with_etr2(_ex, {}, _as, 200)[0]
+chk('★早退路徑亦有 sid 欄位', 'sid' in _r2, True)
+chk('★早退路徑亦有 elev 欄位', 'elev' in _r2, True)
+chk('兩條路徑欄位一致', sorted(_r1.keys()), sorted(_r2.keys()))
+FR.STATION_ELEV = {}
+
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)
