@@ -3589,7 +3589,6 @@ console.log('\n=== 測站底圖（Voronoi + 測站來源）===');
 if (need('toggleStationSrc') && need('toggleInterpMode') && need('_paintGrid')) {
   const src = fs.readFileSync('index.html', 'utf8');
   chk('★提供測站來源切換', /id="bStnSrc"/.test(src), true);
-  chk('★提供銳利／平滑切換', /id="bVoronoi"/.test(src), true);
   chk('Voronoi 以光柵化實作（不算多邊形）',
       /以光柵化實作（逐格找最近點），不需計算多邊形/.test(src), true);
   chk('★上色邏輯已抽出共用', /function _paintGrid\(grid, NX, NY/.test(src), true);
@@ -3675,7 +3674,8 @@ if (need('_scatterTipHtml') && need('focusStation') && need('toggleSidebarFull')
   let fthrew = false;
   try { G.toggleSidebarFull(); } catch(e){ fthrew = true; console.log('   ', e.message); }
   chk('全螢幕切換不拋錯', fthrew, false);
-  chk('★側欄展開為全寬', getLex("document.getElementById('sb').style.width"), '100%');
+  chk('★側欄展開為全寬', /calc\(100vw/.test(
+      getLex("document.getElementById('sb').style.width")), true);
   chk('地圖隱藏', getLex("document.getElementById('map').style.display"), 'none');
   G.toggleSidebarFull();
   chk('可還原', getLex("document.getElementById('sb').style.width"), '');
@@ -3718,7 +3718,9 @@ if (need('toggleStationLayer') && need('toggleCtlFull')) {
   let e1 = false;
   try { G.toggleCtlFull(); } catch(e){ e1 = true; console.log('   ', e.message); }
   chk('左側全螢幕不拋錯', e1, false);
-  chk('★左側展開為全寬', getLex("document.getElementById('lsb').style.width"), '100%');
+  // 寬度改為 calc(100vw - 44px)，保留兩側按鈕條的空間
+  chk('★左側展開為全寬', /calc\(100vw/.test(
+      getLex("document.getElementById('lsb').style.width")), true);
   chk('右側收為 0', /^0(px)?$/.test(getLex("document.getElementById('sb').style.width")), true);
   G.toggleSidebarFull();
   chk('★切到右側時左側收起', /^0(px)?$/.test(getLex("document.getElementById('lsb').style.width")), true);
@@ -3726,6 +3728,40 @@ if (need('toggleStationLayer') && need('toggleCtlFull')) {
   let e2 = false;
   try { G.toggleStationLayer(); G.toggleStationLayer(); } catch(e){ e2 = true; }
   chk('測站圖層切換不拋錯', e2, false);
+}
+
+
+console.log('\n=== 本輪修正（二）===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★已移除銳利/平滑按鈕', /id="bVoronoi"/.test(src), false);
+  chk('★圖表改用 getAccum（隨視窗更新）',
+      /const acc = getAccum\(tt\);\s*\n\s*if\(!acc\) return;/.test(src), true);
+  chk('說明與地圖著色一致', /與地圖著色的依據完全一致/.test(src), true);
+  chk('★標題標明資料來源', /_winSrcLabel\(\)/.test(src), true);
+  chk('過去視窗標示官方觀測', /'（氣象署觀測）'/.test(src), true);
+  chk('★分級線有左側標籤', /B\.ctx\.fillText\(lv \+ '%', B\.pL - 5/.test(src), true);
+  chk('標籤用同色', /B\.ctx\.fillStyle = c; B\.ctx\.textAlign = 'right'/.test(src), true);
+  chk('★全螢幕保留按鈕條空間', /calc\(100vw - \$\{BAR\}px\)/.test(src), true);
+  chk('說明按鈕會被擠出畫面', /否則面板會被擠出畫面/.test(src), true);
+  chk('按鈕條保持可點', /el\.style\.zIndex = '600'/.test(src), true);
+  chk('★清單點位可定位', /function _zoomPoint\(lat, lng, label\)/.test(src), true);
+  chk('土石流清單帶座標', /lat: d\.lat \?\? \(_alertTown\(d\) \|\| \{\}\)\.lat/.test(src), true);
+  chk('大崩清單帶座標', /lat: a\.lat \?\? \(_alertTown\(a\) \|\| \{\}\)\.lat/.test(src), true);
+  chk('無座標時不綁點擊', /const canZoom = \(x\.lat != null && x\.lng != null\)/.test(src), true);
+}
+if (need('_winSrcLabel') && need('_zoomPoint')) {
+  setLex("winKey='past1'; forecastModel='best';");
+  chk('★過去視窗→官方觀測', G._winSrcLabel(), '（氣象署觀測）');
+  setLex("winKey='fut1'; forecastModel='blend';");
+  chk('★未來視窗→所選模式', G._winSrcLabel(), '（融合 預測）');
+  setLex("winKey='today';");
+  chk('今日→觀測＋預測', /今日＝觀測＋融合預測/.test(G._winSrcLabel()), true);
+  setLex("winKey='today'; forecastModel='best';");
+  let z = false;
+  try { G._zoomPoint(24.0, 121.1, '測試點'); } catch(e){ z = true; console.log('   ', e.message); }
+  chk('定位不拋錯', z, false);
+  chk('無座標時不動作', G._zoomPoint(null, null, 'x'), undefined);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`

@@ -196,8 +196,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       style="border-color:#3a7a8a;color:#7ad8e8">渲染</button>
     <button class="b" id="bStnSrc" onclick="toggleStationSrc()"
       style="border-color:#8a6a3a;color:#e8c87a" title="以雨量站實測位置取代鄉鎮質心">測站</button>
-    <button class="b" id="bVoronoi" onclick="toggleInterpMode()"
-      style="border-color:#8a6a3a;color:#e8c87a" title="最近鄰分割（邊界銳利）／客觀分析（平滑）">銳利</button>
     <button class="b" onclick="downloadRangeCsv()"
       style="border-color:#2a7a4a;color:#5ad88a">⬇ CSV</button>
     <a href="taiwan_blank_map.html" target="_blank" class="b"
@@ -1182,18 +1180,28 @@ function _applyFullLayout(){
   const ctl = document.getElementById('lsb');
   const bf  = document.getElementById('sb-full');
   const bc  = document.getElementById('ctl-full');
+  // ★ 全螢幕時要扣掉兩側按鈕條的寬度，否則面板會被擠出畫面：
+  //   右側有 sb-full / sb-toggle，左側有 ctl-full / lsb-toggle，
+  //   各約 20px。用 calc 保留空間，收合與全螢幕按鈕才點得到。
+  const BAR = 44;   // 兩支按鈕條的總寬（含邊框與間距）
   if(sb){
-    sb.style.width = _sbFull ? '100%' : (_ctlFull ? '0' : '');
-    // 全螢幕時內容可能超出，允許捲動（先前邊緣資訊會被裁掉）
+    sb.style.width = _sbFull ? `calc(100vw - ${BAR}px)` : (_ctlFull ? '0' : '');
+    sb.style.maxWidth = _sbFull ? `calc(100vw - ${BAR}px)` : '';
+    // 內容超出時可捲動（先前邊緣資訊會被裁掉）
     sb.style.overflowX = _sbFull ? 'auto' : 'hidden';
-    sb.style.maxWidth = _sbFull ? '100vw' : '';
+    sb.style.overflowY = _sbFull ? 'auto' : '';
   }
   if(ctl){
-    ctl.style.width = _ctlFull ? '100%' : (_sbFull ? '0' : '');
+    ctl.style.width = _ctlFull ? `calc(100vw - ${BAR}px)` : (_sbFull ? '0' : '');
+    ctl.style.maxWidth = _ctlFull ? `calc(100vw - ${BAR}px)` : '';
     ctl.style.overflow = _ctlFull ? 'auto' : '';
-    ctl.style.maxWidth = _ctlFull ? '100vw' : '';
   }
   if(mp) mp.style.display = (_sbFull || _ctlFull) ? 'none' : '';
+  // 按鈕條在全螢幕時必須保持可見可點
+  [document.getElementById('sb-toggle'), document.getElementById('lsb-toggle'),
+   bf, bc].forEach(el=>{
+    if(el){ el.style.position = 'relative'; el.style.zIndex = '600'; }
+  });
   if(bf){ bf.textContent = _sbFull ? '⛷' : '⛶'; bf.classList.toggle('on', _sbFull); }
   if(bc){ bc.textContent = _ctlFull ? '⛷' : '⛶'; bc.classList.toggle('on', _ctlFull); }
   setTimeout(()=>{ try{ if(selected) updateInfo(selected); }catch(e){} }, 260);
@@ -2072,6 +2080,16 @@ function _scatterTipHtml(t){
     + '<br><span style="color:#6bc8e8;font-size:10px">點選可跳至該地</span>';
 }
 
+// 目前視窗的資料來源標籤：讓圖表標題明示這是觀測還是預測
+function _winSrcLabel(){
+  if(winKey === 'radar') return '（雷達1h）';
+  if(winKey.startsWith('past')) return '（氣象署觀測）';
+  const mn = {blend:'融合', best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
+              icon:'ICON', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'}[forecastModel] || '';
+  if(winKey === 'today') return `（今日＝觀測＋${mn}預測）`;
+  return `（${mn} 預測）`;
+}
+
 function drawEtrPhaseChart(t, canvasId){
   const cv = document.getElementById(canvasId || 'cv-etrphase');
   if(!cv) return;
@@ -2079,13 +2097,17 @@ function drawEtrPhaseChart(t, canvasId){
   // ★ 用純色（同 RAIN_SCALE）：先前紅/橘、綠/藍過近，放大後仍難分辨。
   const ZC = {'山區':'#FF0000', '淺山區':'#FFFF00', '平地':'#00FF00', '沿海地區':'#00FFFF'};
   const key = t ? (t.county||'') + (t.township||'') : '';
+  // ★ 隨時間視窗與模式即時更新：用 getAccum() 取「當前視窗」的值，
+  //   而非固定讀今日觀測。過去視窗會取官方觀測、未來視窗取所選模式的預測，
+  //   與地圖著色的依據完全一致。
   const pts = [];
   (TOWNSHIPS || []).forEach(tt=>{
-    const v = (tt.daily_rain || [])[0];
-    const e = tt.etr2_pct;
-    if(v == null || e == null) return;
+    const acc = getAccum(tt);
+    if(!acc) return;
+    const v = acc.totalRain, e = acc.etrPct;
+    if(v == null || e == null || !isFinite(v) || !isFinite(e)) return;
     const k = (tt.county||'') + (tt.township||'');
-    pts.push({v, e: e*100, zone: _townZone(tt) || '平地', mine: k === key, town: tt});
+    pts.push({v, e, zone: _townZone(tt) || '平地', mine: k === key, town: tt});
   });
   if(!pts.length){
     const F = _fitCanvas(cv, 300, 200);
@@ -2098,7 +2120,9 @@ function drawEtrPhaseChart(t, canvasId){
   const B = _scatterBase(cv, {isZoom, x0:0, x1:vMax, y0:0, y1:eMax,
     xLabel:'今日累積雨量 (mm)', yLabel:'ETR2 (%)',
     yFmt: v=>v.toFixed(0)+'%',
-    title:'雨量與地形分佈' + (t ? `　— ${t.county}${t.township}` : '')});
+    title:'雨量與地形分佈'
+      + `　${_winSrcLabel()}`
+      + (t ? `　— ${t.county}${t.township}` : '')});
   // ★ 分級參考線：50% 綠、70% 黃、90% 紅、100% 紫（使用者指定）
   //   顏色與警戒嚴重度一致，不再只標單一警戒線。
   [[50,'#00FF00'], [70,'#FFFF00'], [90,'#FF0000'], [100,'#FF00FF']].forEach(([lv, c])=>{
@@ -2108,6 +2132,10 @@ function drawEtrPhaseChart(t, canvasId){
     B.ctx.beginPath(); B.ctx.moveTo(B.pL, B.Y(lv));
     B.ctx.lineTo(B.pL + B.iw, B.Y(lv)); B.ctx.stroke();
     B.ctx.setLineDash([]); B.ctx.globalAlpha = 1;
+    // 在左側標出該線代表的百分比，文字用同一顏色
+    B.ctx.fillStyle = c; B.ctx.textAlign = 'right';
+    B.ctx.font = `${B.fs}px sans-serif`;
+    B.ctx.fillText(lv + '%', B.pL - 5, B.Y(lv) + B.fs * 0.35);
   });
   const hits = [];
   pts.forEach(p=>{
@@ -8144,6 +8172,22 @@ function _prevCountMap(entries, judge){
   return m;
 }
 
+// 定位到指定座標並標示（土石流潛勢溪流、大規模崩塌區等點位）
+let _ptMarker = null;
+function _zoomPoint(lat, lng, label){
+  if(lat == null || lng == null) return;
+  map.setView([lat, lng], 14);
+  if(_ptMarker){ try{ map.removeLayer(_ptMarker); }catch(e){} }
+  _ptMarker = L.circleMarker([lat, lng], {
+    radius: 9, color: '#ffff44', weight: 3, fillColor: '#ff6644',
+    fillOpacity: 0.85, pane: 'markerPane'
+  }).addTo(map);
+  if(label) _ptMarker.bindTooltip(String(label),
+    {permanent: true, direction: 'top', className: 'pt-label'}).openTooltip();
+  setTimeout(()=>{ if(_ptMarker){ try{ map.removeLayer(_ptMarker); }catch(e){}
+                                  _ptMarker = null; } }, 30000);
+}
+
 function _alertListHtml(items, footer){
   let h = '';
   _eachDistrict(_groupByDistrict(items), x=>x.rank, (d, dcol, cMap, counties)=>{
@@ -8169,9 +8213,18 @@ function _alertListHtml(items, footer){
           <span style="color:#7a8a9a;font-size:9px">${list.length}</span>${dTag}
           ${tr.arrow || ''}</div>`;
         list.forEach(x=>{
-          h += `<div style="padding:0 0 1px 16px;font-size:10px;color:#d8c8b8;line-height:1.45">
+          // ★ 個別潛勢溪流／崩塌區也可點選定位（先前只有鄉鎮列可以）。
+          //   有座標才綁定，避免點了沒反應。
+          const canZoom = (x.lat != null && x.lng != null);
+          const attr = canZoom
+            ? ` onclick="_zoomPoint(${x.lat},${x.lng},'${String(x.id).replace(/'/g,'')}')"`
+              + ` style="padding:0 0 1px 16px;font-size:10px;color:#d8c8b8;line-height:1.45;`
+              + `cursor:pointer" title="點選可定位到此位置"`
+            : ` style="padding:0 0 1px 16px;font-size:10px;color:#d8c8b8;line-height:1.45"`;
+          h += `<div${attr}>
             <span style="color:${x.tagCol};font-weight:700">${x.id}</span>
-            <span style="color:${x.tagCol};font-size:9px">${x.tag}</span><br>
+            <span style="color:${x.tagCol};font-size:9px">${x.tag}</span>
+            ${canZoom ? '<span style="color:#6bc8e8;font-size:9px">📍</span>' : ''}<br>
             <span style="padding-left:2px;color:#9aa8b8;font-size:9px">${x.detail}</span></div>`;
         });
       });
@@ -8683,6 +8736,10 @@ function updateDebrisPanel(){
     const tr = _alertTrend(d, _prevMap);
     return {
       county: d.county||'', town: d.town||'', id: no,
+      // 供清單點選定位：警戒資料多數沒有逐點座標，
+      // 故退回該鄉鎮的座標（至少能定位到正確區域）
+      lat: d.lat ?? (_alertTown(d) || {}).lat ?? null,
+      lng: d.lng ?? (_alertTown(d) || {}).lng ?? null,
       rank: _alertRank(d)*1000 + (d.pct||0)*100,
       tag: `${tag}${stl.tag}`, tagCol: stl.color, trend: tr,
       detail: `ETR2 ${d.etr2_est ?? d.etr2 ?? '—'}/${den ?? '—'}mm` +
@@ -8970,6 +9027,8 @@ function updateLandslidePanel(){
     const tr = _alertTrend(a, _prevMapL);
     return {
       county: a.county||'', town: a.town||'', id: no,
+      lat: a.lat ?? (_alertTown(a) || {}).lat ?? null,
+      lng: a.lng ?? (_alertTown(a) || {}).lng ?? null,
       rank: st.rank*1000 + (pct ?? 0),
       tag: st.tag, tagCol: st.col, trend: tr,
       detail: `ETR2 ${a.etr2_est ?? a.etr2 ?? '—'}/${den ?? '—'}mm` +
