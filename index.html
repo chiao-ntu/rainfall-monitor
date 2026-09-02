@@ -154,6 +154,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bTemp"  onclick="setMode('temp')" style="border-color:#3a8a5a;color:#7ee8a8">氣溫</button>
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
         style="border-color:#1a4060;color:#8ac8e8">🏷 鄉鎮市區</button>
+      <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
+        style="border-color:#8a6a3a;color:#e8c87a" title="顯示全臺雨量站位置">📍 測站</button>
       <select id="townNameScope" onchange="setTownNameScope(this.value)"
         style="display:none;font-size:10px;background:#061220;color:#8ac8e8;
         border:1px solid #1a4060;border-radius:3px;padding:2px 3px;margin-right:3px"></select>
@@ -340,6 +342,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     </div>
   </div>
   <!-- 左側欄收合按鈕（右緣、上下到底） -->
+  <button id="ctl-full" onclick="toggleCtlFull()" title="左側欄全螢幕/還原"
+    style="align-self:stretch;z-index:500;background:#091520;border:1px solid #1a3348;
+    border-left:none;border-radius:0 4px 4px 0;color:#e8c87a;cursor:pointer;padding:0 3px;
+    font-size:12px;line-height:1;writing-mode:vertical-rl;letter-spacing:2px;
+    flex-shrink:0;margin-bottom:2px">⛶</button>
   <button id="lsb-toggle" onclick="toggleLsb()" title="收合/展開左側欄"
     style="align-self:stretch;z-index:500;background:#091520;border:1px solid #1a3348;border-left:none;
     border-radius:0 4px 4px 0;color:#6bc8e8;cursor:pointer;padding:0 3px;
@@ -484,6 +491,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
     </div>
 
+    <!-- 區塊：雨量與地形分佈 -->
+    <div class="sec" id="sec-etrphase" style="display:none">
+      <div class="sec-h" onclick="toggleSec('etrphase')">
+        <span>雨量與地形分佈</span><span class="sec-arrow" id="arrow-etrphase">▸</span>
+      </div>
+      <div class="sec-body" id="body-etrphase" style="display:none">
+        <canvas id="cv-etrphase" style="width:100%;height:200px;display:block;
+          background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-etrphase')"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          各鄉鎮：今日累積雨量 vs ETR2%，依地形著色。虛線為警戒值（100%）</div>
+      </div>
+    </div>
+
     <!-- 區塊：全臺排行（前 20） -->
     <div class="sec" id="sec-rank" style="display:none">
       <div class="sec-h" onclick="toggleSec('rank')">
@@ -615,20 +636,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
     </div>
 
-    <!-- 區塊：ETR2 與雨量相位 -->
-    <div class="sec" id="sec-etrphase" style="display:none">
-      <div class="sec-h" onclick="toggleSec('etrphase')">
-        <span>ETR2 與雨量關係</span><span class="sec-arrow" id="arrow-etrphase">▸</span>
-      </div>
-      <div class="sec-body" id="body-etrphase" style="display:none">
-        <canvas id="cv-etrphase" style="width:100%;height:200px;display:block;
-          background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-etrphase')"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          各鄉鎮：今日累積雨量 vs ETR2%，依地形著色。虛線為警戒值（100%）</div>
-      </div>
-    </div>
-
     <!-- 區塊：警戒餘裕（測站別） -->
     <div class="sec" id="sec-margin" style="display:none">
       <div class="sec-h" onclick="toggleSec('margin')">
@@ -744,8 +751,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <div id="blend-detail" style="font-size:11px;color:#cfe4f5;line-height:1.7"></div>
         <div style="font-size:9px;color:#3a6080;margin-top:6px">
           方法依據：NOAA National Blend of Models、Met Office IMPROVER。<br>
-          CMPF：Calibrated Multi-source Precipitation Forecast<br>
-          （校正式多源降水預報）—— 本系統自訂名稱，非既有標準術語。</div>
+          CMPF：Calibrated Multi-source Precipitation Forecast</div>
       </div>
     </div>
   </div>
@@ -1155,9 +1161,96 @@ function updateEtrAlertPanel(){
 }
 // 側欄全螢幕：資訊多時單看側欄比較清楚
 //   ★ 只改寬度不動 DOM 結構，避免圖表因重新掛載而需重繪整批。
-let _sbFull = false;
+let _sbFull = false, _ctlFull = false;
+function toggleSidebarFull(){
+  _sbFull = !_sbFull;
+  if(_sbFull) _ctlFull = false;      // 兩者互斥
+  _applyFullLayout();
+}
+// 左側控制列全螢幕
+function toggleCtlFull(){
+  _ctlFull = !_ctlFull;
+  if(_ctlFull) _sbFull = false;
+  _applyFullLayout();
+}
+// ★ 統一套用版面：右側側欄、左側控制列、地圖三者互相補位。
+//   先前只改 sb 的寬度，在全螢幕下再按收合就會退回窄欄
+//   （兩者都在改同一個寬度）；集中處理才不會互相打架。
+function _applyFullLayout(){
+  const sb  = document.getElementById('sb');
+  const mp  = document.getElementById('map');
+  const ctl = document.getElementById('lsb');
+  const bf  = document.getElementById('sb-full');
+  const bc  = document.getElementById('ctl-full');
+  if(sb){
+    sb.style.width = _sbFull ? '100%' : (_ctlFull ? '0' : '');
+    // 全螢幕時內容可能超出，允許捲動（先前邊緣資訊會被裁掉）
+    sb.style.overflowX = _sbFull ? 'auto' : 'hidden';
+    sb.style.maxWidth = _sbFull ? '100vw' : '';
+  }
+  if(ctl){
+    ctl.style.width = _ctlFull ? '100%' : (_sbFull ? '0' : '');
+    ctl.style.overflow = _ctlFull ? 'auto' : '';
+    ctl.style.maxWidth = _ctlFull ? '100vw' : '';
+  }
+  if(mp) mp.style.display = (_sbFull || _ctlFull) ? 'none' : '';
+  if(bf){ bf.textContent = _sbFull ? '⛷' : '⛶'; bf.classList.toggle('on', _sbFull); }
+  if(bc){ bc.textContent = _ctlFull ? '⛷' : '⛶'; bc.classList.toggle('on', _ctlFull); }
+  setTimeout(()=>{ try{ if(selected) updateInfo(selected); }catch(e){} }, 260);
+  if(!_sbFull && !_ctlFull){
+    setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 280);
+  }
+}
 // 地圖上標示單一測站的位置（點選測站清單時使用）
 let _stnMarker = null;
+// ══════════════════════════════════════════════════════════
+//  全臺測站圖層
+//  ★ 以實際座標標出每個雨量站，色階同累積雨量；點選可看詳情。
+//    測站密度遠高於鄉鎮，能看出鄉鎮平均值掩蓋掉的局部強降雨。
+// ══════════════════════════════════════════════════════════
+let _stnLayerOn = false, _stnLayer = null, _stnTimer = null;
+function toggleStationLayer(){
+  _stnLayerOn = !_stnLayerOn;
+  const b = document.getElementById('bStnLayer');
+  if(b) b.classList.toggle('on', _stnLayerOn);
+  renderStationLayer();
+}
+function renderStationLayer(){
+  if(_stnLayer){ try{ map.removeLayer(_stnLayer); }catch(e){} _stnLayer = null; }
+  if(!_stnLayerOn) return;
+  const z = map.getZoom();
+  _stnLayer = L.layerGroup().addTo(map);
+  let n = 0, noPos = 0;
+  (TOWNSHIPS || []).forEach(t=>{
+    (t.stations || []).forEach(st=>{
+      if(st.lat == null || st.lng == null){ noPos++; return; }
+      const v = (st.daily_rain || [])[0];
+      const col = (v != null)
+        ? (RAIN_SCALE.find(b2=>v < b2.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color
+        : '#5a7a95';
+      // 縮放越大點越大；zoom 小時縮到最小避免糊成一片
+      const r = z >= 12 ? 6 : z >= 10 ? 4.5 : z >= 8 ? 3 : 2;
+      const m = L.circleMarker([st.lat, st.lng], {
+        radius: r, color: '#0a1a28', weight: 1,
+        fillColor: col, fillOpacity: v != null ? 0.92 : 0.5,
+        pane: 'markerPane'
+      }).addTo(_stnLayer);
+      const pct = st.etr2_pct != null ? (st.etr2_pct * 100).toFixed(0) + '%' : '—';
+      m.bindTooltip(
+        `<b>${st.name}</b><span style="color:#8a9aaa;font-size:10px">　`
+        + `${t.county}${t.township}</span><br>`
+        + `今日累積：${v != null ? v + ' mm' : '—'}<br>`
+        + `ETR2%：${pct}　警戒值：${st.alert_val != null ? st.alert_val + ' mm' : '—'}`
+        + (st.elev != null ? `<br>海拔：${st.elev.toFixed(0)} m` : ''),
+        {direction: 'top', opacity: 0.95});
+      m.on('click', ()=>{ selected = t; try{ renderLayer(); updateInfo(t); }catch(e){} });
+      n++;
+    });
+  });
+  console.log(`測站圖層：${n} 站`
+    + (noPos ? `（${noPos} 站無座標，需部署含 lat/lng 的 fetch_rainfall.py）` : ''));
+}
+
 function focusStation(st){
   if(!st || st.lat == null || st.lng == null) return;
   map.setView([st.lat, st.lng], 13);
@@ -1181,20 +1274,10 @@ function focusStation(st){
                                    _stnMarker = null; } }, 30000);
 }
 
-function toggleSidebarFull(){
-  _sbFull = !_sbFull;
-  const sb = document.getElementById('sb');
-  const mp = document.getElementById('map');
-  const b = document.getElementById('sb-full');
-  if(sb) sb.style.width = _sbFull ? '100%' : '';
-  if(mp) mp.style.display = _sbFull ? 'none' : '';
-  if(b){ b.textContent = _sbFull ? '⛷' : '⛶'; b.classList.toggle('on', _sbFull); }
-  // 寬度變了，圖表要重繪（canvas 依 offsetWidth 決定緩衝區大小）
-  setTimeout(()=>{ try{ if(selected) updateInfo(selected); }catch(e){} }, 260);
-  if(!_sbFull) setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 280);
-}
-
 function toggleSidebar(){
+  // ★ 全螢幕狀態下按收合 → 先退出全螢幕再照常收合，
+  //   否則兩者都在改同一個寬度，會變成很窄的一欄。
+  if(_sbFull){ _sbFull = false; _applyFullLayout(); }
   sidebarOpen = !sidebarOpen;
   const sb  = document.getElementById('sb');
   const btn = document.getElementById('sb-toggle');
@@ -1824,6 +1907,11 @@ function _fitCanvas(cv, fallbackW, fallbackH){
   const ctx = cv.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);   // 之後都用 CSS 座標作圖
   ctx.clearRect(0, 0, w, h);
+  // ★ 實填深色背景：canvas 未填背景時是「透明」，
+  //   複製或另存成圖片時透明區會被貼成白底，深色主題的圖就變成白底黑字難看。
+  //   CSS 的 background 只影響顯示，不會進到 canvas 的像素資料。
+  ctx.fillStyle = '#040c14';
+  ctx.fillRect(0, 0, w, h);
   return {ctx, w, h};
 }
 
@@ -2010,15 +2098,17 @@ function drawEtrPhaseChart(t, canvasId){
   const B = _scatterBase(cv, {isZoom, x0:0, x1:vMax, y0:0, y1:eMax,
     xLabel:'今日累積雨量 (mm)', yLabel:'ETR2 (%)',
     yFmt: v=>v.toFixed(0)+'%',
-    title:'ETR2 與雨量關係（依地形）' + (t ? `　— ${t.county}${t.township}（白圈）` : '')});
-  // 警戒線 100%
-  if(eMax > 100){
-    B.ctx.strokeStyle = '#ff4444'; B.ctx.setLineDash([4,3]); B.ctx.lineWidth = 1;
-    B.ctx.beginPath(); B.ctx.moveTo(B.pL, B.Y(100));
-    B.ctx.lineTo(B.pL + B.iw, B.Y(100)); B.ctx.stroke(); B.ctx.setLineDash([]);
-    B.ctx.fillStyle = '#ff4444'; B.ctx.textAlign = 'left';
-    B.ctx.fillText('警戒值', B.pL + 3, B.Y(100) - 3);
-  }
+    title:'雨量與地形分佈' + (t ? `　— ${t.county}${t.township}` : '')});
+  // ★ 分級參考線：50% 綠、70% 黃、90% 紅、100% 紫（使用者指定）
+  //   顏色與警戒嚴重度一致，不再只標單一警戒線。
+  [[50,'#00FF00'], [70,'#FFFF00'], [90,'#FF0000'], [100,'#FF00FF']].forEach(([lv, c])=>{
+    if(eMax <= lv) return;
+    B.ctx.strokeStyle = c; B.ctx.globalAlpha = 0.55;
+    B.ctx.setLineDash([4,3]); B.ctx.lineWidth = 1;
+    B.ctx.beginPath(); B.ctx.moveTo(B.pL, B.Y(lv));
+    B.ctx.lineTo(B.pL + B.iw, B.Y(lv)); B.ctx.stroke();
+    B.ctx.setLineDash([]); B.ctx.globalAlpha = 1;
+  });
   const hits = [];
   pts.forEach(p=>{
     hits.push({x: B.X(p.v), y: B.Y(p.e), town: p.town});
@@ -6674,6 +6764,9 @@ function _bindTownNameZoom(){
   if(_bindTownNameZoom.done || typeof map === 'undefined' || !map) return;
   _bindTownNameZoom.done = true;
   map.on('zoomend', ()=>{
+    // 測站圖層的點大小隨 zoom 變化，也要重繪
+    if(_stnLayerOn){ clearTimeout(_stnTimer);
+                     _stnTimer = setTimeout(renderStationLayer, 150); }
     if(!showTownName) return;
     clearTimeout(_tnTimer);
     _tnTimer = setTimeout(renderTownNameLayer, 150);
@@ -9058,6 +9151,8 @@ document.addEventListener('click', function(e){
 // ════════════════════════════════════════════════
 let lsbOpen = true;
 function toggleLsb(){
+  // 全螢幕狀態下按收合 → 先退出全螢幕（同 toggleSidebar 的處理）
+  if(_ctlFull){ _ctlFull = false; _applyFullLayout(); }
   lsbOpen = !lsbOpen;
   const lsb = document.getElementById('lsb');
   const btn = document.getElementById('lsb-toggle');
@@ -9452,6 +9547,9 @@ const _mercY = lat => Math.log(Math.tan(Math.PI/4 + lat*Math.PI/360));
 
 // 共用：把網格塗成色帶並疊到地圖（Barnes 與 Voronoi 兩條路徑共用）
 function _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1){
+  // ★ my0/my1 原本在 renderInterpolated 內計算，抽出共用函式時漏了帶過來，
+  //   導致陸地遮罩的座標全錯、整張圖被遮掉（開啟渲染後地圖一片空白）。
+  const my0 = _mercY(lat0), my1 = _mercY(lat1);
   // 雙線性上採樣 + 離散色階著色
   const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
   const ctx=cv.getContext('2d');

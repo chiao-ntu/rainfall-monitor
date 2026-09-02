@@ -3217,8 +3217,9 @@ if (need('renderBlendDetail')) {
   chk('標明方法依據', /NOAA National Blend of Models、Met Office IMPROVER/.test(src), true);
   chk('★標明 CMPF 完整名稱',
       /CMPF：Calibrated Multi-source Precipitation Forecast/.test(src), true);
-  chk('附中文譯名', /（校正式多源降水預報）/.test(src), true);
-  chk('標明為自訂名稱', /本系統自訂名稱，非既有標準術語/.test(src), true);
+  // 使用者要求移除中文譯名與自訂名稱說明，只留英文全名
+  chk('已移除中文譯名', /（校正式多源降水預報）/.test(src), false);
+  chk('已移除自訂名稱說明', /本系統自訂名稱，非既有標準術語/.test(src), false);
   chk('★明細位於測站清單之後（最下方）',
       src.indexOf('id="sec-stations"') < src.indexOf('id="sec-blend"'), true);
   chk('切模式時同步更新', /renderBlendDetail\(selected\)/.test(src), true);
@@ -3457,7 +3458,8 @@ if (need('drawElevRainChart') && need('drawEtrPhaseChart') && need('drawMarginCh
   const src = fs.readFileSync('index.html', 'utf8');
   chk('★海拔圖以全臺為底', /全臺 \$\{pts\.length\} 站　藍圈＝本鄉鎮/.test(src), true);
   chk('★ETR2 圖依地形著色（純色）', /'山區':'#FF0000', '淺山區':'#FFFF00'/.test(src), true);
-  chk('ETR2 圖有警戒線', /B\.ctx\.fillText\('警戒值'/.test(src), true);
+  // 改為四條分級線（50/70/90/100），不再標單一「警戒值」文字
+  chk('有四條分級線', /\[50,'#00FF00'\], \[70,'#FFFF00'\]/.test(src), true);
   chk('★餘裕圖以測站為單位', /rows\.push\(\{name: st\.name, town: k/.test(src), true);
   chk('餘裕圖有 0 線（警戒值）', /\/\/ 0 線＝警戒值/.test(src), true);
   chk('餘裕依距警戒值排序', /rows\.sort\(\(a,b\)=>b\.margin - a\.margin\)/.test(src), true);
@@ -3484,7 +3486,7 @@ if (need('renderRankList') && need('_bindScatterClick')) {
   chk('★沿海藍', /'沿海地區':'#00FFFF'/.test(src), true);
   chk('說明混淆問題', /先前紅\/橘、綠\/藍過近/.test(src), true);
   chk('★圖例移至底部', /圖例置於底部（比照風力／浪高圖的排版）/.test(src), true);
-  chk('★標題帶所選鄉鎮', /— \$\{t\.county\}\$\{t\.township\}（白圈）/.test(src), true);
+  chk('★標題帶所選鄉鎮', /title:'雨量與地形分佈'[\s\S]{0,60}\$\{t\.township\}/.test(src), true);
   chk('海拔圖標題帶鄉鎮', /（藍圈）/.test(src), true);
   chk('★可點選跳至該地', /點選圖上任一點可跳至該地/.test(src), true);
   chk('點擊有距離門檻（避免誤觸）', /const lim = cv\._isZoom \? 22 : 14;/.test(src), true);
@@ -3535,10 +3537,12 @@ console.log('\n=== 圖表清晰度與版面 ===');
   // 區塊順序
   const order = [...src.matchAll(/<!-- 區塊：([^ （]+)/g)].map(m=>m[1]);
   console.log(`   順序：${order.slice(0,9).join(' → ')}`);
-  chk('★排行在最上', order[0], '全臺排行');
+  // 使用者指定：雨量與地形分佈置頂，排行次之
+  chk('★雨量與地形分佈在最上', order[0], '雨量與地形分佈');
+  chk('排行次之', order[1], '全臺排行');
   chk('★融合明細在最下', order[order.length-1], '融合校正明細');
   const idx = n => order.indexOf(n);
-  chk('★雨量早於 ETR2', idx('現況觀測') < idx('ETR2'), true);
+  chk('★雨量早於警戒餘裕', idx('現況觀測') < idx('警戒餘裕'), true);
   chk('★ETR2 早於風力', idx('ETR2') < idx('逐日風力預測'), true);
   chk('★風力早於浪高', idx('逐日風力預測') < idx('浪高預測'), true);
   chk('★浪高早於氣溫', idx('浪高預測') < idx('氣溫預測'), true);
@@ -3675,6 +3679,53 @@ if (need('_scatterTipHtml') && need('focusStation') && need('toggleSidebarFull')
   chk('地圖隱藏', getLex("document.getElementById('map').style.display"), 'none');
   G.toggleSidebarFull();
   chk('可還原', getLex("document.getElementById('sb').style.width"), '');
+}
+
+
+console.log('\n=== 本輪修正驗證 ===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★渲染遮罩座標已修（my0/my1）',
+      /const my0 = _mercY\(lat0\), my1 = _mercY\(lat1\);/.test(src), true);
+  chk('說明地圖消失成因', /導致陸地遮罩的座標全錯、整張圖被遮掉/.test(src), true);
+  chk('★canvas 實填深色背景（複製不變白底）',
+      /ctx\.fillStyle = '#040c14';\s*\n\s*ctx\.fillRect\(0, 0, w, h\);/.test(src), true);
+  chk('說明白底成因', /複製或另存成圖片時透明區會被貼成白底/.test(src), true);
+  chk('★區塊改名為雨量與地形分佈', /<span>雨量與地形分佈<\/span>/.test(src), true);
+  chk('移除（白圈）字樣', /（白圈）/.test(src), false);
+  chk('★四條分級線（50/70/90/100）',
+      /\[\[50,'#00FF00'\], \[70,'#FFFF00'\], \[90,'#FF0000'\], \[100,'#FF00FF'\]\]/.test(src), true);
+  chk('移除警戒值字樣', /B\.ctx\.fillText\('警戒值'/.test(src), false);
+  chk('★移除自訂名稱說明', /本系統自訂名稱，非既有標準術語/.test(src), false);
+  chk('保留 CMPF 全名', /CMPF：Calibrated Multi-source Precipitation Forecast/.test(src), true);
+  chk('★左側全螢幕按鈕', /id="ctl-full"/.test(src), true);
+  chk('★兩側全螢幕互斥', /if\(_sbFull\) _ctlFull = false;/.test(src), true);
+  chk('★全螢幕時允許捲動（邊緣不被裁）', /sb\.style\.overflowX = _sbFull \? 'auto'/.test(src), true);
+  chk('收合時先退出全螢幕', /if\(_sbFull\)\{ _sbFull = false; _applyFullLayout\(\); \}/.test(src), true);
+  chk('★測站圖層按鈕', /id="bStnLayer"/.test(src), true);
+  chk('測站點隨 zoom 調整大小', /z >= 12 \? 6 : z >= 10 \? 4\.5/.test(src), true);
+  chk('測站圖層在鄉鎮市區按鈕旁',
+      src.indexOf('id="bTownName"') < src.indexOf('id="bStnLayer"'), true);
+  const order = [...src.matchAll(/<!-- 區塊：([^ （]+)/g)].map(m=>m[1]);
+  chk('★雨量與地形分佈在最上', order[0], '雨量與地形分佈');
+}
+if (need('toggleStationLayer') && need('toggleCtlFull')) {
+  setLex(`document.body.insertAdjacentHTML('beforeend',
+    '<div id="sb"></div><div id="lsb"></div><div id="map"></div>' +
+    '<button id="sb-full"></button><button id="ctl-full"></button>' +
+    '<button id="bStnLayer"></button>');
+    _sbFull=false; _ctlFull=false;`);
+  let e1 = false;
+  try { G.toggleCtlFull(); } catch(e){ e1 = true; console.log('   ', e.message); }
+  chk('左側全螢幕不拋錯', e1, false);
+  chk('★左側展開為全寬', getLex("document.getElementById('lsb').style.width"), '100%');
+  chk('右側收為 0', /^0(px)?$/.test(getLex("document.getElementById('sb').style.width")), true);
+  G.toggleSidebarFull();
+  chk('★切到右側時左側收起', /^0(px)?$/.test(getLex("document.getElementById('lsb').style.width")), true);
+  G.toggleSidebarFull();
+  let e2 = false;
+  try { G.toggleStationLayer(); G.toggleStationLayer(); } catch(e){ e2 = true; }
+  chk('測站圖層切換不拋錯', e2, false);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
