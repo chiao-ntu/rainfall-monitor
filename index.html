@@ -164,7 +164,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
         style="border-color:#1a4060;color:#8ac8e8">🏷 鄉鎮市區</button>
       <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
-        style="border-color:#8a6a3a;color:#e8c87a" title="顯示全臺雨量站位置">📍 雨量測站</button>
+        style="border-color:#8a6a3a;color:#e8c87a">📍 雨量測站</button>
       <select id="townNameScope" onchange="setTownNameScope(this.value)"
         style="display:none;font-size:10px;background:#061220;color:#8ac8e8;
         border:1px solid #1a4060;border-radius:3px;padding:2px 3px;margin-right:3px"></select>
@@ -1253,8 +1253,14 @@ function renderStationLayer(){
         fillColor: col, fillOpacity: v != null ? 0.92 : 0.5,
         pane: 'markerPane'
       }).addTo(_stnLayer);
-      // ★ 不掛 tooltip：368 鄉鎮上千個點，逐點提示反而干擾判讀；
-      //   需要細節時點選即可帶出該鄉鎮的完整資訊。
+      const pct = st.etr2_pct != null ? (st.etr2_pct * 100).toFixed(0) + '%' : '—';
+      m.bindTooltip(
+        `<b>${st.name}</b><span style="color:#8a9aaa;font-size:10px">　`
+        + `${t.county}${t.township}</span><br>`
+        + `今日累積：${v != null ? v + ' mm' : '—'}<br>`
+        + `ETR2%：${pct}　警戒值：${st.alert_val != null ? st.alert_val + ' mm' : '—'}`
+        + (st.elev != null ? `<br>海拔：${st.elev.toFixed(0)} m` : ''),
+        {direction: 'top', opacity: 0.95});
       m.on('click', ()=>{ selected = t; try{ renderLayer(); updateInfo(t); }catch(e){} });
       n++;
     });
@@ -1950,8 +1956,13 @@ function _scatterBase(cv, o){
   // ★ 可指定固定刻度（yTicks）：ETR2 圖只需 50/70/90/100 這幾個判讀門檻，
   //   均分刻度會多出一堆無意義的數字，畫面反而雜亂。
   if(o.yTicks){
-    // 標籤留給呼叫端用分級色重畫（見 drawEtrPhaseChart），此處不畫刻度文字，
-    // 避免灰色數字與彩色標籤重疊。
+    // 分級線（50/70/90/100）的標籤由呼叫端用對應顏色重畫，
+    // 此處只補畫「基準線」的刻度（如 0%），否則圖看起來像沒有底。
+    (o.yBaseTicks || [0]).forEach(v=>{
+      if(v < o.y0 || v > o.y1) return;
+      ctx.beginPath(); ctx.moveTo(pL, Y(v)); ctx.lineTo(pL + iw, Y(v)); ctx.stroke();
+      ctx.fillText(o.yFmt ? o.yFmt(v) : v.toFixed(0), pL - 5, Y(v) + fs*0.35);
+    });
   } else {
     for(let i = 0; i <= ny; i++){
       const v = o.y0 + (o.y1 - o.y0) * i / ny;
@@ -2130,7 +2141,7 @@ function drawEtrPhaseChart(t, canvasId){
   const eMax = Math.max(120, Math.ceil(Math.max(...pts.map(p=>p.e))/50)*50);
   const B = _scatterBase(cv, {isZoom, x0:0, x1:vMax, y0:0, y1:eMax,
     xLabel:'今日累積雨量 (mm)', yLabel:'ETR2 (%)',
-    yFmt: v=>v.toFixed(0)+'%', yTicks: [50, 70, 90, 100],
+    yFmt: v=>v.toFixed(0)+'%', yTicks: [0, 50, 70, 90, 100],
     title:'雨量與地形分佈'
       + `　${_winSrcLabel()}`
       + (t ? `　— ${t.county}${t.township}` : '')});

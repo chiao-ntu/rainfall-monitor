@@ -3742,9 +3742,17 @@ console.log('\n=== 本輪修正（三）===');
   chk('★移除渲染的測站來源按鈕', /id="bStnSrc"/.test(src), false);
   chk('說明為何移除', /測站只有觀測值、沒有預測/.test(src), true);
   chk('★圖層改名為雨量測站', /📍 雨量測站/.test(src), true);
-  chk('★測站圖層不掛 tooltip', /不掛 tooltip：368 鄉鎮上千個點/.test(src), true);
+  // 測站本身的 tooltip 必須保留（判讀時很重要）；拿掉的是按鈕的 title 提示
+  chk('★測站保留 tooltip', /m\.bindTooltip\(\s*\n\s*`<b>\$\{st\.name\}<\/b>/.test(src), true);
+  chk('tooltip 含所屬鄉鎮', /\$\{t\.county\}\$\{t\.township\}<\/span>/.test(src), true);
+  chk('tooltip 含 ETR2 與警戒值', /ETR2%：\$\{pct\}　警戒值/.test(src), true);
+  chk('★按鈕不再有 title 提示',
+      /id="bStnLayer"[\s\S]{0,120}title="顯示全臺雨量站位置"/.test(src), false);
   chk('★Y 軸可指定固定刻度', /o\.yTicks/.test(src), true);
-  chk('ETR2 圖只用 50/70/90/100', /yTicks: \[50, 70, 90, 100\]/.test(src), true);
+  // ★ 保留 0% 當基準線，否則圖看起來像沒有底
+  chk('ETR2 圖刻度含 0%', /yTicks: \[0, 50, 70, 90, 100\]/.test(src), true);
+  chk('基準線另行繪製', /o\.yBaseTicks \|\| \[0\]/.test(src), true);
+  chk('分級線不含 0%', /\[\[50,'#00FF00'\], \[70,'#FFFF00'\]/.test(src), true);
   chk('說明均分刻度的問題', /均分刻度會多出一堆無意義的數字/.test(src), true);
   chk('★放大標題已改名', /'cv-etrphase': '雨量與地形分佈'/.test(src), true);
   chk('不再有舊標題', /ETR2 與雨量關係（依地形）/.test(src), false);
