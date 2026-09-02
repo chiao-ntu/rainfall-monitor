@@ -21,6 +21,15 @@ body{font-family:'Microsoft JhengHei',sans-serif;background:#0c1822;color:#dde8f
 #ctrl{background:#081420;border-bottom:1px solid #1a3348;padding:5px 14px;display:flex;flex-direction:column;gap:4px;flex-shrink:0;overflow:hidden;transition:max-height 0.4s ease,padding 0.25s ease,opacity 0.2s ease;max-height:600px}
 #ctrl.collapsed{max-height:0;padding-top:0;padding-bottom:0;opacity:0}
 .ctrl-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+/* 全螢幕面板：限制內容寬度並置中，避免表格被撐得過寬而難讀 */
+body.panel-full #sb > *, body.panel-full #lsb > *{
+  max-width:1100px; margin-left:auto; margin-right:auto; width:100%
+}
+body.panel-full #sb{ padding:0 12px; box-sizing:border-box }
+body.panel-full #lsb{ padding:0 12px; box-sizing:border-box }
+/* 全螢幕時表格與圖表同步限寬，欄位才不會拉開 */
+body.panel-full table{ max-width:1100px }
+body.panel-full canvas{ max-width:1100px }
 .cl{font-size:10px;color:#3a6080;white-space:nowrap}
 .bg{display:flex;gap:2px;flex-wrap:wrap}
 .b{padding:3px 9px;font-size:10px;border:1px solid #1e3a5a;background:#0d2035;color:#5a90b8;cursor:pointer;border-radius:3px;transition:all .12s;white-space:nowrap}
@@ -155,7 +164,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
         style="border-color:#1a4060;color:#8ac8e8">🏷 鄉鎮市區</button>
       <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
-        style="border-color:#8a6a3a;color:#e8c87a" title="顯示全臺雨量站位置">📍 測站</button>
+        style="border-color:#8a6a3a;color:#e8c87a" title="顯示全臺雨量站位置">📍 雨量測站</button>
       <select id="townNameScope" onchange="setTownNameScope(this.value)"
         style="display:none;font-size:10px;background:#061220;color:#8ac8e8;
         border:1px solid #1a4060;border-radius:3px;padding:2px 3px;margin-right:3px"></select>
@@ -194,8 +203,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       style="border-color:#5a3a8a;color:#b08ae8">自訂色階級距</button>
     <button class="b" id="bBlurRender" onclick="toggleBlurRender()"
       style="border-color:#3a7a8a;color:#7ad8e8">渲染</button>
-    <button class="b" id="bStnSrc" onclick="toggleStationSrc()"
-      style="border-color:#8a6a3a;color:#e8c87a" title="以雨量站實測位置取代鄉鎮質心">測站</button>
     <button class="b" onclick="downloadRangeCsv()"
       style="border-color:#2a7a4a;color:#5ad88a">⬇ CSV</button>
     <a href="taiwan_blank_map.html" target="_blank" class="b"
@@ -944,9 +951,8 @@ let selected = null;
 let townLayer = null, countyLayer = null;
 let _blurOn = false;  // 渲染（邊界漸層）開關
 // 渲染來源與方式（測站底圖）
-//   _srcStation：以雨量站（約1300點）取代鄉鎮質心（368點）作為輸入
 //   _interpMode：'barnes' 平滑客觀分析｜'voronoi' 最近鄰（邊界銳利）
-let _srcStation = false, _interpMode = 'barnes';
+let _interpMode = 'barnes';   // 保留變數：Voronoi 程式碼仍在，僅移除 UI 入口
 let _cwaQpfActive = false;  // 前48h是否為CWA QPF覆蓋
 
 // 右側欄收合/展開
@@ -1197,6 +1203,10 @@ function _applyFullLayout(){
     ctl.style.overflow = _ctlFull ? 'auto' : '';
   }
   if(mp) mp.style.display = (_sbFull || _ctlFull) ? 'none' : '';
+  // ★ 全螢幕時限制內容寬度並置中：整片拉滿時表格欄位會被撐得極寬
+  //   （分署名稱貼左、數值貼右，中間一大片空白），反而更難讀。
+  //   限制在 1100px 內並置中，行長維持在舒適範圍。
+  document.body.classList.toggle('panel-full', _sbFull || _ctlFull);
   // 按鈕條在全螢幕時必須保持可見可點
   [document.getElementById('sb-toggle'), document.getElementById('lsb-toggle'),
    bf, bc].forEach(el=>{
@@ -1243,14 +1253,8 @@ function renderStationLayer(){
         fillColor: col, fillOpacity: v != null ? 0.92 : 0.5,
         pane: 'markerPane'
       }).addTo(_stnLayer);
-      const pct = st.etr2_pct != null ? (st.etr2_pct * 100).toFixed(0) + '%' : '—';
-      m.bindTooltip(
-        `<b>${st.name}</b><span style="color:#8a9aaa;font-size:10px">　`
-        + `${t.county}${t.township}</span><br>`
-        + `今日累積：${v != null ? v + ' mm' : '—'}<br>`
-        + `ETR2%：${pct}　警戒值：${st.alert_val != null ? st.alert_val + ' mm' : '—'}`
-        + (st.elev != null ? `<br>海拔：${st.elev.toFixed(0)} m` : ''),
-        {direction: 'top', opacity: 0.95});
+      // ★ 不掛 tooltip：368 鄉鎮上千個點，逐點提示反而干擾判讀；
+      //   需要細節時點選即可帶出該鄉鎮的完整資訊。
       m.on('click', ()=>{ selected = t; try{ renderLayer(); updateInfo(t); }catch(e){} });
       n++;
     });
@@ -1943,10 +1947,17 @@ function _scatterBase(cv, o){
     ctx.fillText(o.xFmt ? o.xFmt(v) : v.toFixed(0), X(v), pT + ih + fs + 4);
   }
   ctx.textAlign = 'right';
-  for(let i = 0; i <= ny; i++){
-    const v = o.y0 + (o.y1 - o.y0) * i / ny;
-    ctx.beginPath(); ctx.moveTo(pL, Y(v)); ctx.lineTo(pL + iw, Y(v)); ctx.stroke();
-    ctx.fillText(o.yFmt ? o.yFmt(v) : v.toFixed(0), pL - 5, Y(v) + fs*0.35);
+  // ★ 可指定固定刻度（yTicks）：ETR2 圖只需 50/70/90/100 這幾個判讀門檻，
+  //   均分刻度會多出一堆無意義的數字，畫面反而雜亂。
+  if(o.yTicks){
+    // 標籤留給呼叫端用分級色重畫（見 drawEtrPhaseChart），此處不畫刻度文字，
+    // 避免灰色數字與彩色標籤重疊。
+  } else {
+    for(let i = 0; i <= ny; i++){
+      const v = o.y0 + (o.y1 - o.y0) * i / ny;
+      ctx.beginPath(); ctx.moveTo(pL, Y(v)); ctx.lineTo(pL + iw, Y(v)); ctx.stroke();
+      ctx.fillText(o.yFmt ? o.yFmt(v) : v.toFixed(0), pL - 5, Y(v) + fs*0.35);
+    }
   }
   ctx.textAlign = 'center';
   // X 軸標題放在刻度下方、圖例之上（原本兩者疊在同一行）
@@ -2119,7 +2130,7 @@ function drawEtrPhaseChart(t, canvasId){
   const eMax = Math.max(120, Math.ceil(Math.max(...pts.map(p=>p.e))/50)*50);
   const B = _scatterBase(cv, {isZoom, x0:0, x1:vMax, y0:0, y1:eMax,
     xLabel:'今日累積雨量 (mm)', yLabel:'ETR2 (%)',
-    yFmt: v=>v.toFixed(0)+'%',
+    yFmt: v=>v.toFixed(0)+'%', yTicks: [50, 70, 90, 100],
     title:'雨量與地形分佈'
       + `　${_winSrcLabel()}`
       + (t ? `　— ${t.county}${t.township}` : '')});
@@ -2132,9 +2143,9 @@ function drawEtrPhaseChart(t, canvasId){
     B.ctx.beginPath(); B.ctx.moveTo(B.pL, B.Y(lv));
     B.ctx.lineTo(B.pL + B.iw, B.Y(lv)); B.ctx.stroke();
     B.ctx.setLineDash([]); B.ctx.globalAlpha = 1;
-    // 在左側標出該線代表的百分比，文字用同一顏色
+    // 左側標籤：用與線條相同的顏色（取代 _scatterBase 的灰色刻度）
     B.ctx.fillStyle = c; B.ctx.textAlign = 'right';
-    B.ctx.font = `${B.fs}px sans-serif`;
+    B.ctx.font = `bold ${B.fs}px sans-serif`;
     B.ctx.fillText(lv + '%', B.pL - 5, B.Y(lv) + B.fs * 0.35);
   });
   const hits = [];
@@ -9154,7 +9165,7 @@ function toggleChartZoom(canvasId){
     'cv-wind-hr-est': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風推估）` : '',
     'cv-stnrank': selected ? `${selected.county}${selected.township} 測站雨量排名` : '',
     'cv-elevrain': '海拔與雨量分布（地形雨效應）',
-    'cv-etrphase': 'ETR2 與雨量關係（依地形）',
+    'cv-etrphase': '雨量與地形分佈',
     'cv-margin': '全臺最接近警戒的雨量站',
     'cv-temp-day': selected ? `${selected.county}${selected.township} 逐日氣溫預測` : '',
     'cv-temp-hr': selected ? `${selected.county}${selected.township} 逐時氣溫預測` : '',
@@ -9680,17 +9691,10 @@ function renderInterpolated(){
   const inBox = (la, lo) => !(la<lat0-0.1||la>lat1+0.1||lo<lng0-0.1||lo>lng1+0.1);
   const toXY = (la, lo) => [ (lo-lng0)/(lng1-lng0)*NX,
                              (1-(_mercY(la)-my0)/(my1-my0))*NY ];
-  if(_srcStation){
-    TOWNSHIPS.forEach(t=>{
-      (t.stations||[]).forEach(st=>{
-        const v = (st.daily_rain||[])[0];
-        if(v==null || st.lat==null || st.lng==null) return;
-        if(!inBox(st.lat, st.lng)) return;
-        const xy = toXY(st.lat, st.lng);
-        pts.push([xy[0], xy[1], v]);
-      });
-    });
-  } else {
+  // ★ 曾提供「以測站為渲染輸入」，但測站只有觀測值、沒有預測，
+  //   切到未來視窗就整片空白，實用性低，故移除。
+  //   要看測站分布請用圖層列的「📍 雨量測站」。
+  {
     TOWNSHIPS.forEach(t=>{
       if(t.lat==null||t.lng==null) return;
       if(!inBox(t.lat, t.lng)) return;  // 金馬除外
@@ -9763,47 +9767,6 @@ function renderInterpolated(){
 
   _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1);
 
-}
-
-// 測站底圖：以雨量站實測位置作為渲染輸入
-//   ★ 測站密度約 1300 點，遠高於鄉鎮的 368 點，空間細節更真實。
-//     但測站只有觀測值，故僅在「今天／過去」等有觀測的視窗有意義；
-//     未來視窗仍應以鄉鎮的預報值為準。
-function toggleStationSrc(){
-  _srcStation = !_srcStation;
-  const b = document.getElementById('bStnSrc');
-  if(b) b.classList.toggle('on', _srcStation);
-  if(_srcStation && !_blurOn){       // 沒開渲染看不到效果，順手開啟
-    _blurOn = true;
-    const rb = document.getElementById('bBlurRender');
-    if(rb) rb.classList.add('on');
-  }
-  const n = (TOWNSHIPS||[]).reduce((a,t)=>a + (t.stations||[])
-              .filter(x=>x.lat!=null && (x.daily_rain||[])[0]!=null).length, 0);
-  console.log(_srcStation
-    ? `渲染來源改為雨量站（${n} 站有位置與觀測值）`
-    : '渲染來源改回鄉鎮質心（368 點）');
-  renderLayer();
-}
-// 切換 Voronoi（銳利）／Barnes（平滑）
-//   兩者互補：Voronoi 誠實反映「資料只到這個密度、這區以哪站為準」；
-//   Barnes 呈現推估的連續場，適合看雨帶結構與趨勢。
-function toggleInterpMode(){
-  _interpMode = (_interpMode === 'barnes') ? 'voronoi' : 'barnes';
-  const b = document.getElementById('bVoronoi');
-  if(b){
-    b.classList.toggle('on', _interpMode === 'voronoi');
-    b.textContent = (_interpMode === 'voronoi') ? '銳利' : '平滑';
-  }
-  if(!_blurOn){
-    _blurOn = true;
-    const rb = document.getElementById('bBlurRender');
-    if(rb) rb.classList.add('on');
-  }
-  console.log(_interpMode === 'voronoi'
-    ? '渲染方式：Voronoi 最近鄰（邊界銳利，明示各站勢力範圍）'
-    : '渲染方式：Barnes 客觀分析（平滑連續場）');
-  renderLayer();
 }
 
 function toggleBlurRender(){

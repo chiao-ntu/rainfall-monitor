@@ -3586,41 +3586,12 @@ if (need('copyRankList') && need('downloadAllCsv')) {
 
 
 console.log('\n=== 測站底圖（Voronoi + 測站來源）===');
-if (need('toggleStationSrc') && need('toggleInterpMode') && need('_paintGrid')) {
+if (need('_paintGrid')) {
   const src = fs.readFileSync('index.html', 'utf8');
-  chk('★提供測站來源切換', /id="bStnSrc"/.test(src), true);
   chk('Voronoi 以光柵化實作（不算多邊形）',
       /以光柵化實作（逐格找最近點），不需計算多邊形/.test(src), true);
   chk('★上色邏輯已抽出共用', /function _paintGrid\(grid, NX, NY/.test(src), true);
   chk('兩條路徑共用上色', /Barnes 與 Voronoi 兩條路徑共用/.test(src), true);
-  chk('說明測站密度優勢', /測站密度約 1300 點，遠高於鄉鎮的 368 點/.test(src), true);
-  chk('★提醒測站僅有觀測值', /測站只有觀測值，故僅在「今天／過去」等有觀測的視窗有意義/.test(src), true);
-  chk('說明兩種方式互補', /Voronoi 誠實反映「資料只到這個密度/.test(src), true);
-
-  // 狀態切換
-  setLex(`document.body.insertAdjacentHTML('beforeend',
-    '<button id="bStnSrc"></button><button id="bVoronoi"></button>' +
-    '<button id="bBlurRender"></button>');
-    _srcStation=false; _interpMode='barnes'; _blurOn=false;`);
-  let tthrew = false;
-  try { G.toggleInterpMode(); } catch(e){ tthrew = true; console.log('   ', e.message); }
-  chk('切換不拋錯', tthrew, false);
-  chk('★切為 voronoi', getLex('_interpMode'), 'voronoi');
-  chk('★自動開啟渲染（否則看不到）', getLex('_blurOn'), true);
-  chk('按鈕文字改為銳利',
-      getLex("document.getElementById('bVoronoi').textContent"), '銳利');
-  G.toggleInterpMode();
-  chk('可切回 barnes', getLex('_interpMode'), 'barnes');
-  chk('按鈕文字改為平滑',
-      getLex("document.getElementById('bVoronoi').textContent"), '平滑');
-
-  setLex("_blurOn=false;");
-  try { G.toggleStationSrc(); } catch(e){ tthrew = true; }
-  chk('測站來源切換不拋錯', tthrew, false);
-  chk('★切為測站來源', getLex('_srcStation'), true);
-  chk('同樣自動開啟渲染', getLex('_blurOn'), true);
-  G.toggleStationSrc();
-  chk('可切回鄉鎮來源', getLex('_srcStation'), false);
 
   // Voronoi 最近鄰邏輯正確性（離線驗算）
   const pts = [[2, 2, 100], [10, 10, 20]];
@@ -3633,7 +3604,7 @@ if (need('toggleStationSrc') && need('toggleInterpMode') && need('_paintGrid')) 
   chk('★靠近站A取A值', near(3, 3), 100);
   chk('★靠近站B取B值', near(9, 9), 20);
   chk('中間點取較近者', near(5, 5), 100);
-  setLex("_srcStation=false; _interpMode='barnes'; _blurOn=false;");
+  setLex("_interpMode='barnes'; _blurOn=false;");
 }
 
 
@@ -3762,6 +3733,25 @@ if (need('_winSrcLabel') && need('_zoomPoint')) {
   try { G._zoomPoint(24.0, 121.1, '測試點'); } catch(e){ z = true; console.log('   ', e.message); }
   chk('定位不拋錯', z, false);
   chk('無座標時不動作', G._zoomPoint(null, null, 'x'), undefined);
+}
+
+
+console.log('\n=== 本輪修正（三）===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★移除渲染的測站來源按鈕', /id="bStnSrc"/.test(src), false);
+  chk('說明為何移除', /測站只有觀測值、沒有預測/.test(src), true);
+  chk('★圖層改名為雨量測站', /📍 雨量測站/.test(src), true);
+  chk('★測站圖層不掛 tooltip', /不掛 tooltip：368 鄉鎮上千個點/.test(src), true);
+  chk('★Y 軸可指定固定刻度', /o\.yTicks/.test(src), true);
+  chk('ETR2 圖只用 50/70/90/100', /yTicks: \[50, 70, 90, 100\]/.test(src), true);
+  chk('說明均分刻度的問題', /均分刻度會多出一堆無意義的數字/.test(src), true);
+  chk('★放大標題已改名', /'cv-etrphase': '雨量與地形分佈'/.test(src), true);
+  chk('不再有舊標題', /ETR2 與雨量關係（依地形）/.test(src), false);
+  chk('★全螢幕限制內容寬度', /body\.panel-full #sb > \*/.test(src), true);
+  chk('限寬 1100px 並置中', /max-width:1100px; margin-left:auto/.test(src), true);
+  chk('說明拉滿的問題', /整片拉滿時表格欄位會被撐得極寬/.test(src), true);
+  chk('切換時套用 class', /classList\.toggle\('panel-full'/.test(src), true);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
