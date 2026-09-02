@@ -1178,8 +1178,16 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
         etr2_val = station_etr2.get(sid) if sid else None
         etr2_pct = round(etr2_val/alert_val, 4) if (etr2_val is not None and alert_val and alert_val > 0) else None
         daily    = station_daily.get(sid, [0.0]*15) if sid else [0.0]*15
+        # ★ 帶上座標與海拔：供前端做「海拔 vs 雨量」散佈圖與測站底圖著色。
+        #   海拔查自 station_elev.json（由 20m DTM 離線產生，見 build_station_elev.py）。
+        _sinfo = (stations or {}).get(sid) or {}
+        _elev = (STATION_ELEV or {}).get(sid)
         enriched.append({
             'name':      name,
+            'sid':       sid or '',
+            'lat':       _sinfo.get('lat') or None,
+            'lng':       _sinfo.get('lng') or None,
+            'elev':      _elev,
             'alert_val': st.get('alert_val'),
             'village':   st.get('village', ''),
             'etr2':      round(etr2_val, 1) if etr2_val is not None else None,
@@ -2311,6 +2319,8 @@ def calc_bias_24h(daily_rain, model_yday):
 #  ★ 方法對應 NOAA National Blend of Models：以分析場（此處為測站觀測）
 #    校正各模式，並依地形相似性分群 —— NBM 稱之為 supplemental locations。
 #  ★ 現階段只累積與呈現，不回饋修正預測；待樣本足夠再啟用加權。
+STATION_ELEV_FILE = "station_elev.json"   # 測站海拔（由 20m DTM 離線產生）
+STATION_ELEV = {}
 TERRAIN_FILE = "terrain_zones_official.json"   # 地形分類（山區/淺山/沿海/平地）
 SKILL_FILE = "model_skill.json"
 SKILL_KEEP_DAYS = 45        # 保留天數：短期權重看7天、長期基準看30天，留餘裕
@@ -3447,6 +3457,16 @@ def main():
     counties_needed = set(COUNTY_EP_3D.keys()) | set(t['county'] for t in static_list)
 
     # 觀測
+    # 測站海拔對照（離線產生；缺檔不影響其他流程）
+    global STATION_ELEV
+    if os.path.exists(STATION_ELEV_FILE):
+        try:
+            with open(STATION_ELEV_FILE, encoding='utf-8') as _f:
+                STATION_ELEV = json.load(_f)
+            print(f"測站海拔：{len(STATION_ELEV)} 站")
+        except Exception as _e:
+            print(f"測站海拔讀取失敗（不影響其他）：{_e}")
+
     stations = fetch_obs()
     history  = update_history(stations,now_tpe) if stations else \
                (json.load(open(HISTORY_FILE)) if os.path.exists(HISTORY_FILE) else {})

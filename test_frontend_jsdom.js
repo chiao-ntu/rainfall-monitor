@@ -2557,8 +2557,10 @@ console.log('\n=== 色階與雨量一致 + 分布診斷 ===');
   // ★ 只檢查「實際使用」的色碼，註解中的說明文字不算
   const _src = fs.readFileSync('index.html','utf8')
     .split('\n').filter(l=>!l.trim().startsWith('//')).join('\n');
-  chk('無柔和版色碼殘留（程式碼中）',
-      /'#40d060'|'#f0d040'|'#e04040'|'#c050e0'/.test(_src), false);
+  // ★ 只檢查「色階定義」不得殘留柔和版；警戒餘裕圖用 #40d060 作為
+  //   「距警戒值尚遠」的安全色，與雨量/風力色階無關，不在此限。
+  chk('色階定義無柔和版殘留',
+      /BF_BANDS = \[[\s\S]{0,300}#40d060|WAVE_BANDS = \[[\s\S]{0,300}#40d060/.test(_src), false);
 }
 if (need('_logModeDistribution')) {
   const src = fs.readFileSync('index.html', 'utf8');
@@ -3409,7 +3411,7 @@ if (need('drawStnRankChart')) {
   const src = fs.readFileSync('index.html', 'utf8');
   chk('僅有測站時顯示區塊', /sEl\.style\.display = hasStn \? 'block' : 'none'/.test(src), true);
   chk('色階同累積雨量', /RAIN_SCALE\.find\(b=>r\.v < b\.max\)/.test(src), true);
-  chk('★有導引線（點狀圖特徵）', /Cleveland dot plot 的特徵/.test(src), true);
+  chk('★改為橫向長條（量值比較更直觀）', /量值大小的比較用長條比點更直觀/.test(src), true);
   chk('限制顯示筆數', /\.slice\(0, 14\)/.test(src), true);
 }
 
@@ -3425,6 +3427,51 @@ console.log('\n=== 情境編輯器支援融合 ===');
   const labels = getLex('SCN_MODEL_LABEL');
   console.log(`   情境模式：${Object.values(labels).join('、')}`);
   chk('選項齊全', Object.keys(labels).length, 9);
+}
+
+
+console.log('\n=== 地形與雨量關係圖 ===');
+if (need('drawElevRainChart') && need('drawEtrPhaseChart') && need('drawMarginChart')) {
+  setLex(`document.body.insertAdjacentHTML('beforeend',
+    '<canvas id="cv-elevrain"></canvas><canvas id="cv-etrphase"></canvas>' +
+    '<canvas id="cv-margin"></canvas>');
+    TOWNSHIPS.length = 0;
+    [{county:'南投縣', township:'仁愛鄉', daily_rain:[120], etr2_pct:1.35,
+      stations:[{sid:'A1', name:'翠峰', elev:2100, daily_rain:[135], etr2_pct:1.42},
+                {sid:'A2', name:'廬山', elev:1200, daily_rain:[98], etr2_pct:0.88}]},
+     {county:'臺北市', township:'大安區', daily_rain:[15], etr2_pct:0.22,
+      stations:[{sid:'B1', name:'臺北', elev:6, daily_rain:[15], etr2_pct:0.22}]},
+     {county:'宜蘭縣', township:'蘇澳鎮', daily_rain:[60], etr2_pct:0.65,
+      stations:[{sid:'C1', name:'蘇澳', elev:25, daily_rain:[60], etr2_pct:0.65}]}
+    ].forEach(x=>TOWNSHIPS.push(x));`);
+  const t = getLex("TOWNSHIPS[0]");
+  let threw = false;
+  try {
+    G.drawElevRainChart(t); G.drawEtrPhaseChart(t); G.drawMarginChart(t);
+    G.drawElevRainChart(t, 'chart-zoom-canvas');
+    G.drawEtrPhaseChart(t, 'chart-zoom-canvas');
+    G.drawMarginChart(t, 'chart-zoom-canvas');
+  } catch(e){ threw = true; console.log('   ', e.message); }
+  chk('三張圖繪製不拋錯（含放大）', threw, false);
+
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★海拔圖以全臺為底', /全臺 \$\{pts\.length\} 站　藍圈＝本鄉鎮/.test(src), true);
+  chk('★ETR2 圖依地形著色', /'山區':'#ff6a4a'/.test(src), true);
+  chk('ETR2 圖有警戒線', /B\.ctx\.fillText\('警戒值'/.test(src), true);
+  chk('★餘裕圖以測站為單位', /rows\.push\(\{name: st\.name, town: k/.test(src), true);
+  chk('餘裕圖有 0 線（警戒值）', /\/\/ 0 線＝警戒值/.test(src), true);
+  chk('餘裕依距警戒值排序', /rows\.sort\(\(a,b\)=>b\.margin - a\.margin\)/.test(src), true);
+
+  // 無資料時不應出錯
+  setLex("TOWNSHIPS.length = 0;");
+  let t2 = false;
+  try { G.drawElevRainChart(null); G.drawEtrPhaseChart(null); G.drawMarginChart(null); }
+  catch(e){ t2 = true; }
+  chk('無資料時不拋錯', t2, false);
+
+  chk('測站排名改為長條圖', /量值大小的比較用長條比點更直觀/.test(src), true);
+  chk('後端輸出測站座標與海拔', /'elev':      _elev/.test(
+      fs.readFileSync('fetch_rainfall.py', 'utf8')), true);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`

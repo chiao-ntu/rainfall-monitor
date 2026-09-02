@@ -638,6 +638,48 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
     </div>
 
+    <!-- 區塊：地形與雨量關係（散佈圖） -->
+    <div class="sec" id="sec-elevrain" style="display:none">
+      <div class="sec-h" onclick="toggleSec('elevrain')">
+        <span>海拔與雨量</span><span class="sec-arrow" id="arrow-elevrain">▸</span>
+      </div>
+      <div class="sec-body" id="body-elevrain" style="display:none">
+        <canvas id="cv-elevrain" style="width:100%;height:200px;display:block;
+          background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-elevrain')"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          全臺雨量站的今日累積 vs 海拔；藍點為本鄉鎮測站。可觀察地形雨效應</div>
+      </div>
+    </div>
+
+    <!-- 區塊：ETR2 與雨量相位 -->
+    <div class="sec" id="sec-etrphase" style="display:none">
+      <div class="sec-h" onclick="toggleSec('etrphase')">
+        <span>ETR2 與雨量關係</span><span class="sec-arrow" id="arrow-etrphase">▸</span>
+      </div>
+      <div class="sec-body" id="body-etrphase" style="display:none">
+        <canvas id="cv-etrphase" style="width:100%;height:200px;display:block;
+          background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-etrphase')"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          各鄉鎮：今日累積雨量 vs ETR2%，依地形著色。虛線為警戒值（100%）</div>
+      </div>
+    </div>
+
+    <!-- 區塊：警戒餘裕（測站別） -->
+    <div class="sec" id="sec-margin" style="display:none">
+      <div class="sec-h" onclick="toggleSec('margin')">
+        <span>警戒餘裕</span><span class="sec-arrow" id="arrow-margin">▸</span>
+      </div>
+      <div class="sec-body" id="body-margin" style="display:none">
+        <canvas id="cv-margin" style="width:100%;height:200px;display:block;
+          background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-margin')"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          全臺最接近警戒的雨量站（ETR2% − 100%）；正值代表已超過警戒值</div>
+      </div>
+    </div>
+
     <!-- 區塊：融合校正明細（僅融合模式顯示） -->
     <div class="sec" id="sec-blend" style="display:none">
       <div class="sec-h" onclick="toggleSec('blend')">
@@ -1582,8 +1624,9 @@ function _blendOverviewHtml(){
 }
 
 // ══════════════════════════════════════════════════════════
-//  測站雨量排名（Cleveland dot plot）
-//  ★ 相較長條圖更乾淨易讀：每站一個點，一眼看出雨勢最猛的測站與極端值。
+//  測站雨量排名（橫向長條圖）
+//  ★ 量值大小的比較用長條比點更直觀（長度可直接相比）。
+//    依雨量排序，一眼看出雨勢最猛的測站與極端值。
 //    資料來自 t.stations（該鄉鎮的官方雨量站，含今日累積）。
 // ══════════════════════════════════════════════════════════
 function drawStnRankChart(t, canvasId){
@@ -1630,15 +1673,14 @@ function drawStnRankChart(t, canvasId){
     const y = Y(i);
     ctx.fillStyle = '#9fc8e8'; ctx.font = `${fs}px sans-serif`;
     ctx.fillText(r.name.slice(0, isZoom ? 14 : 6), pL - 6, y + fs*0.35);
-    // 導引線（Cleveland dot plot 的特徵，幫助橫向對位）
-    ctx.strokeStyle = '#16324a'; ctx.setLineDash([2, 3]);
-    ctx.beginPath(); ctx.moveTo(pL, y); ctx.lineTo(X(r.v), y); ctx.stroke();
-    ctx.setLineDash([]);
-    // 點：色階同累積雨量圖層
+    // 橫向長條：量值比較用長條比點更直觀（使用者指定）
     const col = (RAIN_SCALE.find(b=>r.v < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color;
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(X(r.v), y, isZoom ? 7 : 4, 0, Math.PI*2); ctx.fill();
-    ctx.strokeStyle = '#0a1a28'; ctx.lineWidth = 1; ctx.stroke();
+    const bh = Math.max(4, (ih / rows.length) * 0.62);
+    ctx.fillStyle = col; ctx.globalAlpha = 0.85;
+    ctx.fillRect(pL, y - bh/2, Math.max(1, X(r.v) - pL), bh);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#0a1a28'; ctx.lineWidth = 1;
+    ctx.strokeRect(pL, y - bh/2, Math.max(1, X(r.v) - pL), bh);
     // 數值
     ctx.fillStyle = '#cfe4f5'; ctx.textAlign = 'left';
     ctx.fillText(r.v.toFixed(0), X(r.v) + (isZoom ? 11 : 7), y + fs*0.35);
@@ -1648,6 +1690,214 @@ function drawStnRankChart(t, canvasId){
     ctx.fillStyle = '#6bc8e8'; ctx.font = 'bold 20px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(`${t.county}${t.township} 測站雨量排名（今日累積）`, cv.width/2, 26);
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  共用：散佈圖底稿（軸線、格線、標題）
+// ══════════════════════════════════════════════════════════
+function _scatterBase(cv, o){
+  cv.width = cv.offsetWidth || 300;
+  cv.height = cv.offsetHeight || 200;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  const isZoom = o.isZoom;
+  const fs = isZoom ? 15 : 9;
+  const pL = isZoom ? 90 : 42, pR = isZoom ? 40 : 14;
+  const pT = isZoom ? 46 : 12, pB = isZoom ? 56 : 26;
+  const iw = cv.width - pL - pR, ih = cv.height - pT - pB;
+  const X = v => pL + iw * ((v - o.x0) / Math.max(1e-9, o.x1 - o.x0));
+  const Y = v => pT + ih * (1 - (v - o.y0) / Math.max(1e-9, o.y1 - o.y0));
+  ctx.strokeStyle = '#12283c'; ctx.lineWidth = 1;
+  ctx.fillStyle = '#5a7a95'; ctx.font = `${fs}px sans-serif`;
+  ctx.textAlign = 'center';
+  const nx = 4, ny = 4;
+  for(let i = 0; i <= nx; i++){
+    const v = o.x0 + (o.x1 - o.x0) * i / nx;
+    ctx.beginPath(); ctx.moveTo(X(v), pT); ctx.lineTo(X(v), pT + ih); ctx.stroke();
+    ctx.fillText(o.xFmt ? o.xFmt(v) : v.toFixed(0), X(v), pT + ih + fs + 4);
+  }
+  ctx.textAlign = 'right';
+  for(let i = 0; i <= ny; i++){
+    const v = o.y0 + (o.y1 - o.y0) * i / ny;
+    ctx.beginPath(); ctx.moveTo(pL, Y(v)); ctx.lineTo(pL + iw, Y(v)); ctx.stroke();
+    ctx.fillText(o.yFmt ? o.yFmt(v) : v.toFixed(0), pL - 5, Y(v) + fs*0.35);
+  }
+  ctx.textAlign = 'center';
+  ctx.fillText(o.xLabel || '', pL + iw/2, cv.height - 4);
+  ctx.save(); ctx.translate(isZoom ? 22 : 11, pT + ih/2); ctx.rotate(-Math.PI/2);
+  ctx.fillText(o.yLabel || '', 0, 0); ctx.restore();
+  if(isZoom && o.title){
+    ctx.fillStyle = '#6bc8e8'; ctx.font = 'bold 19px sans-serif';
+    ctx.fillText(o.title, cv.width/2, 28);
+  }
+  return {ctx, X, Y, pL, pT, iw, ih, fs, isZoom};
+}
+
+// ── 海拔 vs 雨量（地形雨效應）──────────────────────
+//   ★ 全臺測站為底、本鄉鎮測站highlight，才看得出該地在整體分布中的位置。
+function drawElevRainChart(t, canvasId){
+  const cv = document.getElementById(canvasId || 'cv-elevrain');
+  if(!cv) return;
+  const isZoom = (canvasId === 'chart-zoom-canvas');
+  const here = new Set(((t && t.stations) || []).map(x=>x.sid).filter(Boolean));
+  const pts = [];
+  (TOWNSHIPS || []).forEach(tt=>{
+    (tt.stations || []).forEach(st=>{
+      const e = st.elev, v = (st.daily_rain || [])[0];
+      if(e == null || v == null) return;
+      pts.push({e, v, mine: here.has(st.sid), name: st.name});
+    });
+  });
+  if(!pts.length){
+    const ctx = cv.getContext('2d');
+    cv.width = cv.offsetWidth || 300; cv.height = cv.offsetHeight || 200;
+    ctx.clearRect(0,0,cv.width,cv.height);
+    ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
+    ctx.fillText('尚無測站海拔資料（需部署 station_elev.json）', 12, 24);
+    return;
+  }
+  const eMax = Math.max(500, Math.ceil(Math.max(...pts.map(p=>p.e))/500)*500);
+  const vMax = Math.max(20, Math.ceil(Math.max(...pts.map(p=>p.v))/20)*20);
+  const B = _scatterBase(cv, {isZoom, x0:0, x1:eMax, y0:0, y1:vMax,
+    xLabel:'海拔 (m)', yLabel:'今日累積雨量 (mm)',
+    title:'海拔與雨量分布（地形雨效應）'});
+  pts.forEach(p=>{
+    const col = (RAIN_SCALE.find(b=>p.v < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color;
+    B.ctx.fillStyle = col;
+    B.ctx.globalAlpha = p.mine ? 1 : 0.42;
+    B.ctx.beginPath();
+    B.ctx.arc(B.X(p.e), B.Y(p.v), p.mine ? (isZoom?7:4.5) : (isZoom?4:2.2), 0, Math.PI*2);
+    B.ctx.fill();
+    if(p.mine){
+      B.ctx.strokeStyle = '#6bc8e8'; B.ctx.lineWidth = isZoom?2:1.2; B.ctx.stroke();
+    }
+    B.ctx.globalAlpha = 1;
+  });
+  B.ctx.fillStyle = '#7a94ac'; B.ctx.font = `${B.fs}px sans-serif`;
+  B.ctx.textAlign = 'left';
+  B.ctx.fillText(`全臺 ${pts.length} 站　藍圈＝本鄉鎮`, B.pL + 4, B.pT + B.fs + 2);
+}
+
+// ── ETR2 vs 雨量（依地形著色）──────────────────────
+//   ★ 能看出「同樣雨量下，山區的土壤含水量反應是否更劇烈」，
+//     這直接關係坡地警戒判準的合理性。
+function drawEtrPhaseChart(t, canvasId){
+  const cv = document.getElementById(canvasId || 'cv-etrphase');
+  if(!cv) return;
+  const isZoom = (canvasId === 'chart-zoom-canvas');
+  const ZC = {'山區':'#ff6a4a', '淺山區':'#ffb84a', '沿海地區':'#4aa8ff', '平地':'#7ee8a8'};
+  const key = t ? (t.county||'') + (t.township||'') : '';
+  const pts = [];
+  (TOWNSHIPS || []).forEach(tt=>{
+    const v = (tt.daily_rain || [])[0];
+    const e = tt.etr2_pct;
+    if(v == null || e == null) return;
+    const k = (tt.county||'') + (tt.township||'');
+    pts.push({v, e: e*100, zone: _townZone(tt) || '平地', mine: k === key});
+  });
+  if(!pts.length){
+    const ctx = cv.getContext('2d');
+    cv.width = cv.offsetWidth || 300; cv.height = cv.offsetHeight || 200;
+    ctx.clearRect(0,0,cv.width,cv.height);
+    ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
+    ctx.fillText('尚無 ETR2 資料', 12, 24);
+    return;
+  }
+  const vMax = Math.max(20, Math.ceil(Math.max(...pts.map(p=>p.v))/20)*20);
+  const eMax = Math.max(120, Math.ceil(Math.max(...pts.map(p=>p.e))/50)*50);
+  const B = _scatterBase(cv, {isZoom, x0:0, x1:vMax, y0:0, y1:eMax,
+    xLabel:'今日累積雨量 (mm)', yLabel:'ETR2 (%)',
+    yFmt: v=>v.toFixed(0)+'%', title:'ETR2 與雨量關係（依地形）'});
+  // 警戒線 100%
+  if(eMax > 100){
+    B.ctx.strokeStyle = '#ff4444'; B.ctx.setLineDash([4,3]); B.ctx.lineWidth = 1;
+    B.ctx.beginPath(); B.ctx.moveTo(B.pL, B.Y(100));
+    B.ctx.lineTo(B.pL + B.iw, B.Y(100)); B.ctx.stroke(); B.ctx.setLineDash([]);
+    B.ctx.fillStyle = '#ff4444'; B.ctx.textAlign = 'left';
+    B.ctx.fillText('警戒值', B.pL + 3, B.Y(100) - 3);
+  }
+  pts.forEach(p=>{
+    B.ctx.fillStyle = ZC[p.zone] || '#7ee8a8';
+    B.ctx.globalAlpha = p.mine ? 1 : 0.5;
+    B.ctx.beginPath();
+    B.ctx.arc(B.X(p.v), B.Y(p.e), p.mine ? (isZoom?8:5) : (isZoom?4:2.4), 0, Math.PI*2);
+    B.ctx.fill();
+    if(p.mine){ B.ctx.strokeStyle='#fff'; B.ctx.lineWidth=isZoom?2:1.2; B.ctx.stroke(); }
+    B.ctx.globalAlpha = 1;
+  });
+  // 圖例
+  let lx = B.pL + 4, ly = B.pT + B.fs + 2;
+  B.ctx.textAlign = 'left'; B.ctx.font = `${B.fs}px sans-serif`;
+  Object.keys(ZC).forEach(z=>{
+    B.ctx.fillStyle = ZC[z];
+    B.ctx.beginPath(); B.ctx.arc(lx + 3, ly - B.fs*0.3, 3, 0, Math.PI*2); B.ctx.fill();
+    B.ctx.fillStyle = '#7a94ac';
+    B.ctx.fillText(z, lx + 9, ly);
+    lx += B.ctx.measureText(z).width + (isZoom ? 30 : 20);
+  });
+}
+
+// ── 警戒餘裕（測站別）──────────────────────────────
+//   ★ 以「距離警戒值多少」呈現比絕對數值更貼近實務判讀：還有多少緩衝。
+function drawMarginChart(t, canvasId){
+  const cv = document.getElementById(canvasId || 'cv-margin');
+  if(!cv) return;
+  const isZoom = (canvasId === 'chart-zoom-canvas');
+  const key = t ? (t.county||'') + (t.township||'') : '';
+  const rows = [];
+  (TOWNSHIPS || []).forEach(tt=>{
+    const k = (tt.county||'') + (tt.township||'');
+    (tt.stations || []).forEach(st=>{
+      if(st.etr2_pct == null) return;
+      rows.push({name: st.name, town: k, pct: st.etr2_pct*100,
+                 margin: st.etr2_pct*100 - 100, mine: k === key});
+    });
+  });
+  rows.sort((a,b)=>b.margin - a.margin);
+  const top = rows.slice(0, isZoom ? 20 : 10);
+  cv.width = cv.offsetWidth || 300; cv.height = cv.offsetHeight || 200;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0,0,cv.width,cv.height);
+  if(!top.length){
+    ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
+    ctx.fillText('尚無測站 ETR2 資料', 12, 24);
+    return;
+  }
+  const fs = isZoom ? 15 : 9;
+  const pL = isZoom ? 210 : 92, pR = isZoom ? 60 : 30;
+  const pT = isZoom ? 44 : 14, pB = isZoom ? 48 : 22;
+  const iw = cv.width - pL - pR, ih = cv.height - pT - pB;
+  const lo = Math.min(-20, Math.floor(Math.min(...top.map(r=>r.margin))/20)*20);
+  const hi = Math.max(20, Math.ceil(Math.max(...top.map(r=>r.margin))/20)*20);
+  const X = v => pL + iw * ((v - lo) / (hi - lo));
+  ctx.strokeStyle = '#12283c'; ctx.fillStyle = '#5a7a95';
+  ctx.font = `${fs}px sans-serif`; ctx.textAlign = 'center';
+  for(let v = lo; v <= hi; v += Math.max(20, Math.round((hi-lo)/4/20)*20)){
+    ctx.beginPath(); ctx.moveTo(X(v), pT); ctx.lineTo(X(v), pT+ih); ctx.stroke();
+    ctx.fillText((v>0?'+':'')+v, X(v), cv.height - pB + fs + 2);
+  }
+  // 0 線＝警戒值
+  ctx.strokeStyle = '#ff4444'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(X(0), pT); ctx.lineTo(X(0), pT+ih); ctx.stroke();
+  ctx.fillText('距警戒值 (%)', pL + iw/2, cv.height - 3);
+  top.forEach((r, i)=>{
+    const y = pT + (ih/top.length)*(i+0.5);
+    const bh = Math.max(4, (ih/top.length)*0.6);
+    ctx.fillStyle = r.mine ? '#6bc8e8' : '#9fc8e8';
+    ctx.textAlign = 'right'; ctx.font = `${fs}px sans-serif`;
+    ctx.fillText((isZoom ? r.town : '') + r.name.slice(0, isZoom?12:6), pL-5, y+fs*0.35);
+    const col = r.margin >= 0 ? '#FF0000' : r.margin >= -30 ? '#FFFF00' : '#40d060';
+    ctx.fillStyle = col; ctx.globalAlpha = r.mine ? 1 : 0.8;
+    const x0 = X(Math.min(0, r.margin)), x1 = X(Math.max(0, r.margin));
+    ctx.fillRect(x0, y-bh/2, Math.max(1, x1-x0), bh);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#cfe4f5'; ctx.textAlign = 'left';
+    ctx.fillText((r.margin>0?'+':'')+r.margin.toFixed(0), X(Math.max(0,r.margin))+4, y+fs*0.35);
+  });
+  if(isZoom){
+    ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('全臺最接近警戒的雨量站', cv.width/2, 26);
   }
 }
 
@@ -3073,6 +3323,22 @@ function updateInfo(t){
     if(hasStn){
       try{ drawStnRankChart(t); }catch(e){ console.warn('測站排名圖失敗', e); }
     }
+
+    // 地形與雨量關係圖（全臺資料為底，本鄉鎮 highlight）
+    const hasElev = (TOWNSHIPS||[]).some(tt=>(tt.stations||[]).some(x=>x.elev != null));
+    const eEl = document.getElementById('sec-elevrain');
+    if(eEl) eEl.style.display = hasElev ? 'block' : 'none';
+    if(hasElev){ try{ drawElevRainChart(t); }catch(e){ console.warn('海拔雨量圖失敗', e); } }
+
+    const hasEtr = (TOWNSHIPS||[]).some(tt=>tt.etr2_pct != null);
+    const pEl = document.getElementById('sec-etrphase');
+    if(pEl) pEl.style.display = hasEtr ? 'block' : 'none';
+    if(hasEtr){ try{ drawEtrPhaseChart(t); }catch(e){ console.warn('ETR2 相位圖失敗', e); } }
+
+    const hasMg = (TOWNSHIPS||[]).some(tt=>(tt.stations||[]).some(x=>x.etr2_pct != null));
+    const mEl = document.getElementById('sec-margin');
+    if(mEl) mEl.style.display = hasMg ? 'block' : 'none';
+    if(hasMg){ try{ drawMarginChart(t); }catch(e){ console.warn('警戒餘裕圖失敗', e); } }
 
     // 融合校正明細（僅融合模式顯示）
     try{ renderBlendDetail(t); }catch(e){ console.warn('融合明細失敗', e); }
@@ -8344,6 +8610,9 @@ function toggleChartZoom(canvasId){
   const needsSelected = (canvasId==='cv'||canvasId==='cv-district-hyeto'
                        ||canvasId.startsWith('cv-wind-')
                        ||canvasId.startsWith('cv-stnrank')
+                       ||canvasId.startsWith('cv-elevrain')
+                       ||canvasId.startsWith('cv-etrphase')
+                       ||canvasId.startsWith('cv-margin')
                        ||canvasId.startsWith('cv-temp-')
                        ||canvasId.startsWith('cv-wave-'));
   if(needsSelected && !selected) return;
@@ -8365,6 +8634,9 @@ function toggleChartZoom(canvasId){
     'cv-wind-hr-gust': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風）` : '',
     'cv-wind-hr-est': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風推估）` : '',
     'cv-stnrank': selected ? `${selected.county}${selected.township} 測站雨量排名` : '',
+    'cv-elevrain': '海拔與雨量分布（地形雨效應）',
+    'cv-etrphase': 'ETR2 與雨量關係（依地形）',
+    'cv-margin': '全臺最接近警戒的雨量站',
     'cv-temp-day': selected ? `${selected.county}${selected.township} 逐日氣溫預測` : '',
     'cv-temp-hr': selected ? `${selected.county}${selected.township} 逐時氣溫預測` : '',
     'cv-wave-day': selected ? `${selected.county}${selected.township} 逐日浪高預測` : '',
@@ -8376,7 +8648,13 @@ function toggleChartZoom(canvasId){
   if(titleEl) titleEl.textContent = titleMap[canvasId] || '';
   _zoomCanvasType = canvasId;
 
-  if(canvasId === 'cv-stnrank' && selected){
+  if(canvasId === 'cv-elevrain'){
+    drawElevRainChart(selected, 'chart-zoom-canvas');
+  } else if(canvasId === 'cv-etrphase'){
+    drawEtrPhaseChart(selected, 'chart-zoom-canvas');
+  } else if(canvasId === 'cv-margin'){
+    drawMarginChart(selected, 'chart-zoom-canvas');
+  } else if(canvasId === 'cv-stnrank' && selected){
     drawStnRankChart(selected, 'chart-zoom-canvas');
   } else if(canvasId === 'cv-temp-day' && selected){
     drawTempDayChart(selected, 'chart-zoom-canvas');
