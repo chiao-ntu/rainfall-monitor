@@ -2136,7 +2136,8 @@ if (need('_windSeries') && need('_smoothSeries') && need('drawWindDayChart')) {
   // ★ 風力圖時間軸點數少、空間充裕，X 軸字級改與 Y 軸一致（使用者指定）
   chk('★X軸字級與Y軸相同', /const xFs = fs;/.test(src2), true);
   // 標籤間隔依實際字寬計算，避免放大後互相重疊
-  chk('標籤間隔依字寬計算', /ctx\.measureText\('12\/31 18時'\)\.width \* 1\.15/.test(src2), true);
+  // 改為時間等距後，間隔由 6/12/24 小時決定，不再依字寬取樣序號
+  chk('標籤間隔為整齊時距', /let _stepH = 6;/.test(src2), true);
   // 版面：標題獨立一列，不與軸標題／「現在」重疊
   chk('★標題置於最上緣獨立列', /ctx\.fillText\(o\.title, pL-\(isZoom\?150:44\), fs\+22\)/.test(src2), true);
   chk('★「現在」標於繪圖區內側', /ctx\.fillText\('現在', xn\+\(isZoom\?10:3\)/.test(src2), true);
@@ -3744,8 +3745,8 @@ console.log('\n=== 本輪修正（三）===');
   chk('★圖層改名為雨量測站', /📍 雨量測站/.test(src), true);
   // 測站本身的 tooltip 必須保留（判讀時很重要）；拿掉的是按鈕的 title 提示
   chk('★測站保留 tooltip', /m\.bindTooltip\(\s*\n\s*`<b>\$\{st\.name\}<\/b>/.test(src), true);
-  chk('tooltip 含所屬鄉鎮', /\$\{t\.county\}\$\{t\.township\}<\/span>/.test(src), true);
-  chk('tooltip 含 ETR2 與警戒值', /ETR2%：\$\{pct\}　警戒值/.test(src), true);
+  chk('tooltip 含所屬鄉鎮', /\$\{t\.county\}\$\{t\.township\}　/.test(src), true);
+  chk('tooltip 含 ETR2 與警戒值', /ETR2%：\$\{pct\}<br>`[\s\S]{0,60}警戒值/.test(src), true);
   chk('★按鈕不再有 title 提示',
       /id="bStnLayer"[\s\S]{0,120}title="顯示全臺雨量站位置"/.test(src), false);
   chk('★Y 軸可指定固定刻度', /o\.yTicks/.test(src), true);
@@ -3760,6 +3761,37 @@ console.log('\n=== 本輪修正（三）===');
   chk('限寬 1100px 並置中', /max-width:1100px; margin-left:auto/.test(src), true);
   chk('說明拉滿的問題', /整片拉滿時表格欄位會被撐得極寬/.test(src), true);
   chk('切換時套用 class', /classList\.toggle\('panel-full'/.test(src), true);
+}
+
+
+console.log('\n=== 逐時圖時間軸修正 ===');
+{
+  const src = fs.readFileSync('index.html', 'utf8');
+  chk('★X 軸改用固定時間範圍', /X 軸改用固定時間範圍（預設 -48h ~ \+72h）/.test(src), true);
+  chk('說明比例失真成因', /過去段點少、未來段點多時比例會失真/.test(src), true);
+  chk('★標籤改為時間等距', /標籤改為「時間等距」而非「每 N 個資料點」/.test(src), true);
+  chk('★日期時間分兩行', /ctx\.fillText\(`\$\{d\.getMonth\(\)\+1\}\/\$\{d\.getDate\(\)\}`, x, y1\)/.test(src), true);
+  chk('時間在第二行', /padStart\(2,'0'\)\}時`, x, y2\)/.test(src), true);
+  chk('逐時圖 -48h~+72h', (src.match(/hoursBack:48, hoursFwd:72/g)||[]).length >= 3, true);
+  chk('逐日圖 -48h~+168h', (src.match(/hoursBack:48, hoursFwd:168/g)||[]).length >= 2, true);
+
+  // 固定範圍的實際效果
+  const now = Date.now();
+  const calc = (pts, hb, hf) => {
+    const dMin = Math.min(...pts), dMax = Math.max(...pts);
+    const t0 = Math.min(now - hb*3600e3, dMin);
+    const t1 = Math.max(now + hf*3600e3, dMax);
+    return {hoursBack: (now - t0)/3600e3, hoursFwd: (t1 - now)/3600e3};
+  };
+  // 資料只到 +30h 時，軸仍應延伸到 +72h
+  const r = calc([now - 6*3600e3, now + 30*3600e3], 48, 72);
+  console.log(`   資料 -6h~+30h → 軸 -${r.hoursBack.toFixed(0)}h~+${r.hoursFwd.toFixed(0)}h`);
+  chk('★過去段不被壓縮（仍為 48h）', Math.round(r.hoursBack), 48);
+  chk('★未來段補滿 72h', Math.round(r.hoursFwd), 72);
+
+  chk('★測站 tooltip 含地形分區', /\$\{_townZone\(t\) \|\| ''\}<\/span>/.test(src), true);
+  chk('缺值時說明原因', /非警戒代表站/.test(src), true);
+  chk('海拔缺值說明', /待產生對照表/.test(src), true);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
