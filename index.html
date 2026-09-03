@@ -165,6 +165,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#1a4060;color:#8ac8e8">🏷 鄉鎮市區</button>
       <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
         style="border-color:#8a6a3a;color:#e8c87a">📍 雨量測站</button>
+      <button class="b"    id="bTerrain" onclick="setMode('terrain')"
+        style="border-color:#6a5a3a;color:#d8c090">地形</button>
       <select id="townNameScope" onchange="setTownNameScope(this.value)"
         style="display:none;font-size:10px;background:#061220;color:#8ac8e8;
         border:1px solid #1a4060;border-radius:3px;padding:2px 3px;margin-right:3px"></select>
@@ -449,6 +451,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       onfocus="onSearchInput(this.value)"
       style="width:100%;box-sizing:border-box;font-size:12px;padding:5px 7px;
       background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px;outline:none">
+    <select id="countyPick" onchange="pickCounty(this.value)"
+      style="width:100%;box-sizing:border-box;margin-top:4px;font-size:12px;padding:4px 6px;
+      background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+      <option value="">— 選擇縣市（看該縣市各鄉鎮分布）—</option>
+    </select>
     <div id="searchResults" style="display:none;position:absolute;left:14px;right:14px;top:32px;
       z-index:1200;max-height:280px;overflow-y:auto;background:#08182a;
       border:1px solid #2a5070;border-radius:4px;box-shadow:0 4px 14px rgba(0,0,0,.6)"></div>
@@ -493,6 +500,21 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           onmousemove="showChartTooltip(event,'cv-all-hyeto')"
           onmouseleave="hideChartTooltip()"></canvas>
         <div class="hint" style="font-size:9px;padding:2px 0">點擊圖表可放大 / 滑鼠移過顯示數值</div>
+      </div>
+    </div>
+
+    <!-- 區塊：縣市內各鄉鎮（選縣市後顯示） -->
+    <div class="sec" id="sec-countytowns" style="display:none">
+      <div class="sec-h" onclick="toggleSec('countytowns')">
+        <span id="ct-title">縣市內各鄉鎮</span>
+        <span class="sec-arrow" id="arrow-countytowns">▸</span>
+      </div>
+      <div class="sec-body" id="body-countytowns" style="display:none">
+        <canvas id="cv-countytowns" style="width:100%;height:280px;display:block;
+          background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-countytowns')"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          依雨量排序；左側色條為地形分類。點選任一列可跳至該鄉鎮</div>
       </div>
     </div>
 
@@ -1256,12 +1278,23 @@ function renderStationLayer(){
       // ★ ETR2 與海拔可能尚未有資料：ETR2 只有官方警戒站才有，
       //   海拔需部署 station_elev.json（由 20m DTM 離線產生）。
       //   缺值時明確說明原因，而不是只顯示「—」讓人以為壞掉。
-      const pct = st.etr2_pct != null
-        ? `<b>${(st.etr2_pct * 100).toFixed(0)}%</b>`
-        : '<span style="color:#7a94ac">非警戒代表站</span>';
+      // ★ ETR2 三種來源，逐級退回並標明，避免「明明是代表站卻顯示沒有」：
+      //   ① 該站自身的 ETR2（水保署參考站）
+      //   ② 有警戒值但站本身無 ETR2 → 用該鄉鎮的官方現值當參考
+      //   ③ 兩者皆無 → 才是真的沒有觀測依據
+      let pct;
+      if(st.etr2_pct != null){
+        pct = `<b>${(st.etr2_pct * 100).toFixed(0)}%</b>`;
+      } else {
+        const tv = getObsEtr(t);
+        pct = (tv != null)
+          ? `<b>${tv.toFixed(0)}%</b>`
+            + '<span style="color:#8a9aaa;font-size:10px">（鄉鎮值）</span>'
+          : '<span style="color:#7a94ac">無觀測值</span>';
+      }
       const elevStr = st.elev != null
         ? `${st.elev.toFixed(0)} m`
-        : '<span style="color:#7a94ac">待產生對照表</span>';
+        : '<span style="color:#7a94ac">—</span>';
       m.bindTooltip(
         `<b>${st.name}</b><span style="color:#8a9aaa;font-size:10px">　`
         + `${t.county}${t.township}　${_townZone(t) || ''}</span><br>`
@@ -1568,6 +1601,10 @@ function _scnGroupKeys(){
 //    新北瑞芳（深澳漁港）、臺東成功（成功漁港），地形落差大且有漁港。
 //  ★ 不會與 TOWN_ZONE 衝突：TOWN_ZONE 仍是單值，用於情境群組鍵
 //    （分署|地形）與陣風因子；本旗標只用於海象資料的取用與呈現。
+// 各鄉鎮的地形統計（由 20m DTM 離線計算）
+//   m=平均海拔(m)、x=最高點(m)、s=坡度>5% 的面積佔比(%)
+const TOWN_TERRAIN = {"臺東縣成功鎮":{"m":408,"x":1679,"s":93},"屏東縣佳冬鄉":{"m":6,"x":20,"s":8},"雲林縣麥寮鄉":{"m":4,"x":20,"s":12},"臺東縣蘭嶼鄉":{"m":182,"x":548,"s":95},"彰化縣田中鎮":{"m":78,"x":382,"s":27},"彰化縣社頭鄉":{"m":104,"x":441,"s":45},"屏東縣竹田鄉":{"m":13,"x":26,"s":9},"屏東縣萬丹鄉":{"m":12,"x":24,"s":6},"苗栗縣三灣鄉":{"m":124,"x":759,"s":89},"新竹縣峨眉鄉":{"m":162,"x":800,"s":90},"苗栗縣南庄鄉":{"m":670,"x":2116,"s":95},"嘉義縣太保市":{"m":14,"x":30,"s":7},"嘉義縣中埔鄉":{"m":292,"x":1281,"s":75},"嘉義縣番路鄉":{"m":614,"x":1469,"s":89},"嘉義縣水上鄉":{"m":36,"x":198,"s":25},"彰化縣員林市":{"m":82,"x":402,"s":42},"高雄市小港區":{"m":13,"x":144,"s":15},"宜蘭縣蘇澳鎮":{"m":158,"x":881,"s":70},"宜蘭縣五結鄉":{"m":3,"x":16,"s":11},"宜蘭縣宜蘭市":{"m":6,"x":40,"s":8},"宜蘭縣壯圍鄉":{"m":2,"x":19,"s":10},"宜蘭縣羅東鎮":{"m":7,"x":22,"s":5},"宜蘭縣員山鄉":{"m":343,"x":1455,"s":70},"宜蘭縣冬山鄉":{"m":59,"x":505,"s":35},"宜蘭縣三星鄉":{"m":134,"x":722,"s":36},"宜蘭縣大同鄉":{"m":1204,"x":3532,"s":97},"新竹縣竹東鎮":{"m":196,"x":1051,"s":67},"新竹縣新埔鎮":{"m":139,"x":380,"s":80},"新竹縣關西鎮":{"m":285,"x":1340,"s":89},"新竹縣湖口鄉":{"m":120,"x":354,"s":38},"新竹縣芎林鄉":{"m":188,"x":469,"s":79},"新竹縣橫山鄉":{"m":327,"x":975,"s":88},"新竹縣北埔鄉":{"m":344,"x":1348,"s":95},"新竹縣五峰鄉":{"m":1227,"x":2525,"s":99},"臺中市龍井區":{"m":38,"x":258,"s":23},"臺中市大雅區":{"m":164,"x":307,"s":18},"臺中市沙鹿區":{"m":124,"x":301,"s":54},"臺中市梧棲區":{"m":4,"x":12,"s":5},"澎湖縣湖西鄉":{"m":13,"x":50,"s":25},"臺東縣金峰鄉":{"m":946,"x":3085,"s":98},"臺東縣太麻里鄉":{"m":313,"x":1128,"s":86},"苗栗縣苗栗市":{"m":82,"x":230,"s":55},"苗栗縣卓蘭鎮":{"m":484,"x":1231,"s":78},"苗栗縣大湖鄉":{"m":462,"x":1398,"s":94},"苗栗縣公館鄉":{"m":247,"x":785,"s":72},"苗栗縣銅鑼鄉":{"m":271,"x":848,"s":79},"苗栗縣頭屋鄉":{"m":126,"x":557,"s":91},"苗栗縣三義鄉":{"m":375,"x":888,"s":88},"苗栗縣西湖鄉":{"m":96,"x":262,"s":78},"苗栗縣造橋鄉":{"m":57,"x":408,"s":84},"苗栗縣獅潭鄉":{"m":413,"x":1227,"s":97},"彰化縣彰化市":{"m":47,"x":232,"s":42},"彰化縣和美鎮":{"m":8,"x":24,"s":7},"彰化縣線西鄉":{"m":3,"x":13,"s":7},"彰化縣伸港鄉":{"m":3,"x":18,"s":6},"彰化縣秀水鄉":{"m":11,"x":21,"s":4},"彰化縣花壇鄉":{"m":57,"x":256,"s":49},"彰化縣芬園鄉":{"m":121,"x":366,"s":59},"彰化縣溪湖鎮":{"m":16,"x":28,"s":4},"嘉義縣東石鄉":{"m":0,"x":9,"s":12},"彰化縣大村鄉":{"m":39,"x":250,"s":23},"彰化縣埔鹽鄉":{"m":10,"x":22,"s":4},"彰化縣埔心鄉":{"m":21,"x":29,"s":5},"彰化縣永靖鄉":{"m":27,"x":36,"s":2},"彰化縣二水鄉":{"m":139,"x":433,"s":41},"彰化縣二林鎮":{"m":12,"x":25,"s":2},"彰化縣埤頭鄉":{"m":23,"x":39,"s":2},"彰化縣芳苑鄉":{"m":4,"x":19,"s":3},"彰化縣大城鄉":{"m":4,"x":20,"s":3},"彰化縣竹塘鄉":{"m":18,"x":32,"s":4},"彰化縣溪州鄉":{"m":39,"x":73,"s":6},"南投縣南投市":{"m":188,"x":443,"s":65},"南投縣埔里鎮":{"m":631,"x":1666,"s":75},"南投縣草屯鎮":{"m":231,"x":1086,"s":55},"南投縣竹山鎮":{"m":673,"x":2287,"s":81},"南投縣集集鎮":{"m":356,"x":1390,"s":78},"南投縣名間鄉":{"m":236,"x":432,"s":49},"南投縣鹿谷鄉":{"m":735,"x":2020,"s":94},"南投縣中寮鄉":{"m":396,"x":1390,"s":95},"南投縣魚池鄉":{"m":775,"x":2096,"s":85},"南投縣國姓鄉":{"m":565,"x":1481,"s":95},"南投縣水里鄉":{"m":579,"x":1533,"s":86},"南投縣信義鄉":{"m":1932,"x":3948,"s":99},"南投縣仁愛鄉":{"m":1735,"x":3529,"s":98},"雲林縣斗六市":{"m":76,"x":508,"s":24},"雲林縣斗南鎮":{"m":34,"x":64,"s":12},"雲林縣虎尾鎮":{"m":24,"x":39,"s":6},"雲林縣西螺鎮":{"m":28,"x":43,"s":6},"雲林縣土庫鎮":{"m":14,"x":24,"s":4},"雲林縣北港鎮":{"m":7,"x":20,"s":6},"雲林縣古坑鄉":{"m":398,"x":1790,"s":70},"雲林縣大埤鄉":{"m":22,"x":41,"s":7},"雲林縣莿桐鄉":{"m":43,"x":79,"s":7},"雲林縣林內鄉":{"m":122,"x":372,"s":44},"雲林縣二崙鄉":{"m":19,"x":34,"s":4},"雲林縣崙背鄉":{"m":11,"x":28,"s":5},"雲林縣東勢鄉":{"m":5,"x":18,"s":5},"雲林縣褒忠鄉":{"m":9,"x":18,"s":4},"雲林縣元長鄉":{"m":10,"x":25,"s":4},"雲林縣水林鄉":{"m":2,"x":12,"s":4},"嘉義縣朴子市":{"m":5,"x":14,"s":6},"嘉義縣大林鎮":{"m":49,"x":183,"s":27},"嘉義縣民雄鄉":{"m":41,"x":168,"s":24},"嘉義縣溪口鄉":{"m":16,"x":37,"s":6},"嘉義縣新港鄉":{"m":12,"x":27,"s":6},"嘉義縣六腳鄉":{"m":5,"x":17,"s":8},"嘉義縣義竹鄉":{"m":4,"x":15,"s":12},"嘉義縣鹿草鄉":{"m":11,"x":26,"s":6},"嘉義縣竹崎鄉":{"m":538,"x":1862,"s":88},"嘉義縣梅山鄉":{"m":736,"x":1956,"s":95},"嘉義縣大埔鄉":{"m":517,"x":1235,"s":90},"嘉義縣阿里山鄉":{"m":1461,"x":3875,"s":99},"屏東縣屏東市":{"m":23,"x":38,"s":6},"屏東縣潮州鎮":{"m":23,"x":64,"s":3},"屏東縣長治鄉":{"m":48,"x":88,"s":3},"屏東縣麟洛鄉":{"m":25,"x":37,"s":4},"屏東縣九如鄉":{"m":30,"x":44,"s":8},"屏東縣里港鄉":{"m":39,"x":68,"s":12},"屏東縣鹽埔鄉":{"m":57,"x":105,"s":5},"屏東縣高樹鄉":{"m":82,"x":286,"s":13},"屏東縣萬巒鄉":{"m":36,"x":240,"s":9},"屏東縣內埔鄉":{"m":53,"x":309,"s":13},"屏東縣新埤鄉":{"m":33,"x":105,"s":8},"屏東縣崁頂鄉":{"m":5,"x":17,"s":5},"屏東縣南州鄉":{"m":5,"x":18,"s":3},"屏東縣琉球鄉":{"m":35,"x":87,"s":64},"屏東縣三地門鄉":{"m":710,"x":2422,"s":96},"屏東縣霧臺鄉":{"m":1401,"x":3038,"s":99},"屏東縣瑪家鄉":{"m":629,"x":1985,"s":98},"屏東縣泰武鄉":{"m":915,"x":3071,"s":98},"屏東縣來義鄉":{"m":719,"x":2312,"s":97},"屏東縣春日鄉":{"m":639,"x":1689,"s":98},"屏東縣獅子鄉":{"m":430,"x":1468,"s":98},"臺東縣鹿野鄉":{"m":243,"x":947,"s":56},"臺東縣池上鄉":{"m":378,"x":1094,"s":63},"臺東縣延平鄉":{"m":1306,"x":2937,"s":98},"花蓮縣光復鄉":{"m":263,"x":1199,"s":66},"花蓮縣瑞穗鄉":{"m":247,"x":1009,"s":74},"花蓮縣富里鄉":{"m":505,"x":1675,"s":82},"澎湖縣馬公市":{"m":13,"x":61,"s":30},"澎湖縣白沙鄉":{"m":9,"x":39,"s":29},"澎湖縣西嶼鄉":{"m":21,"x":61,"s":45},"澎湖縣望安鄉":{"m":17,"x":73,"s":57},"澎湖縣七美鄉":{"m":24,"x":64,"s":45},"基隆市暖暖區":{"m":232,"x":735,"s":93},"臺北市大安區":{"m":13,"x":135,"s":13},"臺北市文山區":{"m":118,"x":666,"s":78},"高雄市鹽埕區":{"m":1,"x":6,"s":4},"高雄市新興區":{"m":4,"x":8,"s":0},"高雄市前金區":{"m":2,"x":8,"s":4},"高雄市前鎮區":{"m":3,"x":10,"s":3},"宜蘭縣頭城鎮":{"m":255,"x":1004,"s":82},"宜蘭縣南澳鄉":{"m":1021,"x":3599,"s":98},"新竹縣竹北市":{"m":24,"x":176,"s":19},"新竹縣新豐鄉":{"m":34,"x":130,"s":24},"苗栗縣苑裡鎮":{"m":114,"x":602,"s":47},"苗栗縣通霄鎮":{"m":90,"x":523,"s":75},"苗栗縣竹南鎮":{"m":21,"x":102,"s":28},"苗栗縣後龍鎮":{"m":27,"x":177,"s":42},"彰化縣鹿港鎮":{"m":3,"x":17,"s":6},"彰化縣福興鄉":{"m":5,"x":14,"s":4},"雲林縣臺西鄉":{"m":1,"x":12,"s":9},"雲林縣四湖鄉":{"m":2,"x":15,"s":4},"雲林縣口湖鄉":{"m":0,"x":9,"s":12},"嘉義縣布袋鎮":{"m":0,"x":11,"s":13},"屏東縣東港鎮":{"m":1,"x":9,"s":7},"屏東縣枋寮鄉":{"m":27,"x":165,"s":9},"屏東縣新園鄉":{"m":4,"x":30,"s":8},"屏東縣林邊鄉":{"m":2,"x":11,"s":10},"屏東縣車城鄉":{"m":105,"x":620,"s":73},"屏東縣滿州鄉":{"m":168,"x":673,"s":91},"屏東縣枋山鄉":{"m":14,"x":64,"s":32},"屏東縣牡丹鄉":{"m":311,"x":1058,"s":96},"臺東縣臺東市":{"m":37,"x":304,"s":20},"臺東縣卑南鄉":{"m":800,"x":2721,"s":93},"臺東縣東河鄉":{"m":346,"x":1509,"s":95},"花蓮縣吉安鄉":{"m":110,"x":1317,"s":26},"花蓮縣壽豐鄉":{"m":156,"x":1088,"s":64},"花蓮縣秀林鄉":{"m":1563,"x":3634,"s":98},"高雄市楠梓區":{"m":13,"x":176,"s":15},"高雄市鳳山區":{"m":12,"x":65,"s":10},"高雄市大寮區":{"m":17,"x":97,"s":21},"高雄市大樹區":{"m":69,"x":257,"s":60},"高雄市大社區":{"m":44,"x":224,"s":41},"高雄市仁武區":{"m":36,"x":178,"s":36},"高雄市鳥松區":{"m":33,"x":150,"s":50},"高雄市岡山區":{"m":17,"x":311,"s":18},"高雄市橋頭區":{"m":8,"x":48,"s":10},"高雄市燕巢區":{"m":60,"x":342,"s":52},"高雄市田寮區":{"m":76,"x":408,"s":89},"高雄市阿蓮區":{"m":29,"x":302,"s":22},"高雄市路竹區":{"m":13,"x":28,"s":10},"高雄市湖內區":{"m":6,"x":24,"s":12},"高雄市旗山區":{"m":87,"x":418,"s":56},"高雄市美濃區":{"m":143,"x":823,"s":51},"高雄市六龜區":{"m":508,"x":1525,"s":85},"高雄市甲仙區":{"m":595,"x":1661,"s":92},"高雄市杉林區":{"m":266,"x":961,"s":80},"高雄市內門區":{"m":130,"x":694,"s":86},"高雄市茂林區":{"m":1217,"x":2770,"s":98},"高雄市桃源區":{"m":1839,"x":3943,"s":99},"高雄市那瑪夏區":{"m":1152,"x":2471,"s":98},"新北市永和區":{"m":7,"x":16,"s":11},"新北市新店區":{"m":254,"x":979,"s":87},"新北市土城區":{"m":89,"x":426,"s":66},"新北市蘆洲區":{"m":2,"x":12,"s":8},"新北市五股區":{"m":91,"x":522,"s":72},"新北市坪林區":{"m":509,"x":1128,"s":98},"新北市平溪區":{"m":356,"x":839,"s":98},"新北市烏來區":{"m":876,"x":2128,"s":99},"臺中市豐原區":{"m":280,"x":592,"s":49},"臺中市東勢區":{"m":477,"x":1196,"s":79},"臺中市后里區":{"m":224,"x":544,"s":35},"臺中市神岡區":{"m":173,"x":208,"s":13},"臺中市新社區":{"m":590,"x":1128,"s":73},"臺中市石岡區":{"m":362,"x":579,"s":60},"臺中市外埔區":{"m":141,"x":272,"s":26},"臺中市大肚區":{"m":68,"x":293,"s":43},"臺南市新營區":{"m":10,"x":20,"s":9},"臺南市鹽水區":{"m":5,"x":15,"s":10},"臺南市白河區":{"m":167,"x":1240,"s":61},"臺南市後壁區":{"m":17,"x":40,"s":9},"臺南市麻豆區":{"m":6,"x":17,"s":13},"臺南市下營區":{"m":5,"x":16,"s":8},"臺南市六甲區":{"m":66,"x":533,"s":54},"臺南市官田區":{"m":35,"x":192,"s":38},"臺南市大內區":{"m":74,"x":402,"s":73},"臺南市佳里區":{"m":4,"x":17,"s":3},"臺南市學甲區":{"m":2,"x":11,"s":19},"臺南市西港區":{"m":5,"x":16,"s":6},"臺南市新化區":{"m":40,"x":167,"s":52},"臺南市新市區":{"m":10,"x":35,"s":12},"臺南市安定區":{"m":5,"x":42,"s":9},"臺南市玉井區":{"m":109,"x":638,"s":74},"臺南市楠西區":{"m":267,"x":1128,"s":85},"臺南市南化區":{"m":332,"x":1169,"s":91},"臺南市左鎮區":{"m":78,"x":349,"s":88},"臺南市仁德區":{"m":8,"x":30,"s":13},"臺南市歸仁區":{"m":20,"x":37,"s":11},"臺南市關廟區":{"m":39,"x":117,"s":54},"臺南市龍崎區":{"m":88,"x":348,"s":94},"臺南市永康區":{"m":11,"x":33,"s":10},"臺南市北區":{"m":9,"x":25,"s":8},"高雄市林園區":{"m":11,"x":145,"s":18},"高雄市茄萣區":{"m":2,"x":11,"s":12},"高雄市永安區":{"m":3,"x":15,"s":14},"高雄市彌陀區":{"m":5,"x":53,"s":20},"高雄市梓官區":{"m":7,"x":31,"s":6},"新北市淡水區":{"m":138,"x":1092,"s":70},"新北市瑞芳區":{"m":214,"x":746,"s":94},"新北市林口區":{"m":160,"x":258,"s":65},"新北市三芝區":{"m":298,"x":1095,"s":88},"新北市八里區":{"m":91,"x":611,"s":65},"臺中市大甲區":{"m":49,"x":223,"s":13},"臺中市大安區":{"m":13,"x":55,"s":7},"臺南市北門區":{"m":0,"x":18,"s":16},"臺南市安南區":{"m":2,"x":18,"s":11},"桃園市蘆竹區":{"m":79,"x":257,"s":39},"桃園市龜山區":{"m":190,"x":403,"s":69},"桃園市復興區":{"m":999,"x":2440,"s":98},"嘉義市東區":{"m":57,"x":179,"s":40},"嘉義市西區":{"m":27,"x":36,"s":6},"臺東縣達仁鄉":{"m":573,"x":1920,"s":97},"臺東縣大武鄉":{"m":223,"x":892,"s":92},"臺東縣關山鎮":{"m":280,"x":988,"s":47},"臺東縣海端鄉":{"m":1756,"x":3667,"s":99},"新竹市北區":{"m":10,"x":108,"s":14},"新竹市香山區":{"m":26,"x":119,"s":48},"宜蘭縣礁溪鄉":{"m":288,"x":1209,"s":66},"花蓮縣玉里鎮":{"m":333,"x":1342,"s":68},"花蓮縣卓溪鄉":{"m":1691,"x":3815,"s":99},"苗栗縣頭份市":{"m":54,"x":182,"s":59},"臺中市清水區":{"m":61,"x":220,"s":16},"臺南市南區":{"m":6,"x":24,"s":9},"臺南市東區":{"m":21,"x":31,"s":6},"臺南市安平區":{"m":2,"x":12,"s":6},"臺南市中西區":{"m":6,"x":20,"s":6},"桃園市大溪區":{"m":215,"x":663,"s":60},"桃園市八德區":{"m":128,"x":172,"s":8},"桃園市桃園區":{"m":98,"x":253,"s":19},"桃園市大園區":{"m":31,"x":93,"s":16},"桃園市楊梅區":{"m":168,"x":385,"s":38},"基隆市七堵區":{"m":139,"x":630,"s":92},"基隆市仁愛區":{"m":60,"x":205,"s":80},"基隆市信義區":{"m":82,"x":214,"s":87},"基隆市中正區":{"m":36,"x":180,"s":65},"基隆市中山區":{"m":52,"x":222,"s":74},"基隆市安樂區":{"m":94,"x":337,"s":87},"新北市三峽區":{"m":421,"x":1725,"s":94},"新北市鶯歌區":{"m":90,"x":359,"s":55},"新北市中和區":{"m":39,"x":321,"s":44},"新北市樹林區":{"m":64,"x":403,"s":47},"新北市深坑區":{"m":193,"x":592,"s":93},"新北市板橋區":{"m":7,"x":25,"s":11},"新北市石碇區":{"m":345,"x":924,"s":93},"新北市新莊區":{"m":24,"x":239,"s":22},"新北市泰山區":{"m":99,"x":249,"s":66},"新北市三重區":{"m":2,"x":14,"s":10},"新北市雙溪區":{"m":348,"x":978,"s":97},"新北市貢寮區":{"m":169,"x":715,"s":92},"新北市汐止區":{"m":188,"x":727,"s":88},"新北市萬里區":{"m":268,"x":915,"s":93},"新北市金山區":{"m":273,"x":1098,"s":86},"新北市石門區":{"m":183,"x":1072,"s":92},"高雄市苓雅區":{"m":6,"x":17,"s":4},"高雄市三民區":{"m":7,"x":53,"s":8},"桃園市新屋區":{"m":51,"x":137,"s":12},"桃園市觀音區":{"m":44,"x":117,"s":17},"金門縣烈嶼鄉":{"m":16,"x":104,"s":47},"高雄市旗津區":{"m":2,"x":50,"s":16},"臺東縣長濱鄉":{"m":360,"x":1334,"s":95},"花蓮縣豐濱鄉":{"m":246,"x":1125,"s":96},"臺中市霧峰區":{"m":179,"x":767,"s":66},"臺中市大里區":{"m":58,"x":330,"s":15},"臺中市南區":{"m":52,"x":75,"s":8},"臺中市烏日區":{"m":40,"x":210,"s":22},"臺中市中區":{"m":78,"x":84,"s":4},"臺中市西區":{"m":74,"x":93,"s":5},"臺中市南屯區":{"m":90,"x":290,"s":31},"臺中市北區":{"m":96,"x":112,"s":4},"臺中市西屯區":{"m":127,"x":311,"s":28},"臺中市北屯區":{"m":248,"x":856,"s":60},"臺中市潭子區":{"m":202,"x":502,"s":33},"臺北市信義區":{"m":45,"x":374,"s":46},"臺北市萬華區":{"m":4,"x":12,"s":10},"臺北市中正區":{"m":6,"x":46,"s":8},"臺北市松山區":{"m":5,"x":13,"s":6},"臺北市大同區":{"m":2,"x":14,"s":8},"臺北市中山區":{"m":15,"x":200,"s":24},"臺北市士林區":{"m":289,"x":890,"s":74},"臺北市北投區":{"m":324,"x":1116,"s":73},"花蓮縣花蓮市":{"m":21,"x":108,"s":22},"花蓮縣新城鄉":{"m":17,"x":340,"s":19},"臺南市善化區":{"m":13,"x":31,"s":8},"臺南市山上區":{"m":40,"x":278,"s":50},"彰化縣北斗鎮":{"m":34,"x":46,"s":3},"彰化縣田尾鄉":{"m":28,"x":41,"s":4},"金門縣金沙鎮":{"m":17,"x":249,"s":35},"金門縣金湖鎮":{"m":27,"x":244,"s":47},"臺南市柳營區":{"m":33,"x":245,"s":30},"臺南市東山區":{"m":175,"x":980,"s":72},"臺南市七股區":{"m":1,"x":11,"s":8},"臺南市將軍區":{"m":2,"x":12,"s":7},"高雄市鼓山區":{"m":65,"x":357,"s":55},"高雄市左營區":{"m":10,"x":157,"s":9},"桃園市中壢區":{"m":111,"x":171,"s":13},"新竹縣寶山鄉":{"m":93,"x":252,"s":90},"新竹市東區":{"m":60,"x":185,"s":42},"屏東縣恆春鎮":{"m":89,"x":674,"s":70},"臺中市東區":{"m":78,"x":97,"s":8},"臺中市太平區":{"m":329,"x":1202,"s":83},"花蓮縣鳳林鎮":{"m":132,"x":948,"s":27},"花蓮縣萬榮鄉":{"m":1495,"x":3328,"s":99},"桃園市龍潭區":{"m":254,"x":554,"s":45},"桃園市平鎮區":{"m":170,"x":278,"s":18},"臺北市南港區":{"m":102,"x":415,"s":72},"臺北市內湖區":{"m":86,"x":518,"s":69},"金門縣金寧鄉":{"m":16,"x":75,"s":24},"金門縣金城鎮":{"m":17,"x":70,"s":45},"新竹縣尖石鄉":{"m":1589,"x":3527,"s":99},"苗栗縣泰安鄉":{"m":1741,"x":3881,"s":98},"臺中市和平區":{"m":1945,"x":3884,"s":99}};
+
 const TOWN_COASTAL = new Set(["嘉義縣布袋鎮","嘉義縣東石鄉","基隆市中山區","基隆市中正區","基隆市安樂區","宜蘭縣五結鄉","宜蘭縣南澳鄉","宜蘭縣壯圍鄉","宜蘭縣礁溪鄉","宜蘭縣蘇澳鎮","宜蘭縣頭城鎮","屏東縣佳冬鄉","屏東縣恆春鎮","屏東縣新園鄉","屏東縣東港鎮","屏東縣枋寮鄉","屏東縣枋山鄉","屏東縣林邊鄉","屏東縣滿州鄉","屏東縣牡丹鄉","屏東縣獅子鄉","屏東縣琉球鄉","屏東縣車城鄉","彰化縣伸港鄉","彰化縣大城鄉","彰化縣福興鄉","彰化縣線西鄉","彰化縣芳苑鄉","彰化縣鹿港鎮","新北市三芝區","新北市八里區","新北市林口區","新北市淡水區","新北市瑞芳區","新北市石門區","新北市萬里區","新北市貢寮區","新北市金山區","新竹市北區","新竹市香山區","新竹縣新豐鄉","新竹縣竹北市","桃園市大園區","桃園市新屋區","桃園市蘆竹區","桃園市觀音區","澎湖縣七美鄉","澎湖縣望安鄉","澎湖縣湖西鄉","澎湖縣白沙鄉","澎湖縣西嶼鄉","澎湖縣馬公市","臺中市大安區","臺中市大甲區","臺中市梧棲區","臺中市清水區","臺中市龍井區","臺南市七股區","臺南市仁德區","臺南市北門區","臺南市南區","臺南市安南區","臺南市安平區","臺南市將軍區","臺東縣卑南鄉","臺東縣大武鄉","臺東縣太麻里鄉","臺東縣成功鎮","臺東縣東河鄉","臺東縣綠島鄉","臺東縣臺東市","臺東縣蘭嶼鄉","臺東縣達仁鄉","臺東縣長濱鄉","花蓮縣吉安鄉","花蓮縣壽豐鄉","花蓮縣新城鄉","花蓮縣秀林鄉","花蓮縣花蓮市","花蓮縣豐濱鄉","苗栗縣後龍鎮","苗栗縣竹南鎮","苗栗縣苑裡鎮","苗栗縣通霄鎮","連江縣北竿鄉","連江縣南竿鄉","連江縣東引鄉","連江縣莒光鄉","金門縣烈嶼鄉","金門縣烏坵鄉","金門縣金城鎮","金門縣金寧鄉","金門縣金沙鎮","金門縣金湖鎮","雲林縣口湖鄉","雲林縣四湖鄉","雲林縣臺西鄉","雲林縣麥寮鄉","高雄市小港區","高雄市左營區","高雄市彌陀區","高雄市旗津區","高雄市林園區","高雄市梓官區","高雄市楠梓區","高雄市永安區","高雄市湖內區","高雄市茄萣區","高雄市鼓山區"]);
 function _isCoastal(t){
   if(!t) return false;
@@ -2107,7 +2144,7 @@ function _scatterTipHtml(t){
     + `ETR2%（預估）：${acc && acc.etrPct != null ? acc.etrPct.toFixed(0) + '%' : '—'}<br>`
     + (obs != null ? `ETR2%官方現值：<b>${obs.toFixed(0)}%</b><br>` : '')
     + `風險指標：${_windowRisk(t)}`
-    + _windRow(t) + _tempRow(t) + _waveRow(t)
+    + _terrainRow(t) + _windRow(t) + _tempRow(t) + _waveRow(t)
     + '<br><span style="color:#6bc8e8;font-size:10px">點選可跳至該地</span>';
 }
 
@@ -2347,6 +2384,115 @@ function downloadAllCsv(){
   const msg = document.getElementById('rank-msg');
   if(msg){ msg.textContent = `已下載 ${(TOWNSHIPS||[]).length} 筆 × ${cols.length} 欄`;
            setTimeout(()=>msg.textContent='', 3000); }
+}
+
+// ══════════════════════════════════════════════════════════
+//  縣市層級檢視
+//  ★ 先前必須點到某個鄉鎮，右側才會出現圖表；選縣市後可直接看
+//    「該縣市內各鄉鎮的分布」，鄉鎮是更細一層的呈現。
+// ══════════════════════════════════════════════════════════
+let _pickedCounty = '';
+function _fillCountyPicker(){
+  const sel = document.getElementById('countyPick');
+  if(!sel || sel._filled) return;
+  const set = new Set();
+  (TOWNSHIPS || []).forEach(t=>{ if(t.county) set.add(t.county); });
+  if(!set.size) return;
+  [...set].sort().forEach(c=>{
+    const o = document.createElement('option');
+    o.value = c; o.textContent = c;
+    sel.appendChild(o);
+  });
+  sel._filled = true;
+}
+function pickCounty(c){
+  _pickedCounty = c || '';
+  if(!_pickedCounty){ selected = null; updateInfo(null); return; }
+  // 縮放到該縣市範圍
+  const pts = [];
+  (TOWN_GEO.features || []).forEach(f=>{
+    if((f.properties || {}).COUNTYNAME !== _pickedCounty) return;
+    const g = f.geometry;
+    const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+    polys.forEach(poly=>(poly[0] || []).forEach(cc=>pts.push([cc[1], cc[0]])));
+  });
+  if(pts.length) map.fitBounds(L.latLngBounds(pts), {padding:[30,30]});
+  selected = null;                 // 縣市層級：不指定單一鄉鎮
+  try{ renderLayer(); }catch(e){}
+  updateInfo(null);
+}
+// 縣市層級的鄉鎮分布圖：橫向長條，點選可 zoom 到該鄉鎮
+function drawCountyTowns(canvasId){
+  const cv = document.getElementById(canvasId || 'cv-countytowns');
+  if(!cv) return;
+  const isZoom = (canvasId === 'chart-zoom-canvas');
+  const rows = (TOWNSHIPS || [])
+    .filter(t=>t.county === _pickedCounty)
+    .map(t=>{ const a = getAccum(t);
+              return {t, v: a && a.totalRain, e: a && a.etrPct,
+                      zone: _townZone(t) || '平地'}; })
+    .filter(x=>x.v != null)
+    .sort((a,b)=>b.v - a.v);
+  const F = _fitCanvas(cv, 300, Math.max(160, rows.length * (isZoom?26:14) + 40));
+  const ctx = F.ctx, CW = F.w, CH = F.h;
+  if(!rows.length){
+    ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
+    ctx.fillText('此縣市無資料', 12, 24);
+    return;
+  }
+  const fs = isZoom ? 15 : 10;
+  const pL = isZoom ? 190 : 76, pR = isZoom ? 70 : 34;
+  const pT = isZoom ? 40 : 14, pB = isZoom ? 40 : 18;
+  const iw = CW - pL - pR, ih = CH - pT - pB;
+  const vMax = Math.max(10, Math.ceil(rows[0].v * 1.15 / 10) * 10);
+  const X = v => pL + iw * (v / vMax);
+  const ZC = {'山區':'#FF0000', '淺山區':'#FFFF00', '平地':'#00FF00', '沿海地區':'#00FFFF'};
+  ctx.strokeStyle = '#12283c'; ctx.fillStyle = '#5a7a95';
+  ctx.font = `${fs}px sans-serif`; ctx.textAlign = 'center';
+  const step = vMax <= 50 ? 10 : vMax <= 200 ? 50 : 100;
+  for(let v = 0; v <= vMax; v += step){
+    ctx.beginPath(); ctx.moveTo(X(v), pT); ctx.lineTo(X(v), pT + ih); ctx.stroke();
+    ctx.fillText(String(v), X(v), CH - pB + fs + 2);
+  }
+  const hits = [];
+  rows.forEach((r, i)=>{
+    const y = pT + (ih / rows.length) * (i + 0.5);
+    const bh = Math.max(3, (ih / rows.length) * 0.66);
+    ctx.fillStyle = '#9fc8e8'; ctx.textAlign = 'right';
+    ctx.fillText(r.t.township.slice(0, isZoom ? 10 : 5), pL - 5, y + fs*0.35);
+    const col = (RAIN_SCALE.find(b=>r.v < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color;
+    ctx.fillStyle = col; ctx.globalAlpha = 0.9;
+    ctx.fillRect(pL, y - bh/2, Math.max(1, X(r.v) - pL), bh);
+    ctx.globalAlpha = 1;
+    // 地形色小方塊
+    ctx.fillStyle = ZC[r.zone] || '#00FF00';
+    ctx.fillRect(pL - 4, y - bh/2, 3, bh);
+    ctx.fillStyle = '#cfe4f5'; ctx.textAlign = 'left';
+    ctx.fillText(r.v.toFixed(0) + (r.e != null ? `　${r.e.toFixed(0)}%` : ''),
+                 X(r.v) + 4, y + fs*0.35);
+    hits.push({y, h: bh, t: r.t});
+  });
+  cv._ctHits = hits;
+  if(!cv._ctBound){
+    cv._ctBound = true;
+    cv.addEventListener('click', ev=>{
+      const rc = cv.getBoundingClientRect();
+      const my = ev.clientY - rc.top;
+      let best = null;
+      (cv._ctHits || []).forEach(h=>{ if(Math.abs(h.y - my) <= h.h) best = h; });
+      if(!best) return;
+      ev.stopPropagation();
+      if(typeof closeChartZoom === 'function'){ try{ closeChartZoom(); }catch(e){} }
+      const tt = best.t;
+      if(tt.lat != null && tt.lng != null) map.setView([tt.lat, tt.lng], 11);
+      selected = tt;
+      try{ renderLayer(); updateInfo(tt); }catch(e){}
+    }, true);
+  }
+  if(isZoom){
+    ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(`${_pickedCounty} 各鄉鎮${_winSrcLabel()}`, CW/2, 26);
+  }
 }
 
 function renderRankList(){
@@ -3291,6 +3437,14 @@ function getAccum(t){
     return {totalRain: (v==null ? null : v), etrPct: null, isRadar: true};
   }
 
+  // ── 地形模式（靜態資料，不隨時間變化）──
+  if(mode==='terrain'){
+    const g = _terrainOf(t);
+    const v = g ? g.m : null;
+    return {totalRain: v, etrPct: v, isTerrain: true,
+            elevMax: g ? g.x : null, slopePct: g ? g.s : null};
+  }
+
   // ── 氣溫模式 ──
   if(mode==='temp'){
     const w = _tempOf(t);
@@ -3526,6 +3680,9 @@ function renderLayer(){
         //   浪高看起來沒有資料」的原因。
         fillColor = warnMapColor(totalRain || 0);
         fillOp    = (totalRain||0)>0 ? (isSel?0.93:0.82) : 1.0;
+      } else if(acc.isTerrain){
+        fillColor = _elevColor(totalRain) || '#1a2a35';
+        fillOp    = (totalRain == null) ? 0.3 : (isSel?0.95:0.85);
       } else if(acc.isTemp){
         // 氣溫：無資料留白（不可視為 0°C）
         fillColor = _tempColor(totalRain) || '#FFFFFF';
@@ -3624,7 +3781,7 @@ function renderLayer(){
           // 警特報模式另附本視窗的研判摘要（其他 mode 不需要這麼細）
           (mode==='warn'
             ? `<br><span style="font-size:10px">${_warnSummaryHtml(t)}</span>` : '')+
-          _windRow(t) + _tempRow(t) + _waveRow(t);
+          _terrainRow(t) + _windRow(t) + _tempRow(t) + _waveRow(t);
       } else if(isFuture6h){
         // 未來6h段：只看該獨立時段的降雨強度（不累加），用於判斷哪裡容易下大雨
         const startH = segFrom*6, endH = (segTo+1)*6;
@@ -3640,7 +3797,7 @@ function renderLayer(){
           `最大時雨量：${maxIntensity.toFixed(1)} mm/h（${intensityLabel}）<br>`+
           `ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) +
           `風險指標：${_windowRisk(t)}`
-          + _windRow(t) + _tempRow(t) + _waveRow(t);
+          + _terrainRow(t) + _windRow(t) + _tempRow(t) + _waveRow(t);
       } else {
         let rainLabel;
         if(winKey === 'today'){
@@ -3656,15 +3813,15 @@ function renderLayer(){
             // ★ 與未來6h段一致：補上最大時雨量與其警示級別
             `最大時雨量：${_maxHourRow(t, 0, 3)}<br>`+
             `ETR2%（預估）：${etrStr}<br>`+ _etr2NowRow(t) +
-            `風險指標：${riskIndicatorHtml(t,3)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
+            `風險指標：${riskIndicatorHtml(t,3)}` + _terrainRow(t) + _windRow(t) + _tempRow(t) + _waveRow(t);
         } else if(winKey.startsWith('past')){
           tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b>` + _modeHeadRow(t) + `<br>觀測累積雨量：${rainStr} ｜ ETR2%：${etrStr}<br>`+
             `最大時雨量：${_maxHourRow(t, segFrom, segTo)}<br>`+
-            _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
+            _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _terrainRow(t) + _windRow(t) + _tempRow(t) + _waveRow(t);
         } else {
           tooltipHtml = `<b>${p.COUNTYNAME} ${p.TOWNNAME}</b>` + _modeHeadRow(t) + `<br>預測累積雨量：${rainStr} ｜ ETR2%（預估）：${etrStr}<br>`+
             `最大時雨量：${_maxHourRow(t, segFrom, segTo)}<br>`+
-            _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _windRow(t) + _tempRow(t) + _waveRow(t);
+            _etr2NowRow(t) + `風險指標：${_windowRisk(t)}` + _terrainRow(t) + _windRow(t) + _tempRow(t) + _waveRow(t);
         }
       }
       poly.bindTooltip(tooltipHtml, {sticky:true, opacity:.92});
@@ -3726,6 +3883,23 @@ function toggleSec(name){
 }
 
 function updateInfo(t){
+  // ★ 縣市層級：未選鄉鎮但已選縣市時，只畫縣市內鄉鎮分布與排行，
+  //   不進入下方需要單一鄉鎮的流程（否則會存取 t.county 而出錯）。
+  if(!t){
+    _fillCountyPicker();
+    const ctEl0 = document.getElementById('sec-countytowns');
+    if(ctEl0) ctEl0.style.display = _pickedCounty ? 'block' : 'none';
+    if(_pickedCounty){
+      const tt0 = document.getElementById('ct-title');
+      if(tt0) tt0.textContent = `${_pickedCounty} 各鄉鎮`;
+      const it = document.getElementById('iTitle');
+      if(it) it.textContent = _pickedCounty;
+      try{ drawCountyTowns(); }catch(e){ console.warn('縣市鄉鎮圖失敗', e); }
+    }
+    try{ renderRankList(); }catch(e){}
+    try{ renderBlendDetail(null); }catch(e){}
+    return;
+  }
   // 選取鄉鎮時隱藏各分署整合區塊
   ['all-summary','all-daily','all-hyeto'].forEach(name=>{
     const sec = document.getElementById('sec-'+name);
@@ -3843,6 +4017,15 @@ function updateInfo(t){
     const mEl = document.getElementById('sec-margin');
     if(mEl) mEl.style.display = hasMg ? 'block' : 'none';
     if(hasMg){ try{ drawMarginChart(t); }catch(e){ console.warn('警戒餘裕圖失敗', e); } }
+
+    // 縣市內各鄉鎮（選了縣市才顯示）
+    const ctEl = document.getElementById('sec-countytowns');
+    if(ctEl) ctEl.style.display = _pickedCounty ? 'block' : 'none';
+    if(_pickedCounty){
+      const tt = document.getElementById('ct-title');
+      if(tt) tt.textContent = `${_pickedCounty} 各鄉鎮`;
+      try{ drawCountyTowns(); }catch(e){ console.warn('縣市鄉鎮圖失敗', e); }
+    }
 
     // 全臺排行
     const rEl = document.getElementById('sec-rank');
@@ -4472,9 +4655,11 @@ function renderLegend(){
   const isFuture6h = false;  // fut6 已改回累積雨量色階
   // 風力預測：以蒲福風級色階呈現（與 BF_BANDS 同一組定義，避免兩處分歧）
   const WIND_SCALE = BF_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
+  const ELEV_SCALE = ELEV_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
   const TEMP_SCALE = TEMP_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
   const WAVE_SCALE = WAVE_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
-  const sc = mode==='temp' ? TEMP_SCALE
+  const sc = mode==='terrain' ? ELEV_SCALE
+           : mode==='temp' ? TEMP_SCALE
            : mode==='wave' ? WAVE_SCALE
            : mode==='rain' ? RAIN_SCALE
            : mode==='etr'  ? ETR_SCALE
@@ -4483,7 +4668,7 @@ function renderLegend(){
            : RISK_SCALE;
   const titles = { rain: isFuture6h ? '降雨強度' : '累積雨量(mm)', etr: 'ETR2%',
                    risk: '風險指標', warn: '警特報預估', wind: '蒲福風級',
-                   temp: '氣溫(°C)', wave: '浪高' };
+                   temp: '氣溫(°C)', wave: '浪高', terrain: '平均海拔' };
   const titleText = titles[mode] || '';
 
   // 強度分級用描述性文字，不顯示數字範圍
@@ -4494,7 +4679,8 @@ function renderLegend(){
   function rangeLabel(scale, idx){
     if(isFuture6h) return INTENSITY_DESC[idx] || '';
     if(mode==='warn') return scale[idx].label || '';
-    if(mode==='wind' || mode==='temp' || mode==='wave') return scale[idx].label || '';
+    if(mode==='wind' || mode==='temp' || mode==='wave' || mode==='terrain')
+      return scale[idx].label || '';
     if(mode==='risk') return RISK_DESC[idx] || '';
     const s = scale[idx];
     const prevMax = idx>0 ? scale[idx-1].max : 0;
@@ -4844,12 +5030,12 @@ function setModel(m){
 
 function setMode(m){
   mode=m;
-  ['bRain','bEtr','bRisk','bWarn','bWind','bTemp','bWave'].forEach(id=>{
+  ['bRain','bEtr','bRisk','bWarn','bWind','bTemp','bWave','bTerrain'].forEach(id=>{
     const el=document.getElementById(id);
     if(el) el.classList.remove('on');
   });
   const modeMap={rain:'bRain',etr:'bEtr',risk:'bRisk',warn:'bWarn',wind:'bWind',
-                 temp:'bTemp',wave:'bWave'};
+                 temp:'bTemp',wave:'bWave',terrain:'bTerrain'};
   const el=document.getElementById(modeMap[m]);
   if(el) el.classList.add('on');
   withTransition(()=>{
@@ -6851,6 +7037,25 @@ let windKind = 'mean';
 //  由低到高：白(<0) 靛紫(5) 深藍(10) 青藍(14) 嫩綠(18) 純綠(22)
 //            純黃(26) 橘黃(30) 橘紅(35) 鮮紅(38) 深暗紅(>40)
 // ══════════════════════════════════════════════════════════
+// 地形（平均海拔）色階：與地形分類的判準對齊
+//   <100m 平地、100-500 丘陵、500-1000 淺山上緣、1000-2000 山區、>2000 高山
+const ELEV_BANDS = [
+  {max: 100,  color:'#2a6a3a', name:'<100m'},
+  {max: 500,  color:'#7ea84a', name:'100–500m'},
+  {max: 1000, color:'#d8c060', name:'500–1000m'},
+  {max: 2000, color:'#c08a4a', name:'1000–2000m'},
+  {max: 9999, color:'#a06050', name:'>2000m'},
+];
+function _elevColor(v){
+  if(v == null || !isFinite(v)) return null;
+  for(const b of ELEV_BANDS) if(v < b.max) return b.color;
+  return ELEV_BANDS[ELEV_BANDS.length-1].color;
+}
+function _terrainOf(t){
+  if(!t) return null;
+  return (window.TOWN_TERRAIN || TOWN_TERRAIN)[(t.county||'') + (t.township||'')] || null;
+}
+
 const TEMP_BANDS = [
   {max: 0,   color:'#FFFFFF', name:'0°C以下'},
   {max: 5,   color:'#4B0082', name:'0–5°C'},
@@ -7217,12 +7422,15 @@ function _drawWindChart(cvId, pts, opt){
   // ★ X 軸改用固定時間範圍（預設 -48h ~ +72h）。
   //   原本取「資料點首末」，過去段點少、未來段點多時比例會失真：
   //   看起來過去被壓縮、未來又不滿 72 小時。固定範圍才是等時距。
+  // ★ 未來側以「資料實際極限再加 10%」為邊界，不再固定 72h：
+  //   固定範圍會在資料較短時留下大片空白（浪高只有 3 天卻畫到 7 天）。
+  //   過去側維持 48h，讓各圖的歷史區間一致、便於橫向比較。
   const axisNow = (o.nowMs == null) ? Date.now() : o.nowMs;
   const spanBack = (o.hoursBack != null ? o.hoursBack : 48) * 3600e3;
-  const spanFwd  = (o.hoursFwd  != null ? o.hoursFwd  : 72) * 3600e3;
   const dMin = Math.min(...pts.map(p=>p.ms)), dMax = Math.max(...pts.map(p=>p.ms));
   const t0 = Math.min(axisNow - spanBack, dMin);
-  const t1 = Math.max(axisNow + spanFwd,  dMax);
+  const fwdSpan = Math.max(6 * 3600e3, dMax - axisNow);   // 至少留 6 小時
+  const t1 = axisNow + fwdSpan * 1.1;
   const X = ms => pL + iw * ((ms - t0) / Math.max(1, t1 - t0));
   const Y = bf => pT + ih * (1 - (bf - minBf) / Math.max(1, maxBf - minBf));
   // 風級色帶背景（與地圖同一組色，一眼對應）
@@ -7335,12 +7543,18 @@ function _drawWindChart(cvId, pts, opt){
   // ★ 標籤改為「時間等距」而非「每 N 個資料點」：資料點分布不均時
   //   （過去逐時、未來逐3小時）依序號取樣會讓標籤擠在一起。
   //   日期與時間分兩行（比照組體雨量圖），避免相鄰標籤水平重疊。
-  const _lw = ctx.measureText('12/31').width * 1.6;
-  const _maxLabels = Math.max(3, Math.floor(iw / Math.max(1, _lw)));
+  // ★ 間隔要用「兩行中較寬者」量測並留足間隙，否則相鄰標籤仍會疊在一起
+  //   （實測 9/1 與 00時 兩行都會重疊）。乘 2.0 是安全的最小間距。
+  const _lw = Math.max(ctx.measureText('12/31').width,
+                       ctx.measureText('00時').width) * 2.0;
+  const _maxLabels = Math.max(2, Math.floor(iw / Math.max(1, _lw)));
   const _hrsTotal = (t1 - t0) / 3600e3;
-  // 取整齊的間隔：6 / 12 / 24 小時
+  // 從候選間隔中挑「標籤數不超過上限」的最小者
   let _stepH = 6;
-  [6, 12, 24, 48].forEach(h=>{ if(_hrsTotal / h > _maxLabels) _stepH = h * 2; });
+  for(const h of [3, 6, 12, 24, 48, 72]){
+    if(_hrsTotal / h <= _maxLabels){ _stepH = h; break; }
+    _stepH = h;
+  }
   const _d0 = new Date(t0);
   _d0.setMinutes(0, 0, 0);
   _d0.setHours(Math.ceil(_d0.getHours() / _stepH) * _stepH);
@@ -7566,6 +7780,14 @@ function _maxHourRow(t, sf, st){
   return `${mx.toFixed(1)} mm/h（${lab}）`;
 }
 
+// 地形一列（所有模式都顯示，這是靜態屬性）
+function _terrainRow(t){
+  const g = _terrainOf(t);
+  if(!g) return '';
+  return `<br>地形：${_townZone(t) || ''}`
+       + `<span style="color:#8a9aaa">　平均 ${g.m}m・最高 ${g.x}m・坡度>5% 佔 ${g.s}%</span>`;
+}
+
 function _windRow(t){
   const mean = _windOf(t, 'mean');
   if(mean.bf == null) return '';
@@ -7596,6 +7818,12 @@ function _modeHeadRow(t){
     if(v.t == null) return '<span style="color:#8a9aaa;font-size:10px">　氣溫無資料</span>';
     return `<span style="font-size:10px">　氣溫 <b style="color:${_tempColor(v.t)}">`
          + `${v.t.toFixed(0)}°C</b></span>`;
+  }
+  if(mode === 'terrain'){
+    const g = _terrainOf(t);
+    if(!g) return '<span style="color:#8a9aaa;font-size:10px">　無地形資料</span>';
+    return `<span style="font-size:10px">　平均海拔 <b style="color:${_elevColor(g.m)}">`
+         + `${g.m} m</b></span>`;
   }
   if(mode === 'wave'){
     const v = _waveOf(t);
@@ -9181,6 +9409,7 @@ function toggleChartZoom(canvasId){
   const needsSelected = (canvasId==='cv'||canvasId==='cv-district-hyeto'
                        ||canvasId.startsWith('cv-wind-')
                        ||canvasId.startsWith('cv-stnrank')
+                       ||canvasId.startsWith('cv-countytowns')
                        ||canvasId.startsWith('cv-elevrain')
                        ||canvasId.startsWith('cv-etrphase')
                        ||canvasId.startsWith('cv-margin')
@@ -9205,6 +9434,7 @@ function toggleChartZoom(canvasId){
     'cv-wind-hr-gust': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風）` : '',
     'cv-wind-hr-est': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風推估）` : '',
     'cv-stnrank': selected ? `${selected.county}${selected.township} 測站雨量排名` : '',
+    'cv-countytowns': (_pickedCounty || '') + ' 各鄉鎮',
     'cv-elevrain': '海拔與雨量分布（地形雨效應）',
     'cv-etrphase': '雨量與地形分佈',
     'cv-margin': '全臺最接近警戒的雨量站',
@@ -9219,7 +9449,9 @@ function toggleChartZoom(canvasId){
   if(titleEl) titleEl.textContent = titleMap[canvasId] || '';
   _zoomCanvasType = canvasId;
 
-  if(canvasId === 'cv-elevrain'){
+  if(canvasId === 'cv-countytowns'){
+    drawCountyTowns('chart-zoom-canvas');
+  } else if(canvasId === 'cv-elevrain'){
     drawElevRainChart(selected, 'chart-zoom-canvas');
   } else if(canvasId === 'cv-etrphase'){
     drawEtrPhaseChart(selected, 'chart-zoom-canvas');

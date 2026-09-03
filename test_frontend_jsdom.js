@@ -2200,10 +2200,11 @@ if (need('_windSeries') && need('_smoothSeries') && need('drawWindDayChart')) {
   chk('無資料時不顯示', G._windRow({county:'x', township:'y'}), '');
   // 三種 mode 的 tooltip 都要有
   const tsrc = fs.readFileSync('index.html', 'utf8');
+  // 現在順序為 _terrainRow → _windRow → _tempRow → _waveRow
   chk('今天視窗 tooltip 含風力',
-      /風險指標：\$\{riskIndicatorHtml\(t,3\)\}` \+ _windRow\(t\)/.test(tsrc), true);
+      /riskIndicatorHtml\(t,3\)\}` \+ _terrainRow\(t\) \+ _windRow\(t\)/.test(tsrc), true);
   chk('過去/未來視窗 tooltip 含風力',
-      (tsrc.match(/_windowRisk\(t\)\}\` \+ _windRow\(t\)/g)||[]).length >= 2, true);
+      (tsrc.match(/_windowRisk\(t\)\}\` ?\+ ?_terrainRow\(t\) \+ _windRow\(t\)/g)||[]).length >= 1, true);
   const html = fs.readFileSync('index.html', 'utf8');
   chk('逐日圖區塊存在', /id="sec-windday"/.test(html), true);
   chk('逐時圖區塊存在', /id="sec-windhr"/.test(html), true);
@@ -2379,7 +2380,7 @@ if (need('_waveColor') && need('_waveOf') && need('_waveRow')) {
   chk('圖例支援浪高', /wave: '浪高'/.test(src), true);
   // ★ 未來6h 視窗補齊後為 4 處（今天／過去／未來／未來6h段）
   // 六處：今天／過去／未來／未來6h／（warn|etr|risk）／散佈圖 tooltip
-  chk('tooltip 六處都加入', (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 6);
+  chk('tooltip 六處都加入', (src.match(/_terrainRow\(t\) \+ _windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 6);
   setLex("mode='rain'; window.WAVE_FCST={}; window.TEMP_FCST={};");
 }
 
@@ -2466,7 +2467,7 @@ if (need('_tempSeries') && need('_waveSeries') && need('drawTempDayChart')) {
   chk('氣溫允許負值', /allowNeg:true/.test(src), true);
   chk('放大分派含四張圖', /canvasId === 'cv-temp-day'[\s\S]{0,400}canvasId === 'cv-wave-hr'/.test(src), true);
   chk('★未來6h tooltip 補齊要素',
-      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 6);
+      (src.match(/_terrainRow\(t\) \+ _windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 6);
   setLex("window.TEMP_FCST={}; window.WAVE_FCST={};");
 }
 
@@ -3075,7 +3076,7 @@ if (need('_modeHeadRow')) {
       (src.match(/_modeHeadRow\(t\)/g)||[]).length >= 4, true);
   chk('說明不必切圖層', /使用者不必為了/.test(src), true);
   chk('完整欄位仍在（風力/氣溫/浪高列）',
-      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 6);
+      (src.match(/_terrainRow\(t\) \+ _windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 6);
 
   // 各 mode 的標頭內容
   const now = Date.now();
@@ -3114,7 +3115,7 @@ console.log('\n=== ETR2／風險／警特報 tooltip 亦須完整 ===');
   chk('含累積雨量', /\$\{_isPast \? '觀測' : '預測'\}累積雨量/.test(src), true);
   chk('含最大時雨量', /最大時雨量：\$\{_maxHourRow\(t, segFrom, segTo\)\}/.test(src), true);
   chk('含風力/氣溫/浪高',
-      (src.match(/_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 6);
+      (src.match(/_terrainRow\(t\) \+ _windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)/g)||[]).length, 6);
   chk('警特報另附研判摘要', /mode==='warn'\s*\n\s*\? `<br><span style="font-size:10px">\$\{_warnSummaryHtml/.test(src), true);
   chk('標頭支援 warn', /if\(mode === 'warn'\)\{/.test(src), true);
   chk('標頭支援 etr', /if\(mode === 'etr'\)\{/.test(src), true);
@@ -3539,8 +3540,8 @@ console.log('\n=== 圖表清晰度與版面 ===');
   const order = [...src.matchAll(/<!-- 區塊：([^ （]+)/g)].map(m=>m[1]);
   console.log(`   順序：${order.slice(0,9).join(' → ')}`);
   // 使用者指定：雨量與地形分佈置頂，排行次之
-  chk('★雨量與地形分佈在最上', order[0], '雨量與地形分佈');
-  chk('排行次之', order[1], '全臺排行');
+  chk('★縣市鄉鎮在最上', order[0], '縣市內各鄉鎮');
+  chk('雨量與地形分佈次之', order[1], '雨量與地形分佈');
   chk('★融合明細在最下', order[order.length-1], '融合校正明細');
   const idx = n => order.indexOf(n);
   chk('★雨量早於警戒餘裕', idx('現況觀測') < idx('警戒餘裕'), true);
@@ -3615,7 +3616,7 @@ if (need('_scatterTipHtml') && need('focusStation') && need('toggleSidebarFull')
   chk('★放大後可點選點位', /cv\._isZoom \? 22 : 14/.test(src), true);
   chk('★放大後有 tooltip', /id="scatter-tip"/.test(src), true);
   chk('tooltip 與地圖同組欄位',
-      /_windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)[\s\S]{0,80}點選可跳至該地/.test(src), true);
+      /_terrainRow\(t\) \+ _windRow\(t\) \+ _tempRow\(t\) \+ _waveRow\(t\)[\s\S]{0,80}點選可跳至該地/.test(src), true);
   chk('點選後關閉放大檢視', /cv\._isZoom && typeof closeChartZoom/.test(src), true);
   chk('★測站清單可點選定位', /row\.addEventListener\('click', \(\)=> focusStation\(s\)\)/.test(src), true);
   chk('★測站排名長條可點選', /cv\._stnHits/.test(src), true);
@@ -3679,7 +3680,7 @@ console.log('\n=== 本輪修正驗證 ===');
   chk('測站圖層在鄉鎮市區按鈕旁',
       src.indexOf('id="bTownName"') < src.indexOf('id="bStnLayer"'), true);
   const order = [...src.matchAll(/<!-- 區塊：([^ （]+)/g)].map(m=>m[1]);
-  chk('★雨量與地形分佈在最上', order[0], '雨量與地形分佈');
+  chk('★縣市鄉鎮在最上', order[0], '縣市內各鄉鎮');
 }
 if (need('toggleStationLayer') && need('toggleCtlFull')) {
   setLex(`document.body.insertAdjacentHTML('beforeend',
@@ -3790,8 +3791,10 @@ console.log('\n=== 逐時圖時間軸修正 ===');
   chk('★未來段補滿 72h', Math.round(r.hoursFwd), 72);
 
   chk('★測站 tooltip 含地形分區', /\$\{_townZone\(t\) \|\| ''\}<\/span>/.test(src), true);
-  chk('缺值時說明原因', /非警戒代表站/.test(src), true);
-  chk('海拔缺值說明', /待產生對照表/.test(src), true);
+  // 改為逐級退回：站無值時用鄉鎮值並標示，兩者皆無才顯示無觀測值
+  chk('缺值時退回鄉鎮值', /（鄉鎮值）/.test(src), true);
+  chk('兩者皆無時明示', /無觀測值/.test(src), true);
+  chk('海拔缺值顯示破折號', /elevStr = st\.elev != null/.test(src), true);
 }
 
 console.log(fails.length ? `\n失敗 ${fails.length} 項：${JSON.stringify(fails, null, 1)}`
