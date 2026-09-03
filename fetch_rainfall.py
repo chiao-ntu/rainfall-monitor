@@ -1022,17 +1022,39 @@ def fetch_obs():
         return 0.0
 
     stations = {}
-    for st in raw.get('records',{}).get('Station',[]):
+    # ★ 外層有兩種：API 的 records.Station（實務常見），
+    #   以及檔案下載版的 cwaopendata.dataset.Station。兩種都接受，
+    #   否則改用檔案來源時會解析出 0 站。
+    _recs = (raw.get('records') or {}).get('Station')
+    if not _recs:
+        _ds = (raw.get('cwaopendata') or {}).get('dataset') or {}
+        _recs = _ds.get('Station') or _ds.get('station') or []
+    if isinstance(_recs, dict):
+        _recs = [_recs]
+    for st in (_recs or []):
         geo = st.get('GeoInfo',{})
         coords = geo.get('Coordinates',[{}])
+        # ★ 一個測站有 TWD67 與 WGS84 兩組座標，必須取 WGS84
+        #   （Leaflet 用 WGS84；兩者在臺灣差約 800m，取錯會整批偏移）。
         lat,lng = 0.0,0.0
         for c in coords:
+            if (c.get('CoordinateName') or '').upper() != 'WGS84':
+                continue
             lv=c.get('StationLatitude',0); lo=c.get('StationLongitude',0)
             if lv and lo: lat=float(lv); lng=float(lo); break
+        if not lat:                       # 沒有 WGS84 才退回第一組
+            for c in coords:
+                lv=c.get('StationLatitude',0); lo=c.get('StationLongitude',0)
+                if lv and lo: lat=float(lv); lng=float(lo); break
+        # ★ 官方已提供測站海拔，不需再用 DTM 推算
+        try:
+            _alt = float(geo.get('StationAltitude'))
+        except (TypeError, ValueError):
+            _alt = None
         re = st.get('RainfallElement',{})
         stations[st.get('StationId','')] = {
             'name': st.get('StationName',''),
-            'lat':lat,'lng':lng,
+            'lat':lat,'lng':lng,'alt':_alt,
             'county':geo.get('CountyName',''),
             'township':geo.get('TownName',''),
             'rain_now':  gp(re,'Now'),
@@ -1184,7 +1206,10 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
         # ★ 帶上座標與海拔：供前端做「海拔 vs 雨量」散佈圖與測站底圖著色。
         #   海拔查自 station_elev.json（由 20m DTM 離線產生，見 build_station_elev.py）。
         _sinfo = (all_stations or {}).get(sid) or {}
-        _elev = (STATION_ELEV or {}).get(sid)
+        # 官方 StationAltitude 優先；沒有才用 DTM 對照表
+        _elev = _sinfo.get('alt')
+        if _elev is None:
+            _elev = (STATION_ELEV or {}).get(sid)
         enriched.append({
             'name':      name,
             'sid':       sid or '',

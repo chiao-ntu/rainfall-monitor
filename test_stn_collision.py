@@ -642,5 +642,43 @@ chk('★早退路徑亦有 elev 欄位', 'elev' in _r2, True)
 chk('兩條路徑欄位一致', sorted(_r1.keys()), sorted(_r2.keys()))
 FR.STATION_ELEV = {}
 
+
+print('\n=== 測站海拔與座標（官方欄位）===')
+# ★ CWA 觀測站資料本身就有 StationAltitude 與 WGS84 座標，
+#   不需再用 DTM 推算；且一站有 TWD67／WGS84 兩組座標，
+#   取錯會整批偏移約 800m。
+_of = '/mnt/user-data/uploads/O-A0002-001.json'
+if os.path.exists(_of):
+    _raw = json.load(io.open(_of, encoding='utf-8'))
+    class _OR:
+        status_code = 200
+        def json(self): return _raw
+        def raise_for_status(self): pass
+    FR.requests = types.SimpleNamespace(get=lambda *a, **k: _OR())
+    _st = FR.fetch_obs()
+    chk('★解析出測站（支援兩種外層）', len(_st) > 1000, True)
+    _alt = [v['alt'] for v in _st.values() if isinstance(v, dict) and v.get('alt') is not None]
+    print(f"  {len(_st)} 站，有海拔 {len(_alt)}，範圍 {min(_alt):.0f}~{max(_alt):.0f}m")
+    chk('★全數取得官方海拔', len(_alt), len(_st))
+    chk('海拔範圍合理（含玉山級）', max(_alt) > 3000, True)
+    # WGS84：臺灣本島經度應在 119.9~122.1
+    _lngs = [v['lng'] for v in _st.values() if isinstance(v, dict) and v.get('lng')]
+    _lats = [v['lat'] for v in _st.values() if isinstance(v, dict) and v.get('lat')]
+    # 範圍須含東沙島(116.73E/20.70N)與馬祖東引(26.36N)等離島測站
+    print(f"  經度 {min(_lngs):.2f}~{max(_lngs):.2f}、緯度 {min(_lats):.2f}~{max(_lats):.2f}")
+    chk('★座標為 WGS84（經度合理）', 116 < min(_lngs) and max(_lngs) < 123, True)
+    chk('緯度合理', 20 < min(_lats) and max(_lats) < 26.5, True)
+    # 抽驗一個已知站：本島測站不得落在 TWD67 位置（差約 0.008 度）
+    _n99 = next((v for v in _st.values()
+                 if isinstance(v, dict) and v.get('name') == '九份二山'), None)
+    if _n99:
+        print(f"  九份二山 {_n99['lat']:.4f}N {_n99['lng']:.4f}E 海拔 {_n99['alt']:.0f}m")
+        chk('★抽驗站座標正確', abs(_n99['lat'] - 23.962) < 0.01, True)
+    _src8 = io.open('fetch_rainfall.py', encoding='utf-8').read()
+    chk('明確取 WGS84', "!= 'WGS84'" in _src8, True)
+    chk('說明取錯會偏移', '兩者在臺灣差約 800m' in _src8, True)
+    chk('官方海拔優先於 DTM', "_elev = _sinfo.get('alt')" in _src8, True)
+    chk('支援 cwaopendata 外層', "(raw.get('cwaopendata') or {}).get('dataset')" in _src8, True)
+
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)

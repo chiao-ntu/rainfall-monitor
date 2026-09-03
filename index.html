@@ -165,8 +165,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#1a4060;color:#8ac8e8">🏷 鄉鎮市區</button>
       <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
         style="border-color:#8a6a3a;color:#e8c87a">📍 雨量測站</button>
-      <button class="b"    id="bTerrain" onclick="setMode('terrain')"
-        style="border-color:#6a5a3a;color:#d8c090">地形</button>
+      <button class="b"    id="bTerrain" onclick="toggleTerrainLayer()"
+        style="border-color:#6a5a3a;color:#d8c090">⛰ 地形</button>
       <select id="townNameScope" onchange="setTownNameScope(this.value)"
         style="display:none;font-size:10px;background:#061220;color:#8ac8e8;
         border:1px solid #1a4060;border-radius:3px;padding:2px 3px;margin-right:3px"></select>
@@ -1249,6 +1249,39 @@ let _stnMarker = null;
 //    測站密度遠高於鄉鎮，能看出鄉鎮平均值掩蓋掉的局部強降雨。
 // ══════════════════════════════════════════════════════════
 let _stnLayerOn = false, _stnLayer = null, _stnTimer = null;
+// ══════════════════════════════════════════════════════════
+//  地形暈渲疊圖
+//  ★ 疊在最下層＋半透明：看雨量或其他資料時能同時掌握地形，
+//    而不是切換到另一個圖層才看得到。
+//  ★ 影像由 build_terrain_relief.py 離線產生：
+//    海拔灰階（氣象署風格）× Hillshade（光源 315°／仰角 45°）正片疊底。
+// ══════════════════════════════════════════════════════════
+const TERRAIN_RELIEF = {"bounds":[[21.89400185866543,120.04163169146315],[25.29801742002761,122.00964772678445]],"size":[1200,2254],"azimuth":315.0,"altitude":45.0,"stops":[[100,"#F8F9FA"],[500,"#E9ECEF"],[1500,"#CED4DA"],[3000,"#ADB5BD"],[null,"#6C757D"]]};
+let _terrainOn = false, _terrainOverlay = null;
+function toggleTerrainLayer(){
+  _terrainOn = !_terrainOn;
+  const b = document.getElementById('bTerrain');
+  if(b) b.classList.toggle('on', _terrainOn);
+  if(!_terrainOn){
+    if(_terrainOverlay){ try{ map.removeLayer(_terrainOverlay); }catch(e){}
+                         _terrainOverlay = null; }
+    return;
+  }
+  if(!_terrainOverlay){
+    _terrainOverlay = L.imageOverlay('terrain_relief.png', TERRAIN_RELIEF.bounds, {
+      opacity: 0.55,          // 半透明，讓上層的雨量色塊仍清楚可讀
+      pane: 'tilePane',       // 最下層（底圖之上、鄉鎮色塊之下）
+      interactive: false,
+      className: 'terrain-relief'
+    });
+    _terrainOverlay.on('error', ()=>{
+      console.warn('terrain_relief.png 載入失敗（需與 index.html 放在同一目錄）');
+    });
+  }
+  _terrainOverlay.addTo(map);
+  console.log('地形暈渲：已開啟（海拔灰階 × Hillshade 315°/45°）');
+}
+
 function toggleStationLayer(){
   _stnLayerOn = !_stnLayerOn;
   const b = document.getElementById('bStnLayer');
@@ -2168,8 +2201,10 @@ function drawEtrPhaseChart(t, canvasId){
   // ★ 隨時間視窗與模式即時更新：用 getAccum() 取「當前視窗」的值，
   //   而非固定讀今日觀測。過去視窗會取官方觀測、未來視窗取所選模式的預測，
   //   與地圖著色的依據完全一致。
+  // ★ 選了縣市時只畫該縣市的鄉鎮（縣市層級檢視），未選則全臺
   const pts = [];
   (TOWNSHIPS || []).forEach(tt=>{
+    if(_pickedCounty && tt.county !== _pickedCounty) return;
     const acc = getAccum(tt);
     if(!acc) return;
     const v = acc.totalRain, e = acc.etrPct;
@@ -2188,7 +2223,7 @@ function drawEtrPhaseChart(t, canvasId){
   const B = _scatterBase(cv, {isZoom, x0:0, x1:vMax, y0:0, y1:eMax,
     xLabel:'今日累積雨量 (mm)', yLabel:'ETR2 (%)',
     yFmt: v=>v.toFixed(0)+'%', yTicks: [0, 50, 70, 90, 100],
-    title:'雨量與地形分佈'
+    title:(_pickedCounty ? `${_pickedCounty} ` : '') + '雨量與地形分佈'
       + `　${_winSrcLabel()}`
       + (t ? `　— ${t.county}${t.township}` : '')});
   // ★ 分級參考線：50% 綠、70% 黃、90% 紅、100% 紫（使用者指定）
@@ -3437,14 +3472,6 @@ function getAccum(t){
     return {totalRain: (v==null ? null : v), etrPct: null, isRadar: true};
   }
 
-  // ── 地形模式（靜態資料，不隨時間變化）──
-  if(mode==='terrain'){
-    const g = _terrainOf(t);
-    const v = g ? g.m : null;
-    return {totalRain: v, etrPct: v, isTerrain: true,
-            elevMax: g ? g.x : null, slopePct: g ? g.s : null};
-  }
-
   // ── 氣溫模式 ──
   if(mode==='temp'){
     const w = _tempOf(t);
@@ -3680,9 +3707,6 @@ function renderLayer(){
         //   浪高看起來沒有資料」的原因。
         fillColor = warnMapColor(totalRain || 0);
         fillOp    = (totalRain||0)>0 ? (isSel?0.93:0.82) : 1.0;
-      } else if(acc.isTerrain){
-        fillColor = _elevColor(totalRain) || '#1a2a35';
-        fillOp    = (totalRain == null) ? 0.3 : (isSel?0.95:0.85);
       } else if(acc.isTemp){
         // 氣溫：無資料留白（不可視為 0°C）
         fillColor = _tempColor(totalRain) || '#FFFFFF';
@@ -3895,6 +3919,12 @@ function updateInfo(t){
       const it = document.getElementById('iTitle');
       if(it) it.textContent = _pickedCounty;
       try{ drawCountyTowns(); }catch(e){ console.warn('縣市鄉鎮圖失敗', e); }
+    }
+    // 縣市層級也顯示「雨量與地形分佈」（篩選為該縣市的鄉鎮）
+    const peEl = document.getElementById('sec-etrphase');
+    if(peEl) peEl.style.display = _pickedCounty ? 'block' : 'none';
+    if(_pickedCounty){
+      try{ drawEtrPhaseChart(null); }catch(e){ console.warn('分佈圖失敗', e); }
     }
     try{ renderRankList(); }catch(e){}
     try{ renderBlendDetail(null); }catch(e){}
@@ -4658,8 +4688,7 @@ function renderLegend(){
   const ELEV_SCALE = ELEV_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
   const TEMP_SCALE = TEMP_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
   const WAVE_SCALE = WAVE_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
-  const sc = mode==='terrain' ? ELEV_SCALE
-           : mode==='temp' ? TEMP_SCALE
+  const sc = mode==='temp' ? TEMP_SCALE
            : mode==='wave' ? WAVE_SCALE
            : mode==='rain' ? RAIN_SCALE
            : mode==='etr'  ? ETR_SCALE
@@ -4668,7 +4697,7 @@ function renderLegend(){
            : RISK_SCALE;
   const titles = { rain: isFuture6h ? '降雨強度' : '累積雨量(mm)', etr: 'ETR2%',
                    risk: '風險指標', warn: '警特報預估', wind: '蒲福風級',
-                   temp: '氣溫(°C)', wave: '浪高', terrain: '平均海拔' };
+                   temp: '氣溫(°C)', wave: '浪高' };
   const titleText = titles[mode] || '';
 
   // 強度分級用描述性文字，不顯示數字範圍
@@ -4679,8 +4708,7 @@ function renderLegend(){
   function rangeLabel(scale, idx){
     if(isFuture6h) return INTENSITY_DESC[idx] || '';
     if(mode==='warn') return scale[idx].label || '';
-    if(mode==='wind' || mode==='temp' || mode==='wave' || mode==='terrain')
-      return scale[idx].label || '';
+    if(mode==='wind' || mode==='temp' || mode==='wave') return scale[idx].label || '';
     if(mode==='risk') return RISK_DESC[idx] || '';
     const s = scale[idx];
     const prevMax = idx>0 ? scale[idx-1].max : 0;
@@ -4769,6 +4797,9 @@ async function tryLoadLive(){
     }
 
     // CWA QPF 資料來源標示（供內部快取鍵/邏輯使用；不對使用者顯示採用了什麼）
+    // ★ TOWNSHIPS 已備妥 → 填縣市選單（先前只在 updateInfo(null) 呼叫，
+    //   初始載入不會走到那裡，選單因此一直是空的）。
+    try{ _fillCountyPicker(); }catch(e){ console.warn('縣市選單建立失敗', e); }
     _cwaQpfActive = !!d.cwa_qpf_active;
     window._dataGenAt = d.generated_at || '';  // 供各面板快取鍵使用
     // 颱風動態（W-C0034-005 軌跡）：無颱風時為空陣列
@@ -5030,12 +5061,12 @@ function setModel(m){
 
 function setMode(m){
   mode=m;
-  ['bRain','bEtr','bRisk','bWarn','bWind','bTemp','bWave','bTerrain'].forEach(id=>{
+  ['bRain','bEtr','bRisk','bWarn','bWind','bTemp','bWave'].forEach(id=>{
     const el=document.getElementById(id);
     if(el) el.classList.remove('on');
   });
   const modeMap={rain:'bRain',etr:'bEtr',risk:'bRisk',warn:'bWarn',wind:'bWind',
-                 temp:'bTemp',wave:'bWave',terrain:'bTerrain'};
+                 temp:'bTemp',wave:'bWave'};
   const el=document.getElementById(modeMap[m]);
   if(el) el.classList.add('on');
   withTransition(()=>{
@@ -7039,12 +7070,13 @@ let windKind = 'mean';
 // ══════════════════════════════════════════════════════════
 // 地形（平均海拔）色階：與地形分類的判準對齊
 //   <100m 平地、100-500 丘陵、500-1000 淺山上緣、1000-2000 山區、>2000 高山
+// 海拔灰階（同暈渲圖，中央氣象署風格）
 const ELEV_BANDS = [
-  {max: 100,  color:'#2a6a3a', name:'<100m'},
-  {max: 500,  color:'#7ea84a', name:'100–500m'},
-  {max: 1000, color:'#d8c060', name:'500–1000m'},
-  {max: 2000, color:'#c08a4a', name:'1000–2000m'},
-  {max: 9999, color:'#a06050', name:'>2000m'},
+  {max: 100,  color:'#F8F9FA', name:'<100m'},
+  {max: 500,  color:'#E9ECEF', name:'100–500m'},
+  {max: 1500, color:'#CED4DA', name:'500–1500m'},
+  {max: 3000, color:'#ADB5BD', name:'1500–3000m'},
+  {max: 9999, color:'#6C757D', name:'>3000m'},
 ];
 function _elevColor(v){
   if(v == null || !isFinite(v)) return null;
@@ -7546,15 +7578,19 @@ function _drawWindChart(cvId, pts, opt){
   // ★ 間隔要用「兩行中較寬者」量測並留足間隙，否則相鄰標籤仍會疊在一起
   //   （實測 9/1 與 00時 兩行都會重疊）。乘 2.0 是安全的最小間距。
   const _lw = Math.max(ctx.measureText('12/31').width,
-                       ctx.measureText('00時').width) * 2.0;
+                       ctx.measureText('00時').width) * 2.4;
   const _maxLabels = Math.max(2, Math.floor(iw / Math.max(1, _lw)));
   const _hrsTotal = (t1 - t0) / 3600e3;
   // 從候選間隔中挑「標籤數不超過上限」的最小者
   let _stepH = 6;
-  for(const h of [3, 6, 12, 24, 48, 72]){
+  for(const h of [3, 6, 12, 24, 48, 72, 120]){
     if(_hrsTotal / h <= _maxLabels){ _stepH = h; break; }
     _stepH = h;
   }
+  // ★ 二次保險：實際逐一檢查相鄰標籤的畫素距離，不足就跳過。
+  //   量測值與實際排版可能有落差（放大版 canvas 會再被 CSS 縮放），
+  //   單靠間隔估算仍會重疊，故在繪製迴圈中直接擋掉太近的標籤。
+  let _lastX = -1e9;
   const _d0 = new Date(t0);
   _d0.setMinutes(0, 0, 0);
   _d0.setHours(Math.ceil(_d0.getHours() / _stepH) * _stepH);
@@ -7564,6 +7600,8 @@ function _drawWindChart(cvId, pts, opt){
     const d = new Date(ms);
     const x = X(ms);
     if(x < pL - 2 || x > pL + iw + 2) continue;
+    if(x - _lastX < _lw) continue;          // 與前一個標籤太近 → 跳過
+    _lastX = x;
     ctx.fillStyle = '#9fc8e8';
     ctx.fillText(`${d.getMonth()+1}/${d.getDate()}`, x, y1);
     ctx.fillStyle = '#6a8aa5';
@@ -7784,7 +7822,9 @@ function _maxHourRow(t, sf, st){
 function _terrainRow(t){
   const g = _terrainOf(t);
   if(!g) return '';
-  return `<br>地形：${_townZone(t) || ''}`
+  // 山區再細分中低海拔／高海拔（國土署：800-1500 中低、>1500 高海拔）
+  const sub = (g.m >= 1500) ? '高海拔' : (g.m >= 800) ? '中低海拔' : '';
+  return `<br>地形：${_townZone(t) || ''}${sub ? '・' + sub : ''}`
        + `<span style="color:#8a9aaa">　平均 ${g.m}m・最高 ${g.x}m・坡度>5% 佔 ${g.s}%</span>`;
 }
 
@@ -7818,12 +7858,6 @@ function _modeHeadRow(t){
     if(v.t == null) return '<span style="color:#8a9aaa;font-size:10px">　氣溫無資料</span>';
     return `<span style="font-size:10px">　氣溫 <b style="color:${_tempColor(v.t)}">`
          + `${v.t.toFixed(0)}°C</b></span>`;
-  }
-  if(mode === 'terrain'){
-    const g = _terrainOf(t);
-    if(!g) return '<span style="color:#8a9aaa;font-size:10px">　無地形資料</span>';
-    return `<span style="font-size:10px">　平均海拔 <b style="color:${_elevColor(g.m)}">`
-         + `${g.m} m</b></span>`;
   }
   if(mode === 'wave'){
     const v = _waveOf(t);
