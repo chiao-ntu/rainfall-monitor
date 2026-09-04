@@ -271,16 +271,16 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b model-btn"    id="mJma"   onclick="setModel('jma')">JMA</button>
       <span style="color:#3a6080;font-size:10px;padding:0 2px">｜AI</span>
       <button class="b model-btn"    id="mAifs"  onclick="setModel('aifs')"
-        style="border-color:#7a5a9a;color:#c8a8e8">AIFS</button>
+        style="border-color:#7a5a9a;color:#c8a8e8">EC-AIFS</button>
       <button class="b model-btn"    id="mGc"    onclick="setModel('gc')"
-        style="border-color:#7a5a9a;color:#c8a8e8">GraphCast</button>
-      <button class="b model-btn"    id="mHi"    onclick="setModel('hi')" style="color:#ff8866">強降雨</button>
+        style="border-color:#7a5a9a;color:#c8a8e8">GFS GraphCast</button>
+      <button class="b model-btn"    id="mHi"    onclick="setModel('hi')" style="border-color:#8a4a3a;color:#ff8866">強降雨</button>
       <button class="b model-btn"    id="mLo"    onclick="setModel('lo')" style="color:#66bbff">弱降雨</button>
     </div>
     <span id="sys-note" style="margin-right:6px"></span><span id="model-src-note" style="font-size:10px;color:#3a6080;margin-left:4px"></span>
   </div>
 </div>
-<button id="ctrl-toggle" onclick="toggleCtrl()" title="收合/展開控制列"
+<button id="ctrl-toggle" onclick="toggleCtrl()"
   style="width:100%;height:14px;flex-shrink:0;background:#0a1828;border:none;border-top:1px solid #1a3348;
   border-bottom:1px solid #1a3348;color:#6bc8e8;cursor:pointer;font-size:9px;line-height:1;
   transition:transform 0s;padding:0">▲</button>
@@ -360,21 +360,28 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     </div>
   </div>
   <!-- 左側欄收合按鈕（右緣、上下到底） -->
-  <button id="ctl-full" onclick="toggleCtlFull()" title="左側欄全螢幕/還原"
+  <button id="ctl-full" onclick="toggleCtlFull()"
     style="align-self:stretch;z-index:500;background:#091520;border:1px solid #1a3348;
     border-left:none;border-radius:0 4px 4px 0;color:#e8c87a;cursor:pointer;padding:0 3px;
     font-size:12px;line-height:1;writing-mode:vertical-rl;letter-spacing:2px;
     flex-shrink:0;margin-bottom:2px">⛶</button>
-  <button id="lsb-toggle" onclick="toggleLsb()" title="收合/展開左側欄"
+  <button id="lsb-toggle" onclick="toggleLsb()"
     style="align-self:stretch;z-index:500;background:#091520;border:1px solid #1a3348;border-left:none;
     border-radius:0 4px 4px 0;color:#6bc8e8;cursor:pointer;padding:0 3px;
     font-size:12px;line-height:1;writing-mode:vertical-rl;letter-spacing:2px;
     flex-shrink:0">◀</button>
   <div id="map" style="position:relative">
 
+    <!-- 模式時效不足提示（切到超出該模式預報天數的時段時顯示） -->
+    <div id="coverage-warn" style="display:none;position:absolute;top:50%;left:50%;
+      transform:translate(-50%,-50%);z-index:700;max-width:min(520px,86%);
+      background:rgba(10,20,34,.94);border:1px solid #8a6a3a;border-radius:6px;
+      padding:14px 18px;color:#e8c87a;font-size:14px;line-height:1.7;text-align:center;
+      box-shadow:0 6px 26px rgba(0,0,0,.6);pointer-events:none"></div>
+
     <!-- 指北針：右上角，獨立 -->
     <div id="compass-wrap" style="position:absolute;top:12px;right:12px;z-index:600;display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
-      <button id="map-panel-toggle" onclick="toggleMapPanel()" title="收合/展開圖例與比例尺"
+      <button id="map-panel-toggle" onclick="toggleMapPanel()"
         style="background:#fff;border:1px solid #99aabb;border-radius:4px;width:22px;height:22px;font-size:11px;cursor:pointer;color:#222;display:flex;align-items:center;justify-content:center;pointer-events:auto;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform 0.2s ease">&#9650;</button>
       <div id="compass" style="background:#fff;border:1px solid #99aabb;border-radius:50%;width:38px;height:38px;display:flex;align-items:center;justify-content:center;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,.25);position:relative;transition:opacity 0.2s ease,transform 0.2s ease">
         <svg width="20" height="20" viewBox="0 0 24 24">
@@ -400,7 +407,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         width:fit-content;max-width:230px;box-shadow:0 1px 4px rgba(0,0,0,.3);
         transition:opacity 0.2s ease,transform 0.2s ease"></div>
       <button id="typhoon-legend-toggle" onclick="toggleTyphoonLegend()"
-        title="收合/展開颱風動態圖例"
         style="background:#fff;border:1px solid #99aabb;border-radius:4px;width:22px;height:22px;
         font-size:11px;cursor:pointer;color:#222;display:flex;align-items:center;
         justify-content:center;pointer-events:auto;box-shadow:0 1px 3px rgba(0,0,0,.25);
@@ -423,6 +429,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <div id="chart-zoom-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;
     background:rgba(4,8,14,0.92);z-index:3000;cursor:zoom-out;
     display:none;align-items:center;justify-content:center;flex-direction:column">
+    <button onclick="closeChartZoom()" title="關閉（Esc）"
+      style="position:absolute;top:14px;right:18px;z-index:3100;
+      background:#0d2438;color:#9fc8e8;border:1px solid #2a5070;border-radius:4px;
+      font-size:18px;line-height:1;padding:4px 10px;cursor:pointer">✕</button>
     <div style="font-size:13px;color:#7bd0f0;margin-bottom:8px" id="chart-zoom-title">圖表</div>
     <canvas id="chart-zoom-canvas" width="2048" height="1024"
       onmousemove="showChartTooltip(event,'chart-zoom-canvas')"
@@ -439,12 +449,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div id="hyeto-sub"></div>
     <canvas id="hyeto-canvas" style="display:none"></canvas>
   </div>
-  <button id="sb-full" onclick="toggleSidebarFull()" title="側欄全螢幕/還原"
+  <button id="sb-full" onclick="toggleSidebarFull()"
     style="align-self:stretch;z-index:500;background:#091520;border:1px solid #1a3348;
     border-right:none;border-radius:4px 0 0 4px;color:#e8c87a;cursor:pointer;padding:0 3px;
     font-size:12px;line-height:1;writing-mode:vertical-rl;letter-spacing:2px;
     flex-shrink:0;margin-bottom:2px">⛶</button>
-  <button id="sb-toggle" onclick="toggleSidebar()" title="收合/展開側欄"
+  <button id="sb-toggle" onclick="toggleSidebar()"
     style="align-self:stretch;z-index:500;background:#091520;border:1px solid #1a3348;border-right:none;
     border-radius:4px 0 0 4px;color:#6bc8e8;cursor:pointer;padding:0 3px;
     font-size:12px;line-height:1;writing-mode:vertical-rl;letter-spacing:2px;
@@ -493,7 +503,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div class="sec-body" id="body-all-daily" style="display:block">
         <canvas id="cv-all-daily" width="280" height="130"
           style="width:100%;height:130px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-all-daily')"
+          onclick="toggleChartZoom('cv-all-daily', event)"
           onmousemove="showChartTooltip(event,'cv-all-daily')"
           onmouseleave="hideChartTooltip()"></canvas>
         <div class="hint" style="font-size:9px;padding:2px 0">點擊圖表可放大 / 滑鼠移過顯示數值</div>
@@ -507,7 +517,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div class="sec-body" id="body-all-hyeto" style="display:block">
         <canvas id="cv-all-hyeto" width="280" height="130"
           style="width:100%;height:130px;display:block;background:#040c14;border-radius:3px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-all-hyeto')"
+          onclick="toggleChartZoom('cv-all-hyeto', event)"
           onmousemove="showChartTooltip(event,'cv-all-hyeto')"
           onmouseleave="hideChartTooltip()"></canvas>
         <div class="hint" style="font-size:9px;padding:2px 0">點擊圖表可放大 / 滑鼠移過顯示數值</div>
@@ -523,7 +533,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div class="sec-body" id="body-countytowns" style="display:none">
         <canvas id="cv-countytowns" style="width:100%;height:280px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-countytowns')"></canvas>
+          onclick="toggleChartZoom('cv-countytowns', event)"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
           依雨量排序；左側色條為地形分類。點選任一列可跳至該鄉鎮</div>
       </div>
@@ -537,7 +547,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div class="sec-body" id="body-etrphase" style="display:none">
         <canvas id="cv-etrphase" style="width:100%;height:200px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-etrphase')"></canvas>
+          onclick="toggleChartZoom('cv-etrphase', event)"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
           各鄉鎮：今日累積雨量 vs ETR2%，依地形著色。虛線為警戒值（100%）</div>
       </div>
@@ -551,7 +561,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div class="sec-body" id="body-elevrain" style="display:none">
         <canvas id="cv-elevrain" style="width:100%;height:200px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-elevrain')"></canvas>
+          onclick="toggleChartZoom('cv-elevrain', event)"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
           全臺雨量站的今日累積 vs 海拔；藍點為本鄉鎮測站。可觀察地形雨效應</div>
       </div>
@@ -620,7 +630,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
       <div class="sec-body" id="body-chart" style="display:none">
         <canvas id="cv" style="width:100%;height:90px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv')"
+          onclick="toggleChartZoom('cv', event)"
           onmousemove="showChartTooltip(event,'cv')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">點擊圖表可放大／縮小</div>
       </div>
@@ -641,7 +651,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
       <div class="sec-body" id="body-hyeto" style="display:none">
         <canvas id="cv-district-hyeto" width="260" height="100" style="width:100%;height:100px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-district-hyeto')"
+          onclick="toggleChartZoom('cv-district-hyeto', event)"
           onmousemove="showChartTooltip(event,'cv-district-hyeto')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="display:flex;gap:8px;margin-top:4px;font-size:9px;color:#5a8aaa;flex-wrap:wrap">
           <span><span style="display:inline-block;width:8px;height:8px;background:#4a7ab0;margin-right:3px"></span>觀測(日)</span>
@@ -660,7 +670,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div class="sec-body" id="body-stnrank" style="display:none">
         <canvas id="cv-stnrank" style="width:100%;height:220px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-stnrank')"></canvas>
+          onclick="toggleChartZoom('cv-stnrank', event)"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
           該鄉鎮各雨量站的今日累積，依雨量排序；色階同累積雨量圖層</div>
       </div>
@@ -682,7 +692,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div class="sec-body" id="body-margin" style="display:none">
         <canvas id="cv-margin" style="width:100%;height:200px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-margin')"></canvas>
+          onclick="toggleChartZoom('cv-margin', event)"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
           全臺最接近警戒的雨量站（ETR2% − 100%）；正值代表已超過警戒值</div>
       </div>
@@ -704,15 +714,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div class="sec-body" id="body-windday" style="display:none">
         <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">平均風</div>
         <canvas id="cv-wind-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-day')"
+          onclick="toggleChartZoom('cv-wind-day', event)"
           onmousemove="showChartTooltip(event,'cv-wind-day')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風</div>
         <canvas id="cv-wind-day-gust" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-day-gust')"
+          onclick="toggleChartZoom('cv-wind-day-gust', event)"
           onmousemove="showChartTooltip(event,'cv-wind-day-gust')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風推估</div>
         <canvas id="cv-wind-day-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-day-est')"
+          onclick="toggleChartZoom('cv-wind-day-est', event)"
           onmousemove="showChartTooltip(event,'cv-wind-day-est')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
           各日最大風級；點擊圖表可放大／縮小</div>
@@ -727,15 +737,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div class="sec-body" id="body-windhr" style="display:none">
         <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">平均風</div>
         <canvas id="cv-wind-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-hr')"
+          onclick="toggleChartZoom('cv-wind-hr', event)"
           onmousemove="showChartTooltip(event,'cv-wind-hr')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風</div>
         <canvas id="cv-wind-hr-gust" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-hr-gust')"
+          onclick="toggleChartZoom('cv-wind-hr-gust', event)"
           onmousemove="showChartTooltip(event,'cv-wind-hr-gust')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風推估</div>
         <canvas id="cv-wind-hr-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-hr-est')"
+          onclick="toggleChartZoom('cv-wind-hr-est', event)"
           onmousemove="showChartTooltip(event,'cv-wind-hr-est')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
           ● 為氣象署逐3小時官方預報時間點，其間曲線為內插（僅供視覺化，非官方值）</div>
@@ -750,11 +760,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div class="sec-body" id="body-wave" style="display:none">
         <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">逐日（各日最大）</div>
         <canvas id="cv-wave-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wave-day')"
+          onclick="toggleChartZoom('cv-wave-day', event)"
           onmousemove="showChartTooltip(event,'cv-wave-day')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">逐時</div>
         <canvas id="cv-wave-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wave-hr')"
+          onclick="toggleChartZoom('cv-wave-hr', event)"
           onmousemove="showChartTooltip(event,'cv-wave-hr')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
           僅沿海預報點有資料；● 為官方預報時間點</div>
@@ -769,11 +779,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div class="sec-body" id="body-temp" style="display:none">
         <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">逐日（各日最高/最低）</div>
         <canvas id="cv-temp-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-temp-day')"
+          onclick="toggleChartZoom('cv-temp-day', event)"
           onmousemove="showChartTooltip(event,'cv-temp-day')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">逐時</div>
         <canvas id="cv-temp-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-temp-hr')"
+          onclick="toggleChartZoom('cv-temp-hr', event)"
           onmousemove="showChartTooltip(event,'cv-temp-hr')" onmouseleave="hideChartTooltip()"></canvas>
         <div style="font-size:9px;color:#3a6080;margin-top:3px">
           ● 為氣象署逐3小時官方預報時間點；點擊圖表可放大／縮小</div>
@@ -987,8 +997,8 @@ const MODEL_NOTE = {
   ecmwf: 'ECMWF IFS HRES 9km · 前90h逐時 · 物理模式',
   gfs:   'NOAA GFS · 時效 16 天',
   icon:  'DWD ICON · 時效 7 天',
-  hi:    'CWA+ECMWF × 系集前25%放大倍率（前48h，縣級）',
-  lo:    'CWA+ECMWF × 系集後25%縮小倍率（前48h，縣級）',
+  hi:    '融合 × 系集前25%放大倍率（前48h，縣級）',
+  lo:    '融合 × 系集後25%縮小倍率（前48h，縣級）',
   cwa:   '純CWA官方定量降水預報（颱風期間F-C0041；平時48h逐6h常態版，每日4次預報員修正）',
 };
 let selected = null;
@@ -1318,6 +1328,7 @@ function toggleTerrainLayer(){
   // ★ 鄉鎮色塊預設幾乎不透明，會把地形完全蓋掉；
   //   開啟地形時調降填色不透明度，兩層才能同時判讀。
   try{ renderLayer(); }catch(e){}
+  try{ if(_blurOn) renderInterpolated(); }catch(e){}
   console.log('地形暈渲：已開啟（海拔灰階 × Hillshade 315°/45°）');
 }
 
@@ -2101,7 +2112,8 @@ function _drawScaleLegend(ctx, CW, CH, bands, fs, isZoom, note){
   const wU = items.map(b=>ctx.measureText(b.label || String(b.max)).width
                         + (isZoom ? 30 : 18));
   let lx = (CW - wU.reduce((a, b)=>a + b, 0)) / 2;
-  const ly = CH - (isZoom ? (note ? 26 : 10) : (note ? 15 : 5));
+  // note 為 null 時仍要留出下一行給呼叫端（例如地形色塊列）
+  const ly = CH - (isZoom ? (note ? 26 : 24) : (note ? 15 : 14));
   items.forEach((b, i)=>{
     ctx.fillStyle = b.color;
     ctx.fillRect(lx, ly - fs * 0.8, isZoom ? 12 : 8, isZoom ? 10 : 7);
@@ -2303,6 +2315,36 @@ function _scatterTipHtml(t){
 }
 
 // 目前視窗的資料來源標籤：讓圖表標題明示這是觀測還是預測
+// ★ 各模式的預報時效（天）。切到超出時效的時段時，地圖會整片無資料，
+//   使用者容易誤以為系統壞了，故明確提示「該模式只到哪一天」。
+const MODEL_DAYS = {
+  best: 16, ecmwf: 10, gfs: 16, icon: 7, jma: 11,
+  aifs: 15, gc: 16, cwa: 3, hi: 15, lo: 15, blend: 16,
+};
+// 回傳超時提示字串；未超時回 null
+function _coverageWarn(){
+  const days = MODEL_DAYS[forecastModel];
+  if(!days) return null;
+  // 目前檢視時段的結束時刻
+  let endMs = null;
+  if(_hourIdx != null){
+    endMs = Date.now() + _hourIdx * 3600e3;
+  } else if(typeof segTo === 'number' && segTo >= 0){
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    endMs = d.getTime() + (segTo + 1) * 6 * 3600e3;
+  }
+  if(endMs == null) return null;
+  const limit = Date.now() + days * 86400e3;
+  if(endMs <= limit) return null;
+  const ld = new Date(limit);
+  const WD = ['日','一','二','三','四','五','六'];
+  const nm = {best:'CWA+ECMWF', ecmwf:'ECMWF IFS HRES', gfs:'NOAA GFS',
+              icon:'DWD ICON', jma:'JMA', aifs:'EC-AIFS',
+              gc:'GFS GraphCast', cwa:'CWA 官方'}[forecastModel] || forecastModel;
+  return `${nm} 官方開放資料僅提供 ${days} 天預報，`
+       + `${ld.getMonth()+1}月${ld.getDate()}日（週${WD[ld.getDay()]}）之後無資料`;
+}
+
 function _winSrcLabel(){
   if(winKey === 'radar') return '（雷達1h）';
   if(winKey.startsWith('fut1h_')){
@@ -2688,7 +2730,7 @@ function drawCountyTowns(canvasId){
       try{ renderLayer(); updateInfo(tt); }catch(e){}
     }, true);
   }
-  _drawScaleLegend(ctx, CW, CH, RAIN_SCALE, fs, isZoom, '長條＝雨量色階');
+  _drawScaleLegend(ctx, CW, CH, RAIN_SCALE, fs, isZoom, null);
   // 地形圖例：用實際色塊而非「紅山區」這種文字，一眼對應左緣細條
   {
     const TZ = [['山區','#FF0000'], ['淺山','#FFFF00'],
@@ -2696,7 +2738,8 @@ function drawCountyTowns(canvasId){
     ctx.font = `${fs}px sans-serif`;
     const wU = TZ.map(([t])=>ctx.measureText(t).width + (isZoom ? 28 : 17));
     let lx = (CW - wU.reduce((a,b)=>a+b, 0)) / 2;
-    const ly = CH - (isZoom ? 8 : 4);
+    // ★ 移到雨量圖例的下一行（先前兩者疊在同一行看不清楚）
+    const ly = CH - (isZoom ? 8 : 3);
     ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'right';
     ctx.fillText('左緣細條＝', lx - 4, ly);
     TZ.forEach(([t, c], i)=>{
@@ -2959,6 +3002,28 @@ function getQpfArr(t, qpfField){
   if(qpfField === 'qpf_cwa' && !scn) return t.qpf_cwa || [];
   // ★ 融合（CMPF）為動態計算，非後端欄位，故在此組出基底陣列。
   //   結果快取於 t 上（同一輪資料不會變），避免每次重繪重算 368 次。
+  // ★ 強／弱降雨：改以「融合結果 × 系集倍率」計算，而非固定用 qpf_best。
+  //   融合已納入七個模式並依實測誤差加權，比單一模式當基底更有代表性。
+  //   倍率仍取後端算好的縣級系集比值（qpf_hi/qpf_best 的比例）。
+  if(qpfField === 'qpf_hi' || qpfField === 'qpf_lo'){
+    const base = t.qpf_best || [];
+    const ref  = t[qpfField] || [];
+    if(!t._blendCache || t._blendKey !== (window._dataGenAt || '')){
+      t._blendCache = _blendQpf(t);
+      t._blendKey = window._dataGenAt || '';
+    }
+    const bl = t._blendCache || base;
+    const out = [];
+    for(let i = 0; i < Math.max(base.length, bl.length); i++){
+      const b = base[i], r = ref[i], v = bl[i];
+      if(v == null){ out.push(null); continue; }
+      // 倍率＝ref/base（後端的系集比值）；base 為 0 時無倍率可推，維持原值
+      const k = (b != null && b > 0.05 && r != null) ? (r / b) : 1;
+      out.push(Math.round(v * k * 10) / 10);
+    }
+    if(!scn) return out;
+    t._hiloCache = out;
+  }
   if(qpfField === 'qpf_blend'){
     if(!t._blendCache || t._blendKey !== (window._dataGenAt || '')){
       t._blendCache = _blendQpf(t);
@@ -2968,7 +3033,9 @@ function getQpfArr(t, qpfField){
     //   24h 偏差比與自訂倍率，融合模式因此完全不受修正影響。
     //   融合是本系統的推估值（非官方值），本來就該接受這些調整。
   }
-  const base = (qpfField === 'qpf_blend' ? t._blendCache : t[qpfField])
+  const base = (qpfField === 'qpf_blend' ? t._blendCache
+              : (qpfField === 'qpf_hi' || qpfField === 'qpf_lo') ? t._hiloCache
+              : t[qpfField])
              || t.qpf_15d || new Array(60).fill(0);
   const gf = _qpfFactor();
 
@@ -3281,7 +3348,7 @@ function scnApplyAndClose(){
 
 const SCN_MODEL_LABEL = {'':'沿用上方', blend:'融合', best:'CWA+ECMWF',
   ecmwf:'ECMWF', gfs:'GFS', icon:'ICON', jma:'JMA',
-  aifs:'AIFS(AI)', gc:'GraphCast(AI)', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'};
+  aifs:'EC-AIFS', gc:'GFS GraphCast', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'};
 
 // TOWN_ZONE 未產生時，_townZone() 退路只會回「山區／平地」，
 // 因此「淺山區／沿海地區」兩列目前對不到任何鄉鎮——在 UI 上標記出來，
@@ -3965,13 +4032,17 @@ function renderLayer(){
       // ★ 邊框改深灰：原本用 fillColor（與填色同色）等於沒有邊界，
       //   飽和色塊相鄰時完全分不出鄉鎮。選取時仍為黃色高亮。
       // 深灰但不過重：#2a2a2a 太黑會蓋過色塊，改中灰並降低不透明度
-      color: isSel ? '#ffff44' : '#5a5a5a',
-      weight: _hideFill ? (isSel ? 1.5 : 0) : (isSel ? 1.5 : 0.4),
+      color: isSel ? '#ffff44' : (_terrainOn ? '#3a3a3a' : '#5a5a5a'),
+      // ★ 渲染模式下仍畫鄉鎮界（先前 weight 0 等於整個消失）；
+      //   界線是判讀行政責任範圍的依據，不該因為換呈現方式就不見。
+      weight: isSel ? 1.5 : (_hideFill ? 0.35 : 0.4),
       opacity: isSel ? 1 : 0.45,
-      stroke: _hideFill ? isSel : true,
+      stroke: true,
       fillColor,
       // 地形疊圖開啟時降低填色不透明度，讓下層暈渲透出來
-      fillOpacity: _hideFill ? 0.02 : (_terrainOn ? fillOp * 0.55 : fillOp),
+      // ★ 地形疊圖時的可讀性：只降低不透明度會讓色塊被灰階地形沖淡、
+      //   顏色難以辨識。改為「小幅降低 + 加深邊框」，保留色相與飽和度。
+      fillOpacity: _hideFill ? 0.02 : (_terrainOn ? fillOp * 0.82 : fillOp),
       smoothFactor: 0  // 停用Leaflet的路徑平滑，避免縮放時端點偏移
     };
     // 使用快取的座標（見 llOf 說明）
@@ -4092,6 +4163,15 @@ function renderLayer(){
     }
   });
   countyLayer.addTo(map);
+  // 模式時效提示
+  try{
+    const cw = document.getElementById('coverage-warn');
+    if(cw){
+      const msg = _coverageWarn();
+      cw.style.display = msg ? 'block' : 'none';
+      if(msg) cw.innerHTML = '⚠ ' + msg;
+    }
+  }catch(e){}
   try{ _logModeDistribution(); }catch(e){}
   // 渲染模式：重算內插色帶層（防抖180ms：拉時間軸時不連續重算，停下才算一次）
   if(_blurOn){
@@ -5278,8 +5358,10 @@ function setModel(m){
   const btnMap={best:'mBest',ecmwf:'mEcmwf',gfs:'mGfs',icon:'mIcon',hi:'mHi',lo:'mLo',
                 cwa:'mCwa',blend:'mBlend',jma:'mJma',aifs:'mAifs',gc:'mGc'};
   const el=document.getElementById(btnMap[m]); if(el) el.classList.add('on');
+  // ★ 模式說明已移除（使用者指定）：按鈕名稱本身已足夠辨識，
+  //   額外說明反而佔用控制列空間。
   const note = document.getElementById('model-src-note');
-  if(note) note.textContent = MODEL_NOTE[m] || '';
+  if(note) note.textContent = '';
   // 切到/離開融合模式時同步更新右側明細
   try{ if(typeof renderBlendDetail === 'function') renderBlendDetail(selected); }catch(e){}
   // ★ 同 setWin：切模式後左側四面板與警戒圖層也要依新模式重算
@@ -9728,7 +9810,25 @@ function _redrawZoom(){
   else if(_zoomCanvasType==='cv-all-hyeto') drawAllDistrictHyetoChart('chart-zoom-canvas');
 }
 
-function toggleChartZoom(canvasId){
+// ★ Ctrl/⌘ + 左鍵＝放大或關閉大圖；一般點擊留給圖面內的互動
+//   （先前直接點就放大，容易誤觸圖上的鄉鎮點位）。
+// 關閉放大檢視（✕ 按鈕、Esc、Ctrl+左鍵皆可）
+function closeChartZoom(){
+  const modal = document.getElementById('chart-zoom-modal');
+  if(modal) modal.style.display = 'none';
+  const tip = document.getElementById('scatter-tip');
+  if(tip) tip.style.display = 'none';
+  window._zoomOpen = false;
+}
+document.addEventListener('keydown', e=>{
+  if(e.key === 'Escape' && window._zoomOpen) closeChartZoom();
+});
+
+function toggleChartZoom(canvasId, ev){
+  if(ev && !(ev.ctrlKey || ev.metaKey)){
+    // 沒按 Ctrl：不放大，讓點擊事件由圖表自身的互動處理
+    return;
+  }
   const needsSelected = (canvasId==='cv'||canvasId==='cv-district-hyeto'
                        ||canvasId.startsWith('cv-wind-')
                        ||canvasId.startsWith('cv-stnrank')
@@ -9743,10 +9843,11 @@ function toggleChartZoom(canvasId){
   if(!modal) return;
   const isOpen = modal.style.display === 'flex';
   if(isOpen){
-    modal.style.display = 'none';
+    closeChartZoom();
     return;
   }
   modal.style.display = 'flex';
+  window._zoomOpen = true;
   const titleMap = {
     'cv': selected ? `${selected.county}${selected.township} 逐日雨量（16天）` : '',
     'cv-district-hyeto': selected ? `${selected.county}${selected.township} 組體雨量圖` : '',
@@ -10266,10 +10367,12 @@ function _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1){
   const url=cv.toDataURL();
   const _tp=map.getPane('townPane');
   if(_tp) _tp.style.filter='';  // 防禦：確保無殘留模糊濾鏡
-  if(_interpOverlay){ _interpOverlay.setUrl(url); }
+  // ★ 地形疊圖開啟時降低不透明度，讓下層暈渲透出來（先前 1.0 全蓋住）
+  const _op = (typeof _terrainOn !== 'undefined' && _terrainOn) ? 0.72 : 1.0;
+  if(_interpOverlay){ _interpOverlay.setUrl(url); _interpOverlay.setOpacity(_op); }
   else{
     _interpOverlay=L.imageOverlay(url, INTERP_BOUNDS,
-      {pane:'townPane', opacity:1.0, interactive:false, className:'interp-crisp'}).addTo(map);
+      {pane:'townPane', opacity:_op, interactive:false, className:'interp-crisp'}).addTo(map);
   }
 }
 
