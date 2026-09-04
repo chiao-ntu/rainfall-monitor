@@ -34,6 +34,56 @@ AZIMUTH = 315.0     # 光源方位（西北）
 ALTITUDE = 45.0     # 光源仰角
 
 
+def _fill_inland_voids(dem, max_iter=60):
+    """把被陸地包圍的缺值以鄰域平均逐步補起來（海域缺值保持 NaN）。
+
+    做法：先用洪水填充從影像邊界標出「外部」（海域），其餘 NaN 即為內陸空洞；
+    再對內陸空洞反覆取 3×3 鄰域平均，直到補滿或達迭代上限。
+    """
+    import numpy as np
+    from collections import deque
+    nan = ~np.isfinite(dem)
+    H, W = dem.shape
+    outside = np.zeros((H, W), dtype=bool)
+    dq = deque()
+    for x in range(W):
+        for y in (0, H - 1):
+            if nan[y, x] and not outside[y, x]:
+                outside[y, x] = True; dq.append((y, x))
+    for y in range(H):
+        for x in (0, W - 1):
+            if nan[y, x] and not outside[y, x]:
+                outside[y, x] = True; dq.append((y, x))
+    while dq:
+        y, x = dq.popleft()
+        for dy, dx in ((1,0), (-1,0), (0,1), (0,-1)):
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < H and 0 <= nx < W and nan[ny, nx] and not outside[ny, nx]:
+                outside[ny, nx] = True; dq.append((ny, nx))
+    inland = nan & ~outside
+    n0 = int(inland.sum())
+    if not n0:
+        return outside
+    work = dem.copy()
+    for _ in range(max_iter):
+        todo = inland & ~np.isfinite(work)
+        if not todo.any():
+            break
+        filled = np.where(np.isfinite(work), work, 0.0)
+        cnt = np.isfinite(work).astype('float32')
+        acc = np.zeros_like(filled); num = np.zeros_like(cnt)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy == 0 and dx == 0: continue
+                acc += np.roll(np.roll(filled, dy, 0), dx, 1)
+                num += np.roll(np.roll(cnt, dy, 0), dx, 1)
+        avg = np.where(num > 0, acc / np.maximum(num, 1), np.nan)
+        work = np.where(todo & np.isfinite(avg), avg, work)
+    dem[:] = work
+    print(f'  內陸空洞補值 {n0} 像素（DTM 原始缺值，如雪山山脈方塊）')
+    return outside
+
+
 def main():
     if not os.path.exists(DEM):
         print(f'找不到 {DEM}（請先解壓 不分幅_全台20MDEM）')
@@ -60,6 +110,12 @@ def main():
           if dem_m.ndim == 3 else dem_m.filled(np.nan).astype('float32')
     nodata = ~np.isfinite(dem) | (dem <= -1000)
     dem[nodata] = np.nan
+
+    # ★ 補內陸空洞：DTM 原始檔在雪山山脈一帶（約 24.52N/121.08E）有整塊
+    #   方形缺值，直接輸出會在山區留下白色破洞（實際那裡是 1200m 以上山地）。
+    #   海域的缺值必須保留（要透明），故只補「四周被陸地包圍」的空洞。
+    land_mask = _fill_inland_voids(dem)
+    nodata = ~np.isfinite(dem)
 
     # 實際格距（公尺）：原始 20m × 降採樣倍率
     cell = 20.0 / scale
