@@ -755,7 +755,8 @@ function paintFeature(county, town){
     if(!l.feature) return;
     const lp=l.feature.properties;
     if(featureKey(lp.COUNTYNAME||'',lp.TOWNNAME||'')===key)
-      l.setStyle({fillColor:activeColor,fillOpacity:0.78,color:activeColor,weight:0.3,smoothFactor:0});
+      l.setStyle({fillColor:activeColor,fillOpacity:0.78,
+                  color:'#5a5a5a',weight:0.4,opacity:0.45,smoothFactor:0});
   });
   document.getElementById('cnt').textContent=Object.keys(fillData).length;
   refreshRosterColors();
@@ -806,8 +807,11 @@ function buildTownLayer(){
     style(feat){
       const p=feat.properties;
       const c=featureColor(p.COUNTYNAME||'',p.TOWNNAME||'');
-      return {fillColor:c||'#f8f8f8',fillOpacity:c?0.78:0.03,
-              color:c||'rgba(120,140,160,0.3)',weight:0.3,smoothFactor:0};
+      // ★ 邊框設定與 index.html 一致（中灰 #5a5a5a、weight 0.4、opacity 0.45）：
+      //   先前邊框顏色跟著填色走、weight 只有 0.3，兩張地圖出圖時線條粗細
+      //   與顏色不同，套疊比對會對不上。
+      return {fillColor:c||'#f8f8f8', fillOpacity:c?0.78:0.03,
+              color:'#5a5a5a', weight:0.4, opacity:0.45, smoothFactor:0};
     },
     onEachFeature(feat,layer){
       const p=feat.properties;

@@ -1983,7 +1983,7 @@ function drawStnRankChart(t, canvasId){
   }
   const fs = isZoom ? 16 : 10;
   const pL = isZoom ? 190 : 78, pR = isZoom ? 60 : 26;
-  const pT = isZoom ? 40 : 16, pB = isZoom ? 46 : 22;
+  const pT = isZoom ? 40 : 16, pB = isZoom ? 74 : 40;   // 底部留白給圖例
   const iw = CW - pL - pR, ih = CH - pT - pB;
   const vMax = Math.max(10, Math.ceil(Math.max(...rows.map(r=>r.v)) * 1.15 / 10) * 10);
   const hits = [];
@@ -2037,6 +2037,7 @@ function drawStnRankChart(t, canvasId){
       }
     }, true);
   }
+  _drawScaleLegend(ctx, CW, CH, RAIN_SCALE, fs, isZoom, '長條顏色＝累積雨量色階');
   if(isZoom){
     ctx.fillStyle = '#6bc8e8'; ctx.font = 'bold 20px sans-serif';
     ctx.textAlign = 'center';
@@ -2065,6 +2066,29 @@ function _fitCanvas(cv, fallbackW, fallbackH){
   ctx.fillStyle = '#040c14';
   ctx.fillRect(0, 0, w, h);
   return {ctx, w, h};
+}
+
+// 共用：在畫布底部畫一列色階圖例
+function _drawScaleLegend(ctx, CW, CH, bands, fs, isZoom, note){
+  ctx.font = `${fs}px sans-serif`;
+  const items = bands.slice(0, isZoom ? 8 : 6);
+  const wU = items.map(b=>ctx.measureText(b.label || String(b.max)).width
+                        + (isZoom ? 30 : 18));
+  let lx = (CW - wU.reduce((a, b)=>a + b, 0)) / 2;
+  const ly = CH - (isZoom ? (note ? 26 : 10) : (note ? 15 : 5));
+  items.forEach((b, i)=>{
+    ctx.fillStyle = b.color;
+    ctx.fillRect(lx, ly - fs * 0.8, isZoom ? 12 : 8, isZoom ? 10 : 7);
+    ctx.strokeStyle = '#0a1a28'; ctx.lineWidth = 1;
+    ctx.strokeRect(lx, ly - fs * 0.8, isZoom ? 12 : 8, isZoom ? 10 : 7);
+    ctx.fillStyle = '#7a94ac'; ctx.textAlign = 'left';
+    ctx.fillText(b.label || String(b.max), lx + (isZoom ? 16 : 11), ly);
+    lx += wU[i];
+  });
+  if(note){
+    ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'center';
+    ctx.fillText(note, CW / 2, CH - (isZoom ? 8 : 4));
+  }
 }
 
 function _scatterBase(cv, o){
@@ -2368,7 +2392,7 @@ function drawMarginChart(t, canvasId){
   }
   const fs = isZoom ? 15 : 9;
   const pL = isZoom ? 210 : 92, pR = isZoom ? 60 : 30;
-  const pT = isZoom ? 44 : 14, pB = isZoom ? 48 : 22;
+  const pT = isZoom ? 44 : 14, pB = isZoom ? 76 : 40;   // 底部留白給圖例
   const iw = CW - pL - pR, ih = CH - pT - pB;
   const lo = Math.min(-20, Math.floor(Math.min(...top.map(r=>r.margin))/20)*20);
   const hi = Math.max(20, Math.ceil(Math.max(...top.map(r=>r.margin))/20)*20);
@@ -2397,6 +2421,11 @@ function drawMarginChart(t, canvasId){
     ctx.fillStyle = '#cfe4f5'; ctx.textAlign = 'left';
     ctx.fillText((r.margin>0?'+':'')+r.margin.toFixed(0), X(Math.max(0,r.margin))+4, y+fs*0.35);
   });
+  _drawScaleLegend(ctx, CW, CH,
+    [{max:0, color:'#FF0000', label:'已達警戒'},
+     {max:0, color:'#FFFF00', label:'接近（-30%內）'},
+     {max:0, color:'#40d060', label:'尚有餘裕'}],
+    fs, isZoom, '橫軸 0＝警戒值');
   if(isZoom){
     ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
     ctx.fillText('全臺最接近警戒的雨量站', CW/2, 26);
@@ -2504,13 +2533,39 @@ function _fillCountyPicker(){
   const set = new Set();
   (TOWNSHIPS || []).forEach(t=>{ if(t.county) set.add(t.county); });
   if(!set.size) return;
-  [...set].sort().forEach(c=>{
-    const o = document.createElement('option');
-    o.value = c; o.textContent = c;
-    sel.appendChild(o);
+  // ★ 依分署順序、署內由北到南排列（而非筆畫排序）：
+  //   使用者是依分署轄區在判讀，字典序會把同分署的縣市打散。
+  //   以 DISTRICT_COUNTIES 的既有順序為準，兩者永遠一致。
+  const ORDER = ['臺北分署','臺中分署','南投分署','臺南分署','臺東分署','花蓮分署'];
+  let n = 0;
+  ORDER.forEach(dist=>{
+    const list = (typeof DISTRICT_COUNTIES !== 'undefined'
+                  ? DISTRICT_COUNTIES[dist] : null) || [];
+    const has = list.filter(c=>set.has(c));
+    if(!has.length) return;
+    const grp = document.createElement('optgroup');
+    grp.label = dist;
+    has.forEach(c=>{
+      const o = document.createElement('option');
+      o.value = c; o.textContent = c;
+      grp.appendChild(o);
+      set.delete(c); n++;
+    });
+    sel.appendChild(grp);
   });
+  // 不在任何分署清單裡的（防禦：資料若有新縣市不致漏掉）
+  if(set.size){
+    const grp = document.createElement('optgroup');
+    grp.label = '其他';
+    [...set].sort().forEach(c=>{
+      const o = document.createElement('option');
+      o.value = c; o.textContent = c;
+      grp.appendChild(o); n++;
+    });
+    sel.appendChild(grp);
+  }
   sel._filled = true;
-  console.log(`縣市選單：填入 ${set.size} 個縣市`);
+  console.log(`縣市選單：填入 ${n} 個縣市（依分署分組）`);
 }
 function pickCounty(c){
   _pickedCounty = c || '';
@@ -2549,7 +2604,7 @@ function drawCountyTowns(canvasId){
   }
   const fs = isZoom ? 15 : 10;
   const pL = isZoom ? 190 : 76, pR = isZoom ? 70 : 34;
-  const pT = isZoom ? 40 : 14, pB = isZoom ? 40 : 18;
+  const pT = isZoom ? 40 : 14, pB = isZoom ? 72 : 38;   // 底部留白給圖例
   const iw = CW - pL - pR, ih = CH - pT - pB;
   const vMax = Math.max(10, Math.ceil(rows[0].v * 1.15 / 10) * 10);
   const X = v => pL + iw * (v / vMax);
@@ -2596,6 +2651,8 @@ function drawCountyTowns(canvasId){
       try{ renderLayer(); updateInfo(tt); }catch(e){}
     }, true);
   }
+  _drawScaleLegend(ctx, CW, CH, RAIN_SCALE, fs, isZoom,
+    '長條＝雨量色階　左緣細條＝地形（紅山區/黃淺山/綠平地/青沿海）');
   if(isZoom){
     ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
     ctx.fillText(`${_pickedCounty} 各鄉鎮${_winSrcLabel()}`, CW/2, 26);

@@ -213,6 +213,124 @@ def _resolve_product_url(dataid, timeout=60):
 TIDE_EP = 'F-A0021-001'          # 鄉鎮潮汐預報（滿潮／乾潮時刻與潮高）
 
 
+# 雷達定量降雨：O-B0045-001 過去1小時實估、F-B0046-001 未來1小時預報
+#   ★ 這是原「QPESUMS」的接續資料集（換了 dataid，並非停用）。
+#     441×561 格點、解析度 0.0125°（約 1.4km），每 10 分鐘更新。
+RADAR_QPE_EP = 'O-B0045-001'      # 過去1小時（實估，含雨量站校正）
+RADAR_QPF_EP = 'F-B0046-001'      # 未來1小時（預報）
+
+
+def fetch_radar_grid(dataid, label):
+    """讀雷達定量降雨格點 → (values, meta)；失敗回 (None, None)。
+
+    格點定義（官方）：左下角為東經118、北緯20，先經向遞增再緯向遞增，
+    TWD67 經緯網格，無效值 -1。
+    """
+    if not CWA_API_KEY:
+        return None, None
+    print(f"抓取{label}（{dataid}）...")
+    txt = None
+    for _try in range(2):
+        try:
+            r = cwa_get(f"{FILEAPI}/{dataid}",
+                        params={"Authorization": CWA_API_KEY,
+                                "downloadType": "WEB", "format": "XML"},
+                        timeout=120)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}（{_try+1}/2）")
+                if _try == 0: time.sleep(5)
+                continue
+            txt = r.content.decode('utf-8', 'replace')
+            break
+        except Exception as e:
+            print(f"    取用失敗（{_try+1}/2）：{e}")
+            if _try == 0: time.sleep(5)
+    if not txt:
+        print(f"★ {label}：下載失敗")
+        return None, None
+    try:
+        def _tag(t):
+            m = re.search(rf'<{t}>([^<]*)</{t}>', txt)
+            return m.group(1).strip() if m else ''
+        meta = {
+            'lon0': float(_tag('StartPointLongitude') or 118),
+            'lat0': float(_tag('StartPointLatitude') or 20),
+            'res':  float(_tag('GridResolution') or 0.0125),
+            'nx':   int(_tag('GridDimensionX') or 441),
+            'ny':   int(_tag('GridDimensionY') or 561),
+            'time': _tag('DateTime'),
+        }
+        i = txt.index('<content>'); j = txt.index('</content>', i)
+        vals = [float(x) for x in txt[i+9:j].split(',') if x.strip()]
+    except Exception as e:
+        print(f"★ {label}：解析失敗 {e}")
+        return None, None
+    if len(vals) != meta['nx'] * meta['ny']:
+        print(f"★ {label}：格點數不符（{len(vals)} vs "
+              f"{meta['nx']}×{meta['ny']}）")
+        return None, None
+    pos = sum(1 for v in vals if v > 0)
+    print(f"    {meta['nx']}×{meta['ny']} 格點，有雨 {pos} "
+          f"（{pos/len(vals)*100:.1f}%），時間 {meta['time'][:16]}")
+    return vals, meta
+
+
+def radar_to_towns(vals, meta, town_polys):
+    """把雷達格點聚合到鄉鎮 → {縣市+鄉鎮: {'mean':x, 'max':x, 'n':格點數}}。
+
+    ★ 用「鄉鎮多邊形範圍內的所有格點」而非質心單點：
+      質心取樣時該點沒回波就是 null，但那不代表整個鄉鎮沒雨
+      —— 實測 radar.json 有約 60% 的鄉鎮是 null。
+      1.4km 格點下，一個鄉鎮涵蓋數十到數百格，統計上穩定得多。
+    """
+    lon0, lat0 = meta['lon0'], meta['lat0']
+    res, nx, ny = meta['res'], meta['nx'], meta['ny']
+    out = {}
+    for key, (lo0, la0, lo1, la1, poly) in town_polys.items():
+        i0 = max(0, int((lo0 - lon0) / res))
+        i1 = min(nx - 1, int((lo1 - lon0) / res) + 1)
+        j0 = max(0, int((la0 - lat0) / res))
+        j1 = min(ny - 1, int((la1 - lat0) / res) + 1)
+        if i1 < i0 or j1 < j0:
+            continue
+        acc, mx, n = 0.0, None, 0
+        for j in range(j0, j1 + 1):
+            base = j * nx
+            for i in range(i0, i1 + 1):
+                v = vals[base + i]
+                if v < 0:                 # -1 為無效值
+                    continue
+                # 只計落在多邊形內的格點
+                if not _pt_in_poly(lon0 + i * res, lat0 + j * res, poly):
+                    continue
+                acc += v; n += 1
+                if mx is None or v > mx: mx = v
+        if n:
+            out[key] = {'mean': round(acc / n, 1), 'max': round(mx, 1), 'n': n}
+    if out:
+        _nz = sum(1 for v in out.values() if v['max'] > 0)
+        _avg = sum(v['n'] for v in out.values()) / len(out)
+        print(f"    鄉鎮聚合：{len(out)} 個（有雨 {_nz}），平均每鄉鎮 {_avg:.0f} 格")
+    return out
+
+
+def _pt_in_poly(x, y, rings):
+    """射線法：點是否在多邊形內（rings 為外環清單，任一命中即算）。"""
+    for ring in rings:
+        inside = False
+        n = len(ring)
+        j = n - 1
+        for i in range(n):
+            xi, yi = ring[i]; xj, yj = ring[j]
+            if ((yi > y) != (yj > y)) and \
+               (x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi):
+                inside = not inside
+            j = i
+        if inside:
+            return True
+    return False
+
+
 def fetch_tide_forecast():
     """鄉鎮潮汐預報 → {縣市+鄉鎮: {'range': 大/中/小, 'times': [...]}}。
 
@@ -2349,6 +2467,7 @@ def calc_bias_24h(daily_rain, model_yday):
 #  ★ 現階段只累積與呈現，不回饋修正預測；待樣本足夠再啟用加權。
 STATION_ELEV_FILE = "station_elev.json"   # 測站海拔（由 20m DTM 離線產生）
 STATION_ELEV = {}
+TOWN_POLYS_FILE = "town_polys.json"   # 鄉鎮界（供雷達格點聚合，由 index.html 抽出）
 TERRAIN_FILE = "terrain_zones_official.json"   # 地形分類（山區/淺山/沿海/平地）
 SKILL_FILE = "model_skill.json"
 SKILL_KEEP_DAYS = 45        # 保留天數：短期權重看7天、長期基準看30天，留餘裕
@@ -3521,6 +3640,29 @@ def main():
     gust_fcst     = fetch_gust_forecast() if CWA_API_KEY else {}
     # 沿海浪高（僅 120 個沿海預報點）
     wave_fcst     = fetch_wave_forecast() if CWA_API_KEY else {}
+    # ── 雷達定量降雨（過去1小時實估 + 未來1小時預報）──────
+    #   ★ 用鄉鎮多邊形聚合，取代原本的質心單點取樣
+    #     （單點在該鄉鎮沒回波時就是 null，實測約 60% 鄉鎮為空）。
+    radar_qpe, radar_qpe_time = {}, ''
+    radar_qpf_grid, radar_qpf_time2 = {}, ''
+    _polys = {}
+    if os.path.exists(TOWN_POLYS_FILE):
+        try:
+            with open(TOWN_POLYS_FILE, encoding='utf-8') as _f:
+                _polys = json.load(_f)
+        except Exception as _e:
+            print(f"鄉鎮界讀取失敗（雷達改用質心）：{_e}")
+    if _polys and CWA_API_KEY:
+        _pv = {k: (v[0], v[1], v[2], v[3], v[4]) for k, v in _polys.items()}
+        _v, _m = fetch_radar_grid(RADAR_QPE_EP, '雷達過去1小時定量降雨')
+        if _v:
+            radar_qpe = radar_to_towns(_v, _m, _pv)
+            radar_qpe_time = _m.get('time', '')
+        _v2, _m2 = fetch_radar_grid(RADAR_QPF_EP, '雷達未來1小時定量降雨')
+        if _v2:
+            radar_qpf_grid = radar_to_towns(_v2, _m2, _pv)
+            radar_qpf_time2 = _m2.get('time', '')
+
     tide_fcst     = fetch_tide_forecast() if CWA_API_KEY else {}
 
     # 全臺測站清單（供前端測站圖層；只留必要欄位以免 data.json 過大）
@@ -4112,6 +4254,9 @@ def main():
         #   townships[].stations 只含「警戒表」裡的站，且站名比對不到就沒座標
         #   （實測 514/891 無座標）。測站圖層需要的是完整清單，故另行輸出。
         'all_stations': all_stations_out,
+        # 雷達定量降雨（鄉鎮多邊形聚合；mean=區內平均、max=區內最大）
+        'radar_qpe': radar_qpe, 'radar_qpe_time': radar_qpe_time,
+        'radar_qpf_grid': radar_qpf_grid, 'radar_qpf_time': radar_qpf_time2,
         # 預報員研判之地區雨量區間（F-C0034，豪雨/颱風事件期間才發布）
         #   {24h|total: {title, valid, areas:{地區:{flat|mountain:{lo,hi,hl}}}}}
         #   ★ 縣市級區間，供上下界參考與比對；不覆蓋逐站 ETR2 等精細資料
