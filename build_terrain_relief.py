@@ -34,54 +34,39 @@ AZIMUTH = 315.0     # 光源方位（西北）
 ALTITUDE = 45.0     # 光源仰角
 
 
-def _fill_inland_voids(dem, max_iter=60):
-    """把被陸地包圍的缺值以鄰域平均逐步補起來（海域缺值保持 NaN）。
+def _mark_inland_voids(dem):
+    """標出「被陸地包圍」的缺值區（不補值）。
 
-    做法：先用洪水填充從影像邊界標出「外部」（海域），其餘 NaN 即為內陸空洞；
-    再對內陸空洞反覆取 3×3 鄰域平均，直到補滿或達迭代上限。
+    ★ 為何不補：DTM 原始檔在雪山一帶缺一整個約 12.5×12.5 km 的圖幅。
+      該缺口周界高程最高僅 2185m，但缺口內是雪山主峰一帶（3886m）——
+      任何由周界推估的補值都會嚴重低估，畫出來的是假地形。
+      故保留缺值並在圖上標示「無資料」，誠實呈現。
+    回傳 (inland_voids, sea)：兩個布林遮罩。
     """
     import numpy as np
     from collections import deque
     nan = ~np.isfinite(dem)
     H, W = dem.shape
-    outside = np.zeros((H, W), dtype=bool)
+    sea = np.zeros((H, W), dtype=bool)
     dq = deque()
     for x in range(W):
         for y in (0, H - 1):
-            if nan[y, x] and not outside[y, x]:
-                outside[y, x] = True; dq.append((y, x))
+            if nan[y, x] and not sea[y, x]:
+                sea[y, x] = True; dq.append((y, x))
     for y in range(H):
         for x in (0, W - 1):
-            if nan[y, x] and not outside[y, x]:
-                outside[y, x] = True; dq.append((y, x))
+            if nan[y, x] and not sea[y, x]:
+                sea[y, x] = True; dq.append((y, x))
     while dq:
         y, x = dq.popleft()
-        for dy, dx in ((1,0), (-1,0), (0,1), (0,-1)):
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             ny, nx = y + dy, x + dx
-            if 0 <= ny < H and 0 <= nx < W and nan[ny, nx] and not outside[ny, nx]:
-                outside[ny, nx] = True; dq.append((ny, nx))
-    inland = nan & ~outside
-    n0 = int(inland.sum())
-    if not n0:
-        return outside
-    work = dem.copy()
-    for _ in range(max_iter):
-        todo = inland & ~np.isfinite(work)
-        if not todo.any():
-            break
-        filled = np.where(np.isfinite(work), work, 0.0)
-        cnt = np.isfinite(work).astype('float32')
-        acc = np.zeros_like(filled); num = np.zeros_like(cnt)
-        for dy in (-1, 0, 1):
-            for dx in (-1, 0, 1):
-                if dy == 0 and dx == 0: continue
-                acc += np.roll(np.roll(filled, dy, 0), dx, 1)
-                num += np.roll(np.roll(cnt, dy, 0), dx, 1)
-        avg = np.where(num > 0, acc / np.maximum(num, 1), np.nan)
-        work = np.where(todo & np.isfinite(avg), avg, work)
-    dem[:] = work
-    print(f'  內陸空洞補值 {n0} 像素（DTM 原始缺值，如雪山山脈方塊）')
-    return outside
+            if 0 <= ny < H and 0 <= nx < W and nan[ny, nx] and not sea[ny, nx]:
+                sea[ny, nx] = True; dq.append((ny, nx))
+    voids = nan & ~sea
+    if voids.any():
+        print(f'  內陸缺值 {int(voids.sum())} 像素 → 標示為「無資料」（不捏造地形）')
+    return voids, sea
 
 
 def main():
@@ -111,11 +96,8 @@ def main():
     nodata = ~np.isfinite(dem) | (dem <= -1000)
     dem[nodata] = np.nan
 
-    # ★ 補內陸空洞：DTM 原始檔在雪山山脈一帶（約 24.52N/121.08E）有整塊
-    #   方形缺值，直接輸出會在山區留下白色破洞（實際那裡是 1200m 以上山地）。
-    #   海域的缺值必須保留（要透明），故只補「四周被陸地包圍」的空洞。
-    land_mask = _fill_inland_voids(dem)
-    nodata = ~np.isfinite(dem)
+    # ★ 內陸缺值不補值，只標示（見 _mark_inland_voids 的說明）
+    voids, sea = _mark_inland_voids(dem)
 
     # 實際格距（公尺）：原始 20m × 降採樣倍率
     cell = 20.0 / scale
@@ -146,33 +128,15 @@ def main():
     # --- 3. 正片疊底 ---
     out = np.clip(rgb * hs[..., None], 0, 255).astype('uint8')
 
-    # ★ 只讓「外海」透明。DEM 的 nodata 也包含內陸水體（水庫、湖泊）與
-    #   少數空洞，若一律透明，圖上會出現破洞（實測日月潭一帶破一個大洞）。
-    #   做法：從影像四邊灌水做連通標記，只有連到邊界的 nodata 才是海。
-    from collections import deque
-    sea = np.zeros(nodata.shape, dtype=bool)
-    dq = deque()
-    Hh, Ww = nodata.shape
-    for x in range(Ww):
-        for y in (0, Hh - 1):
-            if nodata[y, x] and not sea[y, x]: sea[y, x] = True; dq.append((y, x))
-    for y in range(Hh):
-        for x in (0, Ww - 1):
-            if nodata[y, x] and not sea[y, x]: sea[y, x] = True; dq.append((y, x))
-    while dq:
-        y, x = dq.popleft()
-        for dy, dx in ((1,0), (-1,0), (0,1), (0,-1)):
-            ny, nx = y + dy, x + dx
-            if 0 <= ny < Hh and 0 <= nx < Ww and nodata[ny, nx] and not sea[ny, nx]:
-                sea[ny, nx] = True; dq.append((ny, nx))
-    inland_hole = nodata & ~sea
-    if inland_hole.any():
-        # 內陸空洞：用最低海拔色填，並套用該處的暈渲，視覺上不突兀
-        base = np.array(ELEV_STOPS[0][1], dtype='float32')
-        out[inland_hole] = np.clip(base * hs[inland_hole][..., None],
-                                   0, 255).astype('uint8')
-        print(f'  內陸空洞補值 {int(inland_hole.sum())} 像素（水庫、湖泊等）')
-    alpha = np.where(sea, 0, 255).astype('uint8')      # 僅外海透明
+    # ★ 內陸缺值以斜線標示「無資料」，與真實地形明確區分。
+    #   不用鄰域推估填色 —— 缺口內是雪山主峰（3886m），周界最高僅 2185m，
+    #   推估出來的會是明顯偏低的假地形。
+    if voids.any():
+        yy, xx = np.mgrid[0:H, 0:W]
+        stripe = ((yy + xx) % 14) < 4
+        out[voids & stripe] = (150, 130, 120)
+        out[voids & ~stripe] = (215, 210, 205)
+    alpha = np.where(sea, 0, 255).astype('uint8')   # 僅外海透明
 
     try:
         from PIL import Image

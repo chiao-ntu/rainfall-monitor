@@ -7624,18 +7624,22 @@ function _drawWindChart(cvId, pts, opt){
   const _d0 = new Date(t0);
   _d0.setMinutes(0, 0, 0);
   _d0.setHours(Math.ceil(_d0.getHours() / _stepH) * _stepH);
-  const y1 = H - pB + (isZoom ? 56 : 16);
-  const y2 = H - pB + (isZoom ? 78 : 28);
+  // ★ 兩行基線間距 = 字高 × 1.6，確保上下不重疊（先前固定 22/12px，
+  //   放大時字級 18 但間距只有 22，字身就疊在一起）。
+  const _lh = Math.round(xFs * 1.6);
+  const y1 = H - pB + (isZoom ? 44 : 13);
+  const y2 = y1 + _lh;
   for(let ms = _d0.getTime(); ms <= t1; ms += _stepH * 3600e3){
     const d = new Date(ms);
     const x = X(ms);
     if(x < pL - 2 || x > pL + iw + 2) continue;
     if(x - _lastX < _lw) continue;          // 與前一個標籤太近 → 跳過
     _lastX = x;
+    // ★ 時間在上、日期在下（使用者指定）
     ctx.fillStyle = '#9fc8e8';
-    ctx.fillText(`${d.getMonth()+1}/${d.getDate()}`, x, y1);
+    ctx.fillText(`${String(d.getHours()).padStart(2,'0')}時`, x, y1);
     ctx.fillStyle = '#6a8aa5';
-    ctx.fillText(`${String(d.getHours()).padStart(2,'0')}時`, x, y2);
+    ctx.fillText(`${d.getMonth()+1}/${d.getDate()}`, x, y2);
     // 刻度線
     ctx.strokeStyle = '#16324a'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x, pT + ih); ctx.lineTo(x, pT + ih + 3); ctx.stroke();
