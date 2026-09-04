@@ -1282,8 +1282,12 @@ function toggleTerrainLayer(){
       className: 'terrain-relief'
     });
     _terrainOverlay.on('error', ()=>{
-      console.warn('terrain_relief.png 載入失敗（需與 index.html 放在同一目錄）');
+      console.warn('⚠ terrain_relief.png 載入失敗 —— 該檔需與 index.html 放在'
+        + '同一目錄並一起部署；未部署時只會看到色塊變淡、沒有地形。');
+      const b2 = document.getElementById('bTerrain');
+      if(b2){ b2.textContent = '⛰ 地形(缺檔)'; b2.style.color = '#e88'; }
     });
+    _terrainOverlay.on('load', ()=>{ console.log('地形暈渲圖載入完成'); });
   }
   _terrainOverlay.addTo(map);
   // ★ 鄉鎮色塊預設幾乎不透明，會把地形完全蓋掉；
