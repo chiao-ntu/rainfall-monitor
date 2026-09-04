@@ -51,9 +51,14 @@ def main():
     H = max(1, int(round(src.height * scale)))
     print(f'降採樣 {src.width}×{src.height} → {W}×{H}')
 
-    dem = src.read(1, out_shape=(1, H, W),
-                   resampling=Resampling.average).astype('float32')
-    nodata = (dem <= -1000)
+    # ★ 用 masked 讀取：nodata 是 -32767，若直接 average 降採樣，
+    #   海陸交界的格子會把 -32767 平均進去，產生大負值或被拉低的假高程
+    #   （視覺上就是海岸出現破洞或異常色塊）。masked 會排除 nodata。
+    dem_m = src.read(1, out_shape=(1, H, W),
+                     resampling=Resampling.average, masked=True)
+    dem = dem_m.filled(np.nan).astype('float32')[0] \
+          if dem_m.ndim == 3 else dem_m.filled(np.nan).astype('float32')
+    nodata = ~np.isfinite(dem) | (dem <= -1000)
     dem[nodata] = np.nan
 
     # 實際格距（公尺）：原始 20m × 降採樣倍率
@@ -84,7 +89,34 @@ def main():
 
     # --- 3. 正片疊底 ---
     out = np.clip(rgb * hs[..., None], 0, 255).astype('uint8')
-    alpha = np.where(nodata, 0, 255).astype('uint8')   # 海域透明
+
+    # ★ 只讓「外海」透明。DEM 的 nodata 也包含內陸水體（水庫、湖泊）與
+    #   少數空洞，若一律透明，圖上會出現破洞（實測日月潭一帶破一個大洞）。
+    #   做法：從影像四邊灌水做連通標記，只有連到邊界的 nodata 才是海。
+    from collections import deque
+    sea = np.zeros(nodata.shape, dtype=bool)
+    dq = deque()
+    Hh, Ww = nodata.shape
+    for x in range(Ww):
+        for y in (0, Hh - 1):
+            if nodata[y, x] and not sea[y, x]: sea[y, x] = True; dq.append((y, x))
+    for y in range(Hh):
+        for x in (0, Ww - 1):
+            if nodata[y, x] and not sea[y, x]: sea[y, x] = True; dq.append((y, x))
+    while dq:
+        y, x = dq.popleft()
+        for dy, dx in ((1,0), (-1,0), (0,1), (0,-1)):
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < Hh and 0 <= nx < Ww and nodata[ny, nx] and not sea[ny, nx]:
+                sea[ny, nx] = True; dq.append((ny, nx))
+    inland_hole = nodata & ~sea
+    if inland_hole.any():
+        # 內陸空洞：用最低海拔色填，並套用該處的暈渲，視覺上不突兀
+        base = np.array(ELEV_STOPS[0][1], dtype='float32')
+        out[inland_hole] = np.clip(base * hs[inland_hole][..., None],
+                                   0, 255).astype('uint8')
+        print(f'  內陸空洞補值 {int(inland_hole.sum())} 像素（水庫、湖泊等）')
+    alpha = np.where(sea, 0, 255).astype('uint8')      # 僅外海透明
 
     try:
         from PIL import Image

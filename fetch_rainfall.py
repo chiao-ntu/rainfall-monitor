@@ -3174,7 +3174,8 @@ QPF_PNG_BANDS = [
     (3,99,255, 10),     (5,155,255, 5),   (3,200,255, 2),    (156,252,255, 1),
     (194,194,194, 0.5),
 ]
-QPF_PNG_TOL = 42          # 色距容忍（√(42²×3)≈73）
+# 色距容忍：相鄰級距最小色距 45（5mm↔2mm），取其一半再留餘裕 → 半徑 ≤22
+QPF_PNG_TOL = 12          # 每通道容忍（√(12²×3)≈20.8，安全落在半距內）
 QPF_PNG_WINDOW_HOURS = 12 # 定量降水預報(II) 為 12h 有效時段
 
 def _png_solve_homography(px_map, ll_map):
@@ -3223,7 +3224,16 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns, fname='', win_seg=None, win_n
         mx, mn = max(r,g,b), min(r,g,b)
         if mx > 235 and mn > 225: return 0.0          # 白底＝無雨
         if mx < 55: return None                        # 黑等值線/邊界
+        # ★ 0.5mm 這一級的官方色就是灰色 (194,194,194)，
+        #   會被下面的「低飽和灰＝文字/格線」規則誤殺 → 大片小雨區沒有票，
+        #   該鄉鎮的值改由鄰近的藍色像素決定，於是「明明沒雨卻爆增」。
+        #   故先比對灰色級距，命中就回 0.5，不進入低飽和過濾。
+        if abs(r-194) <= 12 and abs(g-194) <= 12 and abs(b-194) <= 12:
+            return 0.5
         if (mx-mn) < 22 and 55 <= mx < 230: return None  # 低飽和灰（文字/格線）
+        # ★ 取最近色，且容忍半徑須小於「相鄰級距色距的一半」，
+        #   否則抗鋸齒或壓縮雜訊會讓 2mm 被判成 5mm、5mm 判成 10mm
+        #   （實測相鄰色距最小僅 45，原本 tol=42→半徑 72.7 遠超過）。
         best, bd = None, tol2 + 1
         for (br,bg,bb,bv) in bands:
             d = (r-br)**2 + (g-bg)**2 + (b-bb)**2

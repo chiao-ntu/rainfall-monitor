@@ -532,6 +532,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
     </div>
 
+    <!-- 區塊：地形與雨量關係（散佈圖） -->
+    <div class="sec" id="sec-elevrain" style="display:none">
+      <div class="sec-h" onclick="toggleSec('elevrain')">
+        <span>海拔與雨量</span><span class="sec-arrow" id="arrow-elevrain">▸</span>
+      </div>
+      <div class="sec-body" id="body-elevrain" style="display:none">
+        <canvas id="cv-elevrain" style="width:100%;height:200px;display:block;
+          background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-elevrain')"></canvas>
+        <div style="font-size:9px;color:#3a6080;margin-top:3px">
+          全臺雨量站的今日累積 vs 海拔；藍點為本鄉鎮測站。可觀察地形雨效應</div>
+      </div>
+    </div>
+
     <!-- 區塊：全臺排行（前 20） -->
     <div class="sec" id="sec-rank" style="display:none">
       <div class="sec-h" onclick="toggleSec('rank')">
@@ -647,20 +661,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>觀測站清單</span><span class="sec-arrow" id="arrow-stations">▸</span>
       </div>
       <div class="sec-body" id="body-stations" style="display:none"></div>
-    </div>
-
-    <!-- 區塊：地形與雨量關係（散佈圖） -->
-    <div class="sec" id="sec-elevrain" style="display:none">
-      <div class="sec-h" onclick="toggleSec('elevrain')">
-        <span>海拔與雨量</span><span class="sec-arrow" id="arrow-elevrain">▸</span>
-      </div>
-      <div class="sec-body" id="body-elevrain" style="display:none">
-        <canvas id="cv-elevrain" style="width:100%;height:200px;display:block;
-          background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-elevrain')"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          全臺雨量站的今日累積 vs 海拔；藍點為本鄉鎮測站。可觀察地形雨效應</div>
-      </div>
     </div>
 
     <!-- 區塊：警戒餘裕（測站別） -->
@@ -1267,10 +1267,17 @@ function toggleTerrainLayer(){
                          _terrainOverlay = null; }
     return;
   }
+  // ★ 需要專屬 pane：放 tilePane 會與底圖同層而被鄉鎮色塊完全蓋住。
+  //   zIndex 設在 tilePane(200) 與 townPane 之間。
+  if(!map.getPane('terrainPane')){
+    map.createPane('terrainPane');
+    map.getPane('terrainPane').style.zIndex = 250;
+    map.getPane('terrainPane').style.pointerEvents = 'none';
+  }
   if(!_terrainOverlay){
     _terrainOverlay = L.imageOverlay('terrain_relief.png', TERRAIN_RELIEF.bounds, {
       opacity: 0.55,          // 半透明，讓上層的雨量色塊仍清楚可讀
-      pane: 'tilePane',       // 最下層（底圖之上、鄉鎮色塊之下）
+      pane: 'terrainPane',    // 專屬 pane：底圖之上、鄉鎮色塊之下
       interactive: false,
       className: 'terrain-relief'
     });
@@ -1279,6 +1286,9 @@ function toggleTerrainLayer(){
     });
   }
   _terrainOverlay.addTo(map);
+  // ★ 鄉鎮色塊預設幾乎不透明，會把地形完全蓋掉；
+  //   開啟地形時調降填色不透明度，兩層才能同時判讀。
+  try{ renderLayer(); }catch(e){}
   console.log('地形暈渲：已開啟（海拔灰階 × Hillshade 315°/45°）');
 }
 
@@ -2106,8 +2116,24 @@ function drawElevRainChart(t, canvasId){
   _bindScatterClick(cv, hitsE, isZoom);
   B.ctx.fillStyle = '#7a94ac'; B.ctx.font = `${B.fs}px sans-serif`;
   B.ctx.textAlign = 'center';
-  B.ctx.fillText(`全臺 ${pts.length} 站　藍圈＝本鄉鎮　點選圖上任一點可跳至該地`,
-                 B.CW/2, B.CH - (isZoom ? 10 : 5));
+  // 圖例：雨量色階（點的顏色依此），置於底部
+  const LG = RAIN_SCALE.slice(0, 6);
+  B.ctx.font = `${B.fs}px sans-serif`;
+  const wU = LG.map(b=>B.ctx.measureText(b.label || String(b.max)).width + (isZoom?30:18));
+  let lx2 = (B.CW - wU.reduce((a,b)=>a+b,0)) / 2;
+  const ly2 = B.CH - (isZoom ? 26 : 15);
+  LG.forEach((b, i)=>{
+    B.ctx.fillStyle = b.color;
+    B.ctx.beginPath();
+    B.ctx.arc(lx2 + 4, ly2 - B.fs*0.32, isZoom?5:3, 0, Math.PI*2); B.ctx.fill();
+    B.ctx.strokeStyle = '#0a1a28'; B.ctx.lineWidth = 1; B.ctx.stroke();
+    B.ctx.fillStyle = '#7a94ac'; B.ctx.textAlign = 'left';
+    B.ctx.fillText(b.label || String(b.max), lx2 + (isZoom?12:9), ly2);
+    lx2 += wU[i];
+  });
+  B.ctx.fillStyle = '#7a94ac'; B.ctx.textAlign = 'center';
+  B.ctx.fillText(`全臺 ${pts.length} 站　藍圈＝本鄉鎮　點選任一點可跳至該地`,
+                 B.CW/2, B.CH - (isZoom ? 8 : 4));
 }
 
 // ── ETR2 vs 雨量（依地形著色）──────────────────────
@@ -2781,7 +2807,9 @@ function getQpfArr(t, qpfField){
       t._blendCache = _blendQpf(t);
       t._blendKey = window._dataGenAt || '';
     }
-    if(!scn) return t._blendCache;
+    // ★ 不可在此 return：先前直接回傳快取，等於跳過下方的
+    //   24h 偏差比與自訂倍率，融合模式因此完全不受修正影響。
+    //   融合是本系統的推估值（非官方值），本來就該接受這些調整。
   }
   const base = (qpfField === 'qpf_blend' ? t._blendCache : t[qpfField])
              || t.qpf_15d || new Array(60).fill(0);
@@ -3749,7 +3777,9 @@ function renderLayer(){
       weight: _hideFill ? (isSel ? 1.5 : 0) : (isSel ? 1.5 : 0.4),
       opacity: isSel ? 1 : 0.45,
       stroke: _hideFill ? isSel : true,
-      fillColor, fillOpacity: _hideFill ? 0.02 : fillOp,
+      fillColor,
+      // 地形疊圖開啟時降低填色不透明度，讓下層暈渲透出來
+      fillOpacity: _hideFill ? 0.02 : (_terrainOn ? fillOp * 0.55 : fillOp),
       smoothFactor: 0  // 停用Leaflet的路徑平滑，避免縮放時端點偏移
     };
     // 使用快取的座標（見 llOf 說明）
