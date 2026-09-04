@@ -263,6 +263,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b model-btn"    id="mEcmwf" onclick="setModel('ecmwf')">ECMWF</button>
       <button class="b model-btn"    id="mGfs"   onclick="setModel('gfs')">GFS</button>
       <button class="b model-btn"    id="mIcon"  onclick="setModel('icon')">ICON</button>
+      <button class="b model-btn"    id="mJma"   onclick="setModel('jma')">JMA</button>
+      <span style="color:#3a6080;font-size:10px;padding:0 2px">｜AI</span>
+      <button class="b model-btn"    id="mAifs"  onclick="setModel('aifs')"
+        style="border-color:#7a5a9a;color:#c8a8e8">AIFS</button>
+      <button class="b model-btn"    id="mGc"    onclick="setModel('gc')"
+        style="border-color:#7a5a9a;color:#c8a8e8">GraphCast</button>
       <button class="b model-btn"    id="mHi"    onclick="setModel('hi')" style="color:#ff8866">強降雨</button>
       <button class="b model-btn"    id="mLo"    onclick="setModel('lo')" style="color:#66bbff">弱降雨</button>
     </div>
@@ -957,12 +963,21 @@ const MODEL_FIELD = {
   hi:    'qpf_hi',
   lo:    'qpf_lo',
   cwa:   'qpf_cwa',
+  jma:   'qpf_jma',
+  aifs:  'qpf_aifs',    // AI
+  gc:    'qpf_gc',      // AI
   blend: 'qpf_blend',   // 融合（CMPF）：由 _blendQpf 動態計算，非後端欄位
 };
+// ★ AI 模式清單：對超出訓練分布的極端降雨傾向低估，
+//   融合時的偏差校正上限放寬（物理模式 2.0、AI 模式 3.0）。
+const AI_MODELS = new Set(['aifs', 'gc']);
 const MODEL_NOTE = {
   best:  '',
   blend: '多源校正融合（CMPF）· 依近期實測誤差動態加權',
-  ecmwf: 'ECMWF IFS 0.25° · 時效 10 天',
+  jma:   'JMA 日本氣象廳 · 物理模式',
+  aifs:  'ECMWF AIFS · AI 模式（極端值易低估，融合時已放寬上調）',
+  gc:    'GFS GraphCast · AI 模式（極端值易低估，融合時已放寬上調）',
+  ecmwf: 'ECMWF IFS HRES 9km · 前90h逐時 · 物理模式',
   gfs:   'NOAA GFS · 時效 16 天',
   icon:  'DWD ICON · 時效 7 天',
   hi:    'CWA+ECMWF × 系集前25%放大倍率（前48h，縣級）',
@@ -1830,7 +1845,8 @@ document.addEventListener('click', e=>{
 //       有數據支撐的分歧比盲從更有價值，且可作為與官方討論的依據
 //    ④ 離散度：各模式差異大代表不確定性高，供 UI 標示信心度
 // ══════════════════════════════════════════════════════════
-const BLEND_MODELS = ['best', 'ecmwf', 'gfs', 'icon'];
+// ★ 融合成員：物理 + AI 全納入。AI 的極端值低估由偏差校正處理。
+const BLEND_MODELS = ['best', 'ecmwf', 'gfs', 'icon', 'jma', 'aifs', 'gc'];
 
 // 取某鄉鎮、某模式的近期表現 → {bias, mae, n}
 function _skillOf(t, model){
@@ -1897,8 +1913,11 @@ function _blendQpf(t){
       if(v == null) return;
       // ① 逐地形偏差校正（bias = Σ觀測/Σ模式，>1 代表模式低估）
       const s = sk[m];
+      // ★ AI 模式對極端降雨傾向低估，上調幅度放寬到 3.0；
+      //   物理模式維持 2.0（過度放大反而失真）。
+      const cap = AI_MODELS.has(m) ? 3.0 : 2.0;
       const corrected = (s && s.bias && s.n >= 10)
-        ? v * Math.max(0.5, Math.min(2.0, s.bias))   // 限幅避免極端校正
+        ? v * Math.max(0.5, Math.min(cap, s.bias))
         : v;
       acc += corrected * W[m];
       wa += W[m];
@@ -3248,7 +3267,8 @@ function scnApplyAndClose(){
 }
 
 const SCN_MODEL_LABEL = {'':'沿用上方', blend:'融合', best:'CWA+ECMWF',
-  ecmwf:'ECMWF', gfs:'GFS', icon:'ICON', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'};
+  ecmwf:'ECMWF', gfs:'GFS', icon:'ICON', jma:'JMA',
+  aifs:'AIFS(AI)', gc:'GraphCast(AI)', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'};
 
 // TOWN_ZONE 未產生時，_townZone() 退路只會回「山區／平地」，
 // 因此「淺山區／沿海地區」兩列目前對不到任何鄉鎮——在 UI 上標記出來，
@@ -5203,10 +5223,12 @@ function clearBtns(){
 
 function setModel(m){
   forecastModel = m;
-  ['mBest','mEcmwf','mGfs','mIcon','mHi','mLo','mCwa','mBlend'].forEach(id=>{
+  ['mBest','mEcmwf','mGfs','mIcon','mHi','mLo','mCwa','mBlend',
+   'mJma','mAifs','mGc'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.classList.remove('on');
   });
-  const btnMap={best:'mBest',ecmwf:'mEcmwf',gfs:'mGfs',icon:'mIcon',hi:'mHi',lo:'mLo',cwa:'mCwa',blend:'mBlend'};
+  const btnMap={best:'mBest',ecmwf:'mEcmwf',gfs:'mGfs',icon:'mIcon',hi:'mHi',lo:'mLo',
+                cwa:'mCwa',blend:'mBlend',jma:'mJma',aifs:'mAifs',gc:'mGc'};
   const el=document.getElementById(btnMap[m]); if(el) el.classList.add('on');
   const note = document.getElementById('model-src-note');
   if(note) note.textContent = MODEL_NOTE[m] || '';

@@ -696,5 +696,59 @@ chk('地形圖層 z-index 夾在正確位置',
     "map.getPane('terrainPane').style.zIndex = 392;" in _srcA, True)
 chk('說明只有顏色變淺的成因', '那正是「只有顏色變淺」的成因' in _srcA, True)
 
+
+print('\n=== 雷達定量降雨格點（O-B0045）===')
+# ★ 原「QPESUMS 停用」其實是換了 dataid；441×561 格點、1.4km 解析度。
+#   用鄉鎮多邊形聚合取代質心單點 —— 質心取樣時實測約 60% 鄉鎮為 null。
+_rf = '/mnt/user-data/uploads/O-B0045-001.xml'
+if os.path.exists(_rf) and os.path.exists('town_polys.json'):
+    _rraw = open(_rf, 'rb').read()
+    class _RR:
+        status_code = 200; content = _rraw
+    FR.cwa_get = lambda *a, **k: _RR()
+    _v, _m = FR.fetch_radar_grid('O-B0045-001', '雷達過去1小時')
+    chk('★解析格點', len(_v) if _v else 0, 441 * 561)
+    chk('格點規格正確', [_m['nx'], _m['ny'], _m['res']], [441, 561, 0.0125])
+    chk('起點為東經118/北緯20', [_m['lon0'], _m['lat0']], [118.0, 20.0])
+    _pl = json.load(io.open('town_polys.json', encoding='utf-8'))
+    _pv = {k: (x[0], x[1], x[2], x[3], x[4]) for k, x in _pl.items()}
+    _agg = FR.radar_to_towns(_v, _m, _pv)
+    chk('★多邊形聚合涵蓋率 >95%', len(_agg) / len(_pv) > 0.95, True)
+    _avg = sum(x['n'] for x in _agg.values()) / max(1, len(_agg))
+    print(f"  平均每鄉鎮 {_avg:.0f} 格（質心法只有 1 格）")
+    chk('每鄉鎮多格取樣', _avg > 20, True)
+    chk('含平均與最大', sorted(list(_agg.values())[0].keys()), ['max', 'mean', 'n'])
+    # 無效值 -1 不得計入
+    chk('★排除無效值', all(x['mean'] >= 0 for x in _agg.values()), True)
+    _srcB = io.open('fetch_rainfall.py', encoding='utf-8').read()
+    chk('輸出 radar_qpe', "'radar_qpe': radar_qpe" in _srcB, True)
+    chk('輸出未來1小時', "'radar_qpf_grid': radar_qpf_grid" in _srcB, True)
+    chk('說明質心法的問題', '實測約 60% 鄉鎮為空' in _srcB, True)
+
+
+print('\n=== 模式升級：IFS HRES 9km 與 AI 模式 ===')
+# ★ ecmwf_ifs（IFS HRES）是 ECMWF 官方物理模式，非 AI、非 Open-Meteo 加工。
+#   9km vs 0.25°(25km)、前90h原生逐時、無 open-data 的 2 小時延遲 → 純升級。
+_srcC = io.open('fetch_rainfall.py', encoding='utf-8').read()
+chk('★預設改用 IFS HRES', "om_all.get('ecmwf_ifs') or om_all.get('ecmwf_ifs025'" in _srcC, True)
+chk('qpf_ecmwf 取 IFS HRES', "qpf_ecmwf = get_qpf_model('ecmwf_ifs')" in _srcC, True)
+chk('★IFS HRES 不可用時退回 0.25°', 'IFS HRES 無回應 → 退回 ECMWF IFS 0.25°' in _srcC, True)
+chk('物理與 AI 分列', "OM_PHYSICAL = " in _srcC and "OM_AI       = " in _srcC, True)
+chk('AI 模式為 AIFS 與 GraphCast',
+    "OM_AI       = ['ecmwf_aifs025_single', 'gfs_graphcast025']" in _srcC, True)
+chk('含 JMA', "'jma_seamless'" in _srcC, True)
+chk('★保留逐時資料', "result_hourly[key]" in _srcC, True)
+chk('輸出逐時欄位', "'hourly_ifs':" in _srcC, True)
+chk('新模式進輸出', "'qpf_aifs':" in _srcC and "'qpf_gc':" in _srcC, True)
+chk('誤差追蹤含 AI 模式', "'aifs': 'ecmwf_aifs025_single'" in _srcC, True)
+_srcD = io.open('index.html', encoding='utf-8').read()
+chk('★AI 模式獨立按鈕', 'id="mAifs"' in _srcD and 'id="mGc"' in _srcD, True)
+chk('AI 按鈕視覺區分（紫）', "border-color:#7a5a9a" in _srcD, True)
+chk('★融合含全部七個模式',
+    "['best', 'ecmwf', 'gfs', 'icon', 'jma', 'aifs', 'gc']" in _srcD, True)
+chk('★AI 偏差上限放寬至 3.0', "const cap = AI_MODELS.has(m) ? 3.0 : 2.0;" in _srcD, True)
+chk('說明 AI 低估傾向', '對極端降雨傾向低估' in _srcD, True)
+chk('情境編輯器含新模式', "aifs:'AIFS(AI)'" in _srcD, True)
+
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)

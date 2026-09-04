@@ -1840,12 +1840,24 @@ def fetch_openmeteo_model(townships, model='best_match'):
     抓取 Open-Meteo 多模式預報（涵蓋全部15天，從現在起）
     model: 'best_match'（ECMWF+GFS最佳組合）/ 'ecmwf_ifs025' / 'gfs_seamless' / 'icon_seamless'
     """
+    # ★ 模式分兩類，前端也分開呈現：
+    #   物理模式 —— 傳統數值天氣預報，可直接取代/併入既有綜合
+    #   AI 模式  —— 資料驅動，對超出訓練分布的極端降雨傾向低估，
+    #                需經偏差校正後才納入融合（校正上限放寬）
     model_names = {
         'best_match':    'Open-Meteo Best（ECMWF+GFS）',
-        'ecmwf_ifs025':  'ECMWF IFS',
+        # ── 物理模式 ──
+        'ecmwf_ifs':     'ECMWF IFS HRES 9km',   # ★ 官方物理、9km、前90h逐時
+        'ecmwf_ifs025':  'ECMWF IFS 0.25°',      # 舊版：25km、3h、延遲2小時
         'gfs_seamless':  'NOAA GFS',
         'icon_seamless': 'DWD ICON',
+        'jma_seamless':  'JMA（日本氣象廳）',
+        # ── AI 模式 ──
+        'ecmwf_aifs025_single': 'ECMWF AIFS（AI）',
+        'gfs_graphcast025':     'GFS GraphCast（AI）',
     }
+    # AI 模式清單（供偏差校正放寬上限、前端分組）
+    AI_MODELS = {'ecmwf_aifs025_single', 'gfs_graphcast025'}
     label = model_names.get(model, model)
     print(f"  抓取 {label}...")
     lats=[t.get('lat',0) for t in townships]
@@ -1874,13 +1886,14 @@ def fetch_openmeteo_model(townships, model='best_match'):
         except Exception as e:
             print(f"    失敗（嘗試{attempt+1}/3）：{e}")
             if attempt == 2:
-                return {}, {}
+                return {}, {}, {}
             time.sleep(3)
     else:
-        return {}, {}
+        return {}, {}, {}
 
     result={}
     result_max_hourly={}  # 每個6h段內的「最大單一小時雨量」，供強度分級用
+    result_hourly={}      # 前96小時逐時值（IFS HRES 前90h為原生逐時）
     data_list = raw if isinstance(raw,list) else [raw]
     for i, loc in enumerate(data_list):
         key = f"{lats[i]:.4f}_{lngs[i]:.4f}"
@@ -1894,6 +1907,10 @@ def fetch_openmeteo_model(townships, model='best_match'):
             max_hourly_6h.append(round(max(chunk), 1) if chunk else 0.0)
         result[key] = segs_6h[:64]
         result_max_hourly[key] = max_hourly_6h[:64]
+        # ★ 保留前 90 小時的逐時值：IFS HRES 在此區間是原生逐時，
+        #   其餘模式由 Open-Meteo 內插。前端逐時檢視需要這份資料。
+        result_hourly[key] = [round(v, 1) if v is not None else None
+                              for v in precip[:96]]
 
         # 逐時掃描 CWA 警特報條件（每個模式都算，供前端依所選模式顯示對應等級）
         # 大雨: 24h≥100 或 1h≥40；豪雨: 24h≥200 或 3h≥100
@@ -1918,21 +1935,38 @@ def fetch_openmeteo_model(townships, model='best_match'):
         WARN_SEG_CACHE.setdefault(model, {})[key] = warn_seg[:64]
     n = len(next(iter(result.values()),[]))
     print(f"    {len(result)} 個點，各 {n} 個6h時段")
-    return result, result_max_hourly
+    return result, result_max_hourly, result_hourly
+
+# ★ 要抓的模式清單。物理與 AI 分開，前端也依此分組呈現。
+OM_PHYSICAL = ['best_match', 'ecmwf_ifs', 'gfs_seamless', 'icon_seamless', 'jma_seamless']
+OM_AI       = ['ecmwf_aifs025_single', 'gfs_graphcast025']
+OM_MODELS   = OM_PHYSICAL + OM_AI
+
 
 def fetch_openmeteo(townships):
-    """抓取所有 Open-Meteo 模式，回傳 (totals_by_model, max_hourly_by_model)"""
-    print(f"抓取 Open-Meteo（{len(townships)} 個鄉鎮，全部15天）...")
-    models = ['best_match', 'ecmwf_ifs025', 'gfs_seamless', 'icon_seamless']
-    all_results = {}
-    all_max_hourly = {}
-    for i, model in enumerate(models):
+    """抓取所有 Open-Meteo 模式 → (totals, max_hourly, hourly)。
+
+    ★ ecmwf_ifs（IFS HRES 9km）取代舊的 ecmwf_ifs025：
+      同為 ECMWF 官方物理模式，但解析度 9km vs 25km、前 90 小時原生逐時、
+      且無 open-data 版的 2 小時額外延遲。純升級，沒有取捨。
+    ★ AI 模式（AIFS、GraphCast）另行標記：它們對超出訓練分布的極端降雨
+      傾向低估，需經偏差校正才納入融合。
+    """
+    print(f"抓取 Open-Meteo（{len(townships)} 個鄉鎮，{len(OM_MODELS)} 個模式）...")
+    all_results, all_max_hourly, all_hourly = {}, {}, {}
+    for i, model in enumerate(OM_MODELS):
         if i > 0:
             time.sleep(2)  # 避免連續請求觸發限流
-        result, max_hourly = fetch_openmeteo_model(townships, model)
+        result, max_hourly, hourly = fetch_openmeteo_model(townships, model)
+        if not result and model in ('ecmwf_ifs',):
+            # IFS HRES 若不可用，退回 0.25° 版本（至少有 ECMWF 資料）
+            print("    IFS HRES 無回應 → 退回 ECMWF IFS 0.25°")
+            time.sleep(2)
+            result, max_hourly, hourly = fetch_openmeteo_model(townships, 'ecmwf_ifs025')
         all_results[model] = result
         all_max_hourly[model] = max_hourly
-    return all_results, all_max_hourly
+        all_hourly[model] = hourly
+    return all_results, all_max_hourly, all_hourly
 
 
 # ── F-B0046 未來1小時雷達定量降雨預報（~1.4km 格點，每10分鐘更新）──
@@ -2284,7 +2318,7 @@ def fetch_ensemble_ratios(townships):
         'latitude':  ','.join(f"{x:.4f}" for x in lats),
         'longitude': ','.join(f"{x:.4f}" for x in lngs),
         'hourly':    'precipitation',
-        'models':    'ecmwf_ifs025',
+        'models':    'ecmwf_ifs',      # IFS HRES 9km（原 0.25°）
         'forecast_days': 15,   # ECMWF 系集支援 15 天（全期強/弱降雨情境）
         'timezone':  'Asia/Taipei',
     }
@@ -2368,8 +2402,12 @@ def fetch_models_yesterday(townships):
     print("抓取四模式昨日回算（誤差追蹤基準）...")
     lats = [t.get('lat', 0) for t in townships]
     lngs = [t.get('lng', 0) for t in townships]
-    MODELS = {'best': 'best_match', 'ecmwf': 'ecmwf_ifs025',
-              'gfs': 'gfs_seamless', 'icon': 'icon_seamless'}
+    # ★ 含 AI 模式：AIFS 與 GraphCast 也要追蹤誤差，
+    #   它們對極端降雨傾向低估，偏差比會明顯 >1，正好由校正處理。
+    MODELS = {'best': 'best_match', 'ecmwf': 'ecmwf_ifs',
+              'gfs': 'gfs_seamless', 'icon': 'icon_seamless',
+              'jma': 'jma_seamless',
+              'aifs': 'ecmwf_aifs025_single', 'graphcast': 'gfs_graphcast025'}
     out = {}
     for tag, mid in MODELS.items():
         params = {
@@ -2494,7 +2532,7 @@ def update_model_skill(out_towns, zones, now_tpe):
             skill = {'days': {}}
     skill.setdefault('days', {})
 
-    MODELS = ('best', 'ecmwf', 'gfs', 'icon')
+    MODELS = ('best', 'ecmwf', 'gfs', 'icon', 'jma', 'aifs', 'graphcast')
     day = {}
     n_used = 0
     for t in out_towns:
@@ -3712,8 +3750,10 @@ def main():
     official_warn = fetch_official_warnings() if CWA_API_KEY else None
 
     # Open-Meteo（四個模式）
-    om_all, om_max_hourly_all = fetch_openmeteo(static_list)
-    om = om_all.get('ecmwf_ifs025', {})  # 預設用 ECMWF IFS，對台灣地形雨準確度較高
+    om_all, om_max_hourly_all, om_hourly_all = fetch_openmeteo(static_list)
+    # ★ 預設改用 IFS HRES 9km（原為 0.25°）：解析度提升近 3 倍，
+    #   對臺灣中央山脈的地形雨差異最明顯。
+    om = om_all.get('ecmwf_ifs') or om_all.get('ecmwf_ifs025', {})
 
     # QPESUMS 網格觀測（1h 即時 + 24h 歷史合成）
     # QPESUMS（O-A0038）已停用：CWA 該 dataid 現回傳溫度圖而非雨量網格。
@@ -3787,7 +3827,7 @@ def main():
 
         # 各模式的完整15天QPF（依優先序：CWA > ECMWF > GFS/ICON）
         qpf_best  = get_qpf_model('best_match')
-        qpf_ecmwf = get_qpf_model('ecmwf_ifs025')
+        qpf_ecmwf = get_qpf_model('ecmwf_ifs')
         qpf_gfs   = get_qpf_model('gfs_seamless')
         qpf_icon  = get_qpf_model('icon_seamless')
 
@@ -3896,6 +3936,13 @@ def main():
             'qpf_ecmwf': qpf_ecmwf,
             'qpf_gfs':   qpf_gfs,
             'qpf_icon':  qpf_icon,
+            # ── 新增模式 ──
+            'qpf_jma':   get_qpf_model('jma_seamless'),
+            'qpf_aifs':  get_qpf_model('ecmwf_aifs025_single'),   # AI
+            'qpf_gc':    get_qpf_model('gfs_graphcast025'),       # AI
+            # 逐時（IFS HRES 前 90h 為原生逐時，其餘為內插）
+            'hourly_ifs': (om_hourly_all.get('ecmwf_ifs') or {}).get(
+                            f"{lat:.4f}_{lng:.4f}"),
             'qpf_hi':    apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'hi')[0],
             'qpf_lo':    apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'lo')[0],
             'maxh_hi':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'hi')[1],
@@ -3960,7 +4007,7 @@ def main():
 
     if non_static_coords:
         time.sleep(3)
-        non_static_om, non_static_maxh = fetch_openmeteo(non_static_coords)
+        non_static_om, non_static_maxh, non_static_hourly = fetch_openmeteo(non_static_coords)
     else:
         non_static_om, non_static_maxh = {}, {}
 
