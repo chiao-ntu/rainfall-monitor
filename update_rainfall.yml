@@ -1,0 +1,89 @@
+name: 降雨監測主排程
+
+# ★ 這份 workflow 的重點在「累積型檔案必須一起 commit」：
+#   obs_history.json（測站逐日雨量，16 天）
+#   model_skill.json（融合模式的誤差追蹤，45 天）  ← 先前漏掉，導致每輪歸零
+#   若漏 commit，下一輪 checkout 拿到的是空的，等於永遠從頭開始。
+
+on:
+  schedule:
+    # 每小時第 5 分（CWA 整點發布後幾分鐘，避開他們的遲發）
+    - cron: '5 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: update-rainfall
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50        # 波浪模式 zip 有 56MB，CWA 慢時需要時間
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests numpy pillow
+
+      - name: Fetch rainfall data
+        env:
+          CWA_API_KEY: ${{ secrets.CWA_API_KEY }}
+        run: python fetch_rainfall.py
+
+      - name: Commit and push
+        run: |
+          # data.json 沒產出就中止（fetch_rainfall 的健全性檢查會擋下殘缺資料，
+          # 此時保留前一輪的檔案是正確行為，不該視為失敗）
+          if [ ! -f data.json ]; then
+            echo "data.json 不存在（可能是健全性檢查中止寫檔），跳過 commit"
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add data.json
+
+          # ★ 累積型檔案：缺一個就會讓對應功能永遠重新開始
+          [ -f obs_history.json ] && git add obs_history.json   # 測站逐日雨量（16天）
+          [ -f model_skill.json ] && git add model_skill.json   # 融合誤差追蹤（45天）
+
+          # 靜態資料檔（極少變動，但若有重建也一併帶上）
+          [ -f coastal_towns.json ]           && git add coastal_towns.json
+          [ -f terrain_zones_official.json ]  && git add terrain_zones_official.json
+          [ -f all_townships.json ]           && git add all_townships.json
+
+          # 快照（archive/ 由 fetch_rainfall 自行輪替與清理）
+          [ -d archive ] && git add -A archive
+
+          if git diff --cached --quiet; then
+            echo "無變更，跳過 commit"
+            exit 0
+          fi
+
+          git commit -m "自動更新 $(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M') TST"
+
+          # 與遠端可能有其他 workflow 的 push 衝突，重試幾次
+          for i in 1 2 3 4 5; do
+            if git push; then
+              echo "push 成功"
+              exit 0
+            fi
+            echo "push 失敗，rebase 後重試（$i/5）"
+            git pull --rebase --autostash || true
+            sleep $((i * 5))
+          done
+          echo "push 連續失敗"
+          exit 1

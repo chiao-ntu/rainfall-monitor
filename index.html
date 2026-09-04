@@ -454,7 +454,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <select id="countyPick" onchange="pickCounty(this.value)"
       style="width:100%;box-sizing:border-box;margin-top:4px;font-size:12px;padding:4px 6px;
       background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
-      <option value="">— 選擇縣市（看該縣市各鄉鎮分布）—</option>
+      <option value="">全臺</option>
     </select>
     <div id="searchResults" style="display:none;position:absolute;left:14px;right:14px;top:32px;
       z-index:1200;max-height:280px;overflow-y:auto;background:#08182a;
@@ -2510,6 +2510,7 @@ function _fillCountyPicker(){
     sel.appendChild(o);
   });
   sel._filled = true;
+  console.log(`縣市選單：填入 ${set.size} 個縣市`);
 }
 function pickCounty(c){
   _pickedCounty = c || '';
@@ -4875,6 +4876,8 @@ async function tryLoadLive(){
     // ★ TOWNSHIPS 已備妥 → 填縣市選單（先前只在 updateInfo(null) 呼叫，
     //   初始載入不會走到那裡，選單因此一直是空的）。
     try{ _fillCountyPicker(); }catch(e){ console.warn('縣市選單建立失敗', e); }
+    // 保險：若上一行執行時元素尚未就緒，稍後再補一次
+    setTimeout(()=>{ try{ _fillCountyPicker(); }catch(e){} }, 400);
     _cwaQpfActive = !!d.cwa_qpf_active;
     window._dataGenAt = d.generated_at || '';  // 供各面板快取鍵使用
     // 颱風動態（W-C0034-005 軌跡）：無颱風時為空陣列
