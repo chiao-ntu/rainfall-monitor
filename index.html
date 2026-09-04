@@ -1267,17 +1267,20 @@ function toggleTerrainLayer(){
                          _terrainOverlay = null; }
     return;
   }
-  // ★ 需要專屬 pane：放 tilePane 會與底圖同層而被鄉鎮色塊完全蓋住。
-  //   zIndex 設在 tilePane(200) 與 townPane 之間。
+  // ★ 圖層順序：本系統沒有底圖，seaPane(390) 有一張白色全域矩形當背景。
+  //   terrainPane 若設 250 會被那張白矩形整個蓋住（看不到地形）；
+  //   若設得比 townPane(395) 高，白色暈渲又會蓋在色塊上把畫面洗淡
+  //   —— 那正是「只有顏色變淺」的成因。
+  //   正解：夾在 seaPane(390) 與 townPane(395) 之間。
   if(!map.getPane('terrainPane')){
     map.createPane('terrainPane');
-    map.getPane('terrainPane').style.zIndex = 250;
+    map.getPane('terrainPane').style.zIndex = 392;
     map.getPane('terrainPane').style.pointerEvents = 'none';
   }
   if(!_terrainOverlay){
     _terrainOverlay = L.imageOverlay('terrain_relief.png', TERRAIN_RELIEF.bounds, {
-      opacity: 0.55,          // 半透明，讓上層的雨量色塊仍清楚可讀
-      pane: 'terrainPane',    // 專屬 pane：底圖之上、鄉鎮色塊之下
+      opacity: 0.9,           // 在色塊之下，不需太透明才看得清地形
+      pane: 'terrainPane',    // 白色背景之上、鄉鎮色塊之下
       interactive: false,
       className: 'terrain-relief'
     });
@@ -1308,6 +1311,44 @@ function renderStationLayer(){
   const z = map.getZoom();
   _stnLayer = L.layerGroup().addTo(map);
   let n = 0, noPos = 0;
+  // ★ 優先用後端輸出的完整測站清單（1300+ 站，全數有座標與海拔）。
+  //   townships[].stations 只含警戒表的站，且站名比對不到就沒座標
+  //   （實測 514/891 無座標），拿來畫圖層會少掉一大半測站。
+  const ALL = window.ALL_STATIONS || null;
+  if(ALL){
+    Object.keys(ALL).forEach(sid=>{
+      const a = ALL[sid];
+      if(!a || a.la == null) { noPos++; return; }
+      const v = a.r;
+      const col = (v != null)
+        ? (RAIN_SCALE.find(b2=>v < b2.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color
+        : '#5a7a95';
+      const r = z >= 12 ? 6 : z >= 10 ? 4.5 : z >= 8 ? 3 : 2;
+      const m = L.circleMarker([a.la, a.lo], {
+        radius: r, color: '#0a1a28', weight: 1,
+        fillColor: col, fillOpacity: v != null ? 0.92 : 0.5,
+        pane: 'markerPane'
+      }).addTo(_stnLayer);
+      const key = (a.c || '') + (a.t || '');
+      const tt = TMAP[key];
+      const pct = (tt && getObsEtr(tt) != null)
+        ? `<b>${getObsEtr(tt).toFixed(0)}%</b>`
+          + '<span style="color:#8a9aaa;font-size:10px">（鄉鎮值）</span>'
+        : '<span style="color:#7a94ac">—</span>';
+      m.bindTooltip(
+        `<b>${a.n}</b><span style="color:#8a9aaa;font-size:10px">　${key}`
+        + (tt ? `　${_townZone(tt) || ''}` : '') + '</span><br>'
+        + `今日累積：${v != null ? '<b>' + v + ' mm</b>' : '—'}<br>`
+        + `ETR2%：${pct}<br>`
+        + `海拔：${a.e != null ? a.e.toFixed(0) + ' m' : '—'}`,
+        {direction: 'top', opacity: 0.95});
+      if(tt) m.on('click', ()=>{ selected = tt;
+        try{ renderLayer(); updateInfo(tt); }catch(e){} });
+      n++;
+    });
+    console.log(`測站圖層：${n} 站（完整清單）`);
+    return;
+  }
   (TOWNSHIPS || []).forEach(t=>{
     (t.stations || []).forEach(st=>{
       if(st.lat == null || st.lng == null){ noPos++; return; }
@@ -4843,6 +4884,7 @@ async function tryLoadLive(){
     window.TEMP_FCST = d.temp_fcst || {};   // 鄉鎮氣溫（逐3小時）
     window.WAVE_FCST = d.wave_fcst || {};   // 沿海浪高（僅沿海鄉鎮）
     window.TIDE_FCST = d.tide_fcst || {};   // 鄉鎮潮汐（滿潮/乾潮時刻與潮高）
+    window.ALL_STATIONS = d.all_stations || null;    // 全臺測站（含座標/海拔）
     window.MODEL_SKILL = d.model_skill || {};        // 逐地形×逐模式的近期誤差
     window.SKILL_PROGRESS = d.skill_progress || null;   // 樣本累積進度
     window.FORECASTER_PRECIP = d.forecaster_precip || {};  // 官方研判雨量區間

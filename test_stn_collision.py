@@ -680,5 +680,21 @@ if os.path.exists(_of):
     chk('官方海拔優先於 DTM', "_elev = _sinfo.get('alt')" in _src8, True)
     chk('支援 cwaopendata 外層', "(raw.get('cwaopendata') or {}).get('dataset')" in _src8, True)
 
+
+print('\n=== 全臺測站清單輸出 ===')
+# ★ townships[].stations 只含警戒表的站，站名比對不到就沒座標
+#   （實測 514/891 無座標）；測站圖層需要完整清單，故另行輸出 all_stations。
+_src9 = io.open('fetch_rainfall.py', encoding='utf-8').read()
+chk('★輸出全臺測站清單', "'all_stations': all_stations_out" in _src9, True)
+chk('只留必要欄位（控制檔案大小）', "'la': round(_v['lat'], 5)" in _src9, True)
+chk('含海拔', "'e': _v.get('alt')" in _src9, True)
+chk('含縣市鄉鎮', "'c': _v.get('county', '')" in _src9, True)
+chk('說明為何需要', '實測 514/891 無座標' in _src9, True)
+_srcA = io.open('index.html', encoding='utf-8').read()
+chk('★前端優先用完整清單', 'const ALL = window.ALL_STATIONS || null;' in _srcA, True)
+chk('地形圖層 z-index 夾在正確位置',
+    "map.getPane('terrainPane').style.zIndex = 392;" in _srcA, True)
+chk('說明只有顏色變淺的成因', '那正是「只有顏色變淺」的成因' in _srcA, True)
+
 print('\n全部通過' if not fails else f'\n失敗 {len(fails)} 項：{fails}')
 sys.exit(1 if fails else 0)

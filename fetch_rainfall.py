@@ -3522,6 +3522,23 @@ def main():
     # 沿海浪高（僅 120 個沿海預報點）
     wave_fcst     = fetch_wave_forecast() if CWA_API_KEY else {}
     tide_fcst     = fetch_tide_forecast() if CWA_API_KEY else {}
+
+    # 全臺測站清單（供前端測站圖層；只留必要欄位以免 data.json 過大）
+    all_stations_out = {}
+    for _sid, _v in (stations or {}).items():
+        if not isinstance(_v, dict) or not _v.get('lat'):
+            continue
+        _d = (_v.get('daily_rain') or [None])
+        all_stations_out[_sid] = {
+            'n': _v.get('name', ''),
+            'la': round(_v['lat'], 5), 'lo': round(_v['lng'], 5),
+            'e': _v.get('alt'),
+            'c': _v.get('county', ''), 't': _v.get('township', ''),
+            'r': _v.get('rain_24h') if _v.get('rain_24h') is not None else (
+                 _d[0] if _d and _d[0] is not None else None),
+        }
+    if all_stations_out:
+        print(f"全臺測站清單：{len(all_stations_out)} 站（含座標與海拔）")
     fc_precip     = fetch_forecaster_precip() if CWA_API_KEY else {}
     debris_alerts = fetch_debris_alerts()
     # 雙軌：現況紅黃走官方發布值、未來推估自算
@@ -4091,6 +4108,10 @@ def main():
         # 鄉鎮潮汐預報（F-A0021-001）：滿潮/乾潮時刻、潮高(cm,相對當地均潮位)、潮差級別
         #   ★ 暴潮溢淹風險＝滿潮 × 大浪同時發生，故需與 wave_fcst 併看
         'tide_fcst': tide_fcst,
+        # ★ 全臺 CWA 測站清單（含座標、海拔、今日累積）：
+        #   townships[].stations 只含「警戒表」裡的站，且站名比對不到就沒座標
+        #   （實測 514/891 無座標）。測站圖層需要的是完整清單，故另行輸出。
+        'all_stations': all_stations_out,
         # 預報員研判之地區雨量區間（F-C0034，豪雨/颱風事件期間才發布）
         #   {24h|total: {title, valid, areas:{地區:{flat|mountain:{lo,hi,hl}}}}}
         #   ★ 縣市級區間，供上下界參考與比對；不覆蓋逐站 ETR2 等精細資料
