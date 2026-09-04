@@ -196,6 +196,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div class="bg" id="future6h-btns" style="flex:1;min-width:0"></div>
   </div>
   <div class="ctrl-row">
+    <span class="cl" style="color:#7ee8a8" title="ECMWF IFS HRES 前90小時為原生逐時">逐時</span>
+    <div class="bg" id="future1h-btns" style="flex:1;min-width:0;
+      overflow-x:auto;white-space:nowrap"></div>
+  </div>
+  <div class="ctrl-row">
     <span class="cl" style="color:#7ee8a8">逐日</span>
     <div class="bg" id="day-btns" style="flex:1;min-width:0"></div>
   </div>
@@ -954,6 +959,8 @@ let refreshTimer = null;
 // 過去資料來自 daily_rain[]（逐日觀測，index 0=今天）
 // 未來資料來自 qpf_15d 等（逐6h預測，index 0=現在這一段）
 let mode = 'rain', segFrom = 0, segTo = 3, winKey = 'today';
+// 逐時視窗的小時索引（1~90，null 代表非逐時視窗）
+let _hourIdx = null;
 let forecastModel = 'best';   // 'best' | 'ecmwf' | 'gfs' | 'icon'
 const MODEL_FIELD = {
   best:  'qpf_best',
@@ -2298,6 +2305,12 @@ function _scatterTipHtml(t){
 // 目前視窗的資料來源標籤：讓圖表標題明示這是觀測還是預測
 function _winSrcLabel(){
   if(winKey === 'radar') return '（雷達1h）';
+  if(winKey.startsWith('fut1h_')){
+    const h = parseInt(winKey.slice(6));
+    const native = (forecastModel === 'ecmwf' || forecastModel === 'best'
+                    || forecastModel === 'blend');
+    return `（+${h}h 逐時${native ? '・IFS HRES 原生' : '・段內平均'}）`;
+  }
   if(winKey.startsWith('past')) return '（氣象署觀測）';
   const mn = {blend:'融合', best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
               icon:'ICON', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'}[forecastModel] || '';
@@ -3633,6 +3646,27 @@ function key_is_today_window(sf, st){
   return winKey === 'today';
 }
 
+// 取「未來第 h 小時」的雨量。
+//   優先用 IFS HRES 的原生逐時（hourly_ifs）；其他模式沒有逐時資料，
+//   退回該 6h 段的平均值並標記 approx，前端須標示為近似。
+function _hourlyAt(t, h){
+  if(h == null || h < 1) return null;
+  // hourly_ifs[0] 對應「今天 00 時」，需換算成「現在起算的第 h 小時」
+  const now = new Date();
+  const idx = now.getHours() + h;
+  if(forecastModel === 'ecmwf' || forecastModel === 'best' || forecastModel === 'blend'){
+    const arr = t.hourly_ifs;
+    if(Array.isArray(arr) && idx < arr.length && arr[idx] != null){
+      return {v: arr[idx], approx: false};
+    }
+  }
+  // 退回 6h 段平均
+  const seg = _nowSeg() + Math.floor((h - 1) / 6);
+  const a = getQpfArr(t, MODEL_FIELD[forecastModel] || 'qpf_best');
+  const v = (Array.isArray(a) && a[seg] != null) ? a[seg] / 6 : null;
+  return (v == null) ? null : {v: Math.round(v * 10) / 10, approx: true};
+}
+
 function getAccum(t){
   const hasObs = t.rain_24h !== null && t.rain_24h !== undefined;
   const hasEtr = t.alert_val !== null && t.alert_val !== undefined && t.alert_val > 0;
@@ -3643,6 +3677,19 @@ function getAccum(t){
   if(winKey === 'radar'){
     const v = t.qpf_radar_1h;
     return {totalRain: (v==null ? null : v), etrPct: null, isRadar: true};
+  }
+
+  // ── 逐時視窗（IFS HRES 前 90 小時原生逐時）──
+  //   ★ 取單一小時的雨量，而非 6h 段的總和。
+  //     其他模式沒有逐時原生資料時，退回該 6h 段除以 6 的平均值，
+  //     並在 tooltip 標示為「段內平均」以免誤解為實際逐時預報。
+  if(_hourIdx != null && mode !== 'temp' && mode !== 'wave' && mode !== 'wind'){
+    const hv = _hourlyAt(t, _hourIdx);
+    if(hv != null){
+      const et = hasEtr ? _calcEtr2Raw(t, segFrom, qpfField) : null;
+      return {totalRain: hv.v, etrPct: et, isHourly: true,
+              approx: hv.approx, hour: _hourIdx};
+    }
   }
 
   // ── 氣溫模式 ──
@@ -5197,6 +5244,7 @@ async function tryLoadLive(){
   if(baseTag) baseTag.textContent = `更新時間：${fmtDT(BASE_TIME)}`;
   buildPastBtns();
   buildFuture6hBtns();
+  buildFuture1hBtns();
   buildDayBtns();
   renderLayer();
   renderLegend();
@@ -5282,6 +5330,7 @@ function setWin(key){
   }
 
   winKey=key; clearBtns();
+  if(!key.startsWith('fut1h_')) _hourIdx = null;   // 離開逐時視窗即重設
   document.getElementById('cust-ctrl').classList.remove('show');
 
   if(key==='today'){
@@ -5295,7 +5344,18 @@ function setWin(key){
     segFrom = -(n*4+4);
     const btn=document.getElementById('bpast'+n); if(btn) btn.classList.add('on');
     updateModelRowVisibility(false);
+  } else if(key.startsWith('fut1h_')){
+    // ★ 逐時視窗：IFS HRES 前 90 小時為原生逐時（非內插），
+    //   故可做到 1 小時解析度。segFrom/segTo 仍用 6h 段表示所屬區間，
+    //   實際取值由 _hourIdx 指向逐時陣列（見 getAccum 的 hourly 分支）。
+    const h = parseInt(key.slice(6));   // 1~90，未來第 h 小時
+    _hourIdx = h;
+    const seg = _nowSeg() + Math.floor((h - 1) / 6);
+    segFrom = seg; segTo = seg;
+    const btn = document.getElementById('bfut1h_' + h); if(btn) btn.classList.add('on');
+    updateModelRowVisibility(true);
   } else if(key.startsWith('fut6_')){
+    _hourIdx = null;
     const n = parseInt(key.slice(5));  // 1~8，代表未來第n個6h段
     // seg 為日曆日對齊（seg 0=今天00-06），未來時段需從「現在所在的6h段」起算
     // ★ 必須與 buildFuture6hBtns／_panelSeg 用同一個起點（_nowSeg），三者不一致
@@ -5386,6 +5446,36 @@ function buildPastBtns(){
 }
 
 // 建立「未來6h段」按鈕（+6h ~ +48h，共8個）
+// 逐時按鈕（未來 1~90 小時）
+//   ★ IFS HRES 前 90 小時為原生逐時資料，故可做到 1 小時解析度。
+//     按鈕多，橫向捲動呈現；每 6 小時插一個分隔便於定位。
+function buildFuture1hBtns(){
+  const c = document.getElementById('future1h-btns');
+  if(!c) return;
+  c.innerHTML = '';
+  ALL_DYNAMIC_BTN_IDS = ALL_DYNAMIC_BTN_IDS.filter(id=>!id.startsWith('bfut1h_'));
+  const now = new Date();
+  for(let h = 1; h <= 90; h++){
+    const d = new Date(now.getTime() + h * 3600e3);
+    const btn = document.createElement('button');
+    btn.className = 'b';
+    btn.id = 'bfut1h_' + h;
+    btn.textContent = String(d.getHours()).padStart(2, '0') + '時';
+    btn.title = `+${h}h　${d.getMonth()+1}/${d.getDate()} `
+              + `${String(d.getHours()).padStart(2,'0')}:00`;
+    btn.style.padding = '2px 5px';
+    btn.style.fontSize = '10px';
+    // 每日 00 時加粗，方便在長列中定位
+    if(d.getHours() === 0){
+      btn.style.borderColor = '#5a8ab0';
+      btn.textContent = `${d.getMonth()+1}/${d.getDate()}`;
+    }
+    btn.onclick = ()=>setWin('fut1h_' + h);
+    c.appendChild(btn);
+    ALL_DYNAMIC_BTN_IDS.push(btn.id);
+  }
+}
+
 function buildFuture6hBtns(){
   const c = document.getElementById('future6h-btns');
   if(!c) return;
@@ -5475,6 +5565,7 @@ function init(){
 
   buildPastBtns();
   buildFuture6hBtns();
+  buildFuture1hBtns();
   buildDayBtns();
   setWin('today');  // 預設顯示今天（觀測至今+預測補滿24h）
   tryLoadLive();
@@ -8066,6 +8157,20 @@ function _modeHeadRow(t){
       }
     }
     if(h) return h;
+  }
+  if(_hourIdx != null){
+    const acc = getAccum(t);
+    if(acc && acc.isHourly){
+      const c = (acc.totalRain != null)
+        ? (RAIN_SCALE.find(b=>acc.totalRain < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color
+        : '#8a9aaa';
+      return `<span style="font-size:10px">　+${_hourIdx}h `
+        + `<b style="color:${c}">${acc.totalRain != null ? acc.totalRain + ' mm' : '—'}</b>`
+        + (acc.approx
+            ? '<span style="color:#e8a860">（段內平均，非原生逐時）</span>'
+            : '<span style="color:#8ad8a0">（IFS HRES 原生逐時）</span>')
+        + '</span>';
+    }
   }
   if(mode === 'warn'){
     const acc = getAccum(t);
