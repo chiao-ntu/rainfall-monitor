@@ -19,6 +19,15 @@
 import io, json, math, os, sys
 
 DEM = 'dem/DEM_tawiwan_V2025.tif'
+# ★ 補洞用的分幅 DEM（選用）：
+#   「不分幅_全台20MDEM」在三縣市交界處（苗栗泰安／新竹五峰／苗栗南庄，
+#   約 24.511N/121.068E）缺一整個 12.5×12.5 km 的圖幅。
+#   分幅版本是逐縣市製作，可補上該範圍。把解開的 GeoTIFF 放進
+#   dem_patch/ 目錄即可（檔名不拘，全部會被讀入並依需要取用）。
+#     分幅_新竹縣20MDEM(2025).zip
+#     分幅_苗栗縣20MDEM(2025).zip
+#   來源：國土測繪中心 TGOS
+PATCH_DIR = 'dem_patch'
 OUT_PNG = 'terrain_relief.png'
 OUT_META = 'terrain_relief.json'
 
@@ -32,6 +41,53 @@ ELEV_STOPS = [
 ]
 AZIMUTH = 315.0     # 光源方位（西北）
 ALTITUDE = 45.0     # 光源仰角
+
+
+def _patch_voids(dem, voids, src, W, H):
+    """用分幅 DEM 補「不分幅」版本的缺洞。回傳是否有補到。
+
+    ★ 只在缺值處取值，不覆寫既有資料 —— 分幅與不分幅是同一份成果，
+      重疊處數值一致，但仍以不分幅為準避免接邊差異。
+    """
+    import glob, numpy as np, rasterio
+    from rasterio.enums import Resampling
+    if not os.path.isdir(PATCH_DIR):
+        print(f'  （無 {PATCH_DIR}/ 目錄，缺洞維持標示為無資料）')
+        return False
+    tifs = [f for f in glob.glob(os.path.join(PATCH_DIR, '**', '*'), recursive=True)
+            if f.lower().endswith(('.tif', '.tiff'))]
+    if not tifs:
+        print(f'  （{PATCH_DIR}/ 內無 GeoTIFF）')
+        return False
+    filled_any = False
+    for tf in tifs:
+        try:
+            p = rasterio.open(tf)
+        except Exception as e:
+            print(f'  跳過 {os.path.basename(tf)}：{e}')
+            continue
+        try:
+            # 以主圖的網格重採樣分幅資料，確保像素對齊
+            from rasterio.warp import reproject
+            buf = np.full((H, W), np.nan, dtype='float32')
+            reproject(source=rasterio.band(p, 1), destination=buf,
+                      src_transform=p.transform, src_crs=p.crs,
+                      dst_transform=src.transform * src.transform.scale(
+                          src.width / W, src.height / H),
+                      dst_crs=src.crs, resampling=Resampling.average,
+                      src_nodata=p.nodata if p.nodata is not None else -32767,
+                      dst_nodata=np.nan)
+            take = voids & np.isfinite(buf) & (buf > -1000)
+            n = int(take.sum())
+            if n:
+                dem[take] = buf[take]
+                filled_any = True
+                print(f'  {os.path.basename(tf)} 補了 {n} 像素')
+        except Exception as e:
+            print(f'  {os.path.basename(tf)} 重採樣失敗：{e}')
+        finally:
+            p.close()
+    return filled_any
 
 
 def _mark_inland_voids(dem):
@@ -98,6 +154,13 @@ def main():
 
     # ★ 內陸缺值不補值，只標示（見 _mark_inland_voids 的說明）
     voids, sea = _mark_inland_voids(dem)
+    # 有分幅補丁就先補洞，補完後重新判定缺值
+    if voids.any():
+        n_before = int(voids.sum())
+        if _patch_voids(dem, voids, src, W, H):
+            voids, sea = _mark_inland_voids(dem)
+            n_after = int(voids.sum())
+            print(f'  分幅補洞：{n_before} → {n_after} 像素')
 
     # 實際格距（公尺）：原始 20m × 降採樣倍率
     cell = 20.0 / scale
