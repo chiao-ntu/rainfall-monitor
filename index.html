@@ -2545,9 +2545,14 @@ function _fillCountyPicker(){
     if(!has.length) return;
     const grp = document.createElement('optgroup');
     grp.label = dist;
+    // 分署標題用該分署代表色，與地圖、圖表的分署色一致
+    const dc = (typeof DISTRICT_COLOR !== 'undefined') ? DISTRICT_COLOR[dist] : null;
+    if(dc){ grp.style.color = dc; grp.style.fontWeight = '700'; }
     has.forEach(c=>{
       const o = document.createElement('option');
       o.value = c; o.textContent = c;
+      o.style.color = '#cfe4f5';      // 縣市維持原色，不繼承分署色
+      o.style.fontWeight = '400';
       grp.appendChild(o);
       set.delete(c); n++;
     });
@@ -2651,8 +2656,25 @@ function drawCountyTowns(canvasId){
       try{ renderLayer(); updateInfo(tt); }catch(e){}
     }, true);
   }
-  _drawScaleLegend(ctx, CW, CH, RAIN_SCALE, fs, isZoom,
-    '長條＝雨量色階　左緣細條＝地形（紅山區/黃淺山/綠平地/青沿海）');
+  _drawScaleLegend(ctx, CW, CH, RAIN_SCALE, fs, isZoom, '長條＝雨量色階');
+  // 地形圖例：用實際色塊而非「紅山區」這種文字，一眼對應左緣細條
+  {
+    const TZ = [['山區','#FF0000'], ['淺山','#FFFF00'],
+                ['平地','#00FF00'], ['沿海','#00FFFF']];
+    ctx.font = `${fs}px sans-serif`;
+    const wU = TZ.map(([t])=>ctx.measureText(t).width + (isZoom ? 28 : 17));
+    let lx = (CW - wU.reduce((a,b)=>a+b, 0)) / 2;
+    const ly = CH - (isZoom ? 8 : 4);
+    ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'right';
+    ctx.fillText('左緣細條＝', lx - 4, ly);
+    TZ.forEach(([t, c], i)=>{
+      ctx.fillStyle = c;
+      ctx.fillRect(lx, ly - fs*0.8, isZoom ? 4 : 3, isZoom ? 10 : 7);
+      ctx.fillStyle = '#7a94ac'; ctx.textAlign = 'left';
+      ctx.fillText(t, lx + (isZoom ? 8 : 6), ly);
+      lx += wU[i];
+    });
+  }
   if(isZoom){
     ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
     ctx.fillText(`${_pickedCounty} 各鄉鎮${_winSrcLabel()}`, CW/2, 26);

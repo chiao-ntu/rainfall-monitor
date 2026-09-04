@@ -727,7 +727,9 @@ map.createPane('townPane'); map.getPane('townPane').style.zIndex=395;
 L.rectangle([[-90,-180],[90,180]],{pane:'seaPane',color:'none',fillColor:'#fff',fillOpacity:1,interactive:false}).addTo(map);
 
 const countyBorder=L.geoJSON(COUNTY_GEO,{
-  style:{color:'#222',weight:1.4,fill:false},interactive:false
+  // ★ 與 index.html 一致：#000000、weight 1、opacity 0.7
+  //   先前是 #222／1.4，兩張地圖的縣市界粗細與濃淡不同，套疊會對不上。
+  style:{color:'#000000',weight:1,opacity:0.7,fill:false},interactive:false
 }).addTo(map);
 
 let townLayerObj=null;
