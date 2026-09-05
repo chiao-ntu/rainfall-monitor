@@ -152,17 +152,9 @@ function toggleTerrainLayer(){
     }
     _terrainOverlay.addTo(map);
   }
-  // 重繪鄉鎮層套用新不透明度（地形開啟時色塊稍淡、邊框加深）
-  if(typeof townLayerObj !== 'undefined' && townLayerObj){
-    townLayerObj.setStyle(f=>{
-      const p2 = f.properties;
-      const c = featureColor(p2.COUNTYNAME||'', p2.TOWNNAME||'');
-      return {fillColor:c||'#f8f8f8',
-              fillOpacity: c ? (_terrainOn ? 0.64 : 0.78) : (_terrainOn ? 0.0 : 0.03),
-              color: _terrainOn ? '#3a3a3a' : '#5a5a5a',
-              weight:0.4, opacity:0.45, smoothFactor:0};
-    });
-  }
+  // ★ 統一走 refreshStyles：它同時處理渲染模式與地形疊圖的樣式，
+  //   各自設定會互相覆蓋（先前地形開啟後渲染層的樣式就被蓋掉）。
+  try{ refreshStyles(); }catch(e){}
 }
 
 let _townNameOn = false, _townNameLayer = null, _tnCache = {};
@@ -837,13 +829,20 @@ function refreshStyles(){
     // 邊框顏色跟填色同色（消除視覺空隙）
     const _outIsland = county==='金門縣' || county==='連江縣';
     const _hideFill = _blurOn && !_outIsland;
+    // ★ 與 index.html 一致：
+    //   ① 渲染模式下仍畫鄉鎮界（原本 weight:0 讓界線整個消失，
+    //      但界線是判讀行政責任範圍的依據，不該因換呈現方式就不見）
+    //   ② 地形疊圖開啟時色塊稍淡、邊框加深，讓下層暈渲透出來
+    //      且色相仍可辨識
     layer.setStyle({
       fillColor:c||'#f8f8f8',
       // 渲染模式：著色鄉鎮改由內插色帶層顯示（金馬在範圍外，維持原色）
-      fillOpacity:_hideFill?0.02:(c?0.78:0.03),
-      color:c||'rgba(120,140,160,0.3)',
-      weight:_hideFill?0:0.3,
-      stroke:!_hideFill,
+      fillOpacity:_hideFill ? 0.02
+                 : (c ? (_terrainOn ? 0.64 : 0.78) : (_terrainOn ? 0.0 : 0.03)),
+      color:_terrainOn ? '#3a3a3a' : '#5a5a5a',
+      weight:_hideFill ? 0.35 : 0.4,
+      opacity:0.45,
+      stroke:true,
       smoothFactor:0,
     });
   });
@@ -1142,10 +1141,12 @@ function renderInterpolated(){
   const url=cv.toDataURL();
   const _tp=map.getPane('townPane');
   if(_tp) _tp.style.filter='';  // 防禦：確保無殘留模糊濾鏡（舊版曾設blur）
-  if(_interpOverlay){ _interpOverlay.setUrl(url); }
+  // ★ 地形疊圖開啟時降低不透明度，讓下層暈渲透出來（原本 1.0 全蓋住）
+  const _op = (typeof _terrainOn !== 'undefined' && _terrainOn) ? 0.72 : 1.0;
+  if(_interpOverlay){ _interpOverlay.setUrl(url); _interpOverlay.setOpacity(_op); }
   else{
     _interpOverlay=L.imageOverlay(url, INTERP_BOUNDS,
-      {pane:'townPane', opacity:1.0, interactive:false, className:'interp-crisp'}).addTo(map);
+      {pane:'townPane', opacity:_op, interactive:false, className:'interp-crisp'}).addTo(map);
   }
 }
 
