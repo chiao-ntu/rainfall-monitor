@@ -110,6 +110,9 @@ body{font-family:sans-serif;background:#fff;display:flex;height:100vh;position:r
     <span id="btn-townname" onclick="toggleTownNames()" title="顯示/隱藏鄉鎮市區名稱"
       style="cursor:pointer;font-size:11px;padding:2px 6px;border:1px solid #2a5070;
       border-radius:3px;color:#7bd0f0;user-select:none;white-space:nowrap">🏷 鄉鎮名</span>
+    <span id="btn-terrain" onclick="toggleTerrainLayer()" title="地形暈渲"
+      style="cursor:pointer;font-size:11px;padding:2px 6px;border:1px solid #6a5a3a;
+      border-radius:3px;color:#d8c090;user-select:none;white-space:nowrap">⛰ 地形</span>
   </div>
   <div id="roster-body"></div>
 </div>
@@ -118,6 +121,50 @@ body{font-family:sans-serif;background:#fff;display:flex;height:100vh;position:r
 //   ★ 標註位置用「面積最大環的內部代表點」，不是形心：
 //     多環行政區（如高雄旗津含東沙）若取形心或點數最多的環，
 //     標籤會跑到外海。此處與主系統的作法一致。
+// ── 地形暈渲疊圖（與 index.html 同一張影像、同一套圖層順序）──
+const TERRAIN_RELIEF = {"bounds":[[21.89400185866543,120.04163169146315],[25.29801742002761,122.00964772678445]],"size":[1200,2254],"azimuth":315.0,"altitude":45.0,"stops":[[100,"#F8F9FA"],[500,"#E9ECEF"],[1500,"#CED4DA"],[3000,"#ADB5BD"],[null,"#6C757D"]]};
+let _terrainOn = false, _terrainOverlay = null;
+function toggleTerrainLayer(){
+  _terrainOn = !_terrainOn;
+  const b = document.getElementById('btn-terrain');
+  if(b){
+    b.style.background = _terrainOn ? '#3a3020' : 'transparent';
+    b.style.color = _terrainOn ? '#f0dcb0' : '#d8c090';
+  }
+  if(!_terrainOn){
+    if(_terrainOverlay){ try{ map.removeLayer(_terrainOverlay); }catch(e){}
+                         _terrainOverlay = null; }
+  } else {
+    // 專屬 pane：夾在白色背景與鄉鎮色塊之間（同 index.html 的 392）
+    if(!map.getPane('terrainPane')){
+      map.createPane('terrainPane');
+      map.getPane('terrainPane').style.zIndex = 392;
+      map.getPane('terrainPane').style.pointerEvents = 'none';
+    }
+    if(!_terrainOverlay){
+      _terrainOverlay = L.imageOverlay('terrain_relief.png', TERRAIN_RELIEF.bounds, {
+        opacity: 0.9, pane: 'terrainPane', interactive: false});
+      _terrainOverlay.on('error', ()=>{
+        console.warn('terrain_relief.png 載入失敗（需與本檔放在同一目錄）');
+        const b2 = document.getElementById('btn-terrain');
+        if(b2){ b2.textContent = '⛰ 地形(缺檔)'; b2.style.color = '#e88'; }
+      });
+    }
+    _terrainOverlay.addTo(map);
+  }
+  // 重繪鄉鎮層套用新不透明度（地形開啟時色塊稍淡、邊框加深）
+  if(typeof townLayerObj !== 'undefined' && townLayerObj){
+    townLayerObj.setStyle(f=>{
+      const p2 = f.properties;
+      const c = featureColor(p2.COUNTYNAME||'', p2.TOWNNAME||'');
+      return {fillColor:c||'#f8f8f8',
+              fillOpacity: c ? (_terrainOn ? 0.64 : 0.78) : (_terrainOn ? 0.0 : 0.03),
+              color: _terrainOn ? '#3a3a3a' : '#5a5a5a',
+              weight:0.4, opacity:0.45, smoothFactor:0};
+    });
+  }
+}
+
 let _townNameOn = false, _townNameLayer = null, _tnCache = {};
 function toggleTownNames(){
   _townNameOn = !_townNameOn;

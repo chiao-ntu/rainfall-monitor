@@ -35,6 +35,14 @@ body.panel-full canvas{ max-width:1100px }
 .b{padding:3px 9px;font-size:10px;border:1px solid #1e3a5a;background:#0d2035;color:#5a90b8;cursor:pointer;border-radius:3px;transition:all .12s;white-space:nowrap}
 .b:hover{background:#1a3a5a}
 .b.on{background:#14507a;border-color:#3a8acc;color:#6bc8e8;font-weight:700}
+/* ★ 強／弱降雨：.b.on 會把顏色統一成藍色系，選中時看不出是哪一個。
+   給專屬選中樣式（強＝暖紅、弱＝冷藍），未選中也保持可辨識。 */
+.b.hi-btn{border-color:#8a4a3a;color:#ff8866;background:#1f1210}
+.b.hi-btn:hover{background:#3a1f18}
+.b.hi-btn.on{background:#7a2a18;border-color:#ff6644;color:#ffd0c0;font-weight:700}
+.b.lo-btn{border-color:#3a5a8a;color:#66aaff;background:#0e1626}
+.b.lo-btn:hover{background:#182a44}
+.b.lo-btn.on{background:#1a4a8a;border-color:#66aaff;color:#d0e4ff;font-weight:700}
 .b.pbtn{border-color:#5a4010;color:#c08030}
 .b.pbtn.on{background:#3a2a0a;border-color:#aa6010;color:#f0a030}
 #cust-ctrl{display:none;flex-direction:column;gap:2px;padding:6px 14px 8px;width:100%;box-sizing:border-box}
@@ -274,10 +282,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#7a5a9a;color:#c8a8e8">EC-AIFS</button>
       <button class="b model-btn"    id="mGc"    onclick="setModel('gc')"
         style="border-color:#7a5a9a;color:#c8a8e8">GFS GraphCast</button>
-      <button class="b model-btn"    id="mHi"    onclick="setModel('hi')" style="border-color:#8a4a3a;color:#ff8866">強降雨</button>
-      <button class="b model-btn"    id="mLo"    onclick="setModel('lo')" style="color:#66bbff">弱降雨</button>
+      <button class="b model-btn hi-btn"    id="mHi"    onclick="setModel('hi')">強降雨</button>
+      <button class="b model-btn lo-btn"    id="mLo"    onclick="setModel('lo')">弱降雨</button>
     </div>
-    <span id="sys-note" style="margin-right:6px"></span><span id="model-src-note" style="font-size:10px;color:#3a6080;margin-left:4px"></span>
+    <span id="sys-note"></span><span id="model-src-note"></span>
   </div>
 </div>
 <button id="ctrl-toggle" onclick="toggleCtrl()"
@@ -484,9 +492,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 
   <!-- 可捲動的分區內容 -->
   <div id="sb-scroll" style="overflow-y:auto;flex:1;padding:0 4px">
-    <div id="iCont-hint" class="hint" style="padding:10px 10px">
-      在地圖點選任一區域，可查看累積雨量、ETR2% 及逐日趨勢。
-    </div>
+    <div id="iCont-hint" class="hint" style="padding:10px 10px"></div>
 
     <!-- 未選鄉鎮時：各分署摘要 + 整合圖表 -->
     <div class="sec" id="sec-all-summary" style="display:block">
@@ -506,7 +512,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           onclick="toggleChartZoom('cv-all-daily', event)"
           onmousemove="showChartTooltip(event,'cv-all-daily')"
           onmouseleave="hideChartTooltip()"></canvas>
-        <div class="hint" style="font-size:9px;padding:2px 0">點擊圖表可放大 / 滑鼠移過顯示數值</div>
       </div>
     </div>
 
@@ -520,7 +525,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           onclick="toggleChartZoom('cv-all-hyeto', event)"
           onmousemove="showChartTooltip(event,'cv-all-hyeto')"
           onmouseleave="hideChartTooltip()"></canvas>
-        <div class="hint" style="font-size:9px;padding:2px 0">點擊圖表可放大 / 滑鼠移過顯示數值</div>
       </div>
     </div>
 
@@ -534,8 +538,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <canvas id="cv-countytowns" style="width:100%;height:280px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-countytowns', event)"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          依雨量排序；左側色條為地形分類。點選任一列可跳至該鄉鎮</div>
       </div>
     </div>
 
@@ -548,8 +550,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <canvas id="cv-etrphase" style="width:100%;height:200px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-etrphase', event)"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          各鄉鎮：今日累積雨量 vs ETR2%，依地形著色。虛線為警戒值（100%）</div>
       </div>
     </div>
 
@@ -562,8 +562,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <canvas id="cv-elevrain" style="width:100%;height:200px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-elevrain', event)"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          全臺雨量站的今日累積 vs 海拔；藍點為本鄉鎮測站。可觀察地形雨效應</div>
       </div>
     </div>
 
@@ -632,7 +630,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <canvas id="cv" style="width:100%;height:90px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
           onclick="toggleChartZoom('cv', event)"
           onmousemove="showChartTooltip(event,'cv')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">點擊圖表可放大／縮小</div>
       </div>
     </div>
 
@@ -658,7 +655,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           <span><span style="display:inline-block;width:8px;height:8px;background:#6ad8f0;margin-right:3px"></span>QPF預測(6h)</span>
           <span><span style="display:inline-block;width:14px;height:2px;background:#ff9933;margin-right:3px;vertical-align:middle"></span>ETR2%</span>
         </div>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">行政區整體最大值代表；點擊圖表可放大／縮小</div>
       </div>
     </div>
 
@@ -671,8 +667,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <canvas id="cv-stnrank" style="width:100%;height:220px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-stnrank', event)"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          該鄉鎮各雨量站的今日累積，依雨量排序；色階同累積雨量圖層</div>
       </div>
     </div>
 
@@ -693,8 +687,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <canvas id="cv-margin" style="width:100%;height:200px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-margin', event)"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          全臺最接近警戒的雨量站（ETR2% − 100%）；正值代表已超過警戒值</div>
       </div>
     </div>
 
@@ -724,8 +716,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <canvas id="cv-wind-day-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-wind-day-est', event)"
           onmousemove="showChartTooltip(event,'cv-wind-day-est')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          各日最大風級；點擊圖表可放大／縮小</div>
       </div>
     </div>
 
@@ -747,8 +737,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <canvas id="cv-wind-hr-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-wind-hr-est', event)"
           onmousemove="showChartTooltip(event,'cv-wind-hr-est')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          ● 為氣象署逐3小時官方預報時間點，其間曲線為內插（僅供視覺化，非官方值）</div>
       </div>
     </div>
 
@@ -766,8 +754,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <canvas id="cv-wave-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-wave-hr', event)"
           onmousemove="showChartTooltip(event,'cv-wave-hr')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          僅沿海預報點有資料；● 為官方預報時間點</div>
       </div>
     </div>
 
@@ -785,8 +771,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <canvas id="cv-temp-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-temp-hr', event)"
           onmousemove="showChartTooltip(event,'cv-temp-hr')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:9px;color:#3a6080;margin-top:3px">
-          ● 為氣象署逐3小時官方預報時間點；點擊圖表可放大／縮小</div>
       </div>
     </div>
 
@@ -1964,7 +1948,7 @@ function _blendOverviewHtml(){
          + '<div style="color:#7a94ac;font-size:10px;margin-top:4px">'
          + '每日累積一次；短期權重看 7 天、長期基準看 30 天。<br>'
          + '樣本數達 10 筆以上才會啟用差異化權重。<br>'
-         + '點選任一鄉鎮可查看該地的融合細節。</div>';
+         + '</div>';
   }
   const NAMES = {best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS', icon:'ICON'};
   const rows = zones.sort().map(z=>{
@@ -1992,7 +1976,7 @@ function _blendOverviewHtml(){
     + '</div>'
     + rows.join('') + pgLine
     + '<div style="color:#7a94ac;font-size:10px;margin-top:5px">'
-    + '點選任一鄉鎮可查看該地的加權明細與官方研判比對。</div>';
+    + '</div>';
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2063,6 +2047,7 @@ function drawStnRankChart(t, canvasId){
   if(!cv._stnBound){
     cv._stnBound = true;
     cv.addEventListener('click', ev=>{
+      if(ev.ctrlKey || ev.metaKey) return;   // Ctrl＝強制放大
       const rc = cv.getBoundingClientRect();
       const my = ev.clientY - rc.top;
       let best = null;
@@ -2074,7 +2059,7 @@ function drawStnRankChart(t, canvasId){
       }
     }, true);
   }
-  _drawScaleLegend(ctx, CW, CH, RAIN_SCALE, fs, isZoom, '長條顏色＝累積雨量色階');
+  _drawScaleLegend(ctx, CW, CH, RAIN_SCALE, fs, isZoom, null);
   if(isZoom){
     ctx.fillStyle = '#6bc8e8'; ctx.font = 'bold 20px sans-serif';
     ctx.textAlign = 'center';
@@ -2239,7 +2224,7 @@ function drawElevRainChart(t, canvasId){
     lx2 += wU[i];
   });
   B.ctx.fillStyle = '#7a94ac'; B.ctx.textAlign = 'center';
-  B.ctx.fillText(`全臺 ${pts.length} 站　藍圈＝本鄉鎮　點選任一點可跳至該地`,
+  B.ctx.fillText('',
                  B.CW/2, B.CH - (isZoom ? 8 : 4));
 }
 
@@ -2267,6 +2252,7 @@ function _bindScatterClick(cv, hits, isZoom){
   if(cv._scatterBound) return;
   cv._scatterBound = true;
   cv.addEventListener('click', ev=>{
+    if(ev.ctrlKey || ev.metaKey) return;   // Ctrl＝強制放大，不觸發點位
     const best = _scatterHitAt(cv, ev);
     if(!best || !best.town) return;
     ev.stopPropagation();               // 不要同時觸發放大／關閉
@@ -2499,7 +2485,7 @@ function drawMarginChart(t, canvasId){
     [{max:0, color:'#FF0000', label:'已達警戒'},
      {max:0, color:'#FFFF00', label:'接近（-30%內）'},
      {max:0, color:'#40d060', label:'尚有餘裕'}],
-    fs, isZoom, '橫軸 0＝警戒值');
+    fs, isZoom, null);
   if(isZoom){
     ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
     ctx.fillText('全臺最接近警戒的雨量站', CW/2, 26);
@@ -2717,6 +2703,7 @@ function drawCountyTowns(canvasId){
   if(!cv._ctBound){
     cv._ctBound = true;
     cv.addEventListener('click', ev=>{
+      if(ev.ctrlKey || ev.metaKey) return;   // Ctrl＝強制放大
       const rc = cv.getBoundingClientRect();
       const my = ev.clientY - rc.top;
       let best = null;
@@ -2999,7 +2986,25 @@ function getQpfArr(t, qpfField){
   // ★ 官方值絕不調整（使用者明訂）：氣象署 CWA QPF 一律原樣回傳，
   //   不套全域倍率、不套情境加成/倍率。出事時這是可以引述的官方數據。
   //   情境中某日若選 CWA，該日同樣不受調整（見下方迴圈的 isCwa 判斷）。
-  if(qpfField === 'qpf_cwa' && !scn) return t.qpf_cwa || [];
+  // ★ CWA 只涵蓋官方發布的時段（常態 8 段／颱風期間格點），其餘為 null。
+  //   ETR2 需往前推 7 天累積、風險指標需下一段展望，直接用會整片算不出來。
+  //   故：官方有值的段一律用官方值（不套任何倍率），缺的段以融合值補齊
+  //   —— 補的部分在 tooltip 標示，判讀時能區分官方與推估。
+  if(qpfField === 'qpf_cwa' && !scn){
+    const cwa = t.qpf_cwa || [];
+    const off = new Set(t.official_segs || []);
+    if(!off.size) return cwa;
+    if(!t._blendCache || t._blendKey !== (window._dataGenAt || '')){
+      t._blendCache = _blendQpf(t);
+      t._blendKey = window._dataGenAt || '';
+    }
+    const bl = t._blendCache || [];
+    const out = [];
+    for(let i = 0; i < Math.max(cwa.length, bl.length, 60); i++){
+      out.push(off.has(i) && cwa[i] != null ? cwa[i] : (bl[i] != null ? bl[i] : null));
+    }
+    return out;
+  }
   // ★ 融合（CMPF）為動態計算，非後端欄位，故在此組出基底陣列。
   //   結果快取於 t 上（同一輪資料不會變），避免每次重繪重算 368 次。
   // ★ 強／弱降雨：改以「融合結果 × 系集倍率」計算，而非固定用 qpf_best。
@@ -5316,7 +5321,8 @@ async function tryLoadLive(){
     DAILY_CHART_EXTREMES = null;
     const src = d.source || '';
     const note = document.getElementById('data-note');
-    if(note) note.textContent = `${src} · 產製：${d.generated_at ? d.generated_at.slice(0,16).replace('T',' ') : ''} | 雨量=今日00:00起累積觀測`;
+    // ★ 系統註記已移除（使用者指定）：資料時間在各面板內已有標示
+    if(note) note.textContent = '';
   }catch(e){
     console.warn('data.json 載入失敗（使用示範資料）：', e.message);
   }
@@ -8201,6 +8207,25 @@ function _windRow(t){
 // 目前檢視模式的標頭：把該 mode 的主值放在鄉鎮名旁邊，
 //   其餘欄位仍完整顯示（雨量、ETR2、風險、風力、氣溫、浪高、潮汐…）。
 function _modeHeadRow(t){
+  // ★ CWA 模式：標示本視窗有多少段是官方值、多少段以融合值補
+  //   （官方只發布 48 小時內的常態 QPF，其餘段沒有官方數據）
+  if(forecastModel === 'cwa'){
+    const off = new Set(t.official_segs || []);
+    let nOff = 0, nAll = 0;
+    for(let i = Math.max(0, segFrom); i <= Math.max(0, segTo); i++){
+      nAll++; if(off.has(i)) nOff++;
+    }
+    if(nAll){
+      const tail = (mode === 'rain') ? '' : `　${
+        {etr:'ETR2', risk:'風險', warn:'警特報'}[mode] || ''}依此計算`;
+      if(nOff === nAll)
+        return `<span style="color:#8ad8a0;font-size:10px">　官方值${tail}</span>`;
+      if(nOff === 0)
+        return `<span style="color:#e8a860;font-size:10px">　官方未發布，以融合值補${tail}</span>`;
+      return `<span style="font-size:10px">　官方 ${nOff}/${nAll} 段`
+           + `<span style="color:#e8a860">，其餘融合值補</span>${tail}</span>`;
+    }
+  }
   if(mode === 'wind'){
     const w = _windOf(t);
     const nm = {mean:'平均風', gust:'陣風', gust_est:'陣風推估'}[windKind] || '風力';
@@ -9825,10 +9850,10 @@ document.addEventListener('keydown', e=>{
 });
 
 function toggleChartZoom(canvasId, ev){
-  if(ev && !(ev.ctrlKey || ev.metaKey)){
-    // 沒按 Ctrl：不放大，讓點擊事件由圖表自身的互動處理
-    return;
-  }
+  // ★ 一般點擊仍會放大（原有行為保留）；Ctrl/⌘ + 左鍵是「強制放大」的
+  //   額外途徑 —— 圖上有互動點位時，其 click handler 會 stopPropagation
+  //   攔下一般點擊，此時按 Ctrl 就能確保放大而非觸發點位。
+  if(ev && (ev.ctrlKey || ev.metaKey)) ev.stopPropagation();
   const needsSelected = (canvasId==='cv'||canvasId==='cv-district-hyeto'
                        ||canvasId.startsWith('cv-wind-')
                        ||canvasId.startsWith('cv-stnrank')
