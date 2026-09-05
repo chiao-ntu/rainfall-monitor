@@ -43,8 +43,6 @@ body.panel-full canvas{ max-width:1100px }
 .b.lo-btn{border-color:#3a5a8a;color:#66aaff;background:#0e1626}
 .b.lo-btn:hover{background:#182a44}
 .b.lo-btn.on{background:#1a4a8a;border-color:#66aaff;color:#d0e4ff;font-weight:700}
-/* 系集比值未取得：以虛線邊框標示狀態，而非調暗（調暗像是不能按） */
-.b.no-ens{border-style:dashed}
 .b.pbtn{border-color:#5a4010;color:#c08030}
 .b.pbtn.on{background:#3a2a0a;border-color:#aa6010;color:#f0a030}
 #cust-ctrl{display:none;flex-direction:column;gap:2px;padding:6px 14px 8px;width:100%;box-sizing:border-box}
@@ -286,7 +284,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#7a5a9a;color:#c8a8e8">GFS GraphCast</button>
       <button class="b model-btn hi-btn"    id="mHi"    onclick="setModel('hi')">強降雨</button>
       <button class="b model-btn lo-btn"    id="mLo"    onclick="setModel('lo')">弱降雨</button>
-      <span id="ens-note" style="display:none;font-size:9px;color:#c8a860;margin-left:4px"></span>
     </div>
     <span id="sys-note"></span><span id="model-src-note"></span>
   </div>
@@ -984,8 +981,8 @@ const MODEL_NOTE = {
   ecmwf: 'ECMWF IFS HRES 9km · 前90h逐時 · 物理模式',
   gfs:   'NOAA GFS · 時效 16 天',
   icon:  'DWD ICON · 時效 7 天',
-  hi:    '融合 × 系集前25%放大倍率（前48h，縣級）',
-  lo:    '融合 × 系集後25%縮小倍率（前48h，縣級）',
+  hi:    '',
+  lo:    '',
   cwa:   '純CWA官方定量降水預報（颱風期間F-C0041；平時48h逐6h常態版，每日4次預報員修正）',
 };
 let selected = null;
@@ -3010,24 +3007,38 @@ function getQpfArr(t, qpfField){
   }
   // ★ 融合（CMPF）為動態計算，非後端欄位，故在此組出基底陣列。
   //   結果快取於 t 上（同一輪資料不會變），避免每次重繪重算 368 次。
-  // ★ 強／弱降雨：改以「融合結果 × 系集倍率」計算，而非固定用 qpf_best。
-  //   融合已納入七個模式並依實測誤差加權，比單一模式當基底更有代表性。
-  //   倍率仍取後端算好的縣級系集比值（qpf_hi/qpf_best 的比例）。
+  // ★ 強／弱降雨：改由「本系統七個模式的離散度」自行計算，
+  //   不再依賴 CWA 縣級系集比值（該資料常抓取失敗，且只涵蓋前 48h、
+  //   解析度僅到縣級）。做法是逐時段取所有可用模式的值排序，
+  //   強降雨＝前 25% 分位、弱降雨＝後 25% 分位 —— 這就是系集本身的
+  //   離散資訊，涵蓋全時段、全模式，且永遠可得。
   if(qpfField === 'qpf_hi' || qpfField === 'qpf_lo'){
-    const base = t.qpf_best || [];
-    const ref  = t[qpfField] || [];
-    if(!t._blendCache || t._blendKey !== (window._dataGenAt || '')){
-      t._blendCache = _blendQpf(t);
-      t._blendKey = window._dataGenAt || '';
-    }
-    const bl = t._blendCache || base;
-    const out = [];
-    for(let i = 0; i < Math.max(base.length, bl.length); i++){
-      const b = base[i], r = ref[i], v = bl[i];
-      if(v == null){ out.push(null); continue; }
-      // 倍率＝ref/base（後端的系集比值）；base 為 0 時無倍率可推，維持原值
-      const k = (b != null && b > 0.05 && r != null) ? (r / b) : 1;
-      out.push(Math.round(v * k * 10) / 10);
+    const hi = (qpfField === 'qpf_hi');
+    const arrs = [];
+    BLEND_MODELS.forEach(m=>{
+      const a = t[MODEL_FIELD[m]];
+      if(Array.isArray(a) && a.length) arrs.push(a);
+    });
+    const cwaA = t.qpf_cwa;
+    if(Array.isArray(cwaA) && cwaA.length) arrs.push(cwaA);
+    let out;
+    if(arrs.length < 2){
+      out = (t.qpf_best || []).slice();       // 模式不足，無離散可言
+    } else {
+      const n = Math.max(...arrs.map(a=>a.length));
+      out = [];
+      for(let i = 0; i < n; i++){
+        const vs = arrs.map(a=>a[i]).filter(v=>v != null && isFinite(v));
+        if(!vs.length){ out.push(null); continue; }
+        vs.sort((a, b)=>a - b);
+        // 線性插值取分位數（hi=0.75、lo=0.25）
+        const q = hi ? 0.75 : 0.25;
+        const pos = (vs.length - 1) * q;
+        const lo_ = Math.floor(pos), hi_ = Math.ceil(pos);
+        const v = (lo_ === hi_) ? vs[lo_]
+                : vs[lo_] + (vs[hi_] - vs[lo_]) * (pos - lo_);
+        out.push(Math.round(v * 10) / 10);
+      }
     }
     if(!scn) return out;
     t._hiloCache = out;
@@ -4927,10 +4938,11 @@ function _drawTownChart(t, canvasId, isZoom, type){
     const x=pL+i*itemW+(itemW-barW)/2;
     if(v>0){
       const barH=ch*v/axisMaxRain;
-      // ★ 長條改用雨量色階（同地圖圖例），可直接對應強度分級；
-      //   分署由 ETR2% 折線的顏色區分，不需再靠長條色。
-      ctx.fillStyle=(RAIN_SCALE.find(b=>v<b.max)||RAIN_SCALE[RAIN_SCALE.length-1]).color;
-      ctx.globalAlpha=0.88;
+      // ★ 分署圖維持分署色：六個分署同時呈現時，用雨量色階會讓
+      //   不同分署的長條混成一片，無法辨識是哪一署。
+      // ★ 鄉鎮圖：長條用雨量色階（同地圖圖例），可直接對應強度分級
+  ctx.fillStyle=(RAIN_SCALE.find(b=>v<b.max)||RAIN_SCALE[RAIN_SCALE.length-1]).color;
+  ctx.globalAlpha=0.88;
       ctx.fillRect(x,pT+ch-barH,barW,barH);ctx.globalAlpha=1;
       ctx.fillStyle='#cfe0f0';ctx.font=`${lblFs}px sans-serif`;ctx.textAlign='center';
       ctx.fillText(v>=10?Math.round(v):v.toFixed(1),pL+i*itemW+itemW/2,pT+ch-barH-(isZoom?10:3));
@@ -4938,7 +4950,8 @@ function _drawTownChart(t, canvasId, isZoom, type){
   });
 
   // 折線（ETR2%，白色實線）+ 資料標籤
-  ctx.beginPath();ctx.strokeStyle=ETR_LINE;ctx.lineWidth=isZoom?6:1.6;
+  // ★ ETR2 折線改用該鄉鎮所屬分署的代表色
+  ctx.beginPath();ctx.strokeStyle=districtColor;ctx.lineWidth=isZoom?6:1.6;
   etr.forEach((v,i)=>{
     const x=pL+i*itemW+itemW/2,y=pT+ch*(1-v/axisMaxEtr);
     i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
@@ -4946,7 +4959,7 @@ function _drawTownChart(t, canvasId, isZoom, type){
   ctx.stroke();
   etr.forEach((v,i)=>{
     const x=pL+i*itemW+itemW/2,y=pT+ch*(1-v/axisMaxEtr);
-    ctx.beginPath();ctx.arc(x,y,isZoom?9:2.2,0,Math.PI*2);ctx.fillStyle=ETR_LINE;ctx.fill();
+    ctx.beginPath();ctx.arc(x,y,isZoom?9:2.2,0,Math.PI*2);ctx.fillStyle=districtColor;ctx.fill();
     if(v>0){
       ctx.fillStyle='#ffffff';ctx.font=`${lblFs}px sans-serif`;ctx.textAlign='center';
       ctx.fillText(v+'%',x,y-(isZoom?18:5));
@@ -5314,22 +5327,12 @@ async function tryLoadLive(){
     _updateFactorBtns();
     renderScnSummary();
     // 系集比值失敗提示（強/弱降雨按鈕仍可按，但值=原始預測）
-    // ★ 系集比值取用失敗時，強/弱降雨會等同原始預測。
-    //   原本把不透明度降到 0.4，視覺上像是「按鈕壞掉不能按」，
-    //   但它其實仍可用。改為保持正常亮度、以文字標註狀態。
-    const hiBtn = document.getElementById('mHi'), loBtn = document.getElementById('mLo');
-    const ensOk = (d.ens_active !== false);
-    [hiBtn, loBtn].forEach(b=>{
-      if(!b) return;
-      b.style.opacity = '';                 // 一律保持正常亮度
-      b.classList.toggle('no-ens', !ensOk);
-      b.title = '';
+    // ★ 強/弱降雨改由本系統七模式的分位數自算，不依賴 CWA 系集比值，
+    //   故不再需要「抓取失敗」的狀態標示（該狀態已不影響功能）。
+    ['mHi', 'mLo'].forEach(id=>{
+      const b = document.getElementById(id);
+      if(b){ b.style.opacity = ''; b.title = ''; b.classList.remove('no-ens'); }
     });
-    const ensNote = document.getElementById('ens-note');
-    if(ensNote){
-      ensNote.textContent = ensOk ? '' : '（系集比值本輪未取得，強/弱＝原始預測）';
-      ensNote.style.display = ensOk ? 'none' : '';
-    }
 
     BASE_TIME = new Date(d.base_time);
     // ★ 時間基準變動 → 主動清空以 BASE_TIME 為基準的快取（雙保險：
@@ -6123,9 +6126,8 @@ function _drawDistrictHourlyChart(cv, isZoom){
       const v=rows[d][h]||0;
       if(v<=0) continue;
       const x=pL+h*grpW+d*barW, bh=ch*v/maxRain;
-      // ★ 長條改用雨量色階（同地圖圖例），一眼對應強度分級；
-      //   分署仍由 ETR2% 折線的顏色區分，不會混淆。
-      ctx.fillStyle=(RAIN_SCALE.find(b=>v<b.max)||RAIN_SCALE[RAIN_SCALE.length-1]).color;
+      // ★ 分署圖維持分署色（六署並列時需可辨識來源）
+      ctx.fillStyle=DISTRICT_COLOR[DISTRICT_ORDER[d]]||'#88aacc';
       ctx.fillRect(x+barW*0.1, pT+ch-bh, barW*0.8, bh);
     }
   }
@@ -10072,14 +10074,17 @@ function _warnHourlySeries(t){
   return arr;
 }
 
+// 後端預先掃描的警特報陣列只涵蓋部分模式。新增的模式（融合、JMA、
+//   EC-AIFS、GFS GraphCast、CWA、強/弱降雨）沒有對應陣列，
+//   若一律退回 warn_seg（best 的結果），切換模式時警特報不會變，
+//   與地圖著色、ETR2、風險指標互相矛盾。
+//   → 這些模式一律走前端重算，確保各圖層顯示一致。
+const WARN_SEG_FIELD = {
+  best: 'warn_seg', ecmwf: 'warn_seg_ecmwf',
+  gfs: 'warn_seg_gfs', icon: 'warn_seg_icon',
+};
 function _warnSegField(){
-  // 依所選模式取對應的後端警特報陣列（每模式獨立判讀）
-  if(forecastModel==='ecmwf') return 'warn_seg_ecmwf';
-  if(forecastModel==='gfs')   return 'warn_seg_gfs';
-  if(forecastModel==='icon')  return 'warn_seg_icon';
-  if(forecastModel==='hi')    return 'warn_seg_hi';
-  if(forecastModel==='lo')    return 'warn_seg_lo';
-  return 'warn_seg';   // best / cwa 用 best_match 掃描
+  return WARN_SEG_FIELD[forecastModel] || null;   // null＝前端重算
 }
 
 function _warnLevelAt(t, seg){
@@ -10089,11 +10094,12 @@ function _warnLevelAt(t, seg){
   //   使用者把雨量放大數倍後，警特報級別若仍用後端值就永遠不會變（面板恆為空），
   //   與地圖著色、ETR2%、土石流推估互相矛盾。此時一律走下方前端重算。
   const _scnOverride = _scnActive() || _qpfFactor() !== 1;
-  if(seg >= 0 && !_scnOverride){
-    const wf = _warnSegField();
+  const wf = _warnSegField();
+  if(seg >= 0 && !_scnOverride && wf){
     const ws = t[wf];
     if(Array.isArray(ws) && seg < ws.length && ws[seg] != null) return ws[seg];
-    // 該模式陣列缺（例如舊資料無 warn_seg_hi）→ 退回 best 的 warn_seg
+    // ★ 僅在「該模式本該有陣列卻缺」時才退回 best（舊資料相容）；
+    //   沒有對應陣列的模式（wf 為 null）不進來，直接走前端重算。
     if(Array.isArray(t.warn_seg) && seg < t.warn_seg.length && t.warn_seg[seg] != null) return t.warn_seg[seg];
   }
   // CWA 現行警特報標準（用戶指定，逐時滾動精確判讀，過去/未來一致）：
