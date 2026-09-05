@@ -43,6 +43,8 @@ body.panel-full canvas{ max-width:1100px }
 .b.lo-btn{border-color:#3a5a8a;color:#66aaff;background:#0e1626}
 .b.lo-btn:hover{background:#182a44}
 .b.lo-btn.on{background:#1a4a8a;border-color:#66aaff;color:#d0e4ff;font-weight:700}
+/* 系集比值未取得：以虛線邊框標示狀態，而非調暗（調暗像是不能按） */
+.b.no-ens{border-style:dashed}
 .b.pbtn{border-color:#5a4010;color:#c08030}
 .b.pbtn.on{background:#3a2a0a;border-color:#aa6010;color:#f0a030}
 #cust-ctrl{display:none;flex-direction:column;gap:2px;padding:6px 14px 8px;width:100%;box-sizing:border-box}
@@ -284,6 +286,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#7a5a9a;color:#c8a8e8">GFS GraphCast</button>
       <button class="b model-btn hi-btn"    id="mHi"    onclick="setModel('hi')">強降雨</button>
       <button class="b model-btn lo-btn"    id="mLo"    onclick="setModel('lo')">弱降雨</button>
+      <span id="ens-note" style="display:none;font-size:9px;color:#c8a860;margin-left:4px"></span>
     </div>
     <span id="sys-note"></span><span id="model-src-note"></span>
   </div>
@@ -3975,7 +3978,9 @@ function renderLayer(){
     if(t){
       // CWA 模式：色階類別呈現——直接用官方色帶著色，不轉數字、不做累積。
       //   取所選時間視窗內最高色帶（防漏報），無覆蓋段＝不著色（白）。
-      if(forecastModel==='cwa'){
+      // ★ 僅限雨量模式：先前不分 mode 一律走這條，導致切到 ETR2／風險／
+      //   警特報／風力等圖層時仍顯示雨量色帶，切換等於無效。
+      if(forecastModel==='cwa' && mode==='rain'){
         const ca = t.qpf_cwa || [];
         let band = null;
         for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
@@ -4071,8 +4076,8 @@ function renderLayer(){
           (v==null ? '<span style="color:#889">無回波/無資料</span>'
                    : `<span style="color:#c88ae8;font-weight:700">${v} mm</span>`)+
           `<br><span style="font-size:9px;color:#889">F-B0046 雷達定量降雨（約1.4km，每10分更新）</span>`;
-      } else if(forecastModel==='cwa'){
-        // CWA 模式：呈現官方定量降水預報「色階類別」，不給數字。
+      } else if(forecastModel==='cwa' && mode==='rain'){
+        // CWA 模式（雨量圖層）：呈現官方定量降水預報「色階類別」，不給數字。
         const ca = t.qpf_cwa || [];
         let band = null;
         for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
@@ -4922,7 +4927,10 @@ function _drawTownChart(t, canvasId, isZoom, type){
     const x=pL+i*itemW+(itemW-barW)/2;
     if(v>0){
       const barH=ch*v/axisMaxRain;
-      ctx.fillStyle=districtColor;ctx.globalAlpha=0.72;
+      // ★ 長條改用雨量色階（同地圖圖例），可直接對應強度分級；
+      //   分署由 ETR2% 折線的顏色區分，不需再靠長條色。
+      ctx.fillStyle=(RAIN_SCALE.find(b=>v<b.max)||RAIN_SCALE[RAIN_SCALE.length-1]).color;
+      ctx.globalAlpha=0.88;
       ctx.fillRect(x,pT+ch-barH,barW,barH);ctx.globalAlpha=1;
       ctx.fillStyle='#cfe0f0';ctx.font=`${lblFs}px sans-serif`;ctx.textAlign='center';
       ctx.fillText(v>=10?Math.round(v):v.toFixed(1),pL+i*itemW+itemW/2,pT+ch-barH-(isZoom?10:3));
@@ -5306,9 +5314,21 @@ async function tryLoadLive(){
     _updateFactorBtns();
     renderScnSummary();
     // 系集比值失敗提示（強/弱降雨按鈕仍可按，但值=原始預測）
-    if(d.ens_active === false){
-      const hiBtn = document.getElementById('mHi'), loBtn = document.getElementById('mLo');
-      [hiBtn, loBtn].forEach(b=>{ if(b){ b.style.opacity=0.4; b.title='本次系集資料抓取失敗，強/弱降雨=原始預測'; } });
+    // ★ 系集比值取用失敗時，強/弱降雨會等同原始預測。
+    //   原本把不透明度降到 0.4，視覺上像是「按鈕壞掉不能按」，
+    //   但它其實仍可用。改為保持正常亮度、以文字標註狀態。
+    const hiBtn = document.getElementById('mHi'), loBtn = document.getElementById('mLo');
+    const ensOk = (d.ens_active !== false);
+    [hiBtn, loBtn].forEach(b=>{
+      if(!b) return;
+      b.style.opacity = '';                 // 一律保持正常亮度
+      b.classList.toggle('no-ens', !ensOk);
+      b.title = '';
+    });
+    const ensNote = document.getElementById('ens-note');
+    if(ensNote){
+      ensNote.textContent = ensOk ? '' : '（系集比值本輪未取得，強/弱＝原始預測）';
+      ensNote.style.display = ensOk ? 'none' : '';
     }
 
     BASE_TIME = new Date(d.base_time);
@@ -6103,7 +6123,9 @@ function _drawDistrictHourlyChart(cv, isZoom){
       const v=rows[d][h]||0;
       if(v<=0) continue;
       const x=pL+h*grpW+d*barW, bh=ch*v/maxRain;
-      ctx.fillStyle=DISTRICT_COLOR[DISTRICT_ORDER[d]]||'#88aacc';
+      // ★ 長條改用雨量色階（同地圖圖例），一眼對應強度分級；
+      //   分署仍由 ETR2% 折線的顏色區分，不會混淆。
+      ctx.fillStyle=(RAIN_SCALE.find(b=>v<b.max)||RAIN_SCALE[RAIN_SCALE.length-1]).color;
       ctx.fillRect(x+barW*0.1, pT+ch-bh, barW*0.8, bh);
     }
   }
