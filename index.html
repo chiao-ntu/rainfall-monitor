@@ -192,21 +192,28 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <span class="cl" style="color:#7ee8a8">過去7天</span>
     <div class="bg" id="past-btns" style="flex:1;min-width:0"></div>
   </div>
+  <!-- 逐時：雷達1h ＋ 日期下拉 ＋ 拖曳滾輪（－/＋ 可逐格切換） -->
   <div class="ctrl-row">
-    <span class="cl" style="color:#7ee8a8">雷達1h</span>
-    <div class="bg" id="radar-btns" style="flex:1;min-width:0">
+    <span class="cl" style="color:#7ee8a8">逐時</span>
+    <div class="bg" id="future1h-btns" style="flex:1;min-width:0;
+      display:flex;align-items:center;gap:5px;flex-wrap:nowrap">
       <button class="b" id="bRadar" onclick="setWin('radar')">未來1h雷達QPF</button>
-      <span id="radar-time" style="font-size:9px;color:#7a98aa;margin-left:6px"></span>
+      <span id="radar-time" style="font-size:9px;color:#7a98aa"></span>
+      <select id="h1-day" onchange="onH1DayChange()"
+        style="font-size:10px;padding:2px 4px;background:#061220;color:#cfe4f5;
+        border:1px solid #1a4060;border-radius:3px"></select>
+      <button class="b" onclick="stepHour(-1)" style="padding:2px 7px">−</button>
+      <input type="range" id="h1-range" min="1" max="90" value="1" step="1"
+        oninput="onH1Range(this.value)"
+        style="flex:1;min-width:90px;accent-color:#3a8acc">
+      <button class="b" onclick="stepHour(1)" style="padding:2px 7px">＋</button>
+      <span id="h1-label" style="font-size:10px;color:#9fc8e8;min-width:82px;
+        text-align:right"></span>
     </div>
   </div>
   <div class="ctrl-row">
     <span class="cl" style="color:#7ee8a8">未來6h段</span>
     <div class="bg" id="future6h-btns" style="flex:1;min-width:0"></div>
-  </div>
-  <div class="ctrl-row">
-    <span class="cl" style="color:#7ee8a8" title="ECMWF IFS HRES 前90小時為原生逐時">逐時</span>
-    <div class="bg" id="future1h-btns" style="flex:1;min-width:0;
-      overflow-x:auto;white-space:nowrap"></div>
   </div>
   <div class="ctrl-row">
     <span class="cl" style="color:#7ee8a8">逐日</span>
@@ -226,14 +233,18 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <div id="cust-ctrl">
     <div class="sl-wrap" style="width:100%">
       <label style="width:20px;flex-shrink:0;font-size:11px;color:#6bc8e8">起</label>
+      <button class="b" onclick="stepSlider('slS',-1)" style="padding:1px 6px;flex-shrink:0">−</button>
       <input type="range" id="slS" min="-28" max="64" value="0" oninput="onSlider()"
         style="flex:1;width:100%;height:6px;accent-color:#3a9adf">
+      <button class="b" onclick="stepSlider('slS',1)" style="padding:1px 6px;flex-shrink:0">＋</button>
       <span id="slS-v" style="font-size:10px;color:#6bc8e8;width:80px;text-align:right;flex-shrink:0"></span>
     </div>
     <div class="sl-wrap" style="width:100%">
       <label style="width:20px;flex-shrink:0;font-size:11px;color:#e8a03a">迄</label>
+      <button class="b" onclick="stepSlider('slE',-1)" style="padding:1px 6px;flex-shrink:0">−</button>
       <input type="range" id="slE" min="-28" max="64" value="3" oninput="onSlider()"
         style="flex:1;width:100%;height:6px;accent-color:#e8803a">
+      <button class="b" onclick="stepSlider('slE',1)" style="padding:1px 6px;flex-shrink:0">＋</button>
       <span id="slE-v" style="font-size:10px;color:#e8a03a;width:80px;text-align:right;flex-shrink:0"></span>
     </div>
     <!-- 時間刻度尺（在時間軸下方，起訖共用） -->
@@ -269,10 +280,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <!-- 預報模式選擇列（未來時段才顯示） -->
   <div class="ctrl-row" id="model-row-wrap" style="display:none">
     <div class="bg" id="model-row">
-      <button class="b model-btn"    id="mBlend" onclick="setModel('blend')"
+      <button class="b model-btn on" id="mBlend" onclick="setModel('blend')"
         style="border-color:#c8a45a;color:#f0c878">融合</button>
       <button class="b model-btn"    id="mCwa"   onclick="setModel('cwa')">CWA</button>
-      <button class="b model-btn on" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
+      <button class="b model-btn" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
       <button class="b model-btn"    id="mEcmwf" onclick="setModel('ecmwf')">ECMWF</button>
       <button class="b model-btn"    id="mGfs"   onclick="setModel('gfs')">GFS</button>
       <button class="b model-btn"    id="mIcon"  onclick="setModel('icon')">ICON</button>
@@ -379,6 +390,17 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     font-size:12px;line-height:1;writing-mode:vertical-rl;letter-spacing:2px;
     flex-shrink:0">◀</button>
   <div id="map" style="position:relative">
+
+    <!-- 時段切換箭頭：與控制列的 −/＋ 等效，看地圖時不必回到上方操作 -->
+    <div id="time-nav" style="position:absolute;bottom:18px;left:50%;
+      transform:translateX(-50%);z-index:650;display:flex;align-items:center;gap:6px;
+      background:rgba(10,20,34,.9);border:1px solid #2a5070;border-radius:20px;
+      padding:5px 12px;box-shadow:0 3px 14px rgba(0,0,0,.5)">
+      <button class="b" onclick="stepWin(-1)" style="padding:3px 10px;font-size:13px">◀</button>
+      <span id="time-nav-label" style="font-size:11px;color:#9fc8e8;min-width:118px;
+        text-align:center"></span>
+      <button class="b" onclick="stepWin(1)" style="padding:3px 10px;font-size:13px">▶</button>
+    </div>
 
     <!-- 模式時效不足提示（切到超出該模式預報天數的時段時顯示） -->
     <div id="coverage-warn" style="display:none;position:absolute;top:50%;left:50%;
@@ -955,7 +977,8 @@ let refreshTimer = null;
 let mode = 'rain', segFrom = 0, segTo = 3, winKey = 'today';
 // 逐時視窗的小時索引（1~90，null 代表非逐時視窗）
 let _hourIdx = null;
-let forecastModel = 'best';   // 'best' | 'ecmwf' | 'gfs' | 'icon'
+// ★ 預設為融合（CMPF）：多源校正後的結果，比單一模式更具代表性
+let forecastModel = 'blend';
 const MODEL_FIELD = {
   best:  'qpf_best',
   ecmwf: 'qpf_ecmwf',
@@ -2432,15 +2455,26 @@ function drawMarginChart(t, canvasId){
   if(!cv) return;
   const isZoom = (canvasId === 'chart-zoom-canvas');
   const key = t ? (t.county||'') + (t.township||'') : '';
+  // ★ 優先用測站層級（較細）；該輪沒有測站 ETR2 時退回鄉鎮層級，
+  //   確保此圖恆有內容而非整片空白。
   const rows = [];
   (TOWNSHIPS || []).forEach(tt=>{
     const k = (tt.county||'') + (tt.township||'');
     (tt.stations || []).forEach(st=>{
       if(st.etr2_pct == null) return;
       rows.push({name: st.name, town: k, pct: st.etr2_pct*100,
-                 margin: st.etr2_pct*100 - 100, mine: k === key});
+                 margin: st.etr2_pct*100 - 100, mine: k === key, isStn: true});
     });
   });
+  if(!rows.length){
+    (TOWNSHIPS || []).forEach(tt=>{
+      const v = getObsEtr(tt);
+      if(v == null) return;
+      const k = (tt.county||'') + (tt.township||'');
+      rows.push({name: tt.township || k, town: k, pct: v,
+                 margin: v - 100, mine: k === key, isStn: false});
+    });
+  }
   rows.sort((a,b)=>b.margin - a.margin);
   const top = rows.slice(0, isZoom ? 20 : 10);
   const F = _fitCanvas(cv, 300, 200);
@@ -2488,7 +2522,8 @@ function drawMarginChart(t, canvasId){
     fs, isZoom, null);
   if(isZoom){
     ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
-    ctx.fillText('全臺最接近警戒的雨量站', CW/2, 26);
+    ctx.fillText(top[0] && top[0].isStn ? '全臺最接近警戒的雨量站'
+                                       : '全臺最接近警戒的鄉鎮', CW/2, 26);
   }
 }
 
@@ -3014,6 +3049,14 @@ function getQpfArr(t, qpfField){
   //   離散資訊，涵蓋全時段、全模式，且永遠可得。
   if(qpfField === 'qpf_hi' || qpfField === 'qpf_lo'){
     const hi = (qpfField === 'qpf_hi');
+    // ★ 快取：分位數計算為 60 段 × 7 模式的排序，368 個鄉鎮各算一次
+    //   （約 22,000 次排序），沒有快取時每次重繪都重算，切換明顯延遲。
+    //   鍵含資料時戳，資料更新後自動失效。
+    const _ck = (hi ? 'H' : 'L') + '|' + (window._dataGenAt || '');
+    if(t._hiloKey === _ck && t._hiloArr){
+      if(!scn) return t._hiloArr;
+      t._hiloCache = t._hiloArr;
+    } else {
     const arrs = [];
     BLEND_MODELS.forEach(m=>{
       const a = t[MODEL_FIELD[m]];
@@ -3040,8 +3083,10 @@ function getQpfArr(t, qpfField){
         out.push(Math.round(v * 10) / 10);
       }
     }
+    t._hiloKey = _ck; t._hiloArr = out;
     if(!scn) return out;
     t._hiloCache = out;
+    }
   }
   if(qpfField === 'qpf_blend'){
     if(!t._blendCache || t._blendKey !== (window._dataGenAt || '')){
@@ -4366,7 +4411,10 @@ function updateInfo(t){
     if(pEl) pEl.style.display = hasEtr ? 'block' : 'none';
     if(hasEtr){ try{ drawEtrPhaseChart(t); }catch(e){ console.warn('ETR2 相位圖失敗', e); } }
 
-    const hasMg = (TOWNSHIPS||[]).some(tt=>(tt.stations||[]).some(x=>x.etr2_pct != null));
+    // ★ 條件放寬：測站層級缺 etr2_pct 時退回鄉鎮層級，
+    //   否則整個區塊不顯示（實測示範資料無測站即完全看不到）。
+    const hasMg = (TOWNSHIPS||[]).some(tt=>
+      (tt.stations||[]).some(x=>x.etr2_pct != null) || tt.etr2_pct != null);
     const mEl = document.getElementById('sec-margin');
     if(mEl) mEl.style.display = hasMg ? 'block' : 'none';
     if(hasMg){ try{ drawMarginChart(t); }catch(e){ console.warn('警戒餘裕圖失敗', e); } }
@@ -4881,7 +4929,9 @@ function _drawTownChart(t, canvasId, isZoom, type){
   const g=_townChartGeom(W,H,isZoom,nItems);
   const {fs,xFs,xLabelH,legendH,pL,pR,pT,pB,cw,ch,itemW}=g;
   const districtColor=getDistrictColor(t.county);
-  const ETR_LINE='#FFFFFF';                    // ETR2%統一白色，避免顏色混淆
+  // ★ ETR2 折線改用該鄉鎮所屬分署色（原為統一白色）；
+  //   圖例也用同色，才不會與實際折線對不上。
+  const ETR_LINE=districtColor;
 
   const axisMaxRain=Math.max(ceilTo10(Math.max(...rain)),10);
   const axisMaxEtr =Math.max(ceilTo10(Math.max(...etr)),10);
@@ -5441,6 +5491,7 @@ function setWin(key){
   }
 
   winKey=key; clearBtns();
+  setTimeout(()=>{ try{ _syncTimeNav(); }catch(e){} }, 0);
   if(!key.startsWith('fut1h_')) _hourIdx = null;   // 離開逐時視窗即重設
   document.getElementById('cust-ctrl').classList.remove('show');
 
@@ -5463,7 +5514,10 @@ function setWin(key){
     _hourIdx = h;
     const seg = _nowSeg() + Math.floor((h - 1) / 6);
     segFrom = seg; segTo = seg;
-    const btn = document.getElementById('bfut1h_' + h); if(btn) btn.classList.add('on');
+    // 逐時已改為滾輪＋下拉，同步其顯示狀態（無個別按鈕）
+    const rng = document.getElementById('h1-range');
+    if(rng && parseInt(rng.value) !== h){ rng.value = h; }
+    try{ _syncH1Label(); }catch(e){}
     updateModelRowVisibility(true);
   } else if(key.startsWith('fut6_')){
     _hourIdx = null;
@@ -5561,30 +5615,133 @@ function buildPastBtns(){
 //   ★ IFS HRES 前 90 小時為原生逐時資料，故可做到 1 小時解析度。
 //     按鈕多，橫向捲動呈現；每 6 小時插一個分隔便於定位。
 function buildFuture1hBtns(){
-  const c = document.getElementById('future1h-btns');
-  if(!c) return;
-  c.innerHTML = '';
-  ALL_DYNAMIC_BTN_IDS = ALL_DYNAMIC_BTN_IDS.filter(id=>!id.startsWith('bfut1h_'));
+  // ★ 逐時改為「日期下拉 ＋ 拖曳滾輪」：90 個按鈕會塞滿整列且難以定位，
+  //   滾輪可連續拖曳、下拉可跳日、−/＋ 逐格微調。
+  const sel = document.getElementById('h1-day');
+  const rng = document.getElementById('h1-range');
+  if(!sel || !rng) return;
   const now = new Date();
+  // 日期選項：涵蓋未來 90 小時所跨的每一天
+  const seen = new Set();
+  sel.innerHTML = '';
+  const WD = ['日','一','二','三','四','五','六'];
   for(let h = 1; h <= 90; h++){
     const d = new Date(now.getTime() + h * 3600e3);
-    const btn = document.createElement('button');
-    btn.className = 'b';
-    btn.id = 'bfut1h_' + h;
-    btn.textContent = String(d.getHours()).padStart(2, '0') + '時';
-    btn.title = `+${h}h　${d.getMonth()+1}/${d.getDate()} `
-              + `${String(d.getHours()).padStart(2,'0')}:00`;
-    btn.style.padding = '2px 5px';
-    btn.style.fontSize = '10px';
-    // 每日 00 時加粗，方便在長列中定位
-    if(d.getHours() === 0){
-      btn.style.borderColor = '#5a8ab0';
-      btn.textContent = `${d.getMonth()+1}/${d.getDate()}`;
-    }
-    btn.onclick = ()=>setWin('fut1h_' + h);
-    c.appendChild(btn);
-    ALL_DYNAMIC_BTN_IDS.push(btn.id);
+    const key = `${d.getMonth()+1}/${d.getDate()}`;
+    if(seen.has(key)) continue;
+    seen.add(key);
+    const o = document.createElement('option');
+    o.value = String(h);                    // 該日的第一個可選小時
+    o.textContent = `${key}（${WD[d.getDay()]}）`;
+    sel.appendChild(o);
   }
+  rng.min = 1; rng.max = 90;
+  if(_hourIdx == null) rng.value = 1;
+  _syncH1Label();
+}
+// 同步顯示標籤與下拉選單（滾輪、下拉、−/＋ 三者共用）
+function _syncH1Label(){
+  const rng = document.getElementById('h1-range');
+  const lab = document.getElementById('h1-label');
+  const sel = document.getElementById('h1-day');
+  if(!rng) return;
+  const h = parseInt(rng.value) || 1;
+  const d = new Date(Date.now() + h * 3600e3);
+  const hh = String(d.getHours()).padStart(2, '0');
+  if(lab) lab.textContent = `+${h}h　${d.getMonth()+1}/${d.getDate()} ${hh}:00`;
+  // 下拉跳到對應日期（不觸發 change）
+  if(sel){
+    const key = `${d.getMonth()+1}/${d.getDate()}`;
+    for(const o of sel.options){
+      const od = new Date(Date.now() + (parseInt(o.value)||1) * 3600e3);
+      if(`${od.getMonth()+1}/${od.getDate()}` === key){ sel.value = o.value; break; }
+    }
+  }
+}
+function onH1Range(v){
+  const rng = document.getElementById('h1-range');
+  if(rng) rng.value = v;
+  _syncH1Label();
+  setWin('fut1h_' + (parseInt(v) || 1));
+}
+function onH1DayChange(){
+  const sel = document.getElementById('h1-day');
+  if(!sel) return;
+  onH1Range(sel.value);
+}
+// −/＋：逐格切換上一個／下一個小時
+// 自訂範圍滾輪的 −/＋：逐段切換，並維持起 ≤ 迄
+// ★ 地圖上的時段切換：依目前所在的時間視窗類型往前／往後一格。
+function stepWin(delta){
+  if(_hourIdx != null){ stepHour(delta); return; }
+  if(winKey === 'custom'){
+    ['slS', 'slE'].forEach(id=>{
+      const el = document.getElementById(id);
+      if(!el) return;
+      const v = (parseInt(el.value) || 0) + delta;
+      el.value = Math.max(parseInt(el.min), Math.min(parseInt(el.max), v));
+    });
+    if(typeof onSlider === 'function') onSlider();
+    return;
+  }
+  const m6 = winKey.match(/^fut6_(\d+)$/);
+  if(m6){ setWin('fut6_' + Math.max(1, Math.min(8, parseInt(m6[1]) + delta))); return; }
+  const md = winKey.match(/^day(\d+)$/);
+  if(md){ setWin('day' + Math.max(0, Math.min(15, parseInt(md[1]) + delta))); return; }
+  const mp = winKey.match(/^past(\d+)$/);
+  if(mp){
+    const n = parseInt(mp[1]) - delta;      // past1 是昨天，往後＝數字變小
+    if(n >= 1 && n <= 7) setWin('past' + n);
+    else if(n < 1) setWin('today');
+    return;
+  }
+  if(winKey === 'today'){ setWin(delta > 0 ? 'fut6_1' : 'past1'); return; }
+  if(winKey === 'radar' && delta > 0){ setWin('fut1h_2'); return; }
+}
+// 更新地圖箭頭旁的時段標籤
+function _syncTimeNav(){
+  const el = document.getElementById('time-nav-label');
+  if(!el) return;
+  let txt = '';
+  if(_hourIdx != null){
+    const d = new Date(Date.now() + _hourIdx * 3600e3);
+    txt = `+${_hourIdx}h　${d.getMonth()+1}/${d.getDate()} `
+        + `${String(d.getHours()).padStart(2,'0')}:00`;
+  } else if(winKey === 'radar') txt = '未來1h雷達';
+  else if(winKey === 'today') txt = '今天';
+  else if(winKey === 'custom') txt = '自訂範圍';
+  else {
+    const m6 = winKey.match(/^fut6_(\d+)$/);
+    const md = winKey.match(/^day(\d+)$/);
+    const mp = winKey.match(/^past(\d+)$/);
+    if(m6) txt = `未來第 ${m6[1]} 個 6h 段`;
+    else if(md) txt = `第 ${md[1]} 日`;
+    else if(mp) txt = `過去第 ${mp[1]} 日`;
+  }
+  el.textContent = txt;
+}
+
+function stepSlider(id, delta){
+  const el = document.getElementById(id);
+  if(!el) return;
+  const lo = parseInt(el.min), hi = parseInt(el.max);
+  let v = Math.max(lo, Math.min(hi, (parseInt(el.value) || 0) + delta));
+  // 起不得超過迄、迄不得低於起
+  const other = document.getElementById(id === 'slS' ? 'slE' : 'slS');
+  if(other){
+    const ov = parseInt(other.value) || 0;
+    if(id === 'slS') v = Math.min(v, ov);
+    else v = Math.max(v, ov);
+  }
+  el.value = v;
+  if(typeof onSlider === 'function') onSlider();
+}
+
+function stepHour(delta){
+  const rng = document.getElementById('h1-range');
+  if(!rng) return;
+  const v = Math.max(1, Math.min(90, (parseInt(rng.value) || 1) + delta));
+  onH1Range(v);
 }
 
 function buildFuture6hBtns(){
