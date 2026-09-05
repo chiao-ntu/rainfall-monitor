@@ -169,15 +169,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bWind"  onclick="setMode('wind')" style="border-color:#3a8a5a;color:#7ee8a8">風力預測</button>
       <button class="b"    id="bWave"  onclick="setMode('wave')" style="border-color:#3a8a5a;color:#7ee8a8">浪高</button>
       <button class="b"    id="bTemp"  onclick="setMode('temp')" style="border-color:#3a8a5a;color:#7ee8a8">氣溫</button>
-      <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
-        style="border-color:#1a4060;color:#8ac8e8">🏷 鄉鎮市區</button>
-      <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
-        style="border-color:#8a6a3a;color:#e8c87a">📍 雨量測站</button>
       <button class="b"    id="bTerrain" onclick="toggleTerrainLayer()"
         style="border-color:#6a5a3a;color:#d8c090">⛰ 地形</button>
+      <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
+        style="border-color:#1a4060;color:#8ac8e8">🏷 鄉鎮市區</button>
       <select id="townNameScope" onchange="setTownNameScope(this.value)"
         style="display:none;font-size:10px;background:#061220;color:#8ac8e8;
         border:1px solid #1a4060;border-radius:3px;padding:2px 3px;margin-right:3px"></select>
+      <select id="countyPick" onchange="pickCounty(this.value)"
+        style="font-size:10px;padding:2px 5px;background:#061220;color:#cfe4f5;
+        border:1px solid #1a4060;border-radius:3px;max-width:130px">
+        <option value="">全臺</option>
+      </select>
+      <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
+        style="border-color:#8a6a3a;color:#e8c87a">📍 雨量測站</button>
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
         style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
       <button class="b"    id="bTyphoon" onclick="toggleTyphoonLayer()"
@@ -205,7 +210,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b" onclick="stepHour(-1)" style="padding:2px 7px">−</button>
       <input type="range" id="h1-range" min="1" max="90" value="1" step="1"
         oninput="onH1Range(this.value)"
-        style="flex:1;min-width:90px;accent-color:#3a8acc">
+        style="width:180px;flex:0 0 auto;accent-color:#3a8acc">
       <button class="b" onclick="stepHour(1)" style="padding:2px 7px">＋</button>
       <span id="h1-label" style="font-size:10px;color:#9fc8e8;min-width:82px;
         text-align:right"></span>
@@ -394,13 +399,22 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <!-- 時段切換箭頭：與控制列的 −/＋ 等效，看地圖時不必回到上方操作 -->
     <div id="time-nav" style="position:absolute;bottom:18px;left:50%;
       transform:translateX(-50%);z-index:650;display:flex;align-items:center;gap:6px;
-      background:rgba(10,20,34,.9);border:1px solid #2a5070;border-radius:20px;
-      padding:5px 12px;box-shadow:0 3px 14px rgba(0,0,0,.5)">
+      background:rgba(10,20,34,.92);border:1px solid #2a5070;border-radius:20px;
+      padding:5px 12px;box-shadow:0 3px 14px rgba(0,0,0,.5)"
+      onclick="event.stopPropagation()" onmousedown="event.stopPropagation()"
+      ondblclick="event.stopPropagation()">
       <button class="b" onclick="stepWin(-1)" style="padding:3px 10px;font-size:13px">◀</button>
-      <span id="time-nav-label" style="font-size:11px;color:#9fc8e8;min-width:118px;
+      <span id="time-nav-label" style="font-size:11px;color:#9fc8e8;min-width:150px;
         text-align:center"></span>
       <button class="b" onclick="stepWin(1)" style="padding:3px 10px;font-size:13px">▶</button>
+      <button class="b" id="time-nav-fold" onclick="toggleTimeNav()"
+        style="padding:3px 7px;font-size:11px">▼</button>
     </div>
+    <button id="time-nav-show" onclick="toggleTimeNav()"
+      style="display:none;position:absolute;bottom:18px;left:50%;
+      transform:translateX(-50%);z-index:650;background:rgba(10,20,34,.92);
+      border:1px solid #2a5070;border-radius:14px;color:#9fc8e8;font-size:11px;
+      padding:3px 12px;cursor:pointer">▲ 時段</button>
 
     <!-- 模式時效不足提示（切到超出該模式預報天數的時段時顯示） -->
     <div id="coverage-warn" style="display:none;position:absolute;top:50%;left:50%;
@@ -502,11 +516,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       onfocus="onSearchInput(this.value)"
       style="width:100%;box-sizing:border-box;font-size:12px;padding:5px 7px;
       background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px;outline:none">
-    <select id="countyPick" onchange="pickCounty(this.value)"
-      style="width:100%;box-sizing:border-box;margin-top:4px;font-size:12px;padding:4px 6px;
-      background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
-      <option value="">全臺</option>
-    </select>
     <div id="searchResults" style="display:none;position:absolute;left:14px;right:14px;top:32px;
       z-index:1200;max-height:280px;overflow-y:auto;background:#08182a;
       border:1px solid #2a5070;border-radius:4px;box-shadow:0 4px 14px rgba(0,0,0,.6)"></div>
@@ -706,7 +715,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>警戒餘裕</span><span class="sec-arrow" id="arrow-margin">▸</span>
       </div>
       <div class="sec-body" id="body-margin" style="display:none">
-        <canvas id="cv-margin" style="width:100%;height:200px;display:block;
+        <div style="display:flex;gap:4px;margin-bottom:5px">
+          <select id="margin-basis" onchange="drawMarginChart(selected)"
+            style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+            <option value="mm">距警戒還需雨量（mm）</option>
+            <option value="pct">距警戒百分比（ETR2%）</option>
+          </select>
+        </div>
+        <canvas id="cv-margin" style="width:100%;height:230px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-margin', event)"></canvas>
       </div>
@@ -2450,88 +2467,153 @@ function drawEtrPhaseChart(t, canvasId){
 
 // ── 警戒餘裕（測站別）──────────────────────────────
 //   ★ 以「距離警戒值多少」呈現比絕對數值更貼近實務判讀：還有多少緩衝。
+// ══════════════════════════════════════════════════════════
+//  警戒餘裕
+//  ★ 兩種基礎（使用者指定）：
+//    mm  ── 距警戒還需多少雨量。A 區警戒 500 現值 200 → 還需 250；
+//           B 區警戒 250 現值 200 → 還需 25。一天內下得到嗎，一目了然。
+//    pct ── 距警戒的百分比。A 區 40% 還有 50%、B 區 80% 只差 10%，
+//           在區間內會產生完全不同的排序，兩者互補。
+//  ★ 分級（以 ETR2% 計，90% 為警戒值）：
+//    綠 −20% 以上餘裕｜黃 −20% 以內｜紅 超過 10%｜紫 超過 10% 以上
+//  ★ 隨時間視窗變動：用 getAccum 取當前視窗的 ETR2%，而非固定現值。
+// ══════════════════════════════════════════════════════════
+const MARGIN_WARN = 90;      // ETR2% 警戒值
+function _marginColor(pct){
+  const d = pct - MARGIN_WARN;
+  if(d > 10)  return '#FF00FF';   // 紫：超過警戒 10% 以上
+  if(d >= 0)  return '#FF0000';   // 紅：已達警戒
+  if(d >= -20) return '#FFFF00';  // 黃：接近（20% 內）
+  return '#00FF00';               // 綠：尚有餘裕
+}
 function drawMarginChart(t, canvasId){
   const cv = document.getElementById(canvasId || 'cv-margin');
   if(!cv) return;
   const isZoom = (canvasId === 'chart-zoom-canvas');
+  const basisEl = document.getElementById('margin-basis');
+  const basis = (basisEl && basisEl.value) || 'mm';
   const key = t ? (t.county||'') + (t.township||'') : '';
-  // ★ 優先用測站層級（較細）；該輪沒有測站 ETR2 時退回鄉鎮層級，
-  //   確保此圖恆有內容而非整片空白。
+
+  // 範圍：選了縣市就只看該縣市，否則全臺
   const rows = [];
   (TOWNSHIPS || []).forEach(tt=>{
+    if(_pickedCounty && tt.county !== _pickedCounty) return;
+    const acc = getAccum(tt);
+    const pct = acc && acc.etrPct;
+    if(pct == null || !isFinite(pct)) return;
+    const den = _etrDen(tt);                       // 警戒值（mm）
     const k = (tt.county||'') + (tt.township||'');
-    (tt.stations || []).forEach(st=>{
-      if(st.etr2_pct == null) return;
-      rows.push({name: st.name, town: k, pct: st.etr2_pct*100,
-                 margin: st.etr2_pct*100 - 100, mine: k === key, isStn: true});
-    });
+    // 距警戒還需的雨量＝(90% − 現值%) × 警戒值 / 100
+    const needMm = (den && den > 0) ? (MARGIN_WARN - pct) * den / 100 : null;
+    rows.push({t: tt, name: tt.township || k, k,
+               pct, needMm, zone: _townZone(tt) || '平地',
+               mine: k === key});
   });
-  if(!rows.length){
-    (TOWNSHIPS || []).forEach(tt=>{
-      const v = getObsEtr(tt);
-      if(v == null) return;
-      const k = (tt.county||'') + (tt.township||'');
-      rows.push({name: tt.township || k, town: k, pct: v,
-                 margin: v - 100, mine: k === key, isStn: false});
-    });
-  }
-  rows.sort((a,b)=>b.margin - a.margin);
-  const top = rows.slice(0, isZoom ? 20 : 10);
-  const F = _fitCanvas(cv, 300, 200);
+  if(basis === 'mm') rows.sort((a,b)=>(a.needMm ?? 1e9) - (b.needMm ?? 1e9));
+  else rows.sort((a,b)=>b.pct - a.pct);
+  const top = rows.slice(0, isZoom ? 22 : 12);
+
+  const F = _fitCanvas(cv, 300, 230);
   const ctx = F.ctx, CW = F.w, CH = F.h;
   if(!top.length){
     ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
-    ctx.fillText('尚無測站 ETR2 資料', 12, 24);
+    ctx.fillText('此範圍無 ETR2 資料', 12, 24);
     return;
   }
   const fs = isZoom ? 15 : 9;
-  const pL = isZoom ? 210 : 92, pR = isZoom ? 60 : 30;
-  const pT = isZoom ? 44 : 14, pB = isZoom ? 76 : 40;   // 底部留白給圖例
+  const pL = isZoom ? 200 : 84, pR = isZoom ? 80 : 42;
+  const pT = isZoom ? 44 : 16, pB = isZoom ? 76 : 42;
   const iw = CW - pL - pR, ih = CH - pT - pB;
-  const lo = Math.min(-20, Math.floor(Math.min(...top.map(r=>r.margin))/20)*20);
-  const hi = Math.max(20, Math.ceil(Math.max(...top.map(r=>r.margin))/20)*20);
-  const X = v => pL + iw * ((v - lo) / (hi - lo));
+  const vals = top.map(r=> basis === 'mm' ? (r.needMm ?? 0) : (r.pct - MARGIN_WARN));
+  const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+  const pad = Math.max(5, (hi - lo) * 0.12);
+  const X = v => pL + iw * ((v - (lo - pad)) / Math.max(1e-9, (hi + pad) - (lo - pad)));
+
   ctx.strokeStyle = '#12283c'; ctx.fillStyle = '#5a7a95';
   ctx.font = `${fs}px sans-serif`; ctx.textAlign = 'center';
-  for(let v = lo; v <= hi; v += Math.max(20, Math.round((hi-lo)/4/20)*20)){
+  const span = (hi + pad) - (lo - pad);
+  const stepV = span <= 60 ? 20 : span <= 200 ? 50 : 100;
+  for(let v = Math.ceil((lo-pad)/stepV)*stepV; v <= hi + pad; v += stepV){
     ctx.beginPath(); ctx.moveTo(X(v), pT); ctx.lineTo(X(v), pT+ih); ctx.stroke();
-    ctx.fillText((v>0?'+':'')+v, X(v), CH - pB + fs + 2);
+    ctx.fillText((v>0?'+':'') + v.toFixed(0), X(v), CH - pB + fs + 2);
   }
   // 0 線＝警戒值
-  ctx.strokeStyle = '#ff4444'; ctx.lineWidth = 1.5;
+  ctx.strokeStyle = '#ff4444'; ctx.lineWidth = 1.6;
   ctx.beginPath(); ctx.moveTo(X(0), pT); ctx.lineTo(X(0), pT+ih); ctx.stroke();
-  ctx.fillText('距警戒值 (%)', pL + iw/2, CH - 3);
+  ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'center';
+  ctx.fillText(basis === 'mm' ? '距警戒還需雨量 (mm)' : '距警戒值 (ETR2%)',
+               pL + iw/2, CH - pB + fs*2 + 6);
+
+  const ZC = {'山區':'#FF0000', '淺山區':'#FFFF00', '平地':'#00FF00', '沿海地區':'#00FFFF'};
+  const hits = [];
   top.forEach((r, i)=>{
     const y = pT + (ih/top.length)*(i+0.5);
-    const bh = Math.max(4, (ih/top.length)*0.6);
+    const bh = Math.max(3, (ih/top.length)*0.62);
+    // ★ 標籤只顯示一次鄉鎮名（先前縣市+鄉鎮再接鄉鎮，重複了）
+    const label = isZoom ? (r.k) : r.name;
     ctx.fillStyle = r.mine ? '#6bc8e8' : '#9fc8e8';
     ctx.textAlign = 'right'; ctx.font = `${fs}px sans-serif`;
-    ctx.fillText((isZoom ? r.town : '') + r.name.slice(0, isZoom?12:6), pL-5, y+fs*0.35);
-    const col = r.margin >= 0 ? '#FF0000' : r.margin >= -30 ? '#FFFF00' : '#40d060';
-    ctx.fillStyle = col; ctx.globalAlpha = r.mine ? 1 : 0.8;
-    const x0 = X(Math.min(0, r.margin)), x1 = X(Math.max(0, r.margin));
-    ctx.fillRect(x0, y-bh/2, Math.max(1, x1-x0), bh);
+    ctx.fillText(label.slice(0, isZoom ? 12 : 5), pL - 9, y + fs*0.35);
+    // 地形分類色條（同其他預測圖）
+    ctx.fillStyle = ZC[r.zone] || '#00FF00';
+    ctx.fillRect(pL - 6, y - bh/2, 3, bh);
+    const v = basis === 'mm' ? (r.needMm ?? 0) : (r.pct - MARGIN_WARN);
+    ctx.fillStyle = _marginColor(r.pct); ctx.globalAlpha = r.mine ? 1 : 0.88;
+    const x0 = X(Math.min(0, v)), x1 = X(Math.max(0, v));
+    ctx.fillRect(x0, y - bh/2, Math.max(1, x1-x0), bh);
     ctx.globalAlpha = 1;
     ctx.fillStyle = '#cfe4f5'; ctx.textAlign = 'left';
-    ctx.fillText((r.margin>0?'+':'')+r.margin.toFixed(0), X(Math.max(0,r.margin))+4, y+fs*0.35);
+    ctx.fillText((v>0?'+':'') + v.toFixed(basis==='mm'?0:0)
+                 + (basis==='mm' ? '' : '%'), X(Math.max(0,v)) + 4, y + fs*0.35);
+    hits.push({y, h: bh, t: r.t});
   });
+  // 圖例：分級 + 地形
   _drawScaleLegend(ctx, CW, CH,
-    [{max:0, color:'#FF0000', label:'已達警戒'},
-     {max:0, color:'#FFFF00', label:'接近（-30%內）'},
-     {max:0, color:'#40d060', label:'尚有餘裕'}],
+    [{max:0, color:'#00FF00', label:'餘裕'}, {max:0, color:'#FFFF00', label:'接近'},
+     {max:0, color:'#FF0000', label:'已達'}, {max:0, color:'#FF00FF', label:'超過'}],
     fs, isZoom, null);
+  {
+    const TZ = [['山區','#FF0000'],['淺山','#FFFF00'],['平地','#00FF00'],['沿海','#00FFFF']];
+    ctx.font = `${fs}px sans-serif`;
+    const wU = TZ.map(([tx])=>ctx.measureText(tx).width + (isZoom?28:17));
+    let lx = (CW - wU.reduce((a,b)=>a+b,0)) / 2;
+    const ly = CH - (isZoom ? 8 : 3);
+    ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'right';
+    ctx.fillText('左緣＝', lx - 4, ly);
+    TZ.forEach(([tx, c], i)=>{
+      ctx.fillStyle = c; ctx.fillRect(lx, ly - fs*0.8, isZoom?4:3, isZoom?10:7);
+      ctx.fillStyle = '#7a94ac'; ctx.textAlign = 'left';
+      ctx.fillText(tx, lx + (isZoom?8:6), ly);
+      lx += wU[i];
+    });
+  }
+  // 點選跳至該鄉鎮（Ctrl＝強制放大，讓路給 toggleChartZoom）
+  cv._mgHits = hits;
+  if(!cv._mgBound){
+    cv._mgBound = true;
+    cv.addEventListener('click', ev=>{
+      if(ev.ctrlKey || ev.metaKey) return;
+      const rc = cv.getBoundingClientRect();
+      const my = ev.clientY - rc.top;
+      let best = null;
+      (cv._mgHits || []).forEach(h=>{ if(Math.abs(h.y - my) <= h.h) best = h; });
+      if(!best || !best.t) return;
+      ev.stopPropagation();
+      if(typeof closeChartZoom === 'function'){ try{ closeChartZoom(); }catch(e){} }
+      const tt = best.t;
+      if(tt.lat != null && tt.lng != null) map.setView([tt.lat, tt.lng], 11);
+      selected = tt;
+      try{ renderLayer(); updateInfo(tt); }catch(e){}
+    }, true);
+  }
   if(isZoom){
     ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
-    ctx.fillText(top[0] && top[0].isStn ? '全臺最接近警戒的雨量站'
-                                       : '全臺最接近警戒的鄉鎮', CW/2, 26);
+    ctx.fillText((_pickedCounty ? _pickedCounty + ' ' : '全臺 ')
+      + (basis==='mm' ? '距警戒還需雨量' : '距警戒百分比')
+      + _winSrcLabel(), CW/2, 26);
   }
 }
 
-// ══════════════════════════════════════════════════════════
-//  全臺排行（前 20）
-//  ★ 圖形看趨勢、列表看名次；兩者互補。可依地形篩選，點選即跳至該地。
-// ══════════════════════════════════════════════════════════
-// 複製當下排行（純文字，可直接貼到報告或通訊軟體）
 function copyRankList(){
   const rows = window._rankRows || [];
   const metric = (document.getElementById('rank-metric') || {});
@@ -4839,7 +4921,8 @@ function _drawHourlyChart(t, canvasId, isZoom){
     const v=vals[h]||0;
     const x=pL+h*bw, bh=ch*v/axisMax;
     ctx.globalAlpha = h<nowIdx ? (_em[h] ? 0.26 : 0.5) : 1.0;   // 分配槽更暗
-    ctx.fillStyle = districtColor;
+    // ★ 長條改用雨量色階（同地圖圖例），可直接對應強度分級
+    ctx.fillStyle = (RAIN_SCALE.find(b=>v<b.max)||RAIN_SCALE[RAIN_SCALE.length-1]).color;
     ctx.fillRect(x+bw*0.12, pT+ch-bh, bw*0.76, bh);
     if(v>=40 && isZoom){
       ctx.strokeStyle='#FF0000'; ctx.lineWidth=4;
@@ -4855,7 +4938,8 @@ function _drawHourlyChart(t, canvasId, isZoom){
 
   // ETR2% 逐時白色折線（全程；zoom每12h一個數值標籤）
   if(etr){
-    ctx.strokeStyle='#FFFFFF'; ctx.lineWidth=isZoom?5:3;
+    // ★ ETR2 折線改用該鄉鎮所屬分署色（原為白色）
+  ctx.strokeStyle=districtColor; ctx.lineWidth=isZoom?5:3;
     ctx.beginPath();
     etr.forEach((e,i)=>{
       const x=pL+i*bw+bw/2;
@@ -4900,7 +4984,7 @@ function _drawHourlyChart(t, canvasId, isZoom){
     :_bObj.pastObsN>0?'※過去48h：QPESUMS觀測＋缺時段以日觀測分配（最暗）'
     :'※過去48h以官方日觀測分配呈現（逐時觀測累積中）';
   ctx.fillText(`左軸：時雨量(mm/h)${approxTag}　${pastTag}`, pL, axTitleY);
-  ctx.fillStyle='#e8e8e8'; ctx.textAlign='right';
+  ctx.fillStyle=districtColor; ctx.textAlign='right';
   ctx.fillText('右軸：ETR2%（逐時）', pL+cw, axTitleY);
 
   // 現在線（槽48）
@@ -5687,7 +5771,11 @@ function stepWin(delta){
   const m6 = winKey.match(/^fut6_(\d+)$/);
   if(m6){ setWin('fut6_' + Math.max(1, Math.min(8, parseInt(m6[1]) + delta))); return; }
   const md = winKey.match(/^day(\d+)$/);
-  if(md){ setWin('day' + Math.max(0, Math.min(15, parseInt(md[1]) + delta))); return; }
+  if(md){
+    const n = parseInt(md[1]) + delta;
+    if(n < 1){ setWin('today'); return; }     // day0＝今天
+    setWin('day' + Math.min(15, n)); return;
+  }
   const mp = winKey.match(/^past(\d+)$/);
   if(mp){
     const n = parseInt(mp[1]) - delta;      // past1 是昨天，往後＝數字變小
@@ -5695,28 +5783,60 @@ function stepWin(delta){
     else if(n < 1) setWin('today');
     return;
   }
-  if(winKey === 'today'){ setWin(delta > 0 ? 'fut6_1' : 'past1'); return; }
+  if(winKey === 'today'){
+    // ★ 今天在「逐日」序列裡：往後應是 day1（明天），而非跳到 6h 段。
+    //   先前跳到 fut6_1 會讓使用者在逐日檢視中突然換成 6h 尺度。
+    setWin(delta > 0 ? 'day1' : 'past1'); return;
+  }
   if(winKey === 'radar' && delta > 0){ setWin('fut1h_2'); return; }
 }
 // 更新地圖箭頭旁的時段標籤
+// 收合／展開地圖時段列
+function toggleTimeNav(){
+  const nav = document.getElementById('time-nav');
+  const btn = document.getElementById('time-nav-show');
+  if(!nav || !btn) return;
+  const hide = (nav.style.display !== 'none');
+  nav.style.display = hide ? 'none' : 'flex';
+  btn.style.display = hide ? 'block' : 'none';
+}
+// ★ 標籤一律顯示實際時間，而非「第 N 段」這種相對描述。
+//   6h 段以「凌晨／上午／下午／晚上」標示，比 00-06 更直覺。
+function _segPeriodName(h){
+  return h < 6 ? '凌晨' : h < 12 ? '上午' : h < 18 ? '下午' : '晚上';
+}
+function _fmtDayTime(d, withPeriod){
+  const WD = ['日','一','二','三','四','五','六'];
+  const base = `${d.getMonth()+1}/${d.getDate()}（${WD[d.getDay()]}）`;
+  if(withPeriod) return base + ' ' + _segPeriodName(d.getHours());
+  return base + ' ' + String(d.getHours()).padStart(2,'0') + '時';
+}
 function _syncTimeNav(){
   const el = document.getElementById('time-nav-label');
   if(!el) return;
   let txt = '';
   if(_hourIdx != null){
-    const d = new Date(Date.now() + _hourIdx * 3600e3);
-    txt = `+${_hourIdx}h　${d.getMonth()+1}/${d.getDate()} `
-        + `${String(d.getHours()).padStart(2,'0')}:00`;
-  } else if(winKey === 'radar') txt = '未來1h雷達';
-  else if(winKey === 'today') txt = '今天';
+    txt = _fmtDayTime(new Date(Date.now() + _hourIdx * 3600e3), false);
+  } else if(winKey === 'radar') txt = '未來1小時（雷達）';
   else if(winKey === 'custom') txt = '自訂範圍';
-  else {
+  else if(winKey === 'today'){
+    txt = _fmtDayTime(new Date(), false).replace(/\s\d+時$/, '　今天');
+  } else {
     const m6 = winKey.match(/^fut6_(\d+)$/);
     const md = winKey.match(/^day(\d+)$/);
     const mp = winKey.match(/^past(\d+)$/);
-    if(m6) txt = `未來第 ${m6[1]} 個 6h 段`;
-    else if(md) txt = `第 ${md[1]} 日`;
-    else if(mp) txt = `過去第 ${mp[1]} 日`;
+    if(m6){
+      // 該 6h 段的起始時刻
+      const seg = _nowSeg() + parseInt(m6[1]) - 1;
+      const d0 = new Date(); d0.setHours(0,0,0,0);
+      txt = _fmtDayTime(new Date(d0.getTime() + seg * 6 * 3600e3), true);
+    } else if(md){
+      const d = new Date(); d.setDate(d.getDate() + parseInt(md[1]));
+      txt = _fmtDayTime(d, false).replace(/\s\d+時$/, '');
+    } else if(mp){
+      const d = new Date(); d.setDate(d.getDate() - parseInt(mp[1]));
+      txt = _fmtDayTime(d, false).replace(/\s\d+時$/, '');
+    }
   }
   el.textContent = txt;
 }
