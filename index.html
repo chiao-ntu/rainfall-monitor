@@ -162,6 +162,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 <div class="ctrl-row">
     <span class="cl" style="color:#7ee8a8">圖層</span>
     <div class="bg">
+      <select id="countyPick" onchange="pickCounty(this.value)"
+      style="font-size:10px;padding:2px 5px;background:#061220;color:#cfe4f5;
+      border:1px solid #1a4060;border-radius:3px;max-width:130px">
+      <option value="">全臺</option>
+      </select>
       <button class="b on" id="bRain"  onclick="setMode('rain')" style="border-color:#3a8a5a;color:#7ee8a8">累積雨量</button>
       <button class="b"    id="bEtr"   onclick="setMode('etr')" style="border-color:#3a8a5a;color:#7ee8a8">ETR2%</button>
       <button class="b"    id="bRisk"  onclick="setMode('risk')" style="border-color:#3a8a5a;color:#7ee8a8">風險指標</button>
@@ -176,11 +181,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <select id="townNameScope" onchange="setTownNameScope(this.value)"
         style="display:none;font-size:10px;background:#061220;color:#8ac8e8;
         border:1px solid #1a4060;border-radius:3px;padding:2px 3px;margin-right:3px"></select>
-      <select id="countyPick" onchange="pickCounty(this.value)"
-        style="font-size:10px;padding:2px 5px;background:#061220;color:#cfe4f5;
-        border:1px solid #1a4060;border-radius:3px;max-width:130px">
-        <option value="">全臺</option>
-      </select>
       <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
         style="border-color:#8a6a3a;color:#e8c87a">📍 雨量測站</button>
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
@@ -397,7 +397,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <div id="map" style="position:relative">
 
     <!-- 時段切換箭頭：與控制列的 −/＋ 等效，看地圖時不必回到上方操作 -->
-    <div id="time-nav" style="position:absolute;bottom:18px;left:50%;
+    <div id="time-nav" style="position:absolute;top:14px;left:50%;
       transform:translateX(-50%);z-index:650;display:flex;align-items:center;gap:6px;
       background:rgba(10,20,34,.92);border:1px solid #2a5070;border-radius:20px;
       padding:5px 12px;box-shadow:0 3px 14px rgba(0,0,0,.5)"
@@ -411,8 +411,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="padding:3px 7px;font-size:11px">▼</button>
     </div>
     <button id="time-nav-show" onclick="toggleTimeNav()"
-      style="display:none;position:absolute;bottom:18px;left:50%;
-      transform:translateX(-50%);z-index:650;background:rgba(10,20,34,.92);
+      style="display:none;position:absolute;top:14px;right:96px;
+      z-index:650;background:rgba(10,20,34,.92);
       border:1px solid #2a5070;border-radius:14px;color:#9fc8e8;font-size:11px;
       padding:3px 12px;cursor:pointer">▲ 時段</button>
 
@@ -719,7 +719,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           <select id="margin-basis" onchange="drawMarginChart(selected)"
             style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
             border:1px solid #1a4060;border-radius:3px">
-            <option value="mm">距警戒還需雨量（mm）</option>
+            <option value="mm">距警戒雨量（mm）</option>
             <option value="pct">距警戒百分比（ETR2%）</option>
           </select>
         </div>
@@ -1586,6 +1586,93 @@ const HomeControl = L.Control.extend({
   }
 });
 map.addControl(new HomeControl());
+
+// ★ 截圖：固定使用地形疊圖的範圍，讓每次輸出的尺寸與涵蓋範圍一致。
+//   先前手動截圖的大小每次不同，無法橫向比較或做成系列圖。
+const SnapControl = L.Control.extend({
+  options:{ position:'topleft' },
+  onAdd:function(){
+    const c = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+    const a = L.DomUtil.create('a', '', c);
+    a.href = '#'; a.title = '截圖（固定範圍）';
+    a.setAttribute('role','button');
+    a.innerHTML = '📷';
+    a.style.cssText = 'font-size:15px;line-height:30px;text-align:center;text-decoration:none';
+    L.DomEvent.on(a, 'click', function(e){
+      L.DomEvent.stop(e);
+      snapMap();
+    });
+    L.DomEvent.disableClickPropagation(c);
+    return c;
+  }
+});
+map.addControl(new SnapControl());
+
+function snapMap(){
+  // 先把視野對齊地形疊圖的範圍，確保每次截圖涵蓋一致
+  const B = (typeof TERRAIN_RELIEF !== 'undefined' && TERRAIN_RELIEF.bounds)
+    ? TERRAIN_RELIEF.bounds : [[21.89, 120.04], [25.30, 122.01]];
+  map.fitBounds(L.latLngBounds(B), {padding:[0,0], animate:false});
+  setTimeout(()=>_doSnap(B), 700);   // 等圖磚與疊圖重繪
+}
+function _doSnap(B){
+  const size = map.getSize();
+  const cv = document.createElement('canvas');
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(size.x * dpr);
+  cv.height = Math.round(size.y * dpr);
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size.x, size.y);
+
+  const pane = map.getPanes().mapPane;
+  const imgs = [...pane.querySelectorAll('img')];
+  imgs.forEach(im=>{
+    try{
+      const r = im.getBoundingClientRect();
+      const mr = map.getContainer().getBoundingClientRect();
+      ctx.globalAlpha = parseFloat(im.style.opacity || '1') || 1;
+      ctx.drawImage(im, r.left - mr.left, r.top - mr.top, r.width, r.height);
+      ctx.globalAlpha = 1;
+    }catch(e){}
+  });
+  // SVG 向量層（鄉鎮色塊、界線）轉點陣後疊上
+  const svgs = [...pane.querySelectorAll('svg')];
+  let pending = svgs.length;
+  const finish = ()=>{
+    const ts = new Date();
+    const name = `map_${ts.getFullYear()}${String(ts.getMonth()+1).padStart(2,'0')}`
+      + `${String(ts.getDate()).padStart(2,'0')}_`
+      + `${String(ts.getHours()).padStart(2,'0')}${String(ts.getMinutes()).padStart(2,'0')}.png`;
+    cv.toBlob(b=>{
+      const url = URL.createObjectURL(b);
+      const a = document.createElement('a');
+      a.href = url; a.download = name;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(url), 1000);
+      console.log(`已截圖：${name}（${cv.width}×${cv.height}）`);
+    }, 'image/png');
+  };
+  if(!pending){ finish(); return; }
+  svgs.forEach(sv=>{
+    try{
+      const r = sv.getBoundingClientRect();
+      const mr = map.getContainer().getBoundingClientRect();
+      const clone = sv.cloneNode(true);
+      clone.setAttribute('width', r.width);
+      clone.setAttribute('height', r.height);
+      const xml = new XMLSerializer().serializeToString(clone);
+      const im = new Image();
+      im.onload = ()=>{
+        ctx.drawImage(im, r.left - mr.left, r.top - mr.top, r.width, r.height);
+        if(--pending === 0) finish();
+      };
+      im.onerror = ()=>{ if(--pending === 0) finish(); };
+      im.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(xml)));
+    }catch(e){ if(--pending === 0) finish(); }
+  });
+}
 // 分層：seaPane(390) < townPane(395) < overlayPane(400: 縣界/災害框線)
 map.createPane('seaPane');
 map.getPane('seaPane').style.zIndex = 390;
@@ -2509,7 +2596,7 @@ function drawMarginChart(t, canvasId){
                pct, needMm, zone: _townZone(tt) || '平地',
                mine: k === key});
   });
-  if(basis === 'mm') rows.sort((a,b)=>(a.needMm ?? 1e9) - (b.needMm ?? 1e9));
+  if(basis === 'mm') rows.sort((a,b)=>(a.needMm ?? 1e9) - (b.needMm ?? 1e9));   // 需雨量少者在前（最危險）
   else rows.sort((a,b)=>b.pct - a.pct);
   const top = rows.slice(0, isZoom ? 22 : 12);
 
@@ -2524,7 +2611,11 @@ function drawMarginChart(t, canvasId){
   const pL = isZoom ? 200 : 84, pR = isZoom ? 80 : 42;
   const pT = isZoom ? 44 : 16, pB = isZoom ? 76 : 42;
   const iw = CW - pL - pR, ih = CH - pT - pB;
-  const vals = top.map(r=> basis === 'mm' ? (r.needMm ?? 0) : (r.pct - MARGIN_WARN));
+  // ★ 兩種基礎的方向一致：越接近／超過警戒 → 值越大（往右）。
+  //   mm 基礎原本是「還需雨量」（越大代表越安全），方向與 % 相反，
+  //   兩張圖並看時容易誤讀。改為取負值，語意變成「超出警戒的雨量」，
+  //   正值＝已超過、負值＝尚差多少。
+  const vals = top.map(r=> basis === 'mm' ? -(r.needMm ?? 0) : (r.pct - MARGIN_WARN));
   const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
   const pad = Math.max(5, (hi - lo) * 0.12);
   const X = v => pL + iw * ((v - (lo - pad)) / Math.max(1e-9, (hi + pad) - (lo - pad)));
@@ -2541,7 +2632,8 @@ function drawMarginChart(t, canvasId){
   ctx.strokeStyle = '#ff4444'; ctx.lineWidth = 1.6;
   ctx.beginPath(); ctx.moveTo(X(0), pT); ctx.lineTo(X(0), pT+ih); ctx.stroke();
   ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'center';
-  ctx.fillText(basis === 'mm' ? '距警戒還需雨量 (mm)' : '距警戒值 (ETR2%)',
+  ctx.fillText(basis === 'mm' ? '距警戒雨量 (mm，正值＝已超過)'
+                              : '距警戒值 (ETR2%，正值＝已超過)',
                pL + iw/2, CH - pB + fs*2 + 6);
 
   const ZC = {'山區':'#FF0000', '淺山區':'#FFFF00', '平地':'#00FF00', '沿海地區':'#00FFFF'};
@@ -2557,7 +2649,7 @@ function drawMarginChart(t, canvasId){
     // 地形分類色條（同其他預測圖）
     ctx.fillStyle = ZC[r.zone] || '#00FF00';
     ctx.fillRect(pL - 6, y - bh/2, 3, bh);
-    const v = basis === 'mm' ? (r.needMm ?? 0) : (r.pct - MARGIN_WARN);
+    const v = basis === 'mm' ? -(r.needMm ?? 0) : (r.pct - MARGIN_WARN);
     ctx.fillStyle = _marginColor(r.pct); ctx.globalAlpha = r.mine ? 1 : 0.88;
     const x0 = X(Math.min(0, v)), x1 = X(Math.max(0, v));
     ctx.fillRect(x0, y - bh/2, Math.max(1, x1-x0), bh);
@@ -2753,12 +2845,19 @@ function pickCounty(c){
   _pickedCounty = c || '';
   if(!_pickedCounty){ selected = null; updateInfo(null); return; }
   // 縮放到該縣市範圍
+  // ★ 只取本島／主要離島範圍：高雄市轄下含東沙（20.7N/116.7E）與
+  //   南沙太平島（10.4N/114.4E），若一併計入外接矩形，
+  //   fitBounds 會把畫面拉到整個南海，看不到高雄本體。
   const pts = [];
   (TOWN_GEO.features || []).forEach(f=>{
     if((f.properties || {}).COUNTYNAME !== _pickedCounty) return;
     const g = f.geometry;
     const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
-    polys.forEach(poly=>(poly[0] || []).forEach(cc=>pts.push([cc[1], cc[0]])));
+    polys.forEach(poly=>(poly[0] || []).forEach(cc=>{
+      const la = cc[1], lo = cc[0];
+      if(la < 21.5 || la > 26.5 || lo < 118.0 || lo > 122.5) return;  // 排除南海諸島
+      pts.push([la, lo]);
+    }));
   });
   if(pts.length) map.fitBounds(L.latLngBounds(pts), {padding:[30,30]});
   selected = null;                 // 縣市層級：不指定單一鄉鎮
@@ -3862,22 +3961,44 @@ function key_is_today_window(sf, st){
 // 取「未來第 h 小時」的雨量。
 //   優先用 IFS HRES 的原生逐時（hourly_ifs）；其他模式沒有逐時資料，
 //   退回該 6h 段的平均值並標記 approx，前端須標示為近似。
+// 取「未來第 h 小時」的雨量。
+//   ★ 關鍵原則：逐時值累加後必須等於該模式的 6h 段值，否則
+//     逐時與逐日、6h 段互相矛盾（先前逐時直接取 IFS 原生值，
+//     但逐日用的是所選模式的段值，兩者來源不同、加總對不上）。
+//   作法：以所選模式的 6h 段值為「總量」，用 IFS 逐時的形狀
+//     （時間分布比例）去分配 —— 總量正確，分布也保有逐時解析度。
 function _hourlyAt(t, h){
   if(h == null || h < 1) return null;
-  // hourly_ifs[0] 對應「今天 00 時」，需換算成「現在起算的第 h 小時」
-  const now = new Date();
-  const idx = now.getHours() + h;
-  if(forecastModel === 'ecmwf' || forecastModel === 'best' || forecastModel === 'blend'){
-    const arr = t.hourly_ifs;
-    if(Array.isArray(arr) && idx < arr.length && arr[idx] != null){
-      return {v: arr[idx], approx: false};
-    }
-  }
-  // 退回 6h 段平均
   const seg = _nowSeg() + Math.floor((h - 1) / 6);
   const a = getQpfArr(t, MODEL_FIELD[forecastModel] || 'qpf_best');
-  const v = (Array.isArray(a) && a[seg] != null) ? a[seg] / 6 : null;
-  return (v == null) ? null : {v: Math.round(v * 10) / 10, approx: true};
+  const segTotal = (Array.isArray(a) && a[seg] != null) ? a[seg] : null;
+  if(segTotal == null) return null;
+
+  // IFS 逐時：hourly_ifs[0] 對應「今天 00 時」
+  const arr = t.hourly_ifs;
+  if(Array.isArray(arr) && arr.length){
+    // 該 6h 段涵蓋的逐時索引（日曆日對齊）
+    const base = seg * 6;
+    const hrs = [];
+    for(let k = 0; k < 6; k++){
+      const v = arr[base + k];
+      hrs.push((v == null || !isFinite(v)) ? 0 : v);
+    }
+    const sum = hrs.reduce((x, y)=>x + y, 0);
+    const now = new Date();
+    const idxInSeg = (now.getHours() + h) - base;
+    if(idxInSeg >= 0 && idxInSeg < 6){
+      if(sum > 0.05){
+        // 依 IFS 的時間分布比例分配所選模式的段總量
+        const v = segTotal * hrs[idxInSeg] / sum;
+        return {v: Math.round(v * 10) / 10, approx: false};
+      }
+      // IFS 該段全無雨 → 平均分配（形狀無資訊）
+      return {v: Math.round(segTotal / 6 * 10) / 10, approx: true};
+    }
+  }
+  // 無逐時形狀可用 → 段內平均
+  return {v: Math.round(segTotal / 6 * 10) / 10, approx: true};
 }
 
 function getAccum(t){
@@ -7681,10 +7802,37 @@ function _townCentroidRaw(f){
 function _buildTownNameScope(){
   const sel = document.getElementById('townNameScope');
   if(!sel || sel.options.length) return;
-  const cs = [...new Set((TOWN_GEO.features||[]).map(f=>(f.properties||{}).COUNTYNAME))]
-             .filter(Boolean).sort();
-  sel.innerHTML = `<option value="ALL">全臺（${cs.length} 縣市）</option>`
-    + cs.map(c=>`<option value="${c}">${c}</option>`).join('');
+  const cs = new Set((TOWN_GEO.features||[]).map(f=>(f.properties||{}).COUNTYNAME)
+                     .filter(Boolean));
+  sel.innerHTML = `<option value="ALL">全臺（${cs.size} 縣市）</option>`;
+  // ★ 依分署分組（同縣市選單）：字典序會把同分署的縣市打散，
+  //   使用者是依分署轄區在判讀。
+  DISTRICT_ORDER.forEach(dist=>{
+    const list = (DISTRICT_COUNTIES[dist] || []).filter(c=>cs.has(c));
+    if(!list.length) return;
+    const grp = document.createElement('optgroup');
+    grp.label = dist;
+    const dc = DISTRICT_COLOR[dist];
+    if(dc){ grp.style.color = dc; grp.style.fontWeight = '700'; }
+    list.forEach(c=>{
+      const o = document.createElement('option');
+      o.value = c; o.textContent = c;
+      o.style.color = '#8ac8e8'; o.style.fontWeight = '400';
+      grp.appendChild(o);
+      cs.delete(c);
+    });
+    sel.appendChild(grp);
+  });
+  if(cs.size){
+    const grp = document.createElement('optgroup');
+    grp.label = '其他';
+    [...cs].sort().forEach(c=>{
+      const o = document.createElement('option');
+      o.value = c; o.textContent = c;
+      grp.appendChild(o);
+    });
+    sel.appendChild(grp);
+  }
   sel.value = townNameScope;
 }
 
