@@ -286,7 +286,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <div class="ctrl-row" id="model-row-wrap" style="display:none">
     <div class="bg" id="model-row">
       <button class="b model-btn on" id="mBlend" onclick="setModel('blend')"
-        style="border-color:#c8a45a;color:#f0c878">融合</button>
+        style="border-color:#c8a45a;color:#f0c878">FORMOSA</button>
       <button class="b model-btn"    id="mCwa"   onclick="setModel('cwa')">CWA</button>
       <button class="b model-btn" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
       <button class="b model-btn"    id="mEcmwf" onclick="setModel('ecmwf')">ECMWF</button>
@@ -399,16 +399,16 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <!-- 時段切換箭頭：與控制列的 −/＋ 等效，看地圖時不必回到上方操作 -->
     <div id="time-nav" style="position:absolute;top:14px;left:50%;
       transform:translateX(-50%);z-index:650;display:flex;align-items:center;gap:6px;
-      background:rgba(10,20,34,.92);border:1px solid #2a5070;border-radius:20px;
-      padding:5px 12px;box-shadow:0 3px 14px rgba(0,0,0,.5)"
+      background:rgba(10,20,34,.92);border:1px solid #2a5070;border-radius:14px;
+      padding:2px 10px;box-shadow:0 3px 14px rgba(0,0,0,.5)"
       onclick="event.stopPropagation()" onmousedown="event.stopPropagation()"
       ondblclick="event.stopPropagation()">
-      <button class="b" onclick="stepWin(-1)" style="padding:3px 10px;font-size:13px">◀</button>
+      <button class="b" onclick="stepWin(-1)" style="padding:1px 8px;font-size:12px">◀</button>
       <span id="time-nav-label" style="font-size:11px;color:#9fc8e8;min-width:150px;
         text-align:center"></span>
-      <button class="b" onclick="stepWin(1)" style="padding:3px 10px;font-size:13px">▶</button>
+      <button class="b" onclick="stepWin(1)" style="padding:1px 8px;font-size:12px">▶</button>
       <button class="b" id="time-nav-fold" onclick="toggleTimeNav()"
-        style="padding:3px 7px;font-size:11px">▼</button>
+        style="padding:1px 6px;font-size:10px">▲</button>
     </div>
     <button id="time-nav-show" onclick="toggleTimeNav()"
       style="display:none;position:absolute;top:14px;right:96px;
@@ -2467,7 +2467,7 @@ function _winSrcLabel(){
     return `（+${h}h 逐時${native ? '・IFS HRES 原生' : '・段內平均'}）`;
   }
   if(winKey.startsWith('past')) return '（氣象署觀測）';
-  const mn = {blend:'融合', best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
+  const mn = {blend:'FORMOSA', best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
               icon:'ICON', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'}[forecastModel] || '';
   if(winKey === 'today') return `（今日＝觀測＋${mn}預測）`;
   return `（${mn} 預測）`;
@@ -2565,6 +2565,23 @@ function drawEtrPhaseChart(t, canvasId){
 //    綠 −20% 以上餘裕｜黃 −20% 以內｜紅 超過 10%｜紫 超過 10% 以上
 //  ★ 隨時間視窗變動：用 getAccum 取當前視窗的 ETR2%，而非固定現值。
 // ══════════════════════════════════════════════════════════
+// ★ 逐時雨量色階（中央氣象署時雨量標準，使用者指定）
+//   與累積雨量色階分開：時雨量 30mm/h 已是紅色警示，
+//   但累積 30mm 只是綠色，兩者不能共用同一組級距。
+const HOURLY_SCALE = [
+  {max: 1,   color:'#FFFFFF', label:'<1'},
+  {max: 10,  color:'#00FFFF', label:'1–10'},
+  {max: 20,  color:'#00FF00', label:'10–20'},
+  {max: 30,  color:'#FFFF00', label:'20–30'},
+  {max: 50,  color:'#FF0000', label:'30–50'},
+  {max: 80,  color:'#FF00FF', label:'50–80'},
+  {max: 9999,color:'#D8A0FF', label:'≥80'},
+];
+function _hourlyColor(v){
+  if(v == null || !isFinite(v)) return null;
+  return (HOURLY_SCALE.find(b=>v < b.max) || HOURLY_SCALE[HOURLY_SCALE.length-1]).color;
+}
+
 const MARGIN_WARN = 90;      // ETR2% 警戒值
 function _marginColor(pct){
   const d = pct - MARGIN_WARN;
@@ -3591,7 +3608,7 @@ function scnApplyAndClose(){
   }
 }
 
-const SCN_MODEL_LABEL = {'':'沿用上方', blend:'融合', best:'CWA+ECMWF',
+const SCN_MODEL_LABEL = {'':'沿用上方', blend:'FORMOSA', best:'CWA+ECMWF',
   ecmwf:'ECMWF', gfs:'GFS', icon:'ICON', jma:'JMA',
   aifs:'EC-AIFS', gc:'GFS GraphCast', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'};
 
@@ -3893,6 +3910,22 @@ function _nowSeg(){
 //   過去：raw + (錨點 − raw現在)  → 加法位移接上官方值（不用乘法，避免放大失真）
 //   無官方錨點者（無警戒值鄉鎮）→ 退回原始算法，行為不變。
 const ETR2_DECAY_6H = Math.pow(0.7, 1/4);   // ≈0.9147
+// ★ 視窗內的「最高」ETR2（而非視窗結束時刻的值）。
+//   理由：ETR2 含前期折減，某段大雨後若隔段無雨會回落。
+//   若只取結束時刻，會出現「當天明明達標卻整片空白」的情形 ——
+//   例如早上 40%、下午升到 50%、晚上折減回 45%，取結束值會漏掉那個 50%。
+//   防災判讀要看的是「這段期間曾經到過多高」，故改取區間最大值。
+function calcEtr2MaxIn(t, segA, segB, qpfField){
+  const a = Math.min(segA, segB), b = Math.max(segA, segB);
+  let mx = null;
+  for(let s = a; s <= b; s++){
+    const v = calcEtr2AtSeg(t, s, qpfField);
+    if(v == null || !isFinite(v)) continue;
+    if(mx == null || v > mx) mx = v;
+  }
+  return mx;
+}
+
 function calcEtr2AtSeg(t, seg, qpfField){
   const anchor = t.etr2;
   if(anchor === null || anchor === undefined || !isFinite(anchor)){
@@ -4074,7 +4107,8 @@ function getAccum(t){
     const sp = _spanAccum(t, segFrom, segTo);
     let etrPct = null;
     if(hasEtr){
-      const etr2 = calcEtr2AtSeg(t, segTo, qpfField);
+      // 取視窗內最高值（見 calcEtr2MaxIn 的說明）
+      const etr2 = calcEtr2MaxIn(t, segFrom, segTo, qpfField);
       etrPct = Math.round(etr2/_etrDen(t)*1000)/10;
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
@@ -4090,7 +4124,8 @@ function getAccum(t){
     // 即使 totalRain 是 null（真的無觀測），ETR2 仍嘗試計算
     let etrPct = null;
     if(hasEtr){
-      const etr2 = calcEtr2AtSeg(t, segTo, qpfField);
+      // 取視窗內最高值（見 calcEtr2MaxIn 的說明）
+      const etr2 = calcEtr2MaxIn(t, segFrom, segTo, qpfField);
       etrPct = Math.round(etr2/_etrDen(t)*1000)/10;
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
@@ -4143,7 +4178,8 @@ function getAccum(t){
       //   官方時間基準的現值仍在「現況觀測 → ETR2%官方現值」呈現（走 getObsEtr，
       //   錨定官方 etr2_pct），兩者分工明確，不會失去官方對齊。
       //   同時也讓 getAccum 與 _summaryEtr（CSV/複製，用 segTo=3）一致。
-      const etr2 = calcEtr2AtSeg(t, segTo, qpfField);
+      // 取視窗內最高值（見 calcEtr2MaxIn 的說明）
+      const etr2 = calcEtr2MaxIn(t, segFrom, segTo, qpfField);
       etrPct = Math.round(etr2/_etrDen(t)*1000)/10;
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
@@ -4263,6 +4299,10 @@ function renderLayer(){
         //   浪高看起來沒有資料」的原因。
         fillColor = warnMapColor(totalRain || 0);
         fillOp    = (totalRain||0)>0 ? (isSel?0.93:0.82) : 1.0;
+      } else if(acc.isHourly){
+        // ★ 逐時視窗用時雨量色階（非累積雨量色階）
+        fillColor = _hourlyColor(totalRain) || '#FFFFFF';
+        fillOp    = (totalRain == null) ? 0.05 : (isSel?0.95:0.85);
       } else if(acc.isTemp){
         // 氣溫：無資料留白（不可視為 0°C）
         fillColor = _tempColor(totalRain) || '#FFFFFF';
@@ -5271,7 +5311,8 @@ function renderLegend(){
   const ELEV_SCALE = ELEV_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
   const TEMP_SCALE = TEMP_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
   const WAVE_SCALE = WAVE_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
-  const sc = mode==='temp' ? TEMP_SCALE
+  const sc = (_hourIdx != null && mode==='rain') ? HOURLY_SCALE
+           : mode==='temp' ? TEMP_SCALE
            : mode==='wave' ? WAVE_SCALE
            : mode==='rain' ? RAIN_SCALE
            : mode==='etr'  ? ETR_SCALE
@@ -5281,6 +5322,7 @@ function renderLegend(){
   const titles = { rain: isFuture6h ? '降雨強度' : '累積雨量(mm)', etr: 'ETR2%',
                    risk: '風險指標', warn: '警特報預估', wind: '蒲福風級',
                    temp: '氣溫(°C)', wave: '浪高' };
+  if(_hourIdx != null && mode==='rain') return '時雨量(mm/h)';
   const titleText = titles[mode] || '';
 
   // 強度分級用描述性文字，不顯示數字範圍
@@ -5573,9 +5615,9 @@ async function tryLoadLive(){
         `title="開關自訂倍率。與『套用修正』相乘，兩者都開時以合併倍率生效。">\u2715自訂倍率 \u00d7${_userFactor}</button>` +
         `<span id="ufac-eff" style="font-size:9px;margin-left:5px;font-weight:700"></span>` +
         `<button id="scn-btn" class="b" onclick="toggleScenario()" style="margin-left:6px;font-size:10px;padding:1px 6px" `+
-        `title="開關情境設定（逐日×分署×地形的模式／加成／倍率）。與全域倍率相乘。">◇情境</button>` +
+        `>◇情境</button>` +
         `<button class="b" onclick="openScnModal()" style="font-size:10px;padding:1px 6px" `+
-        `title="開啟情境編輯器">編輯…</button>` +
+        `>編輯…</button>` +
         `<span id="scn-summary" style="font-size:9px;margin-left:5px"></span>`;
     }
     scnLoad();
@@ -5893,9 +5935,11 @@ function stepWin(delta){
   if(m6){ setWin('fut6_' + Math.max(1, Math.min(8, parseInt(m6[1]) + delta))); return; }
   const md = winKey.match(/^day(\d+)$/);
   if(md){
+    // ★ 逐日按鈕從 day2 起算（day2＝明天），today 即為序列中的第 1 天。
+    //   先前寫成 day1／day0，那是無效的鍵，切換會跳到未定義狀態。
     const n = parseInt(md[1]) + delta;
-    if(n < 1){ setWin('today'); return; }     // day0＝今天
-    setWin('day' + Math.min(15, n)); return;
+    if(n < 2){ setWin('today'); return; }
+    setWin('day' + Math.min(16, n)); return;
   }
   const mp = winKey.match(/^past(\d+)$/);
   if(mp){
@@ -5905,9 +5949,7 @@ function stepWin(delta){
     return;
   }
   if(winKey === 'today'){
-    // ★ 今天在「逐日」序列裡：往後應是 day1（明天），而非跳到 6h 段。
-    //   先前跳到 fut6_1 會讓使用者在逐日檢視中突然換成 6h 尺度。
-    setWin(delta > 0 ? 'day1' : 'past1'); return;
+    setWin(delta > 0 ? 'day2' : 'past1'); return;   // day2＝明天
   }
   if(winKey === 'radar' && delta > 0){ setWin('fut1h_2'); return; }
 }
@@ -5952,7 +5994,8 @@ function _syncTimeNav(){
       const d0 = new Date(); d0.setHours(0,0,0,0);
       txt = _fmtDayTime(new Date(d0.getTime() + seg * 6 * 3600e3), true);
     } else if(md){
-      const d = new Date(); d.setDate(d.getDate() + parseInt(md[1]));
+      // day2＝明天，故位移為 n−1 天
+      const d = new Date(); d.setDate(d.getDate() + parseInt(md[1]) - 1);
       txt = _fmtDayTime(d, false).replace(/\s\d+時$/, '');
     } else if(mp){
       const d = new Date(); d.setDate(d.getDate() - parseInt(mp[1]));
