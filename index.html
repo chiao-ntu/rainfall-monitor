@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>台灣降雨預測監測系統</title>
+<title>FORMOSA</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -473,7 +473,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <div id="chart-zoom-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;
     background:rgba(4,8,14,0.92);z-index:3000;cursor:zoom-out;
     display:none;align-items:center;justify-content:center;flex-direction:column">
-    <button onclick="closeChartZoom()" title="關閉（Esc）"
+    <button onclick="closeChartZoom()"
       style="position:absolute;top:14px;right:18px;z-index:3100;
       background:#0d2438;color:#9fc8e8;border:1px solid #2a5070;border-radius:4px;
       font-size:18px;line-height:1;padding:4px 10px;cursor:pointer">✕</button>
@@ -1037,6 +1037,18 @@ let _cwaQpfActive = false;  // 前48h是否為CWA QPF覆蓋
 let sidebarOpen = true;
 // 自訂色階級距編輯器（僅自訂範圍模式可用）
 const DEFAULT_RAIN_BREAKS = [5,20,40,70,130,250];
+// ★ 累積雨量色階。原本從未以 const/let 宣告（散落 42 處使用，
+//   靠隱含全域在執行期才成形），一旦在宣告前被引用就會拋
+//   ReferenceError。此處明確定義，並與 DEFAULT_RAIN_BREAKS 對齊。
+const RAIN_SCALE = [
+  {max: DEFAULT_RAIN_BREAKS[0], color:'#FFFFFF', label:`< ${DEFAULT_RAIN_BREAKS[0]} mm`},
+  {max: DEFAULT_RAIN_BREAKS[1], color:'#00FFFF', label:`${DEFAULT_RAIN_BREAKS[0]}–${DEFAULT_RAIN_BREAKS[1]} mm`},
+  {max: DEFAULT_RAIN_BREAKS[2], color:'#00FF00', label:`${DEFAULT_RAIN_BREAKS[1]}–${DEFAULT_RAIN_BREAKS[2]} mm`},
+  {max: DEFAULT_RAIN_BREAKS[3], color:'#FFFF00', label:`${DEFAULT_RAIN_BREAKS[2]}–${DEFAULT_RAIN_BREAKS[3]} mm`},
+  {max: DEFAULT_RAIN_BREAKS[4], color:'#FF0000', label:`${DEFAULT_RAIN_BREAKS[3]}–${DEFAULT_RAIN_BREAKS[4]} mm`},
+  {max: DEFAULT_RAIN_BREAKS[5], color:'#FF00FF', label:`${DEFAULT_RAIN_BREAKS[4]}–${DEFAULT_RAIN_BREAKS[5]} mm`},
+  {max: 1e9,                    color:'#FFAAFF', label:`${DEFAULT_RAIN_BREAKS[5]}+ mm`},
+];
 function toggleCustomScaleEditor(){
   const el = document.getElementById('custom-scale-editor');
   const btn = document.getElementById('bCustomScale');
@@ -1608,104 +1620,101 @@ const SnapControl = L.Control.extend({
 });
 map.addControl(new SnapControl());
 
+// ★ 固定尺寸截圖：把地圖容器暫時設為固定像素、視野對齊地形疊圖範圍，
+//   截完再還原。這樣不論螢幕解析度或視窗大小，輸出都完全一致，
+//   可以直接做成系列圖比較（先前直接畫 canvas，行政區界的線寬與
+//   抗鋸齒跟瀏覽器渲染不同，而且尺寸隨視窗變動）。
+const SNAP_W = 900, SNAP_H = 1200;      // 直式，比例接近臺灣本島
 function snapMap(){
-  // 先把視野對齊地形疊圖的範圍，確保每次截圖涵蓋一致
+  const mp = document.getElementById('map');
+  if(!mp) return;
+  const prev = { w: mp.style.width, h: mp.style.height,
+                 pos: mp.style.position, flex: mp.style.flex };
+  mp.style.flex = '0 0 auto';
+  mp.style.width = SNAP_W + 'px';
+  mp.style.height = SNAP_H + 'px';
+  map.invalidateSize({animate:false});
   const B = (typeof TERRAIN_RELIEF !== 'undefined' && TERRAIN_RELIEF.bounds)
     ? TERRAIN_RELIEF.bounds : [[21.89, 120.04], [25.30, 122.01]];
   map.fitBounds(L.latLngBounds(B), {padding:[0,0], animate:false});
-  setTimeout(()=>_doSnap(B), 700);   // 等圖磚與疊圖重繪
+  console.log(`截圖：固定 ${SNAP_W}×${SNAP_H}，視野已對齊地形範圍`);
+  setTimeout(()=>{
+    _doSnap(B).finally(()=>{
+      mp.style.width = prev.w; mp.style.height = prev.h;
+      mp.style.position = prev.pos; mp.style.flex = prev.flex;
+      map.invalidateSize({animate:false});
+    });
+  }, 900);   // 等圖磚、疊圖與向量層重繪
 }
 function _doSnap(B){
-  const size = map.getSize();
-  const cv = document.createElement('canvas');
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  cv.width = Math.round(size.x * dpr);
-  cv.height = Math.round(size.y * dpr);
-  const ctx = cv.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, size.x, size.y);
+  return new Promise(resolve=>{
+    const size = map.getSize();
+    const cv = document.createElement('canvas');
+    cv.width = size.x; cv.height = size.y;     // 固定尺寸，不乘 dpr（避免又隨螢幕變動）
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size.x, size.y);
+    const mr = map.getContainer().getBoundingClientRect();
+    const pane = map.getPanes().mapPane;
 
-  const pane = map.getPanes().mapPane;
-  const imgs = [...pane.querySelectorAll('img')];
-  imgs.forEach(im=>{
-    try{
-      const r = im.getBoundingClientRect();
-      const mr = map.getContainer().getBoundingClientRect();
-      ctx.globalAlpha = parseFloat(im.style.opacity || '1') || 1;
-      ctx.drawImage(im, r.left - mr.left, r.top - mr.top, r.width, r.height);
-      ctx.globalAlpha = 1;
-    }catch(e){}
-  });
-  // SVG 向量層（鄉鎮色塊、界線）轉點陣後疊上
-  const svgs = [...pane.querySelectorAll('svg')];
-  let pending = svgs.length;
-  const finish = ()=>{
-    const ts = new Date();
-    const name = `map_${ts.getFullYear()}${String(ts.getMonth()+1).padStart(2,'0')}`
-      + `${String(ts.getDate()).padStart(2,'0')}_`
-      + `${String(ts.getHours()).padStart(2,'0')}${String(ts.getMinutes()).padStart(2,'0')}.png`;
-    cv.toBlob(b=>{
-      const url = URL.createObjectURL(b);
-      const a = document.createElement('a');
-      a.href = url; a.download = name;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(()=>URL.revokeObjectURL(url), 1000);
-      console.log(`已截圖：${name}（${cv.width}×${cv.height}）`);
-    }, 'image/png');
-  };
-  if(!pending){ finish(); return; }
-  svgs.forEach(sv=>{
-    try{
-      const r = sv.getBoundingClientRect();
-      const mr = map.getContainer().getBoundingClientRect();
-      const clone = sv.cloneNode(true);
-      clone.setAttribute('width', r.width);
-      clone.setAttribute('height', r.height);
-      const xml = new XMLSerializer().serializeToString(clone);
-      const im = new Image();
-      im.onload = ()=>{
-        ctx.drawImage(im, r.left - mr.left, r.top - mr.top, r.width, r.height);
-        if(--pending === 0) finish();
-      };
-      im.onerror = ()=>{ if(--pending === 0) finish(); };
-      im.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(xml)));
-    }catch(e){ if(--pending === 0) finish(); }
+    // 依 pane 的 zIndex 由低到高疊，確保順序與畫面一致
+    const layers = [...pane.children]
+      .map(el=>({el, z: parseInt(getComputedStyle(el).zIndex) || 0}))
+      .sort((a, b)=>a.z - b.z);
+
+    const tasks = [];
+    layers.forEach(({el})=>{
+      el.querySelectorAll('img').forEach(im=>{
+        tasks.push(()=>new Promise(r=>{
+          try{
+            const rr = im.getBoundingClientRect();
+            ctx.globalAlpha = parseFloat(im.style.opacity || '1') || 1;
+            ctx.drawImage(im, rr.left - mr.left, rr.top - mr.top, rr.width, rr.height);
+            ctx.globalAlpha = 1;
+          }catch(e){}
+          r();
+        }));
+      });
+      el.querySelectorAll('svg').forEach(sv=>{
+        tasks.push(()=>new Promise(r=>{
+          try{
+            const rr = sv.getBoundingClientRect();
+            const clone = sv.cloneNode(true);
+            clone.setAttribute('width', rr.width);
+            clone.setAttribute('height', rr.height);
+            const xml = new XMLSerializer().serializeToString(clone);
+            const im = new Image();
+            im.onload = ()=>{
+              ctx.drawImage(im, rr.left - mr.left, rr.top - mr.top, rr.width, rr.height);
+              r();
+            };
+            im.onerror = ()=>r();
+            im.src = 'data:image/svg+xml;base64,'
+                   + btoa(unescape(encodeURIComponent(xml)));
+          }catch(e){ r(); }
+        }));
+      });
+    });
+
+    // 依序執行以維持疊層順序
+    tasks.reduce((p, fn)=>p.then(fn), Promise.resolve()).then(()=>{
+      const ts = new Date();
+      const pad = n=>String(n).padStart(2, '0');
+      const name = `FORMOSA_${ts.getFullYear()}${pad(ts.getMonth()+1)}${pad(ts.getDate())}`
+                 + `_${pad(ts.getHours())}${pad(ts.getMinutes())}.png`;
+      cv.toBlob(b=>{
+        const url = URL.createObjectURL(b);
+        const a = document.createElement('a');
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(()=>URL.revokeObjectURL(url), 1000);
+        console.log(`已截圖：${name}（${cv.width}×${cv.height}）`);
+        resolve();
+      }, 'image/png');
+    });
   });
 }
-// 分層：seaPane(390) < townPane(395) < overlayPane(400: 縣界/災害框線)
-map.createPane('seaPane');
-map.getPane('seaPane').style.zIndex = 390;
-// 鄉鎮塗色專用 pane（供「渲染」模糊效果使用）
-map.createPane('townPane');
-map.getPane('townPane').style.zIndex = 395;
-// 不加任何 tileLayer → 背景純白（CSS 已設 background:#ffffff）
-// 加一個淡藍海域遮罩（用 SVG 全域矩形）
-const seaLayer = L.rectangle([[-90,-180],[90,180]], {
-  pane:'seaPane', color:'none', fillColor:'#ffffff', fillOpacity:1.0, interactive:false
-}).addTo(map);
 
-// ════════════════════════════════════════════════
-//  色階
-// ════════════════════════════════════════════════
-const RAIN_SCALE=[
-  {max:5,   color:'#FFFFFF',label:'< 5 mm'},
-  {max:20,  color:'#00FFFF',label:'5–20 mm'},
-  {max:40,  color:'#00FF00',label:'20–40 mm'},
-  {max:70,  color:'#FFFF00',label:'40–70 mm'},
-  {max:130, color:'#FF0000',label:'70–130 mm'},
-  {max:250, color:'#FF00FF',label:'130–250 mm'},
-  {max:1e9, color:'#FFAAFF',label:'250+ mm'},
-];
-// 未來6h段強度分級（依「該6h段內最大時雨量」判斷，非累積總量換算）
-// 標準：時雨量<40白；≥40黃(大雨)；≥100橘(豪雨)；≥200紅(大豪雨)；≥500紫(超大豪雨)
-const INTENSITY_SCALE=[
-  {max:40,  color:'#FFFFFF', label:'未達標'},
-  {max:100, color:'#FFFF00', label:'大雨'},
-  {max:200, color:'#FF8800', label:'豪雨'},
-  {max:500, color:'#FF0000', label:'大豪雨'},
-  {max:1e9, color:'#FF00FF', label:'超大豪雨'},
-];
 function intensityColor(v){for(const s of INTENSITY_SCALE)if(v<s.max)return s.color;return'#FF00FF'}
 const ETR_SCALE=[
   {max:50,  color:'#FFFFFF',label:'< 50%'},
@@ -3584,11 +3593,9 @@ function renderScnSummary(){
     btn.style.background  = (_scnOn && days.length) ? '#3a1a4a' : '';
     btn.style.borderColor = (_scnOn && days.length) ? '#cc88ff' : '#555';
   }
-  if(!days.length){ el.textContent = ''; return; }
-  el.innerHTML = _scnOn
-    ? `<span style="color:#cc88ff;font-weight:700" title="情境設定生效中：已設定 ${days.length} 天">
-        情境生效（${days.map(_scnDayShort).join('、')}）</span>`
-    : `<span style="color:#8a7a9a" title="已設定但未套用">情境已設定 ${days.length} 天（未套用）</span>`;
+  // ★ 不顯示說明文字（使用者指定）：按鈕本身的邊框／底色已足以表達
+  //   「有無設定、是否生效」，額外文字佔用控制列空間。
+  el.textContent = '';
 }
 function scnToggleDay(day){
   _scnOpenDay[day] = !_scnOpenDay[day];
@@ -5322,8 +5329,10 @@ function renderLegend(){
   const titles = { rain: isFuture6h ? '降雨強度' : '累積雨量(mm)', etr: 'ETR2%',
                    risk: '風險指標', warn: '警特報預估', wind: '蒲福風級',
                    temp: '氣溫(°C)', wave: '浪高' };
-  if(_hourIdx != null && mode==='rain') return '時雨量(mm/h)';
-  const titleText = titles[mode] || '';
+  // ★ 逐時視窗的雨量圖例標題為「時雨量」（先前誤寫成 return，
+  //   等於提早結束 renderLegend，整個圖例都畫不出來）。
+  const titleText = (_hourIdx != null && mode === 'rain')
+    ? '時雨量(mm/h)' : (titles[mode] || '');
 
   // 強度分級用描述性文字，不顯示數字範圍
   const INTENSITY_DESC = ['未達警戒', '大雨', '豪雨', '大豪雨', '超大豪雨'];
@@ -5333,6 +5342,7 @@ function renderLegend(){
   function rangeLabel(scale, idx){
     if(isFuture6h) return INTENSITY_DESC[idx] || '';
     if(mode==='warn') return scale[idx].label || '';
+    if(_hourIdx != null && mode==='rain') return scale[idx].label || '';
     if(mode==='wind' || mode==='temp' || mode==='wave') return scale[idx].label || '';
     if(mode==='risk') return RISK_DESC[idx] || '';
     const s = scale[idx];
