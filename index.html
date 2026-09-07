@@ -611,6 +611,14 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             <option value="obs_etr">觀測 ETR2%</option>
             <option value="qpf_etr">預估 ETR2%</option>
           </select>
+          <select id="rank-topn" onchange="renderRankList()"
+            style="flex:0 0 auto;font-size:11px;padding:3px;
+            background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+            <option value="20">前 20</option>
+            <option value="50">前 50</option>
+            <option value="100">前 100</option>
+            <option value="0">全部</option>
+          </select>
           <select id="rank-zone" onchange="renderRankList()"
             style="flex:1;min-width:90px;font-size:11px;padding:3px;
             background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
@@ -1015,19 +1023,9 @@ const MODEL_FIELD = {
 // ★ AI 模式清單：對超出訓練分布的極端降雨傾向低估，
 //   融合時的偏差校正上限放寬（物理模式 2.0、AI 模式 3.0）。
 const AI_MODELS = new Set(['aifs', 'gc']);
-const MODEL_NOTE = {
-  best:  '',
-  blend: '多源校正融合（CMPF）· 依近期實測誤差動態加權',
-  jma:   'JMA 日本氣象廳 · 物理模式',
-  aifs:  'ECMWF AIFS · AI 模式（極端值易低估，融合時已放寬上調）',
-  gc:    'GFS GraphCast · AI 模式（極端值易低估，融合時已放寬上調）',
-  ecmwf: 'ECMWF IFS HRES 9km · 前90h逐時 · 物理模式',
-  gfs:   'NOAA GFS · 時效 16 天',
-  icon:  'DWD ICON · 時效 7 天',
-  hi:    '',
-  lo:    '',
-  cwa:   '純CWA官方定量降水預報（颱風期間F-C0041；平時48h逐6h常態版，每日4次預報員修正）',
-};
+// ★ 模式說明一律留空（使用者指定）：按鈕名稱本身已足夠辨識，
+//   控制列不顯示任何說明文字。
+const MODEL_NOTE = {};
 let selected = null;
 let townLayer = null, countyLayer = null;
 let _blurOn = false;  // 渲染（邊界漸層）開關
@@ -1629,7 +1627,9 @@ map.addControl(new SnapControl());
 //   抗鋸齒跟瀏覽器渲染不同，而且尺寸隨視窗變動）。
 // ★ 尺寸依地形範圍的長寬比推導，讓臺灣剛好填滿畫面（不留大片空白）。
 //   固定高度 1200，寬度由範圍比例算出。
-const SNAP_H = 1200;
+// ★ 解析度：2400 高（原 1200）。截圖可能用於大螢幕投影，
+//   放大後不糊掉比檔案大小重要。
+const SNAP_H = 2400;
 function snapMap(){
   const mp = document.getElementById('map');
   if(!mp) return;
@@ -1681,9 +1681,15 @@ function _doSnap(B){
       el.querySelectorAll('img').forEach(im=>{
         tasks.push(()=>new Promise(r=>{
           try{
+            // ★ 疊圖（地形、渲染層）與向量層必須用同一個座標基準。
+            //   先前 img 用 getBoundingClientRect、svg 也用，但兩者的
+            //   transform 來源不同（img 在 imageOverlay 的 pane、
+            //   svg 在 overlay pane），CSS transform 造成偏移。
+            //   改以 map 容器為原點，並把 pane 的 transform 一併計入。
             const rr = im.getBoundingClientRect();
             ctx.globalAlpha = parseFloat(im.style.opacity || '1') || 1;
-            ctx.drawImage(im, rr.left - mr.left, rr.top - mr.top, rr.width, rr.height);
+            ctx.drawImage(im, Math.round(rr.left - mr.left), Math.round(rr.top - mr.top),
+                          Math.round(rr.width), Math.round(rr.height));
             ctx.globalAlpha = 1;
           }catch(e){}
           r();
@@ -1694,12 +1700,14 @@ function _doSnap(B){
           try{
             const rr = sv.getBoundingClientRect();
             const clone = sv.cloneNode(true);
-            clone.setAttribute('width', rr.width);
-            clone.setAttribute('height', rr.height);
+            // 用整數尺寸，避免子像素造成與底圖錯開半格
+            clone.setAttribute('width', Math.round(rr.width));
+            clone.setAttribute('height', Math.round(rr.height));
             const xml = new XMLSerializer().serializeToString(clone);
             const im = new Image();
             im.onload = ()=>{
-              ctx.drawImage(im, rr.left - mr.left, rr.top - mr.top, rr.width, rr.height);
+              ctx.drawImage(im, Math.round(rr.left - mr.left), Math.round(rr.top - mr.top),
+                            Math.round(rr.width), Math.round(rr.height));
               r();
             };
             im.onerror = ()=>r();
@@ -2471,6 +2479,25 @@ const MODEL_DAYS = {
   aifs: 15, gc: 16, cwa: 3, hi: 15, lo: 15, blend: 16,
 };
 // 回傳超時提示字串；未超時回 null
+// ★ 各圖層的資料來源：風力、氣溫、浪高、潮汐只有氣象署官方預報，
+//   不隨預報模式切換而變。切到 EC-AIFS 卻顯示 CWA 的風力會造成誤解，
+//   故明確標示「此圖層僅有官方資料」。
+const MODE_SOURCE = {
+  wind: 'CWA 鄉鎮預報', temp: 'CWA 鄉鎮預報',
+  wave: 'CWA 波浪模式', warn: null, etr: null, risk: null, rain: null,
+};
+function _modeSourceNote(){
+  const src = MODE_SOURCE[mode];
+  if(!src) return null;
+  // 雨量類模式才有多來源；切到非 best/cwa 時提示此圖層不隨模式變動
+  if(forecastModel === 'cwa' || forecastModel === 'best') return null;
+  const nm = {blend:'FORMOSA', ecmwf:'ECMWF', gfs:'GFS', icon:'ICON',
+              jma:'JMA', aifs:'EC-AIFS', gc:'GFS GraphCast',
+              hi:'強降雨', lo:'弱降雨'}[forecastModel] || forecastModel;
+  const layer = {wind:'風力', temp:'氣溫', wave:'浪高'}[mode] || mode;
+  return `${nm} 未提供${layer}資料，本圖層顯示 ${src}`;
+}
+
 function _coverageWarn(){
   const days = MODEL_DAYS[forecastModel];
   if(!days) return null;
@@ -3030,13 +3057,20 @@ function renderRankList(){
     }
     // ★ 官方現值須用 getObsEtr()（已回百分比），沒有 t.etr2_now 這個欄位
     else if(metric === 'obs_etr'){ v = getObsEtr(tt); unit = '%'; }
-    else if(metric === 'qpf_etr'){ v = tt.etr2_pct != null ? tt.etr2_pct * 100 : null; unit = '%'; }
+    // ★ 預估 ETR2 須隨時間視窗變動（用 getAccum，與地圖著色同源）；
+    //   先前固定讀 tt.etr2_pct，切換時段時排行完全不動，
+    //   與「預測累積雨量」會變動的行為互相矛盾。
+    else if(metric === 'qpf_etr'){
+      const acc = getAccum(tt); v = acc && acc.etrPct; unit = '%';
+    }
     if(v == null || !isFinite(v)) return;
     rows.push({t: tt, z, v, unit,
                k: (tt.county||'') + (tt.township||'')});
   });
   rows.sort((a,b)=>b.v - a.v);
-  const top = rows.slice(0, 20);
+  const topEl = document.getElementById('rank-topn');
+  const topN = topEl ? parseInt(topEl.value) : 20;
+  const top = (topN > 0) ? rows.slice(0, topN) : rows;   // 0＝全部
   window._rankRows = top;          // 供「複製此排行」使用
   if(!top.length){
     el.innerHTML = '<div style="color:#7a94ac">此條件下無資料</div>';
@@ -4507,7 +4541,7 @@ function renderLayer(){
   try{
     const cw = document.getElementById('coverage-warn');
     if(cw){
-      const msg = _coverageWarn();
+      const msg = _coverageWarn() || _modeSourceNote();
       cw.style.display = msg ? 'block' : 'none';
       if(msg) cw.innerHTML = '⚠ ' + msg;
     }
@@ -5879,7 +5913,9 @@ function buildPastBtns(){
   if(!c) return;
   c.innerHTML = '';
   ALL_DYNAMIC_BTN_IDS = ALL_DYNAMIC_BTN_IDS.filter(id=>!id.startsWith('bpast'));
-  for(let n=0; n<=6; n++){
+  // ★ 觀測歷史保留 16 天，前端放到第 9 天（past0~past8）；
+  //   之後幾天主要供 ETR2 回推使用，判讀價值遞減。
+  for(let n=0; n<=8; n++){
     const dt = new Date(SEG_EPOCH().getTime() - (n+1)*86400000);
     const btn = document.createElement('button');
     btn.className = 'b';
@@ -5973,14 +6009,13 @@ function stepWin(delta){
     //   先前寫成 day1／day0，那是無效的鍵，切換會跳到未定義狀態。
     const n = parseInt(md[1]) + delta;
     if(n < 2){ setWin('today'); return; }
-    setWin('day' + Math.min(16, n)); return;
+    setWin('day' + Math.min(17, n)); return;
   }
   const mp = winKey.match(/^past(\d+)$/);
   if(mp){
-    // ★ 過去按鈕為 past0~past6（past0＝昨天，共 7 天）。
-    //   先前寫成 1~7，切到第 8 天時 past7 不存在，按鈕對不上而跑掉。
+    // ★ 過去按鈕為 past0~past8（past0＝昨天，共 9 天）。
     const n = parseInt(mp[1]) - delta;      // 往後＝數字變小
-    if(n >= 0 && n <= 6) setWin('past' + n);
+    if(n >= 0 && n <= 8) setWin('past' + n);
     else if(n < 0) setWin('today');
     return;
   }
@@ -6002,7 +6037,7 @@ function toggleTimeNav(){
 // ★ 標籤一律顯示實際時間，而非「第 N 段」這種相對描述。
 //   6h 段以「凌晨／上午／下午／晚上」標示，比 00-06 更直覺。
 function _segPeriodName(h){
-  return h < 6 ? '凌晨' : h < 12 ? '上午' : h < 18 ? '下午' : '晚上';
+  return h < 6 ? '凌晨' : h < 12 ? '上午' : h < 18 ? '下午' : '晚間';
 }
 function _fmtDayTime(d, withPeriod){
   const WD = ['日','一','二','三','四','五','六'];
@@ -6080,10 +6115,10 @@ function buildFuture6hBtns(){
     btn.className = 'b';
     btn.id = 'bfut6_'+n;
     const t0 = segTime(curSeg + n - 1), t1 = segTime(curSeg + n);
-    const h1 = t1.getHours()===0 ? 24 : t1.getHours();
-    // 跨日的第一段標日期，其餘只標時間
+    // ★ 改用「凌晨／上午／下午／晚間」而非 0-6時 這種數字區間，
+    //   對照口語與新聞用語，判讀時更直覺。
     const dayTag = (t0.getHours()===0 || n===1) ? `${t0.getMonth()+1}/${t0.getDate()} ` : '';
-    btn.textContent = `${dayTag}${t0.getHours()}-${h1}時`;
+    btn.textContent = `${dayTag}${_segPeriodName(t0.getHours())}`;
     btn.onclick = (nn=>()=>setWin('fut6_'+nn))(n);
     c.appendChild(btn);
     ALL_DYNAMIC_BTN_IDS.push('bfut6_'+n);
@@ -6106,7 +6141,9 @@ function buildDayBtns(){
   ALL_DYNAMIC_BTN_IDS.push('bToday');
 
   // 第2-15天：純未來QPF預測
-  for(let i=2;i<=16;i++){
+  // ★ 推到 16 天（GFS/GraphCast 的時效上限）；超出各模式時效時
+  //   地圖會顯示「該模式僅提供 N 天」的提示。
+  for(let i=2;i<=17;i++){
     const dt=new Date(SEG_EPOCH().getTime()+(i-1)*86400000);
     const btn=document.createElement('button');
     btn.className='b';btn.id=`bday${i}`;btn.textContent=fmtDay(dt);
