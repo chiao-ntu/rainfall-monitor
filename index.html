@@ -4449,7 +4449,8 @@ function _townFill(t, isSel){
     }
   }
   // 非選取的鄉鎮邊框顏色設為與填色相同，視覺上消除縫隙
-  return {fillColor, fillOp};
+  // 一併回傳 _hideFill：renderLayer 的邊框與填色設定也需要它
+  return {fillColor, fillOp, hideFill: _hideFill};
 }
 
 function renderLayer(){
@@ -4484,6 +4485,7 @@ function renderLayer(){
     const isSel = selected && selected.county===p.COUNTYNAME && selected.township===p.TOWNNAME;
     const _f = _townFill(t, isSel);
     const fillColor = _f.fillColor, fillOp = _f.fillOp;
+    const _hideFill = _f.hideFill;
     const opts={
       pane: 'townPane',
       // ★ 邊框改深灰：原本用 fillColor（與填色同色）等於沒有邊界，
