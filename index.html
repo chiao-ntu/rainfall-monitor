@@ -404,8 +404,29 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       onclick="event.stopPropagation()" onmousedown="event.stopPropagation()"
       ondblclick="event.stopPropagation()">
       <button class="b" onclick="stepWin(-1)" style="padding:1px 8px;font-size:12px">◀</button>
-      <span id="time-nav-label" style="font-size:11px;color:#9fc8e8;min-width:150px;
+      <select id="nav-model" onchange="setModel(this.value)"
+        style="font-size:10px;padding:1px 3px;background:#061220;color:#f0c878;
+        border:1px solid #3a5070;border-radius:3px"></select>
+      <select id="nav-scale" onchange="onNavScale(this.value)"
+        style="font-size:10px;padding:1px 3px;background:#061220;color:#7ee8a8;
+        border:1px solid #3a5070;border-radius:3px">
+        <option value="hour">逐時</option>
+        <option value="seg6">未來6h段</option>
+        <option value="day">逐日</option>
+      </select>
+      <span id="time-nav-label" style="font-size:11px;color:#9fc8e8;min-width:140px;
         text-align:center"></span>
+      <select id="nav-layer" onchange="setMode(this.value)"
+        style="font-size:10px;padding:1px 3px;background:#061220;color:#7ee8a8;
+        border:1px solid #3a5070;border-radius:3px">
+        <option value="rain">累積雨量</option>
+        <option value="etr">ETR2%</option>
+        <option value="risk">風險指標</option>
+        <option value="warn">警特報</option>
+        <option value="wind">風力預測</option>
+        <option value="wave">浪高</option>
+        <option value="temp">氣溫</option>
+      </select>
       <button class="b" onclick="stepWin(1)" style="padding:1px 8px;font-size:12px">▶</button>
       <button class="b" id="time-nav-fold" onclick="toggleTimeNav()"
         style="padding:1px 6px;font-size:10px">▲</button>
@@ -599,7 +620,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <!-- 區塊：全臺排行（前 20） -->
     <div class="sec" id="sec-rank" style="display:none">
       <div class="sec-h" onclick="toggleSec('rank')">
-        <span>全臺排行</span><span class="sec-arrow" id="arrow-rank">▸</span>
+        <span id="rank-title">雨量排行</span><span class="sec-arrow" id="arrow-rank">▸</span>
       </div>
       <div class="sec-body" id="body-rank" style="display:none">
         <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:5px">
@@ -1154,7 +1175,7 @@ function _etrHistHtml(curSet){
   const shown = rows.slice(0, 30);
   let h = `<div style="margin-top:6px"><div style="color:#cc8844;font-size:10px;font-weight:700;
     padding:3px 2px;border-bottom:1px solid #cc884455;background:#0d1f30"
-    title="過去7天內ETR2%峰值曾達70%、目前已折減至標準以下的鄉鎮（備查留存）。峰值時間為6h段解析。">近7日曾達70%（備查）</div>`;
+   >近7日曾達70%（備查）</div>`;
   shown.forEach(({county,township,pct,seg})=>{
     const dt = segTime(seg);
     const col = etrColor(pct);
@@ -1239,8 +1260,8 @@ function updateEtrAlertPanel(){
         // 趨勢基準＝前一個6h時段（這期 > 前期＝上升紅▲；< 前期＝下降綠▼）
         const _tTip = `較前期 ${prevPct}% → 本期 ${pct}%`;
         const arrow = pct > prevPct
-          ? `<span style="color:#ff4433;font-weight:700" title="${_tTip}"> ▲</span>`
-          : (pct < prevPct ? `<span style="color:#33cc66;font-weight:700" title="${_tTip}"> ▼</span>` : '');
+          ? `<span style="color:#ff4433;font-weight:700"> ▲</span>`
+          : (pct < prevPct ? `<span style="color:#33cc66;font-weight:700"> ▼</span>` : '');
         h += `<div style="display:flex;justify-content:space-between;align-items:center;padding:1px 2px 1px 10px;font-size:10px
           ${isNew ? ';background:#3a2a08;border-radius:3px;box-shadow:inset 0 0 0 1px #7a5a18' : ''}">
           <span style="cursor:pointer;text-decoration:underline dotted;color:${col};font-weight:700"
@@ -1646,6 +1667,19 @@ function snapMap(){
   // ★ zoomSnap 預設為 1，fitBounds 只能取整數縮放層級，
   //   實際縮放會比需要的更小，於是圖面四周留下大片空白
   //   （這就是「臺灣很小、圖片很長」的原因）。設為 0 才能精確填滿。
+  // ★ 截圖期間蓋上遮罩：容器尺寸與縮放會變動，讓使用者看到地圖
+  //   「跑掉又跳回來」會誤以為出錯。
+  let mask = document.getElementById('snap-mask');
+  if(!mask){
+    mask = document.createElement('div');
+    mask.id = 'snap-mask';
+    mask.style.cssText = 'position:fixed;inset:0;z-index:4000;'
+      + 'background:rgba(4,10,18,.9);display:flex;align-items:center;'
+      + 'justify-content:center;color:#9fc8e8;font-size:15px';
+    mask.textContent = '截圖中…';
+    document.body.appendChild(mask);
+  }
+  mask.style.display = 'flex';
   map.options.zoomSnap = 0;
   mp.style.flex = '0 0 auto';
   mp.style.width = SNAP_W + 'px';
@@ -1662,6 +1696,8 @@ function snapMap(){
         map.options.zoomSnap = prev.snap;
         map.invalidateSize({animate:false});
         map.setView(prev.center, prev.zoom, {animate:false});
+        const mk = document.getElementById('snap-mask');
+        if(mk) mk.style.display = 'none';
       });
     }, 1200);
   }));
@@ -1706,9 +1742,19 @@ function _doSnap(B){
           try{
             const rr = sv.getBoundingClientRect();
             const clone = sv.cloneNode(true);
-            // 用整數尺寸，避免子像素造成與底圖錯開半格
-            clone.setAttribute('width', Math.round(rr.width));
-            clone.setAttribute('height', Math.round(rr.height));
+            // ★ Leaflet 的 SVG 圖層帶有 viewBox（由 _updateTransform 設定），
+            //   直接改 width/height 會讓內容依 viewBox 重新縮放，
+            //   於是界線與地形／色塊錯開。改為保留原始 viewBox，
+            //   並讓 width/height 與 viewBox 的尺寸一致。
+            const vb = sv.getAttribute('viewBox');
+            if(vb){
+              const p4 = vb.split(/[\s,]+/).map(Number);
+              clone.setAttribute('width', p4[2]);
+              clone.setAttribute('height', p4[3]);
+            } else {
+              clone.setAttribute('width', Math.round(rr.width));
+              clone.setAttribute('height', Math.round(rr.height));
+            }
             const xml = new XMLSerializer().serializeToString(clone);
             const im = new Image();
             im.onload = ()=>{
@@ -3054,6 +3100,9 @@ function drawCountyTowns(canvasId){
 }
 
 function renderRankList(){
+  // 標題隨範圍變化
+  const _rt = document.getElementById('rank-title');
+  if(_rt) _rt.textContent = (_pickedCounty ? _pickedCounty : '全臺') + ' 雨量排行';
   const el = document.getElementById('rank-list');
   if(!el) return;
   const metric = (document.getElementById('rank-metric') || {}).value || 'obs_rain';
@@ -3062,6 +3111,9 @@ function renderRankList(){
 
   const rows = [];
   (TOWNSHIPS || []).forEach(tt=>{
+    // ★ 依圖層的縣市選擇篩選：選「全臺」看全部鄉鎮，
+    //   選某縣市則只看該縣市內的鄉鎮。
+    if(_pickedCounty && tt.county !== _pickedCounty) return;
     const z = _townZone(tt) || '平地';
     if(zoneF && z !== zoneF) return;
     let v = null, unit = 'mm';
@@ -3459,7 +3511,10 @@ function _refreshAfterFactorChange(){
   DAILY_CHART_EXTREMES = null;
   withTransition(()=>{
     renderLayer(); renderLegend();
-    if(selected) updateInfo(selected);
+    // ★ 無論有無選取鄉鎮都要更新右側面板：未選取時以「全臺／所選縣市」
+    //   尺度呈現，否則使用者會以為沒有資料。
+    updateInfo(selected || null);
+    try{ renderRankList(); }catch(e){}
     // ★ 所有受「模式／倍率／情境」影響的面板與圖層都必須在此重繪。
     //   舊版漏了 updateEtrAlertPanel / updateDisasterPanel / 兩個警戒圖層，
     //   使用者必須手動點圖層按鈕才會更新；且 updateSummary 根本不存在
@@ -3728,14 +3783,14 @@ function renderScnModal(){
         h += `<option value="${k}" ${((r.model||'')===k)?'selected':''}>${SCN_MODEL_LABEL[k]}</option>`;
       });
       h += `</select>
-          ${day>0 ? `<button class="b" style="font-size:9px;padding:0 4px" onclick="scnCopyPrevDay(${day})" title="複製前一天">↧</button>` : ''}
-          <button class="b" style="font-size:9px;padding:0 4px" onclick="scnClearDay(${day})" title="清除本日">清除</button>
+          ${day>0 ? `<button class="b" style="font-size:9px;padding:0 4px" onclick="scnCopyPrevDay(${day})">↧</button>` : ''}
+          <button class="b" style="font-size:9px;padding:0 4px" onclick="scnClearDay(${day})">清除</button>
         </div>`;
       h += `<table style="width:100%;border-collapse:collapse;font-size:10px">
         <tr style="color:#7a92a8">
           <th style="text-align:left;padding:0 3px">分署／地形（全區＝該署所有鄉鎮）</th>
-          <th style="padding:0 2px;width:58px" title="該日總量加成，平均分到當日4個6h段">加成mm/日</th>
-          <th style="padding:0 2px;width:46px" title="乘在（模式值＋加成）之上">倍率×</th>
+          <th style="padding:0 2px;width:58px">加成mm/日</th>
+          <th style="padding:0 2px;width:46px">倍率×</th>
           <th style="width:20px"></th>
         </tr>`;
       DISTRICT_ORDER.forEach(d=>{
@@ -3749,7 +3804,7 @@ function renderScnModal(){
           h += `<tr data-bg="${dirty?'#2a1c38':'transparent'}" style="background:${dirty?'#2a1c38':'transparent'}">
             <td style="padding:0 3px;color:${ti===0?dc:(_zoneUnavail(tr)?'#6a6a72':'#8aa8c0')};
                 white-space:nowrap${ti===0?';font-weight:700':''}"
-                title="${d}${tr}${_zoneUnavail(tr)?'（尚無 TOWN_ZONE，此地形目前對不到任何鄉鎮）':''}"
+               
                 >${ti===0 ? `<b>${d}</b>全區` : tr + (_zoneUnavail(tr) ? ' ⚠' : '')}</td>
             <td style="padding:0 2px"><input type="number" step="10" value="${add}"${dis}
               onchange="scnSetVal(${day},'${gk}','add',this.value)"
@@ -3763,7 +3818,7 @@ function renderScnModal(){
               border:1px solid #555;border-radius:3px;padding:0 2px"></td>
             <td style="padding:0 1px">${ti===0 ? `<button class="b" style="font-size:9px;padding:0 2px"
               onclick="scnCopyToTerrain(${day},'${d}')"
-              title="把「全區」的數值複製到該署所有地形列">⇅</button>` : ''}</td>
+             >⇅</button>` : ''}</td>
           </tr>`;
         });
       });
@@ -5669,7 +5724,7 @@ async function tryLoadLive(){
     if(sysNote) sysNote.innerHTML = '';   // 每次載入重建（避免自動更新時重複追加）
     // 使用者只需知道「官方資料是否正常」：有CWA官方QPF覆蓋才亮一個極簡標記，否則不顯示。
     if(sysNote && _cwaQpfActive){
-      sysNote.innerHTML = '<span style="color:#66bb88;font-size:9px" title="本次已成功取得CWA官方定量降水預報資料">● 官方資料正常</span>';
+      sysNote.innerHTML = '<span style="color:#66bb88;font-size:9px">● 官方資料正常</span>';
     }
 
     // 動態偏差比顯示（昨日觀測/昨日模式，顯示層：僅供人工判讀，不影響任何計算）
@@ -5679,22 +5734,22 @@ async function tryLoadLive(){
       const col = b >= 1.5 ? '#ff6644' : b >= 1.1 ? '#ffcc44' : b <= 0.67 ? '#66bbff' : b <= 0.9 ? '#88ccee' : '#88aa88';
       const tag = b >= 1.5 ? `模式明顯低估（觀測≈模式×${b}）` : b >= 1.1 ? '模式偏低'
                 : b <= 0.67 ? '模式明顯高估' : b <= 0.9 ? '模式偏高' : '模式大致準確';
-      sysNote.innerHTML += `${sysNote.innerHTML?' · ':''}<span style="color:${col};font-size:9px" title="昨日觀測雨量÷昨日模式雨量（僅統計模式昨日≥10mm的 ${d.bias_24h_n} 個鄉鎮）。分母為模式回算、分子為觀測歷史記錄——若歷史正在重建（obs_history剛清除），此值可能失真，僅供人工判讀。">24h偏差比 ${b}×（${tag}，n=${d.bias_24h_n}）</span>`+
+      sysNote.innerHTML += `${sysNote.innerHTML?' · ':''}<span style="color:${col};font-size:9px">24h偏差比 ${b}×（${tag}，n=${d.bias_24h_n}）</span>`+
         `<button id="bias-apply-btn" class="b" onclick="toggleBiasApply()" style="margin-left:6px;font-size:10px;padding:1px 6px" `+
-        `title="開啟後所有預測值（地圖/圖表/ETR2/風險/左右狀態列）×${_biasFactor}（限幅0.5~3）。純CWA模式不受影響。可隨時關閉還原。">⚙套用修正 ×${_biasFactor}</button>`;
+        `>⚙套用修正 ×${_biasFactor}</button>`;
     }
     // 自訂倍率：與「套用修正」走同一條路徑（getQpfArr），兩者相乘後生效。
     //   放在同一列，讓「自動偏差修正」與「手動倍率」被讀成同一組工具。
     if(sysNote){
       sysNote.innerHTML += `${sysNote.innerHTML?' \u00b7 ':''}` +
-        `<span style="font-size:9px;color:#8ac8f0" title="手動倍率。與『套用修正』相乘後作用於所有預測值（地圖／圖表／ETR2／風險／左右狀態列／CSV／複製）。純CWA模式不受影響。">自訂倍率</span>` +
-        `<button class="b" onclick="nudgeUserFactor(-0.1)" style="font-size:10px;padding:0 5px;margin-left:3px" title="倍率 -0.1">-</button>` +
+        `<span style="font-size:9px;color:#8ac8f0">自訂倍率</span>` +
+        `<button class="b" onclick="nudgeUserFactor(-0.1)" style="font-size:10px;padding:0 5px;margin-left:3px">-</button>` +
         `<input id="ufac-input" type="number" step="0.1" min="${USER_FACTOR_MIN}" max="${USER_FACTOR_MAX}" value="${_userFactor}" ` +
         `onchange="setUserFactor(this.value)" onkeydown="if(event.key==='Enter'){setUserFactor(this.value);this.blur();}" ` +
         `style="width:48px;font-size:10px;padding:1px 3px;margin:0 2px;background:#1a1a22;color:#ddd;border:1px solid #555;border-radius:3px">` +
-        `<button class="b" onclick="nudgeUserFactor(0.1)" style="font-size:10px;padding:0 5px" title="倍率 +0.1">+</button>` +
+        `<button class="b" onclick="nudgeUserFactor(0.1)" style="font-size:10px;padding:0 5px">+</button>` +
         `<button id="ufac-btn" class="b" onclick="toggleUserFactor()" style="margin-left:4px;font-size:10px;padding:1px 6px" ` +
-        `title="開關自訂倍率。與『套用修正』相乘，兩者都開時以合併倍率生效。">\u2715自訂倍率 \u00d7${_userFactor}</button>` +
+        `>\u2715自訂倍率 \u00d7${_userFactor}</button>` +
         `<span id="ufac-eff" style="font-size:9px;margin-left:5px;font-weight:700"></span>` +
         `<button id="scn-btn" class="b" onclick="toggleScenario()" style="margin-left:6px;font-size:10px;padding:1px 6px" `+
         `>◇情境</button>` +
@@ -6040,6 +6095,42 @@ function stepWin(delta){
 }
 // 更新地圖箭頭旁的時段標籤
 // 收合／展開地圖時段列
+// ★ 時段列的三個下拉：模式、時間尺度、圖層。
+//   看地圖時不必回到上方控制列即可切換，三者與上方按鈕雙向同步。
+const NAV_MODEL_LABEL = {blend:'FORMOSA', cwa:'CWA', best:'CWA+ECMWF',
+  ecmwf:'ECMWF', gfs:'GFS', icon:'ICON', jma:'JMA',
+  aifs:'EC-AIFS', gc:'GFS GraphCast', hi:'強降雨', lo:'弱降雨'};
+function _fillNavSelects(){
+  const ms = document.getElementById('nav-model');
+  if(ms && !ms.options.length){
+    Object.keys(NAV_MODEL_LABEL).forEach(k=>{
+      const o = document.createElement('option');
+      o.value = k; o.textContent = NAV_MODEL_LABEL[k];
+      ms.appendChild(o);
+    });
+  }
+  _syncNavSelects();
+}
+function _syncNavSelects(){
+  const ms = document.getElementById('nav-model');
+  if(ms && ms.value !== forecastModel) ms.value = forecastModel;
+  const ls = document.getElementById('nav-layer');
+  if(ls && ls.value !== mode) ls.value = mode;
+  const ss = document.getElementById('nav-scale');
+  if(ss){
+    const v = (_hourIdx != null) ? 'hour'
+            : /^fut6_/.test(winKey) ? 'seg6'
+            : (/^day/.test(winKey) || winKey === 'today') ? 'day' : ss.value;
+    if(ss.value !== v) ss.value = v;
+  }
+}
+// 切換時間尺度：沿用目前時刻，換到對應尺度的最近時段
+function onNavScale(v){
+  if(v === 'hour'){ setWin('fut1h_' + Math.max(1, _hourIdx || 1)); return; }
+  if(v === 'seg6'){ setWin('fut6_1'); return; }
+  if(v === 'day'){ setWin('today'); return; }
+}
+
 function toggleTimeNav(){
   const nav = document.getElementById('time-nav');
   const btn = document.getElementById('time-nav-show');
@@ -6089,6 +6180,7 @@ function _syncTimeNav(){
     }
   }
   el.textContent = txt;
+  try{ _syncNavSelects(); }catch(e){}
 }
 
 function stepSlider(id, delta){
@@ -6213,6 +6305,7 @@ function init(){
     buildFuture6hBtns();
     buildFuture1hBtns();
     buildDayBtns();
+    try{ _fillNavSelects(); }catch(e){}
     setWin('today');   // 預設顯示今天（觀測至今+預測補滿24h）
   });
   // 資料每 10 分鐘更新一輪（雷達與觀測），故前端也縮短輪詢間隔
@@ -9454,8 +9547,8 @@ function _alertTrend(a, prevMap){
   out.prevPct = Math.round(prv / den * 100);
   const d = out.pct - out.prevPct;
   // 與 ETR2%警戒面板一致：上升紅▲、下降綠▼、持平不顯示
-  if(d > 0) out.arrow = `<span style="color:#ff5544;font-size:9px" title="較前一時段 +${d}%">▲${d}%</span>`;
-  else if(d < 0) out.arrow = `<span style="color:#44dd88;font-size:9px" title="較前一時段 ${d}%">▼${-d}%</span>`;
+  if(d > 0) out.arrow = `<span style="color:#ff5544;font-size:9px">▲${d}%</span>`;
+  else if(d < 0) out.arrow = `<span style="color:#44dd88;font-size:9px">▼${-d}%</span>`;
   return out;
 }
 // 算出「前一段」各鄉鎮的達標數，供增減比較
@@ -9516,7 +9609,7 @@ function _alertListHtml(items, footer){
           const attr = canZoom
             ? ` onclick="_zoomPoint(${x.lat},${x.lng},'${String(x.id).replace(/'/g,'')}')"`
               + ` style="padding:0 0 1px 16px;font-size:10px;color:#d8c8b8;line-height:1.45;`
-              + `cursor:pointer" title="點選可定位到此位置"`
+              + `cursor:pointer"`
             : ` style="padding:0 0 1px 16px;font-size:10px;color:#d8c8b8;line-height:1.45"`;
           h += `<div${attr}>
             <span style="color:${x.tagCol};font-weight:700">${x.id}</span>
@@ -9563,7 +9656,7 @@ function _countyHeaderHtml(county, n){
 function _zoomSpan(county, town, label, col){
   return `<span style="cursor:pointer;text-decoration:underline dotted;color:${col};
     font-weight:700" onclick="focusTownship('${county}','${town}')"
-    title="點擊定位至 ${county}${town}">${label}</span>`;
+   >${label}</span>`;
 }
 
 
@@ -9705,7 +9798,7 @@ function _tySecOpenHtml(key, titleHtml, col, idx){
   return `<div style="background:${col}22;border-left:3px solid ${col};
       padding:4px 6px;border-radius:0 3px 3px 0;margin-bottom:4px;cursor:pointer"
       onclick="toggleTySec('${key.replace(/'/g, "\\'")}')"
-      title="點擊${open ? '收合' : '展開'}此系統的詳細資訊">
+     >
       <span style="color:#9ab8d8;font-size:9px">${open ? '▾' : '▸'}</span>
       ${titleHtml}</div>`
     + `<div style="display:${open ? 'block' : 'none'}">`;
@@ -11101,16 +11194,16 @@ function toggleBlurRender(){
   box-shadow:0 6px 24px rgba(0,0,0,.6);flex-direction:column">
   <div id="scn-drag" style="display:flex;align-items:center;gap:6px;padding:6px 9px;
     background:#1a1030;border-bottom:1px solid #4a3a6a;border-radius:6px 6px 0 0;cursor:move"
-    title="拖曳可移動；點擊可收合／展開">
+   >
     <span id="scn-fold-ind" style="color:#8a7a9a;font-size:9px;pointer-events:none">▾</span>
     <b style="color:#cc88ff;font-size:12px;pointer-events:none">情境編輯器</b>
     <span id="scn-summary2" style="font-size:9px;pointer-events:none"></span>
     <span style="flex:1"></span>
-    <button class="b" style="font-size:10px;padding:1px 6px" onclick="scnExport()" title="匯出 JSON">匯出</button>
-    <label class="b" style="font-size:10px;padding:1px 6px;cursor:pointer" title="匯入 JSON">匯入
+    <button class="b" style="font-size:10px;padding:1px 6px" onclick="scnExport()">匯出</button>
+    <label class="b" style="font-size:10px;padding:1px 6px;cursor:pointer">匯入
       <input type="file" accept="application/json" style="display:none" onchange="scnImport(this)"></label>
     <button class="b" style="font-size:11px;padding:1px 7px"
-      onclick="closeScnModal()" title="關閉情境編輯器（設定會保留）">&#10005;</button>
+      onclick="closeScnModal()">&#10005;</button>
   </div>
   <div id="scn-body" style="overflow-y:auto;overflow-x:hidden;padding:6px 8px;flex:1"></div>
   <div id="scn-foot" style="display:flex;align-items:center;gap:6px;padding:6px 9px;
