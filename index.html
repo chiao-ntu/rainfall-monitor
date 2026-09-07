@@ -1725,20 +1725,12 @@ function _doSnap(B){
       (TOWN_GEO.features || []).forEach(f=>{
         const pr = f.properties || {};
         const t = TMAP[(pr.COUNTYNAME||'') + (pr.TOWNNAME||'')];
-        let col = null, op = 0.85;
+        // ★ 與地圖共用同一份著色邏輯，配色完全一致
         if(t){
-          const acc = getAccum(t);
-          const v = acc && acc.totalRain;
-          if(v != null){
-            col = (_hourIdx != null && mode === 'rain') ? _hourlyColor(v)
-                : (mode === 'rain')
-                  ? (RAIN_SCALE.find(b=>v < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color
-                  : rainColor(v);
-          }
-        }
-        if(col){
-          ctx.fillStyle = col;
-          ctx.globalAlpha = (typeof _terrainOn !== 'undefined' && _terrainOn) ? op*0.82 : op;
+          const fo = _townFill(t, false);
+          ctx.fillStyle = fo.fillColor;
+          ctx.globalAlpha = (typeof _terrainOn !== 'undefined' && _terrainOn)
+            ? fo.fillOp * 0.82 : fo.fillOp;
           tracePolys(f.geometry, ()=>ctx.fill());
           ctx.globalAlpha = 1;
         }
@@ -3013,25 +3005,30 @@ function drawCountyTowns(canvasId){
   const cv = document.getElementById(canvasId || 'cv-countytowns');
   if(!cv) return;
   const isZoom = (canvasId === 'chart-zoom-canvas');
+  // ★ 全臺（_pickedCounty 為空）時應顯示所有鄉鎮，
+  //   先前用 === 比對空字串永遠不成立，於是顯示「無資料」。
   const rows = (TOWNSHIPS || [])
-    .filter(t=>t.county === _pickedCounty)
+    .filter(t=>!_pickedCounty || t.county === _pickedCounty)
     .map(t=>{ const a = getAccum(t);
               return {t, v: a && a.totalRain, e: a && a.etrPct,
                       zone: _townZone(t) || '平地'}; })
     .filter(x=>x.v != null)
     .sort((a,b)=>b.v - a.v);
-  const F = _fitCanvas(cv, 300, Math.max(160, rows.length * (isZoom?26:14) + 40));
+  // 全臺 368 個鄉鎮畫成一張圖過長，取雨量最高的前 N 名
+  const LIMIT = _pickedCounty ? 999 : (isZoom ? 40 : 20);
+  const shown = rows.slice(0, LIMIT);
+  const F = _fitCanvas(cv, 300, Math.max(160, shown.length * (isZoom?26:14) + 40));
   const ctx = F.ctx, CW = F.w, CH = F.h;
-  if(!rows.length){
+  if(!shown.length){
     ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
-    ctx.fillText('此縣市無資料', 12, 24);
+    ctx.fillText(_pickedCounty ? '此縣市無資料' : '無資料', 12, 24);
     return;
   }
   const fs = isZoom ? 15 : 10;
   const pL = isZoom ? 190 : 76, pR = isZoom ? 70 : 34;
   const pT = isZoom ? 40 : 14, pB = isZoom ? 72 : 38;   // 底部留白給圖例
   const iw = CW - pL - pR, ih = CH - pT - pB;
-  const vMax = Math.max(10, Math.ceil(rows[0].v * 1.15 / 10) * 10);
+  const vMax = Math.max(10, Math.ceil(shown[0].v * 1.15 / 10) * 10);
   const X = v => pL + iw * (v / vMax);
   const ZC = {'山區':'#FF0000', '淺山區':'#FFFF00', '平地':'#00FF00', '沿海地區':'#00FFFF'};
   ctx.strokeStyle = '#12283c'; ctx.fillStyle = '#5a7a95';
@@ -3042,9 +3039,9 @@ function drawCountyTowns(canvasId){
     ctx.fillText(String(v), X(v), CH - pB + fs + 2);
   }
   const hits = [];
-  rows.forEach((r, i)=>{
-    const y = pT + (ih / rows.length) * (i + 0.5);
-    const bh = Math.max(3, (ih / rows.length) * 0.66);
+  shown.forEach((r, i)=>{
+    const y = pT + (ih / shown.length) * (i + 0.5);
+    const bh = Math.max(3, (ih / shown.length) * 0.66);
     ctx.fillStyle = '#9fc8e8'; ctx.textAlign = 'right';
     ctx.fillText(r.t.township.slice(0, isZoom ? 10 : 5), pL - 5, y + fs*0.35);
     const col = (RAIN_SCALE.find(b=>r.v < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color;
@@ -3121,12 +3118,17 @@ function renderRankList(){
     const z = _townZone(tt) || '平地';
     if(zoneF && z !== zoneF) return;
     let v = null, unit = 'mm';
-    if(metric === 'obs_rain')      v = (tt.daily_rain || [])[0];
+    // ★ 觀測雨量也隨時段：過去視窗取該日的觀測值。
+    if(metric === 'obs_rain'){
+      const dr = tt.daily_rain || [];
+      const mp = String(winKey||'').match(/^past(\d+)$/);
+      v = mp ? dr[parseInt(mp[1]) + 1] : dr[0];
+    }
     else if(metric === 'qpf_rain'){
       const acc = getAccum(tt); v = acc && acc.totalRain;
     }
     // ★ 官方現值須用 getObsEtr()（已回百分比），沒有 t.etr2_now 這個欄位
-    else if(metric === 'obs_etr'){ v = getObsEtr(tt); unit = '%'; }
+    else if(metric === 'obs_etr'){ v = getObsEtr(tt); unit = '%'; }   // 官方現值，不隨時段
     // ★ 預估 ETR2 須隨時間視窗變動（用 getAccum，與地圖著色同源）；
     //   先前固定讀 tt.etr2_pct，切換時段時排行完全不動，
     //   與「預測累積雨量」會變動的行為互相矛盾。
@@ -4377,6 +4379,79 @@ function getObsEtr(t){
 // ════════════════════════════════════════════════
 //  渲染圖層
 // ════════════════════════════════════════════════
+// ★ 鄉鎮著色邏輯抽成共用函式：地圖（renderLayer）與截圖（_doSnap）
+//   用同一份，否則截圖配色與畫面不一致。
+function _townFill(t, isSel){
+  // 渲染模式下本島由內插色帶層顯示，polygon 僅留 hover 熱區；
+  // 金馬在內插範圍外，維持原色塊。
+  const _outIsland = !!t && (t.county==='金門縣' || t.county==='連江縣');
+  const _hideFill = _blurOn && !_outIsland;
+  let fillColor='#FFFFFF', fillOp=0.05;
+  if(t){
+    // CWA 模式：色階類別呈現——直接用官方色帶著色，不轉數字、不做累積。
+    //   取所選時間視窗內最高色帶（防漏報），無覆蓋段＝不著色（白）。
+    // ★ 僅限雨量模式：先前不分 mode 一律走這條，導致切到 ETR2／風險／
+    //   警特報／風力等圖層時仍顯示雨量色帶，切換等於無效。
+    if(forecastModel==='cwa' && mode==='rain'){
+      const ca = t.qpf_cwa || [];
+      let band = null;
+      for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
+        const v = ca[s];
+        if(v!=null && (band===null || v>band)) band = v;
+      }
+      const col = cwaBandColor(band);
+      if(col){ fillColor=col; fillOp=isSel?0.93:0.82; }
+      else   { fillColor='#FFFFFF'; fillOp=1.0; }   // 無CWA色塊＝白
+    } else {
+    const acc = getAccum(t);
+    const {totalRain, etrPct} = acc;
+    if(acc.isRadar){
+      // 雷達1h：用雨量色階，無回波(null)＝白
+      fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain);
+      fillOp    = (totalRain==null) ? 1.0 : (isSel?0.93:0.82);
+    } else if(acc.isWarn){
+      // ★ 各 mode 分支必須排在「totalRain === null」之前。
+      //   否則警特報未達標(0/null)、浪高內陸(null) 會先被通用的 null 分支
+      //   攔成白色，永遠走不到自己的著色邏輯 —— 實測即為「警特報不顯示、
+      //   浪高看起來沒有資料」的原因。
+      fillColor = warnMapColor(totalRain || 0);
+      fillOp    = (totalRain||0)>0 ? (isSel?0.93:0.82) : 1.0;
+    } else if(acc.isHourly){
+      // ★ 逐時視窗用時雨量色階（非累積雨量色階）
+      fillColor = _hourlyColor(totalRain) || '#FFFFFF';
+      fillOp    = (totalRain == null) ? 0.05 : (isSel?0.95:0.85);
+    } else if(acc.isTemp){
+      // 氣溫：無資料留白（不可視為 0°C）
+      fillColor = _tempColor(totalRain) || '#FFFFFF';
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?0.93:0.82);
+    } else if(acc.isWave){
+      // 浪高：內陸無值 → 極淡灰（明確表示「非沿海」而非「浪高 0」）
+      fillColor = _waveColor(totalRain) || '#e8eef4';
+      fillOp    = (totalRain == null) ? 0.25 : (isSel?0.93:0.82);
+    } else if(acc.isWind){
+      // 風力預測：蒲福風級色階（<4白/4-7綠/7-10黃/10-13紅/>=13紫）
+      fillColor = _bfColor(totalRain) || '#FFFFFF';
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?0.93:0.82);
+    } else if(totalRain === null || totalRain === undefined){
+      // 無資料：顯示淡灰色，保留視覺邊界（不設為0.0，否則鄉鎮消失）
+      fillColor='#FFFFFF'; fillOp=1.0;
+    } else if(acc.isRisk){
+      fillColor = riskColor(totalRain);
+      fillOp    = isSel?0.93:0.78;
+    } else if(acc.isEtrMode){
+      // ETR2%模式：用 etrColor 對應現況 etr2_pct
+      fillColor = totalRain===null ? '#ccddee' : etrColor(totalRain);
+      fillOp    = totalRain===null ? 0.12 : (isSel?0.93:0.78);
+    } else {
+      fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#ccddee':etrColor(etrPct));
+      fillOp    = isSel?0.93:0.78;
+    }
+    }
+  }
+  // 非選取的鄉鎮邊框顏色設為與填色相同，視覺上消除縫隙
+  return {fillColor, fillOp};
+}
+
 function renderLayer(){
   if(townLayer){map.removeLayer(townLayer);townLayer=null;}
   if(countyLayer){map.removeLayer(countyLayer);countyLayer=null;}
@@ -4407,73 +4482,8 @@ function renderLayer(){
     const p = feat.properties;
     const t = TMAP[p.COUNTYNAME + p.TOWNNAME];
     const isSel = selected && selected.county===p.COUNTYNAME && selected.township===p.TOWNNAME;
-    let fillColor='#FFFFFF', fillOp=0.05;
-    if(t){
-      // CWA 模式：色階類別呈現——直接用官方色帶著色，不轉數字、不做累積。
-      //   取所選時間視窗內最高色帶（防漏報），無覆蓋段＝不著色（白）。
-      // ★ 僅限雨量模式：先前不分 mode 一律走這條，導致切到 ETR2／風險／
-      //   警特報／風力等圖層時仍顯示雨量色帶，切換等於無效。
-      if(forecastModel==='cwa' && mode==='rain'){
-        const ca = t.qpf_cwa || [];
-        let band = null;
-        for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
-          const v = ca[s];
-          if(v!=null && (band===null || v>band)) band = v;
-        }
-        const col = cwaBandColor(band);
-        if(col){ fillColor=col; fillOp=isSel?0.93:0.82; }
-        else   { fillColor='#FFFFFF'; fillOp=1.0; }   // 無CWA色塊＝白
-      } else {
-      const acc = getAccum(t);
-      const {totalRain, etrPct} = acc;
-      if(acc.isRadar){
-        // 雷達1h：用雨量色階，無回波(null)＝白
-        fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain);
-        fillOp    = (totalRain==null) ? 1.0 : (isSel?0.93:0.82);
-      } else if(acc.isWarn){
-        // ★ 各 mode 分支必須排在「totalRain === null」之前。
-        //   否則警特報未達標(0/null)、浪高內陸(null) 會先被通用的 null 分支
-        //   攔成白色，永遠走不到自己的著色邏輯 —— 實測即為「警特報不顯示、
-        //   浪高看起來沒有資料」的原因。
-        fillColor = warnMapColor(totalRain || 0);
-        fillOp    = (totalRain||0)>0 ? (isSel?0.93:0.82) : 1.0;
-      } else if(acc.isHourly){
-        // ★ 逐時視窗用時雨量色階（非累積雨量色階）
-        fillColor = _hourlyColor(totalRain) || '#FFFFFF';
-        fillOp    = (totalRain == null) ? 0.05 : (isSel?0.95:0.85);
-      } else if(acc.isTemp){
-        // 氣溫：無資料留白（不可視為 0°C）
-        fillColor = _tempColor(totalRain) || '#FFFFFF';
-        fillOp    = (totalRain == null) ? 1.0 : (isSel?0.93:0.82);
-      } else if(acc.isWave){
-        // 浪高：內陸無值 → 極淡灰（明確表示「非沿海」而非「浪高 0」）
-        fillColor = _waveColor(totalRain) || '#e8eef4';
-        fillOp    = (totalRain == null) ? 0.25 : (isSel?0.93:0.82);
-      } else if(acc.isWind){
-        // 風力預測：蒲福風級色階（<4白/4-7綠/7-10黃/10-13紅/>=13紫）
-        fillColor = _bfColor(totalRain) || '#FFFFFF';
-        fillOp    = (totalRain == null) ? 1.0 : (isSel?0.93:0.82);
-      } else if(totalRain === null || totalRain === undefined){
-        // 無資料：顯示淡灰色，保留視覺邊界（不設為0.0，否則鄉鎮消失）
-        fillColor='#FFFFFF'; fillOp=1.0;
-      } else if(acc.isRisk){
-        fillColor = riskColor(totalRain);
-        fillOp    = isSel?0.93:0.78;
-      } else if(acc.isEtrMode){
-        // ETR2%模式：用 etrColor 對應現況 etr2_pct
-        fillColor = totalRain===null ? '#ccddee' : etrColor(totalRain);
-        fillOp    = totalRain===null ? 0.12 : (isSel?0.93:0.78);
-      } else {
-        fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#ccddee':etrColor(etrPct));
-        fillOp    = isSel?0.93:0.78;
-      }
-      }
-    }
-    // 非選取的鄉鎮邊框顏色設為與填色相同，視覺上消除縫隙
-    // 選取狀態才顯示黃色高亮邊框
-    // 渲染模式：本島改由內插色帶層顯示，polygon 僅留 hover 熱區；金馬（內插範圍外）維持原色塊
-    const _outIsland = p.COUNTYNAME==='金門縣' || p.COUNTYNAME==='連江縣';
-    const _hideFill = _blurOn && !_outIsland;
+    const _f = _townFill(t, isSel);
+    const fillColor = _f.fillColor, fillOp = _f.fillOp;
     const opts={
       pane: 'townPane',
       // ★ 邊框改深灰：原本用 fillColor（與填色同色）等於沒有邊界，
