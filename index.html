@@ -1627,27 +1627,38 @@ map.addControl(new SnapControl());
 //   截完再還原。這樣不論螢幕解析度或視窗大小，輸出都完全一致，
 //   可以直接做成系列圖比較（先前直接畫 canvas，行政區界的線寬與
 //   抗鋸齒跟瀏覽器渲染不同，而且尺寸隨視窗變動）。
-const SNAP_W = 900, SNAP_H = 1200;      // 直式，比例接近臺灣本島
+// ★ 尺寸依地形範圍的長寬比推導，讓臺灣剛好填滿畫面（不留大片空白）。
+//   固定高度 1200，寬度由範圍比例算出。
+const SNAP_H = 1200;
 function snapMap(){
   const mp = document.getElementById('map');
   if(!mp) return;
-  const prev = { w: mp.style.width, h: mp.style.height,
-                 pos: mp.style.position, flex: mp.style.flex };
+  const B = (typeof TERRAIN_RELIEF !== 'undefined' && TERRAIN_RELIEF.bounds)
+    ? TERRAIN_RELIEF.bounds : [[21.89, 120.04], [25.30, 122.01]];
+  // 以 Web Mercator 的 y 投影計算實際螢幕比例（緯度越高壓縮越多）
+  const my = la => Math.log(Math.tan(Math.PI/4 + la*Math.PI/360));
+  const dy = Math.abs(my(B[1][0]) - my(B[0][0]));
+  const dx = Math.abs(B[1][1] - B[0][1]) * Math.PI/180;
+  const SNAP_W = Math.max(400, Math.round(SNAP_H * dx / dy));
+
+  const prev = { w: mp.style.width, h: mp.style.height, flex: mp.style.flex };
   mp.style.flex = '0 0 auto';
   mp.style.width = SNAP_W + 'px';
   mp.style.height = SNAP_H + 'px';
-  map.invalidateSize({animate:false});
-  const B = (typeof TERRAIN_RELIEF !== 'undefined' && TERRAIN_RELIEF.bounds)
-    ? TERRAIN_RELIEF.bounds : [[21.89, 120.04], [25.30, 122.01]];
-  map.fitBounds(L.latLngBounds(B), {padding:[0,0], animate:false});
-  console.log(`截圖：固定 ${SNAP_W}×${SNAP_H}，視野已對齊地形範圍`);
-  setTimeout(()=>{
-    _doSnap(B).finally(()=>{
-      mp.style.width = prev.w; mp.style.height = prev.h;
-      mp.style.position = prev.pos; mp.style.flex = prev.flex;
-      map.invalidateSize({animate:false});
-    });
-  }, 900);   // 等圖磚、疊圖與向量層重繪
+
+  // ★ 必須等容器尺寸生效後再 invalidateSize＋fitBounds，
+  //   否則 fitBounds 會用舊尺寸計算，臺灣會偏在角落且比例錯誤。
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    map.invalidateSize({animate:false});
+    map.fitBounds(L.latLngBounds(B), {padding:[0,0], animate:false});
+    console.log(`截圖：${SNAP_W}×${SNAP_H}（依地形範圍比例）`);
+    setTimeout(()=>{
+      _doSnap(B).finally(()=>{
+        mp.style.width = prev.w; mp.style.height = prev.h; mp.style.flex = prev.flex;
+        map.invalidateSize({animate:false});
+      });
+    }, 1000);   // 等圖磚、疊圖與向量層重繪
+  }));
 }
 function _doSnap(B){
   return new Promise(resolve=>{
@@ -3713,13 +3724,10 @@ function renderScnModal(){
     h += `</div>`;
   }
   body.innerHTML = h;
+  // ★ 不顯示狀態說明文字（使用者指定）：情境編輯器面板本身已有
+  //   逐日設定的視覺呈現，額外文字是多餘的。
   const s2 = document.getElementById('scn-summary2');
-  if(s2){
-    const n = Object.keys(_scnDays).filter(d=>_scnRule(d)).length;
-    s2.innerHTML = n
-      ? `<span style="color:${_scnOn?'#8ae8a8':'#8a7a9a'}">${_scnOn?'生效中':'未套用'}・已設 ${n} 天</span>`
-      : '<span style="color:#6a7a8a">尚未設定</span>';
-  }
+  if(s2) s2.textContent = '';
 }
 
 // ── 收合／展開（保留標題列可拖動；取代原本的 ✕ 關閉）──
@@ -5969,13 +5977,15 @@ function stepWin(delta){
   }
   const mp = winKey.match(/^past(\d+)$/);
   if(mp){
-    const n = parseInt(mp[1]) - delta;      // past1 是昨天，往後＝數字變小
-    if(n >= 1 && n <= 7) setWin('past' + n);
-    else if(n < 1) setWin('today');
+    // ★ 過去按鈕為 past0~past6（past0＝昨天，共 7 天）。
+    //   先前寫成 1~7，切到第 8 天時 past7 不存在，按鈕對不上而跑掉。
+    const n = parseInt(mp[1]) - delta;      // 往後＝數字變小
+    if(n >= 0 && n <= 6) setWin('past' + n);
+    else if(n < 0) setWin('today');
     return;
   }
   if(winKey === 'today'){
-    setWin(delta > 0 ? 'day2' : 'past1'); return;   // day2＝明天
+    setWin(delta > 0 ? 'day2' : 'past0'); return;   // day2＝明天、past0＝昨天
   }
   if(winKey === 'radar' && delta > 0){ setWin('fut1h_2'); return; }
 }
@@ -6024,7 +6034,8 @@ function _syncTimeNav(){
       const d = new Date(); d.setDate(d.getDate() + parseInt(md[1]) - 1);
       txt = _fmtDayTime(d, false).replace(/\s\d+時$/, '');
     } else if(mp){
-      const d = new Date(); d.setDate(d.getDate() - parseInt(mp[1]));
+      // past0＝昨天，故位移為 n+1 天
+      const d = new Date(); d.setDate(d.getDate() - parseInt(mp[1]) - 1);
       txt = _fmtDayTime(d, false).replace(/\s\d+時$/, '');
     }
   }
