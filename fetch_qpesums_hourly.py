@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-雷達1h QPF 每小時更新腳本（輕量，供 GitHub Actions 每小時執行）
+雷達1h QPF 高頻更新腳本（輕量，供 GitHub Actions 每 10 分鐘執行）
 抓 F-B0046（未來1h雷達定量降雨預報，~1.4km格點）→ 取各鄉鎮最近格點值 → 寫 radar.json
 前端載入時併入。與主腳本 fetch_rainfall.py（6h）分寫不同檔，避免競態。
 （原 QPESUMS 觀測補值 O-A0038 已於 2026-07 停用：CWA 該 dataid 改回傳溫度圖，
@@ -24,7 +24,7 @@ TOWNS_FILE   = "all_townships.json"
 #   本腳本每小時第12分執行，是全系統唯一的逐時序列來源。
 #   主腳本 fetch_rainfall.py 只讀不寫；兩支各寫各檔，永不搶寫。
 HOURLY_FILE   = "rain_hourly.json"
-# ── ETR2 官方現值（每小時更新，獨立檔）──────────────────
+# ── ETR2 官方現值（每 10 分鐘更新，獨立檔）──────────────
 #   ETR2 是官方權威現值且每小時都在變，等主排程 6 小時才更新太慢。
 #   本腳本本來就在抓水保署站級 STRT，只需再做「逐官方警戒單元→鄉鎮」聚合。
 #   寫獨立檔，與 radar.json 同策略：兩支 workflow 各寫各檔，永不搶寫 data.json。
@@ -764,7 +764,7 @@ def patch_radar_into_data(radar_vals, radar_dt):
 def main():
     now = datetime.now(timezone.utc) + timedelta(hours=8)
     hour_key = now.strftime('%Y-%m-%dT%H')
-    print(f"雷達1h QPF 每小時更新  {now.strftime('%Y-%m-%d %H:%M')} TST")
+    print(f"雷達1h QPF 高頻更新  {now.strftime('%Y-%m-%d %H:%M')} TST")
 
     if not CWA_API_KEY:
         print("無 CWA_API_KEY，跳過")
