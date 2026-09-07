@@ -1633,31 +1633,37 @@ const SNAP_H = 2400;
 function snapMap(){
   const mp = document.getElementById('map');
   if(!mp) return;
-  const B = (typeof TERRAIN_RELIEF !== 'undefined' && TERRAIN_RELIEF.bounds)
-    ? TERRAIN_RELIEF.bounds : [[21.89, 120.04], [25.30, 122.01]];
-  // 以 Web Mercator 的 y 投影計算實際螢幕比例（緯度越高壓縮越多）
+  // ★ 只取本島（排除澎湖、金門、馬祖）：離島散布極廣，一併納入會讓
+  //   本島被壓得很小、圖面又長又空。
+  const B = [[21.88, 120.03], [25.31, 122.01]];
   const my = la => Math.log(Math.tan(Math.PI/4 + la*Math.PI/360));
   const dy = Math.abs(my(B[1][0]) - my(B[0][0]));
   const dx = Math.abs(B[1][1] - B[0][1]) * Math.PI/180;
   const SNAP_W = Math.max(400, Math.round(SNAP_H * dx / dy));
 
-  const prev = { w: mp.style.width, h: mp.style.height, flex: mp.style.flex };
+  const prev = { w: mp.style.width, h: mp.style.height, flex: mp.style.flex,
+                 snap: map.options.zoomSnap, center: map.getCenter(), zoom: map.getZoom() };
+  // ★ zoomSnap 預設為 1，fitBounds 只能取整數縮放層級，
+  //   實際縮放會比需要的更小，於是圖面四周留下大片空白
+  //   （這就是「臺灣很小、圖片很長」的原因）。設為 0 才能精確填滿。
+  map.options.zoomSnap = 0;
   mp.style.flex = '0 0 auto';
   mp.style.width = SNAP_W + 'px';
   mp.style.height = SNAP_H + 'px';
 
-  // ★ 必須等容器尺寸生效後再 invalidateSize＋fitBounds，
-  //   否則 fitBounds 會用舊尺寸計算，臺灣會偏在角落且比例錯誤。
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
     map.invalidateSize({animate:false});
     map.fitBounds(L.latLngBounds(B), {padding:[0,0], animate:false});
-    console.log(`截圖：${SNAP_W}×${SNAP_H}（依地形範圍比例）`);
+    console.log(`截圖：${SNAP_W}×${SNAP_H}（本島範圍，zoomSnap 0）`);
     setTimeout(()=>{
       _doSnap(B).finally(()=>{
+        // 還原：尺寸、縮放吸附與原本的視野
         mp.style.width = prev.w; mp.style.height = prev.h; mp.style.flex = prev.flex;
+        map.options.zoomSnap = prev.snap;
         map.invalidateSize({animate:false});
+        map.setView(prev.center, prev.zoom, {animate:false});
       });
-    }, 1000);   // 等圖磚、疊圖與向量層重繪
+    }, 1200);
   }));
 }
 function _doSnap(B){
@@ -2824,7 +2830,12 @@ function downloadAllCsv(){
     ['昨日觀測雨量mm', t=>(t.daily_rain||[])[1]],
     ['觀測來源', t=>t.obs_src || '測站'],
     ['ETR2官方現值%', t=>{ const v = getObsEtr(t); return v != null ? v.toFixed(1) : ''; }],
-    ['ETR2預估%', t=>t.etr2_pct != null ? (t.etr2_pct*100).toFixed(1) : ''],
+    // ★ 預估欄位一律走 getAccum，隨所選時間視窗與模式變動
+  //   （先前固定讀 t.etr2_pct，切換時段時 CSV 內容完全不變）。
+  ['ETR2預估%', t=>{ const a = getAccum(t);
+                     return (a && a.etrPct != null) ? a.etrPct.toFixed(1) : ''; }],
+  ['本視窗預測雨量mm', t=>{ const a = getAccum(t);
+                     return (a && a.totalRain != null) ? a.totalRain.toFixed(1) : ''; }],
     ['警戒值mm', t=>t.alert_val],
   ];
   // 各模式的本視窗累積
@@ -2862,7 +2873,10 @@ function downloadAllCsv(){
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   const ts = (window._dataGenAt || new Date().toISOString()).replace(/[:T]/g,'').slice(0,13);
-  a.href = url; a.download = `rainfall_${ts}.csv`;
+  // ★ 檔名帶時間視窗：同一輪資料在不同時段匯出的內容不同，
+  //   沒有標示會分不清哪個檔案對應哪個時段。
+  const winTag = (winKey || 'today').replace(/[^\w]/g, '');
+  a.href = url; a.download = `FORMOSA_${ts}_${winTag}.csv`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(url), 1000);
   const msg = document.getElementById('rank-msg');
@@ -6009,7 +6023,7 @@ function stepWin(delta){
     //   先前寫成 day1／day0，那是無效的鍵，切換會跳到未定義狀態。
     const n = parseInt(md[1]) + delta;
     if(n < 2){ setWin('today'); return; }
-    setWin('day' + Math.min(17, n)); return;
+    setWin('day' + Math.min(16, n)); return;
   }
   const mp = winKey.match(/^past(\d+)$/);
   if(mp){
@@ -6143,7 +6157,9 @@ function buildDayBtns(){
   // 第2-15天：純未來QPF預測
   // ★ 推到 16 天（GFS/GraphCast 的時效上限）；超出各模式時效時
   //   地圖會顯示「該模式僅提供 N 天」的提示。
-  for(let i=2;i<=17;i++){
+  // ★ day2＝明天，故 day16 為第 16 天；先前做到 day17 等於第 17 天，
+  //   超出所有模式時效（GFS/GraphCast 最長 16 天），整片無資料。
+  for(let i=2;i<=16;i++){
     const dt=new Date(SEG_EPOCH().getTime()+(i-1)*86400000);
     const btn=document.createElement('button');
     btn.className='b';btn.id=`bday${i}`;btn.textContent=fmtDay(dt);
@@ -6189,14 +6205,14 @@ function init(){
     }
   });
 
-  buildPastBtns();
-  buildFuture6hBtns();
-  buildFuture1hBtns();
-  buildDayBtns();
-  // ★ 先載入真實資料再繪圖：先前 setWin 在 tryLoadLive 之前，
-  //   會先用內建示範資料畫一次（畫面閃現示範資料的舊日期），
-  //   幾秒後才換成真實資料。改為載入完成後才做首次繪製。
+  // ★ 一切都等真實資料到齊再做：按鈕的日期文字取自 SEG_EPOCH（由
+  //   BASE_TIME 決定），若在 tryLoadLive 之前建立，用的是內建示範
+  //   資料的時間基準，畫面會先閃現示範資料的舊日期。
   tryLoadLive().finally(()=>{
+    buildPastBtns();
+    buildFuture6hBtns();
+    buildFuture1hBtns();
+    buildDayBtns();
     setWin('today');   // 預設顯示今天（觀測至今+預測補滿24h）
   });
   // 資料每 10 分鐘更新一輪（雷達與觀測），故前端也縮短輪詢間隔
