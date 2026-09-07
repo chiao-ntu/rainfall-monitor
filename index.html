@@ -632,6 +632,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             <option value="obs_etr">觀測 ETR2%</option>
             <option value="qpf_etr">預估 ETR2%</option>
           </select>
+          <input id="rank-from" type="number" min="1" value="1" onchange="renderRankList()"
+            style="width:44px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+          <span style="font-size:11px;color:#5a7a95">–</span>
           <select id="rank-topn" onchange="renderRankList()"
             style="flex:0 0 auto;font-size:11px;padding:3px;
             background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
@@ -3140,9 +3144,14 @@ function renderRankList(){
                k: (tt.county||'') + (tt.township||'')});
   });
   rows.sort((a,b)=>b.v - a.v);
+  // ★ 名次範圍：可指定「從第幾名到第幾名」，方便看中後段
+  const fromEl = document.getElementById('rank-from');
   const topEl = document.getElementById('rank-topn');
+  const from = Math.max(1, parseInt((fromEl || {}).value) || 1);
   const topN = topEl ? parseInt(topEl.value) : 20;
-  const top = (topN > 0) ? rows.slice(0, topN) : rows;   // 0＝全部
+  const to = (topN > 0) ? (from - 1 + topN) : rows.length;
+  const top = rows.slice(from - 1, to);
+  window._rankOffset = from - 1;   // 供圖表標示實際名次
   window._rankRows = top;          // 供「複製此排行」使用
   if(!top.length){
     el.innerHTML = '<div style="color:#7a94ac">此條件下無資料</div>';
@@ -3153,15 +3162,23 @@ function renderRankList(){
   el.innerHTML = top.map((r, i)=>{
     const w = Math.max(2, r.v / vMax * 100);
     const hi = r.k === cur;
+    // ★ 名次要加上起始偏移（選「11–30 名」時應顯示 11 而非 1）
+    const rank = (window._rankOffset || 0) + i + 1;
+    // ★ 長條用數值本身的色階（雨量用雨量色階、百分比用 ETR2 色階），
+    //   左緣細條保留地形色 —— 兩種資訊分開，不互相干擾。
+    const barCol = (r.unit === '%')
+      ? ((ETR_SCALE.find(b=>r.v < b.max) || ETR_SCALE[ETR_SCALE.length-1]).color)
+      : ((RAIN_SCALE.find(b=>r.v < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color);
     return `<div onclick="_rankPick('${r.k.replace(/'/g, "")}')"
       style="cursor:pointer;padding:2px 3px;border-radius:2px;
       background:${hi ? '#14344e' : 'transparent'}">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <span><span style="color:#7a94ac;font-size:10px">${String(i+1).padStart(2,' ')}.</span>
+        <span><span style="color:#7a94ac;font-size:10px">${String(rank).padStart(3,' ')}.</span>
           <span style="color:${ZC[r.z]};font-size:9px">●</span> ${r.k}</span>
         <b style="color:#cfe4f5">${r.v.toFixed(r.unit==='%'?0:1)}${r.unit}</b>
       </div>
-      <div style="height:2px;background:${ZC[r.z]};width:${w}%;opacity:.5"></div>
+      <div style="height:6px;border-radius:2px;background:${barCol};
+        width:${w}%;opacity:.85"></div>
     </div>`;
   }).join('');
 }
@@ -4839,14 +4856,14 @@ function updateInfo(t){
     if(mEl) mEl.style.display = hasMg ? 'block' : 'none';
     if(hasMg){ try{ drawMarginChart(t); }catch(e){ console.warn('警戒餘裕圖失敗', e); } }
 
-    // 縣市內各鄉鎮（選了縣市才顯示）
+    // 各鄉鎮分布：全臺或指定縣市都要顯示
+    //   ★ 先前只在有選縣市時顯示，於是點了任一鄉鎮後整個區塊消失，
+    //     必須切換日期或模式才會回來。
     const ctEl = document.getElementById('sec-countytowns');
-    if(ctEl) ctEl.style.display = _pickedCounty ? 'block' : 'none';
-    if(_pickedCounty){
-      const tt = document.getElementById('ct-title');
-      if(tt) tt.textContent = `${_pickedCounty} 各鄉鎮`;
-      try{ drawCountyTowns(); }catch(e){ console.warn('縣市鄉鎮圖失敗', e); }
-    }
+    if(ctEl) ctEl.style.display = 'block';
+    const ctT = document.getElementById('ct-title');
+    if(ctT) ctT.textContent = _pickedCounty ? `${_pickedCounty} 各鄉鎮` : '全臺各鄉鎮';
+    try{ drawCountyTowns(); }catch(e){ console.warn('各鄉鎮圖失敗', e); }
 
     // 全臺排行
     const rEl = document.getElementById('sec-rank');
@@ -10577,13 +10594,11 @@ function toggleChartZoom(canvasId, ev){
   //   額外途徑 —— 圖上有互動點位時，其 click handler 會 stopPropagation
   //   攔下一般點擊，此時按 Ctrl 就能確保放大而非觸發點位。
   if(ev && (ev.ctrlKey || ev.metaKey)) ev.stopPropagation();
+  // ★ 只有「單一鄉鎮」的圖表才需要 selected；各鄉鎮分布、地形分佈、
+  //   海拔分佈、警戒餘裕都是全域圖表，先前一併擋掉導致無法放大。
   const needsSelected = (canvasId==='cv'||canvasId==='cv-district-hyeto'
                        ||canvasId.startsWith('cv-wind-')
                        ||canvasId.startsWith('cv-stnrank')
-                       ||canvasId.startsWith('cv-countytowns')
-                       ||canvasId.startsWith('cv-elevrain')
-                       ||canvasId.startsWith('cv-etrphase')
-                       ||canvasId.startsWith('cv-margin')
                        ||canvasId.startsWith('cv-temp-')
                        ||canvasId.startsWith('cv-wave-'));
   if(needsSelected && !selected) return;
