@@ -403,7 +403,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       padding:2px 10px;box-shadow:0 3px 14px rgba(0,0,0,.5)"
       onclick="event.stopPropagation()" onmousedown="event.stopPropagation()"
       ondblclick="event.stopPropagation()">
-      <button class="b" onclick="stepWin(-1)" style="padding:1px 8px;font-size:12px">◀</button>
       <select id="nav-model" onchange="setModel(this.value)"
         style="font-size:10px;padding:1px 3px;background:#061220;color:#f0c878;
         border:1px solid #3a5070;border-radius:3px"></select>
@@ -414,8 +413,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <option value="seg6">未來6h段</option>
         <option value="day">逐日</option>
       </select>
+      <button class="b" onclick="stepWin(-1)" style="padding:1px 8px;font-size:12px">◀</button>
       <span id="time-nav-label" style="font-size:11px;color:#9fc8e8;min-width:140px;
         text-align:center"></span>
+      <button class="b" onclick="stepWin(1)" style="padding:1px 8px;font-size:12px">▶</button>
       <select id="nav-layer" onchange="setMode(this.value)"
         style="font-size:10px;padding:1px 3px;background:#061220;color:#7ee8a8;
         border:1px solid #3a5070;border-radius:3px">
@@ -427,7 +428,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <option value="wave">浪高</option>
         <option value="temp">氣溫</option>
       </select>
-      <button class="b" onclick="stepWin(1)" style="padding:1px 8px;font-size:12px">▶</button>
       <button class="b" id="time-nav-fold" onclick="toggleTimeNav()"
         style="padding:1px 6px;font-size:10px">▲</button>
     </div>
@@ -556,7 +556,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 
     <div class="sec" id="sec-all-daily" style="display:block">
       <div class="sec-h" onclick="toggleSec('all-daily')">
-        <span>逐日雨量（各分署，15天）</span><span class="sec-arrow" id="arrow-all-daily">▾</span>
+        <span>逐日雨量</span><span class="sec-arrow" id="arrow-all-daily">▾</span>
       </div>
       <div class="sec-body" id="body-all-daily" style="display:block">
         <canvas id="cv-all-daily" width="280" height="130"
@@ -569,7 +569,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 
     <div class="sec" id="sec-all-hyeto" style="display:block">
       <div class="sec-h" onclick="toggleSec('all-hyeto')">
-        <span>組體雨量圖（各分署，未來48h）</span><span class="sec-arrow" id="arrow-all-hyeto">▾</span>
+        <span>組體雨量圖</span><span class="sec-arrow" id="arrow-all-hyeto">▾</span>
       </div>
       <div class="sec-body" id="body-all-hyeto" style="display:block">
         <canvas id="cv-all-hyeto" width="280" height="130"
@@ -1667,19 +1667,6 @@ function snapMap(){
   // ★ zoomSnap 預設為 1，fitBounds 只能取整數縮放層級，
   //   實際縮放會比需要的更小，於是圖面四周留下大片空白
   //   （這就是「臺灣很小、圖片很長」的原因）。設為 0 才能精確填滿。
-  // ★ 截圖期間蓋上遮罩：容器尺寸與縮放會變動，讓使用者看到地圖
-  //   「跑掉又跳回來」會誤以為出錯。
-  let mask = document.getElementById('snap-mask');
-  if(!mask){
-    mask = document.createElement('div');
-    mask.id = 'snap-mask';
-    mask.style.cssText = 'position:fixed;inset:0;z-index:4000;'
-      + 'background:rgba(4,10,18,.9);display:flex;align-items:center;'
-      + 'justify-content:center;color:#9fc8e8;font-size:15px';
-    mask.textContent = '截圖中…';
-    document.body.appendChild(mask);
-  }
-  mask.style.display = 'flex';
   map.options.zoomSnap = 0;
   mp.style.flex = '0 0 auto';
   mp.style.width = SNAP_W + 'px';
@@ -1696,82 +1683,82 @@ function snapMap(){
         map.options.zoomSnap = prev.snap;
         map.invalidateSize({animate:false});
         map.setView(prev.center, prev.zoom, {animate:false});
-        const mk = document.getElementById('snap-mask');
-        if(mk) mk.style.display = 'none';
       });
     }, 1200);
   }));
 }
+// ★ 截圖改為「用地圖自己的投影重畫」，而非把 DOM 節點光柵化。
+//   先前逐一抓 <img>/<svg> 再 drawImage，SVG 因 viewBox、overflow 與
+//   pane transform 的處理與瀏覽器不同，界線永遠對不上地形與色塊。
+//   改用 map.latLngToContainerPoint() 逐點投影，所有圖層共用同一個
+//   座標轉換，對齊問題從根本消失。
 function _doSnap(B){
   return new Promise(resolve=>{
     const size = map.getSize();
     const cv = document.createElement('canvas');
-    cv.width = size.x; cv.height = size.y;     // 固定尺寸，不乘 dpr（避免又隨螢幕變動）
+    cv.width = size.x; cv.height = size.y;
     const ctx = cv.getContext('2d');
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, size.x, size.y);
-    const mr = map.getContainer().getBoundingClientRect();
-    const pane = map.getPanes().mapPane;
 
-    // 依 pane 的 zIndex 由低到高疊，確保順序與畫面一致
-    const layers = [...pane.children]
-      .map(el=>({el, z: parseInt(getComputedStyle(el).zIndex) || 0}))
-      .sort((a, b)=>a.z - b.z);
-
-    const tasks = [];
-    layers.forEach(({el})=>{
-      el.querySelectorAll('img').forEach(im=>{
-        tasks.push(()=>new Promise(r=>{
-          try{
-            // ★ 疊圖（地形、渲染層）與向量層必須用同一個座標基準。
-            //   先前 img 用 getBoundingClientRect、svg 也用，但兩者的
-            //   transform 來源不同（img 在 imageOverlay 的 pane、
-            //   svg 在 overlay pane），CSS transform 造成偏移。
-            //   改以 map 容器為原點，並把 pane 的 transform 一併計入。
-            const rr = im.getBoundingClientRect();
-            ctx.globalAlpha = parseFloat(im.style.opacity || '1') || 1;
-            ctx.drawImage(im, Math.round(rr.left - mr.left), Math.round(rr.top - mr.top),
-                          Math.round(rr.width), Math.round(rr.height));
-            ctx.globalAlpha = 1;
-          }catch(e){}
-          r();
-        }));
+    const P = ll => {                        // [lng,lat] → 畫布座標
+      const p = map.latLngToContainerPoint([ll[1], ll[0]]);
+      return [p.x, p.y];
+    };
+    const tracePolys = (geom, cb)=>{
+      const polys = (geom.type === 'Polygon') ? [geom.coordinates] : geom.coordinates;
+      polys.forEach(poly=>{
+        ctx.beginPath();
+        poly.forEach(ring=>{
+          ring.forEach((c, i)=>{
+            const q = P(c);
+            if(i === 0) ctx.moveTo(q[0], q[1]); else ctx.lineTo(q[0], q[1]);
+          });
+          ctx.closePath();
+        });
+        cb();
       });
-      el.querySelectorAll('svg').forEach(sv=>{
-        tasks.push(()=>new Promise(r=>{
-          try{
-            const rr = sv.getBoundingClientRect();
-            const clone = sv.cloneNode(true);
-            // ★ Leaflet 的 SVG 圖層帶有 viewBox（由 _updateTransform 設定），
-            //   直接改 width/height 會讓內容依 viewBox 重新縮放，
-            //   於是界線與地形／色塊錯開。改為保留原始 viewBox，
-            //   並讓 width/height 與 viewBox 的尺寸一致。
-            const vb = sv.getAttribute('viewBox');
-            if(vb){
-              const p4 = vb.split(/[\s,]+/).map(Number);
-              clone.setAttribute('width', p4[2]);
-              clone.setAttribute('height', p4[3]);
-            } else {
-              clone.setAttribute('width', Math.round(rr.width));
-              clone.setAttribute('height', Math.round(rr.height));
-            }
-            const xml = new XMLSerializer().serializeToString(clone);
-            const im = new Image();
-            im.onload = ()=>{
-              ctx.drawImage(im, Math.round(rr.left - mr.left), Math.round(rr.top - mr.top),
-                            Math.round(rr.width), Math.round(rr.height));
-              r();
-            };
-            im.onerror = ()=>r();
-            im.src = 'data:image/svg+xml;base64,'
-                   + btoa(unescape(encodeURIComponent(xml)));
-          }catch(e){ r(); }
-        }));
-      });
-    });
+    };
 
-    // 依序執行以維持疊層順序
-    tasks.reduce((p, fn)=>p.then(fn), Promise.resolve()).then(()=>{
+    const drawVectors = ()=>{
+      // 鄉鎮色塊（依目前圖層與時間視窗）
+      (TOWN_GEO.features || []).forEach(f=>{
+        const pr = f.properties || {};
+        const t = TMAP[(pr.COUNTYNAME||'') + (pr.TOWNNAME||'')];
+        let col = null, op = 0.85;
+        if(t){
+          const acc = getAccum(t);
+          const v = acc && acc.totalRain;
+          if(v != null){
+            col = (_hourIdx != null && mode === 'rain') ? _hourlyColor(v)
+                : (mode === 'rain')
+                  ? (RAIN_SCALE.find(b=>v < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color
+                  : rainColor(v);
+          }
+        }
+        if(col){
+          ctx.fillStyle = col;
+          ctx.globalAlpha = (typeof _terrainOn !== 'undefined' && _terrainOn) ? op*0.82 : op;
+          tracePolys(f.geometry, ()=>ctx.fill());
+          ctx.globalAlpha = 1;
+        }
+        // 鄉鎮界
+        ctx.strokeStyle = (typeof _terrainOn !== 'undefined' && _terrainOn)
+          ? '#3a3a3a' : '#5a5a5a';
+        ctx.lineWidth = 0.6; ctx.globalAlpha = 0.45;
+        tracePolys(f.geometry, ()=>ctx.stroke());
+        ctx.globalAlpha = 1;
+      });
+      // 縣市界（較粗，畫在最上）
+      if(typeof COUNTY_GEO !== 'undefined' && COUNTY_GEO.features){
+        ctx.strokeStyle = '#000000'; ctx.lineWidth = 1.4; ctx.globalAlpha = 0.7;
+        COUNTY_GEO.features.forEach(f=>tracePolys(f.geometry, ()=>ctx.stroke()));
+        ctx.globalAlpha = 1;
+      }
+      finish();
+    };
+
+    const finish = ()=>{
       const ts = new Date();
       const pad = n=>String(n).padStart(2, '0');
       const name = `FORMOSA_${ts.getFullYear()}${pad(ts.getMonth()+1)}${pad(ts.getDate())}`
@@ -1785,19 +1772,36 @@ function _doSnap(B){
         console.log(`已截圖：${name}（${cv.width}×${cv.height}）`);
         resolve();
       }, 'image/png');
-    });
+    };
+
+    // 地形暈渲：用 imageOverlay 的地理範圍換算成畫布座標後貼上
+    if(typeof _terrainOn !== 'undefined' && _terrainOn && _terrainOverlay){
+      const tb = TERRAIN_RELIEF.bounds;
+      const p0 = map.latLngToContainerPoint([tb[1][0], tb[0][1]]);   // 左上
+      const p1 = map.latLngToContainerPoint([tb[0][0], tb[1][1]]);   // 右下
+      const im = new Image();
+      im.crossOrigin = 'anonymous';
+      im.onload = ()=>{
+        ctx.globalAlpha = 0.9;
+        ctx.drawImage(im, p0.x, p0.y, p1.x - p0.x, p1.y - p0.y);
+        ctx.globalAlpha = 1;
+        drawVectors();
+      };
+      im.onerror = ()=>drawVectors();
+      im.src = 'terrain_relief.png';
+    } else {
+      drawVectors();
+    }
   });
 }
 
-// ★ 圖層分層（先前被誤刪，導致鄉鎮色塊無 pane 可掛、整張地圖空白）：
-//   seaPane(390) < terrainPane(392) < townPane(395) < overlayPane(400)
+// ★ 圖層分層：seaPane(390) < terrainPane(392) < townPane(395) < overlayPane(400)
+//   這段曾兩度被字串替換誤刪，導致鄉鎮色塊無 pane 可掛、整張地圖空白。
 map.createPane('seaPane');
 map.getPane('seaPane').style.zIndex = 390;
-// 鄉鎮塗色專用 pane（供「渲染」模糊效果使用）
 map.createPane('townPane');
 map.getPane('townPane').style.zIndex = 395;
-// 不加任何 tileLayer → 背景純白（CSS 已設 background:#ffffff）
-// 加一個淡藍海域遮罩（用 SVG 全域矩形）
+// 不加 tileLayer → 背景純白；以 SVG 全域矩形當底
 const seaLayer = L.rectangle([[-90,-180],[90,180]], {
   pane:'seaPane', color:'none', fillColor:'#ffffff', fillOpacity:1.0, interactive:false
 }).addTo(map);
@@ -4655,24 +4659,51 @@ function updateInfo(t){
   // ★ 縣市層級：未選鄉鎮但已選縣市時，只畫縣市內鄉鎮分布與排行，
   //   不進入下方需要單一鄉鎮的流程（否則會存取 t.county 而出錯）。
   if(!t){
+    // ★ 未選取鄉鎮時，右側以「全臺／所選縣市」尺度顯示完整圖表，
+    //   而非只留幾個分署圖 —— 先前使用者必須先點一個鄉鎮才看得到
+    //   排行、地形分佈、警戒餘裕等，容易誤以為系統沒有資料。
     _fillCountyPicker();
-    const ctEl0 = document.getElementById('sec-countytowns');
-    if(ctEl0) ctEl0.style.display = _pickedCounty ? 'block' : 'none';
-    if(_pickedCounty){
-      const tt0 = document.getElementById('ct-title');
-      if(tt0) tt0.textContent = `${_pickedCounty} 各鄉鎮`;
-      const it = document.getElementById('iTitle');
-      if(it) it.textContent = _pickedCounty;
-      try{ drawCountyTowns(); }catch(e){ console.warn('縣市鄉鎮圖失敗', e); }
-    }
-    // 縣市層級也顯示「雨量與地形分佈」（篩選為該縣市的鄉鎮）
-    const peEl = document.getElementById('sec-etrphase');
-    if(peEl) peEl.style.display = _pickedCounty ? 'block' : 'none';
-    if(_pickedCounty){
-      try{ drawEtrPhaseChart(null); }catch(e){ console.warn('分佈圖失敗', e); }
-    }
-    try{ renderRankList(); }catch(e){}
-    try{ renderBlendDetail(null); }catch(e){}
+    const scope = _pickedCounty || '全臺';
+    const it = document.getElementById('iTitle');
+    if(it) it.textContent = scope;
+
+    // 顯示：不需單一鄉鎮即可繪製的圖表
+    const showAll = ['countytowns', 'etrphase', 'elevrain', 'margin', 'rank'];
+    showAll.forEach(nm=>{
+      const el = document.getElementById('sec-' + nm);
+      if(el) el.style.display = 'block';
+    });
+    // 隱藏：必須有單一鄉鎮才有意義的圖表
+    ['now', 'qpf', 'daily', 'seg6', 'district-hyeto', 'stnrank', 'stations',
+     'windday', 'windhr', 'tempday', 'temphr', 'waveday', 'wavehr'].forEach(nm=>{
+      const el = document.getElementById('sec-' + nm);
+      if(el) el.style.display = 'none';
+    });
+    // 各分署整合圖：全臺尺度才顯示
+    ['all-summary', 'all-daily', 'all-hyeto'].forEach(nm=>{
+      const el = document.getElementById('sec-' + nm);
+      if(el) el.style.display = _pickedCounty ? 'none' : 'block';
+    });
+
+    const ctT = document.getElementById('ct-title');
+    if(ctT) ctT.textContent = _pickedCounty ? `${_pickedCounty} 各鄉鎮` : '全臺各鄉鎮';
+    const _safe = (fn, nm)=>{ try{ fn(); }catch(e){ console.warn(nm + '失敗', e); } };
+    _safe(()=>drawCountyTowns(), '各鄉鎮圖');
+    _safe(()=>drawEtrPhaseChart(null), '雨量與地形分佈');
+    _safe(()=>drawElevRainChart(null), '雨量與海拔分佈');
+    _safe(()=>drawMarginChart(null), '警戒餘裕');
+    _safe(()=>renderRankList(), '雨量排行');
+    _safe(()=>renderBlendDetail(null), '融合明細');
+    if(!_pickedCounty) _safe(()=>updateAllDistrictCharts(), '分署整合圖');
+    // 套用展開/收合狀態
+    try{
+      Object.keys(secOpen).forEach(nm=>{
+        const b = document.getElementById('body-' + nm);
+        const a = document.getElementById('arrow-' + nm);
+        if(b) b.style.display = secOpen[nm] ? 'block' : 'none';
+        if(a) a.textContent = secOpen[nm] ? '\u25be' : '\u25b8';
+      });
+    }catch(e){}
     return;
   }
   // 選取鄉鎮時隱藏各分署整合區塊
@@ -6575,7 +6606,7 @@ function _drawDistrictChart(ctx,W,H,isZoom,type,data){
 
   if(isZoom){
     ctx.fillStyle='#d0e8ff';ctx.font=`bold ${fs+8}px sans-serif`;ctx.textAlign='left';
-    ctx.fillText(type==='daily'?'全台各分署 逐日QPF（16天，各日00-24時）':'全台各分署 組體QPF（未來48h）',pL,pT-44);
+    ctx.fillText(type==='daily'?'各分署 逐日雨量':'各分署 組體雨量圖',pL,pT-44);
   }
 
   // 格線 + 左右軸刻度
@@ -10572,7 +10603,7 @@ function toggleChartZoom(canvasId, ev){
     'cv-wave-day': selected ? `${selected.county}${selected.township} 逐日浪高預測` : '',
     'cv-wave-hr': selected ? `${selected.county}${selected.township} 逐時浪高預測` : '',
     'cv-all-daily': '全台各分署逐日雨量（16天）',
-    'cv-all-hyeto': '全台各分署組體雨量圖（未來48h）',
+    'cv-all-hyeto': '各分署 組體雨量圖',
   };
   const titleEl = document.getElementById('chart-zoom-title');
   if(titleEl) titleEl.textContent = titleMap[canvasId] || '';
