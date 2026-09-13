@@ -2508,7 +2508,148 @@ STATION_ELEV = {}
 TOWN_POLYS_FILE = "town_polys.json"   # 鄉鎮界（供雷達格點聚合，由 index.html 抽出）
 TERRAIN_FILE = "terrain_zones_official.json"   # 地形分類（山區/淺山/沿海/平地）
 SKILL_FILE = "model_skill.json"
+VERIFY_FILE = "verify.json"      # 逐日校驗（列聯表 + POD/FAR/CSI）
+VERIFY_KEEP_DAYS = 60            # 保留 60 天，供選日期回溯
+# ★ 有效降水門檻（使用者指定）：1mm。
+#   0.1mm 只是「有無降水」，防災判讀用 1mm 才有意義。
+RAIN_THRESHOLD = 1.0
+# 命中／誤報／漏報的誤差判準（使用者指定）：
+#   命中 = 兩邊都有雨且相對誤差 ≤30%
+#   誤報 = 預測有、實際沒有（或誤差 30–60%）
+#   漏報 = 預測沒有、實際有（或誤差 >60%）
+HIT_TOL, MISS_TOL = 0.30, 0.60
 SKILL_KEEP_DAYS = 45        # 保留天數：短期權重看7天、長期基準看30天，留餘裕
+
+
+def _verify_class(obs, mod):
+    """分類單一比對：hit / false（誤報）/ miss（漏報）/ correct_neg（正確無雨）。
+
+    ★ 判準（使用者指定）：
+      命中 —— 兩邊都有雨，且相對誤差在 30% 內
+      誤報 —— 預測有、實際沒有；或兩邊都有雨但誤差 30~60%（偏高側）
+      漏報 —— 預測沒有、實際有；或兩邊都有雨但誤差 >60%
+    以觀測為分母計算相對誤差；觀測為 0 時無法計算比例，直接依有無判定。
+    """
+    o_rain = obs >= RAIN_THRESHOLD
+    m_rain = mod >= RAIN_THRESHOLD
+    if not o_rain and not m_rain:
+        return 'correct_neg'
+    if m_rain and not o_rain:
+        return 'false'          # 預測有、實際沒有
+    if o_rain and not m_rain:
+        return 'miss'           # 預測沒有、實際有
+    # 兩邊都有雨 → 看相對誤差
+    err = abs(mod - obs) / max(obs, 1e-9)
+    if err <= HIT_TOL:
+        return 'hit'
+    if err <= MISS_TOL:
+        return 'false' if mod > obs else 'miss'
+    return 'miss' if mod < obs else 'false'
+
+
+def _verify_scores(c):
+    """由列聯表算 POD / FAR / CSI / 偏差比。
+
+    POD（命中率）= hit / (hit + miss)       —— 實際有雨時抓到的比例
+    FAR（誤報率）= false / (hit + false)     —— 報有雨中報錯的比例
+    CSI（成功指數）= hit / (hit + miss + false) —— 綜合指標，不受正確無雨灌水
+    偏差比 = (hit + false) / (hit + miss)   —— >1 報太多、<1 報太少
+    """
+    h, m, f = c.get('hit', 0), c.get('miss', 0), c.get('false', 0)
+    def _r(x, d):
+        return round(x / d, 3) if d else None
+    return {
+        'POD': _r(h, h + m),
+        'FAR': _r(f, h + f),
+        'CSI': _r(h, h + m + f),
+        'BIAS': _r(h + f, h + m),
+    }
+
+
+def _verify_summary(vf, days=7):
+    """近 N 日的校驗彙整（全臺），供前端不必另載 verify.json 就能顯示概況。"""
+    if not vf or not vf.get('days'):
+        return None
+    ks = sorted(vf['days'].keys())[-days:]
+    agg = {}
+    for k in ks:
+        for m, c in (vf['days'][k].get('全臺') or {}).items():
+            a = agg.setdefault(m, {'hit': 0, 'miss': 0, 'false': 0, 'correct_neg': 0})
+            for kk in a:
+                a[kk] += c.get(kk, 0)
+    return {'days': len(ks), 'from': ks[0] if ks else None, 'to': ks[-1] if ks else None,
+            'scores': {m: _verify_scores(c) for m, c in agg.items()},
+            'counts': agg}
+
+
+def update_verify(out_towns, zones, now_tpe):
+    """逐日校驗：以 1mm 有效降水為門檻，比對昨日各模式與實際觀測。
+
+    ★ 與既有誤差追蹤（model_skill）互補：
+      model_skill 看「量」的偏差（偏差比、MAE），用於融合加權；
+      verify      看「有無」的判斷品質（POD/FAR/CSI），用於評估可信度。
+      兩者共用同一批樣本，在同一個流程算完，不重複抓資料。
+    結構：{"days": {"2026-09-01": {"全臺": {"ecmwf": {hit,miss,false,correct_neg}},
+                                   "山區": {...}}}}
+    """
+    yday = (now_tpe - timedelta(days=1)).strftime('%Y-%m-%d')
+    vf = {'days': {}}
+    if os.path.exists(VERIFY_FILE):
+        try:
+            with open(VERIFY_FILE, encoding='utf-8') as f:
+                vf = json.load(f) or {'days': {}}
+        except Exception:
+            vf = {'days': {}}
+    vf.setdefault('days', {})
+
+    MODELS = ('best', 'ecmwf', 'gfs', 'icon', 'jma', 'aifs', 'graphcast')
+    day = {}
+    n_used = 0
+    for t in out_towns:
+        key = (t.get('county') or '') + (t.get('township') or '')
+        zone = zones.get(key) or '平地'
+        obs = (t.get('daily_rain') or [None, None])[1]      # [1] = 昨天
+        if obs is None:
+            continue
+        if t.get('obs_src') in ('neighbor', 'qpesums'):     # 推估值不列入校驗
+            continue
+        for m in MODELS:
+            mv = (t.get('model_yday') or {}).get(m)
+            if mv is None:
+                continue
+            cls = _verify_class(float(obs), float(mv))
+            # 全臺與逐地形各記一份
+            for scope in ('全臺', zone):
+                d = day.setdefault(scope, {}).setdefault(m, {
+                    'hit': 0, 'miss': 0, 'false': 0, 'correct_neg': 0})
+                d[cls] += 1
+            n_used += 1
+
+    if not day:
+        print("  校驗：昨日無可比對樣本")
+        return vf
+
+    vf['days'][yday] = day
+    cut = (now_tpe - timedelta(days=VERIFY_KEEP_DAYS)).strftime('%Y-%m-%d')
+    vf['days'] = {k: v for k, v in vf['days'].items() if k >= cut}
+    vf['updated'] = now_tpe.isoformat()
+    vf['threshold'] = RAIN_THRESHOLD
+    try:
+        with open(VERIFY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(vf, f, ensure_ascii=False, separators=(',', ':'))
+        sc = {m: _verify_scores(day['全臺'][m]) for m in day.get('全臺', {})}
+        best_m = max(sc, key=lambda m: (sc[m].get('CSI') or -1)) if sc else None
+        print(f"  校驗（≥{RAIN_THRESHOLD}mm）：{yday} 比對 {n_used} 筆，"
+              f"累積 {len(vf['days'])} 天")
+        for m in sorted(sc):
+            s_ = sc[m]
+            print(f"    {m:10s} POD {s_['POD']}　FAR {s_['FAR']}　"
+                  f"CSI {s_['CSI']}　偏差比 {s_['BIAS']}")
+        if best_m:
+            print(f"    昨日 CSI 最佳：{best_m}")
+    except Exception as e:
+        print(f"  校驗寫入失敗：{e}")
+    return vf
 
 
 def update_model_skill(out_towns, zones, now_tpe):
@@ -4301,6 +4442,8 @@ def main():
         #   townships[].stations 只含「警戒表」裡的站，且站名比對不到就沒座標
         #   （實測 514/891 無座標）。測站圖層需要的是完整清單，故另行輸出。
         'all_stations': all_stations_out,
+        # 逐日校驗摘要（完整記錄在 verify.json；此處放近 7 日彙整供前端快速取用）
+        'verify_recent': _verify_recent,
         # 雷達定量降雨（鄉鎮多邊形聚合；mean=區內平均、max=區內最大）
         'radar_qpe': radar_qpe, 'radar_qpe_time': radar_qpe_time,
         'radar_qpf_grid': radar_qpf_grid, 'radar_qpf_time': radar_qpf_time2,
@@ -4367,6 +4510,7 @@ def main():
     # ── 誤差追蹤（CMPF 第二階段）──────────────────────
     #   累積「逐來源 × 逐地形」的預測誤差；現階段只記錄與呈現，
     #   不回饋修正預測。待樣本足夠（短期7天/長期30天）再啟用動態加權。
+    _verify_recent = None      # 校驗彙整（未執行時為 None）
     try:
         _zones = {}
         if os.path.exists(TERRAIN_FILE):
@@ -4374,6 +4518,9 @@ def main():
                 _tz = json.load(_f)
             _zones = _tz.get('zones', _tz) if isinstance(_tz, dict) else {}
         _skill = update_model_skill(out_towns, _zones, now_tpe)
+        # 校驗（POD/FAR/CSI）：與誤差追蹤共用同一批樣本
+        _verify = update_verify(out_towns, _zones, now_tpe)
+        _verify_recent = _verify_summary(_verify)
         output['model_skill'] = summarize_model_skill(_skill, now_tpe)
         # 累積進度：讓前端能說明「還要多久權重才會分化」
         _days_all = sorted((_skill.get('days') or {}).keys())

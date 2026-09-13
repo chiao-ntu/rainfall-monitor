@@ -59,6 +59,7 @@ jobs:
           # ★ 累積型檔案：缺一個就會讓對應功能永遠重新開始
           [ -f obs_history.json ] && git add obs_history.json   # 測站逐日雨量（16天）
           [ -f model_skill.json ] && git add model_skill.json   # 融合誤差追蹤（45天）
+          [ -f verify.json ]      && git add verify.json        # 逐日校驗 POD/FAR/CSI（60天）
 
           # 靜態資料檔（極少變動，但若有重建也一併帶上）
           [ -f coastal_towns.json ]           && git add coastal_towns.json

@@ -213,6 +213,124 @@ def _resolve_product_url(dataid, timeout=60):
 TIDE_EP = 'F-A0021-001'          # 鄉鎮潮汐預報（滿潮／乾潮時刻與潮高）
 
 
+# 雷達定量降雨：O-B0045-001 過去1小時實估、F-B0046-001 未來1小時預報
+#   ★ 這是原「QPESUMS」的接續資料集（換了 dataid，並非停用）。
+#     441×561 格點、解析度 0.0125°（約 1.4km），每 10 分鐘更新。
+RADAR_QPE_EP = 'O-B0045-001'      # 過去1小時（實估，含雨量站校正）
+RADAR_QPF_EP = 'F-B0046-001'      # 未來1小時（預報）
+
+
+def fetch_radar_grid(dataid, label):
+    """讀雷達定量降雨格點 → (values, meta)；失敗回 (None, None)。
+
+    格點定義（官方）：左下角為東經118、北緯20，先經向遞增再緯向遞增，
+    TWD67 經緯網格，無效值 -1。
+    """
+    if not CWA_API_KEY:
+        return None, None
+    print(f"抓取{label}（{dataid}）...")
+    txt = None
+    for _try in range(2):
+        try:
+            r = cwa_get(f"{FILEAPI}/{dataid}",
+                        params={"Authorization": CWA_API_KEY,
+                                "downloadType": "WEB", "format": "XML"},
+                        timeout=120)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}（{_try+1}/2）")
+                if _try == 0: time.sleep(5)
+                continue
+            txt = r.content.decode('utf-8', 'replace')
+            break
+        except Exception as e:
+            print(f"    取用失敗（{_try+1}/2）：{e}")
+            if _try == 0: time.sleep(5)
+    if not txt:
+        print(f"★ {label}：下載失敗")
+        return None, None
+    try:
+        def _tag(t):
+            m = re.search(rf'<{t}>([^<]*)</{t}>', txt)
+            return m.group(1).strip() if m else ''
+        meta = {
+            'lon0': float(_tag('StartPointLongitude') or 118),
+            'lat0': float(_tag('StartPointLatitude') or 20),
+            'res':  float(_tag('GridResolution') or 0.0125),
+            'nx':   int(_tag('GridDimensionX') or 441),
+            'ny':   int(_tag('GridDimensionY') or 561),
+            'time': _tag('DateTime'),
+        }
+        i = txt.index('<content>'); j = txt.index('</content>', i)
+        vals = [float(x) for x in txt[i+9:j].split(',') if x.strip()]
+    except Exception as e:
+        print(f"★ {label}：解析失敗 {e}")
+        return None, None
+    if len(vals) != meta['nx'] * meta['ny']:
+        print(f"★ {label}：格點數不符（{len(vals)} vs "
+              f"{meta['nx']}×{meta['ny']}）")
+        return None, None
+    pos = sum(1 for v in vals if v > 0)
+    print(f"    {meta['nx']}×{meta['ny']} 格點，有雨 {pos} "
+          f"（{pos/len(vals)*100:.1f}%），時間 {meta['time'][:16]}")
+    return vals, meta
+
+
+def radar_to_towns(vals, meta, town_polys):
+    """把雷達格點聚合到鄉鎮 → {縣市+鄉鎮: {'mean':x, 'max':x, 'n':格點數}}。
+
+    ★ 用「鄉鎮多邊形範圍內的所有格點」而非質心單點：
+      質心取樣時該點沒回波就是 null，但那不代表整個鄉鎮沒雨
+      —— 實測 radar.json 有約 60% 的鄉鎮是 null。
+      1.4km 格點下，一個鄉鎮涵蓋數十到數百格，統計上穩定得多。
+    """
+    lon0, lat0 = meta['lon0'], meta['lat0']
+    res, nx, ny = meta['res'], meta['nx'], meta['ny']
+    out = {}
+    for key, (lo0, la0, lo1, la1, poly) in town_polys.items():
+        i0 = max(0, int((lo0 - lon0) / res))
+        i1 = min(nx - 1, int((lo1 - lon0) / res) + 1)
+        j0 = max(0, int((la0 - lat0) / res))
+        j1 = min(ny - 1, int((la1 - lat0) / res) + 1)
+        if i1 < i0 or j1 < j0:
+            continue
+        acc, mx, n = 0.0, None, 0
+        for j in range(j0, j1 + 1):
+            base = j * nx
+            for i in range(i0, i1 + 1):
+                v = vals[base + i]
+                if v < 0:                 # -1 為無效值
+                    continue
+                # 只計落在多邊形內的格點
+                if not _pt_in_poly(lon0 + i * res, lat0 + j * res, poly):
+                    continue
+                acc += v; n += 1
+                if mx is None or v > mx: mx = v
+        if n:
+            out[key] = {'mean': round(acc / n, 1), 'max': round(mx, 1), 'n': n}
+    if out:
+        _nz = sum(1 for v in out.values() if v['max'] > 0)
+        _avg = sum(v['n'] for v in out.values()) / len(out)
+        print(f"    鄉鎮聚合：{len(out)} 個（有雨 {_nz}），平均每鄉鎮 {_avg:.0f} 格")
+    return out
+
+
+def _pt_in_poly(x, y, rings):
+    """射線法：點是否在多邊形內（rings 為外環清單，任一命中即算）。"""
+    for ring in rings:
+        inside = False
+        n = len(ring)
+        j = n - 1
+        for i in range(n):
+            xi, yi = ring[i]; xj, yj = ring[j]
+            if ((yi > y) != (yj > y)) and \
+               (x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi):
+                inside = not inside
+            j = i
+        if inside:
+            return True
+    return False
+
+
 def fetch_tide_forecast():
     """鄉鎮潮汐預報 → {縣市+鄉鎮: {'range': 大/中/小, 'times': [...]}}。
 
@@ -1022,17 +1140,39 @@ def fetch_obs():
         return 0.0
 
     stations = {}
-    for st in raw.get('records',{}).get('Station',[]):
+    # ★ 外層有兩種：API 的 records.Station（實務常見），
+    #   以及檔案下載版的 cwaopendata.dataset.Station。兩種都接受，
+    #   否則改用檔案來源時會解析出 0 站。
+    _recs = (raw.get('records') or {}).get('Station')
+    if not _recs:
+        _ds = (raw.get('cwaopendata') or {}).get('dataset') or {}
+        _recs = _ds.get('Station') or _ds.get('station') or []
+    if isinstance(_recs, dict):
+        _recs = [_recs]
+    for st in (_recs or []):
         geo = st.get('GeoInfo',{})
         coords = geo.get('Coordinates',[{}])
+        # ★ 一個測站有 TWD67 與 WGS84 兩組座標，必須取 WGS84
+        #   （Leaflet 用 WGS84；兩者在臺灣差約 800m，取錯會整批偏移）。
         lat,lng = 0.0,0.0
         for c in coords:
+            if (c.get('CoordinateName') or '').upper() != 'WGS84':
+                continue
             lv=c.get('StationLatitude',0); lo=c.get('StationLongitude',0)
             if lv and lo: lat=float(lv); lng=float(lo); break
+        if not lat:                       # 沒有 WGS84 才退回第一組
+            for c in coords:
+                lv=c.get('StationLatitude',0); lo=c.get('StationLongitude',0)
+                if lv and lo: lat=float(lv); lng=float(lo); break
+        # ★ 官方已提供測站海拔，不需再用 DTM 推算
+        try:
+            _alt = float(geo.get('StationAltitude'))
+        except (TypeError, ValueError):
+            _alt = None
         re = st.get('RainfallElement',{})
         stations[st.get('StationId','')] = {
             'name': st.get('StationName',''),
-            'lat':lat,'lng':lng,
+            'lat':lat,'lng':lng,'alt':_alt,
             'county':geo.get('CountyName',''),
             'township':geo.get('TownName',''),
             'rain_now':  gp(re,'Now'),
@@ -1184,7 +1324,10 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
         # ★ 帶上座標與海拔：供前端做「海拔 vs 雨量」散佈圖與測站底圖著色。
         #   海拔查自 station_elev.json（由 20m DTM 離線產生，見 build_station_elev.py）。
         _sinfo = (all_stations or {}).get(sid) or {}
-        _elev = (STATION_ELEV or {}).get(sid)
+        # 官方 StationAltitude 優先；沒有才用 DTM 對照表
+        _elev = _sinfo.get('alt')
+        if _elev is None:
+            _elev = (STATION_ELEV or {}).get(sid)
         enriched.append({
             'name':      name,
             'sid':       sid or '',
@@ -1697,12 +1840,24 @@ def fetch_openmeteo_model(townships, model='best_match'):
     抓取 Open-Meteo 多模式預報（涵蓋全部15天，從現在起）
     model: 'best_match'（ECMWF+GFS最佳組合）/ 'ecmwf_ifs025' / 'gfs_seamless' / 'icon_seamless'
     """
+    # ★ 模式分兩類，前端也分開呈現：
+    #   物理模式 —— 傳統數值天氣預報，可直接取代/併入既有綜合
+    #   AI 模式  —— 資料驅動，對超出訓練分布的極端降雨傾向低估，
+    #                需經偏差校正後才納入融合（校正上限放寬）
     model_names = {
         'best_match':    'Open-Meteo Best（ECMWF+GFS）',
-        'ecmwf_ifs025':  'ECMWF IFS',
+        # ── 物理模式 ──
+        'ecmwf_ifs':     'ECMWF IFS HRES 9km',   # ★ 官方物理、9km、前90h逐時
+        'ecmwf_ifs025':  'ECMWF IFS 0.25°',      # 舊版：25km、3h、延遲2小時
         'gfs_seamless':  'NOAA GFS',
         'icon_seamless': 'DWD ICON',
+        'jma_seamless':  'JMA（日本氣象廳）',
+        # ── AI 模式 ──
+        'ecmwf_aifs025_single': 'ECMWF AIFS（AI）',
+        'gfs_graphcast025':     'GFS GraphCast（AI）',
     }
+    # AI 模式清單（供偏差校正放寬上限、前端分組）
+    AI_MODELS = {'ecmwf_aifs025_single', 'gfs_graphcast025'}
     label = model_names.get(model, model)
     print(f"  抓取 {label}...")
     lats=[t.get('lat',0) for t in townships]
@@ -1731,13 +1886,14 @@ def fetch_openmeteo_model(townships, model='best_match'):
         except Exception as e:
             print(f"    失敗（嘗試{attempt+1}/3）：{e}")
             if attempt == 2:
-                return {}, {}
+                return {}, {}, {}
             time.sleep(3)
     else:
-        return {}, {}
+        return {}, {}, {}
 
     result={}
     result_max_hourly={}  # 每個6h段內的「最大單一小時雨量」，供強度分級用
+    result_hourly={}      # 前96小時逐時值（IFS HRES 前90h為原生逐時）
     data_list = raw if isinstance(raw,list) else [raw]
     for i, loc in enumerate(data_list):
         key = f"{lats[i]:.4f}_{lngs[i]:.4f}"
@@ -1751,6 +1907,10 @@ def fetch_openmeteo_model(townships, model='best_match'):
             max_hourly_6h.append(round(max(chunk), 1) if chunk else 0.0)
         result[key] = segs_6h[:64]
         result_max_hourly[key] = max_hourly_6h[:64]
+        # ★ 保留前 90 小時的逐時值：IFS HRES 在此區間是原生逐時，
+        #   其餘模式由 Open-Meteo 內插。前端逐時檢視需要這份資料。
+        result_hourly[key] = [round(v, 1) if v is not None else None
+                              for v in precip[:96]]
 
         # 逐時掃描 CWA 警特報條件（每個模式都算，供前端依所選模式顯示對應等級）
         # 大雨: 24h≥100 或 1h≥40；豪雨: 24h≥200 或 3h≥100
@@ -1775,21 +1935,38 @@ def fetch_openmeteo_model(townships, model='best_match'):
         WARN_SEG_CACHE.setdefault(model, {})[key] = warn_seg[:64]
     n = len(next(iter(result.values()),[]))
     print(f"    {len(result)} 個點，各 {n} 個6h時段")
-    return result, result_max_hourly
+    return result, result_max_hourly, result_hourly
+
+# ★ 要抓的模式清單。物理與 AI 分開，前端也依此分組呈現。
+OM_PHYSICAL = ['best_match', 'ecmwf_ifs', 'gfs_seamless', 'icon_seamless', 'jma_seamless']
+OM_AI       = ['ecmwf_aifs025_single', 'gfs_graphcast025']
+OM_MODELS   = OM_PHYSICAL + OM_AI
+
 
 def fetch_openmeteo(townships):
-    """抓取所有 Open-Meteo 模式，回傳 (totals_by_model, max_hourly_by_model)"""
-    print(f"抓取 Open-Meteo（{len(townships)} 個鄉鎮，全部15天）...")
-    models = ['best_match', 'ecmwf_ifs025', 'gfs_seamless', 'icon_seamless']
-    all_results = {}
-    all_max_hourly = {}
-    for i, model in enumerate(models):
+    """抓取所有 Open-Meteo 模式 → (totals, max_hourly, hourly)。
+
+    ★ ecmwf_ifs（IFS HRES 9km）取代舊的 ecmwf_ifs025：
+      同為 ECMWF 官方物理模式，但解析度 9km vs 25km、前 90 小時原生逐時、
+      且無 open-data 版的 2 小時額外延遲。純升級，沒有取捨。
+    ★ AI 模式（AIFS、GraphCast）另行標記：它們對超出訓練分布的極端降雨
+      傾向低估，需經偏差校正才納入融合。
+    """
+    print(f"抓取 Open-Meteo（{len(townships)} 個鄉鎮，{len(OM_MODELS)} 個模式）...")
+    all_results, all_max_hourly, all_hourly = {}, {}, {}
+    for i, model in enumerate(OM_MODELS):
         if i > 0:
             time.sleep(2)  # 避免連續請求觸發限流
-        result, max_hourly = fetch_openmeteo_model(townships, model)
+        result, max_hourly, hourly = fetch_openmeteo_model(townships, model)
+        if not result and model in ('ecmwf_ifs',):
+            # IFS HRES 若不可用，退回 0.25° 版本（至少有 ECMWF 資料）
+            print("    IFS HRES 無回應 → 退回 ECMWF IFS 0.25°")
+            time.sleep(2)
+            result, max_hourly, hourly = fetch_openmeteo_model(townships, 'ecmwf_ifs025')
         all_results[model] = result
         all_max_hourly[model] = max_hourly
-    return all_results, all_max_hourly
+        all_hourly[model] = hourly
+    return all_results, all_max_hourly, all_hourly
 
 
 # ── F-B0046 未來1小時雷達定量降雨預報（~1.4km 格點，每10分鐘更新）──
@@ -2141,7 +2318,7 @@ def fetch_ensemble_ratios(townships):
         'latitude':  ','.join(f"{x:.4f}" for x in lats),
         'longitude': ','.join(f"{x:.4f}" for x in lngs),
         'hourly':    'precipitation',
-        'models':    'ecmwf_ifs025',
+        'models':    'ecmwf_ifs',      # IFS HRES 9km（原 0.25°）
         'forecast_days': 15,   # ECMWF 系集支援 15 天（全期強/弱降雨情境）
         'timezone':  'Asia/Taipei',
     }
@@ -2225,8 +2402,12 @@ def fetch_models_yesterday(townships):
     print("抓取四模式昨日回算（誤差追蹤基準）...")
     lats = [t.get('lat', 0) for t in townships]
     lngs = [t.get('lng', 0) for t in townships]
-    MODELS = {'best': 'best_match', 'ecmwf': 'ecmwf_ifs025',
-              'gfs': 'gfs_seamless', 'icon': 'icon_seamless'}
+    # ★ 含 AI 模式：AIFS 與 GraphCast 也要追蹤誤差，
+    #   它們對極端降雨傾向低估，偏差比會明顯 >1，正好由校正處理。
+    MODELS = {'best': 'best_match', 'ecmwf': 'ecmwf_ifs',
+              'gfs': 'gfs_seamless', 'icon': 'icon_seamless',
+              'jma': 'jma_seamless',
+              'aifs': 'ecmwf_aifs025_single', 'graphcast': 'gfs_graphcast025'}
     out = {}
     for tag, mid in MODELS.items():
         params = {
@@ -2324,6 +2505,7 @@ def calc_bias_24h(daily_rain, model_yday):
 #  ★ 現階段只累積與呈現，不回饋修正預測；待樣本足夠再啟用加權。
 STATION_ELEV_FILE = "station_elev.json"   # 測站海拔（由 20m DTM 離線產生）
 STATION_ELEV = {}
+TOWN_POLYS_FILE = "town_polys.json"   # 鄉鎮界（供雷達格點聚合，由 index.html 抽出）
 TERRAIN_FILE = "terrain_zones_official.json"   # 地形分類（山區/淺山/沿海/平地）
 SKILL_FILE = "model_skill.json"
 SKILL_KEEP_DAYS = 45        # 保留天數：短期權重看7天、長期基準看30天，留餘裕
@@ -2350,7 +2532,7 @@ def update_model_skill(out_towns, zones, now_tpe):
             skill = {'days': {}}
     skill.setdefault('days', {})
 
-    MODELS = ('best', 'ecmwf', 'gfs', 'icon')
+    MODELS = ('best', 'ecmwf', 'gfs', 'icon', 'jma', 'aifs', 'graphcast')
     day = {}
     n_used = 0
     for t in out_towns:
@@ -3149,7 +3331,8 @@ QPF_PNG_BANDS = [
     (3,99,255, 10),     (5,155,255, 5),   (3,200,255, 2),    (156,252,255, 1),
     (194,194,194, 0.5),
 ]
-QPF_PNG_TOL = 42          # 色距容忍（√(42²×3)≈73）
+# 色距容忍：相鄰級距最小色距 45（5mm↔2mm），取其一半再留餘裕 → 半徑 ≤22
+QPF_PNG_TOL = 12          # 每通道容忍（√(12²×3)≈20.8，安全落在半距內）
 QPF_PNG_WINDOW_HOURS = 12 # 定量降水預報(II) 為 12h 有效時段
 
 def _png_solve_homography(px_map, ll_map):
@@ -3198,7 +3381,16 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns, fname='', win_seg=None, win_n
         mx, mn = max(r,g,b), min(r,g,b)
         if mx > 235 and mn > 225: return 0.0          # 白底＝無雨
         if mx < 55: return None                        # 黑等值線/邊界
+        # ★ 0.5mm 這一級的官方色就是灰色 (194,194,194)，
+        #   會被下面的「低飽和灰＝文字/格線」規則誤殺 → 大片小雨區沒有票，
+        #   該鄉鎮的值改由鄰近的藍色像素決定，於是「明明沒雨卻爆增」。
+        #   故先比對灰色級距，命中就回 0.5，不進入低飽和過濾。
+        if abs(r-194) <= 12 and abs(g-194) <= 12 and abs(b-194) <= 12:
+            return 0.5
         if (mx-mn) < 22 and 55 <= mx < 230: return None  # 低飽和灰（文字/格線）
+        # ★ 取最近色，且容忍半徑須小於「相鄰級距色距的一半」，
+        #   否則抗鋸齒或壓縮雜訊會讓 2mm 被判成 5mm、5mm 判成 10mm
+        #   （實測相鄰色距最小僅 45，原本 tol=42→半徑 72.7 遠超過）。
         best, bd = None, tol2 + 1
         for (br,bg,bb,bv) in bands:
             d = (r-br)**2 + (g-bg)**2 + (b-bb)**2
@@ -3486,7 +3678,47 @@ def main():
     gust_fcst     = fetch_gust_forecast() if CWA_API_KEY else {}
     # 沿海浪高（僅 120 個沿海預報點）
     wave_fcst     = fetch_wave_forecast() if CWA_API_KEY else {}
+    # ── 雷達定量降雨（過去1小時實估 + 未來1小時預報）──────
+    #   ★ 用鄉鎮多邊形聚合，取代原本的質心單點取樣
+    #     （單點在該鄉鎮沒回波時就是 null，實測約 60% 鄉鎮為空）。
+    radar_qpe, radar_qpe_time = {}, ''
+    radar_qpf_grid, radar_qpf_time2 = {}, ''
+    _polys = {}
+    if os.path.exists(TOWN_POLYS_FILE):
+        try:
+            with open(TOWN_POLYS_FILE, encoding='utf-8') as _f:
+                _polys = json.load(_f)
+        except Exception as _e:
+            print(f"鄉鎮界讀取失敗（雷達改用質心）：{_e}")
+    if _polys and CWA_API_KEY:
+        _pv = {k: (v[0], v[1], v[2], v[3], v[4]) for k, v in _polys.items()}
+        _v, _m = fetch_radar_grid(RADAR_QPE_EP, '雷達過去1小時定量降雨')
+        if _v:
+            radar_qpe = radar_to_towns(_v, _m, _pv)
+            radar_qpe_time = _m.get('time', '')
+        _v2, _m2 = fetch_radar_grid(RADAR_QPF_EP, '雷達未來1小時定量降雨')
+        if _v2:
+            radar_qpf_grid = radar_to_towns(_v2, _m2, _pv)
+            radar_qpf_time2 = _m2.get('time', '')
+
     tide_fcst     = fetch_tide_forecast() if CWA_API_KEY else {}
+
+    # 全臺測站清單（供前端測站圖層；只留必要欄位以免 data.json 過大）
+    all_stations_out = {}
+    for _sid, _v in (stations or {}).items():
+        if not isinstance(_v, dict) or not _v.get('lat'):
+            continue
+        _d = (_v.get('daily_rain') or [None])
+        all_stations_out[_sid] = {
+            'n': _v.get('name', ''),
+            'la': round(_v['lat'], 5), 'lo': round(_v['lng'], 5),
+            'e': _v.get('alt'),
+            'c': _v.get('county', ''), 't': _v.get('township', ''),
+            'r': _v.get('rain_24h') if _v.get('rain_24h') is not None else (
+                 _d[0] if _d and _d[0] is not None else None),
+        }
+    if all_stations_out:
+        print(f"全臺測站清單：{len(all_stations_out)} 站（含座標與海拔）")
     fc_precip     = fetch_forecaster_precip() if CWA_API_KEY else {}
     debris_alerts = fetch_debris_alerts()
     # 雙軌：現況紅黃走官方發布值、未來推估自算
@@ -3518,8 +3750,10 @@ def main():
     official_warn = fetch_official_warnings() if CWA_API_KEY else None
 
     # Open-Meteo（四個模式）
-    om_all, om_max_hourly_all = fetch_openmeteo(static_list)
-    om = om_all.get('ecmwf_ifs025', {})  # 預設用 ECMWF IFS，對台灣地形雨準確度較高
+    om_all, om_max_hourly_all, om_hourly_all = fetch_openmeteo(static_list)
+    # ★ 預設改用 IFS HRES 9km（原為 0.25°）：解析度提升近 3 倍，
+    #   對臺灣中央山脈的地形雨差異最明顯。
+    om = om_all.get('ecmwf_ifs') or om_all.get('ecmwf_ifs025', {})
 
     # QPESUMS 網格觀測（1h 即時 + 24h 歷史合成）
     # QPESUMS（O-A0038）已停用：CWA 該 dataid 現回傳溫度圖而非雨量網格。
@@ -3593,7 +3827,7 @@ def main():
 
         # 各模式的完整15天QPF（依優先序：CWA > ECMWF > GFS/ICON）
         qpf_best  = get_qpf_model('best_match')
-        qpf_ecmwf = get_qpf_model('ecmwf_ifs025')
+        qpf_ecmwf = get_qpf_model('ecmwf_ifs')
         qpf_gfs   = get_qpf_model('gfs_seamless')
         qpf_icon  = get_qpf_model('icon_seamless')
 
@@ -3702,6 +3936,13 @@ def main():
             'qpf_ecmwf': qpf_ecmwf,
             'qpf_gfs':   qpf_gfs,
             'qpf_icon':  qpf_icon,
+            # ── 新增模式 ──
+            'qpf_jma':   get_qpf_model('jma_seamless'),
+            'qpf_aifs':  get_qpf_model('ecmwf_aifs025_single'),   # AI
+            'qpf_gc':    get_qpf_model('gfs_graphcast025'),       # AI
+            # 逐時（IFS HRES 前 90h 為原生逐時，其餘為內插）
+            'hourly_ifs': (om_hourly_all.get('ecmwf_ifs') or {}).get(
+                            f"{lat:.4f}_{lng:.4f}"),
             'qpf_hi':    apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'hi')[0],
             'qpf_lo':    apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'lo')[0],
             'maxh_hi':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'hi')[1],
@@ -3766,7 +4007,7 @@ def main():
 
     if non_static_coords:
         time.sleep(3)
-        non_static_om, non_static_maxh = fetch_openmeteo(non_static_coords)
+        non_static_om, non_static_maxh, non_static_hourly = fetch_openmeteo(non_static_coords)
     else:
         non_static_om, non_static_maxh = {}, {}
 
@@ -4056,6 +4297,13 @@ def main():
         # 鄉鎮潮汐預報（F-A0021-001）：滿潮/乾潮時刻、潮高(cm,相對當地均潮位)、潮差級別
         #   ★ 暴潮溢淹風險＝滿潮 × 大浪同時發生，故需與 wave_fcst 併看
         'tide_fcst': tide_fcst,
+        # ★ 全臺 CWA 測站清單（含座標、海拔、今日累積）：
+        #   townships[].stations 只含「警戒表」裡的站，且站名比對不到就沒座標
+        #   （實測 514/891 無座標）。測站圖層需要的是完整清單，故另行輸出。
+        'all_stations': all_stations_out,
+        # 雷達定量降雨（鄉鎮多邊形聚合；mean=區內平均、max=區內最大）
+        'radar_qpe': radar_qpe, 'radar_qpe_time': radar_qpe_time,
+        'radar_qpf_grid': radar_qpf_grid, 'radar_qpf_time': radar_qpf_time2,
         # 預報員研判之地區雨量區間（F-C0034，豪雨/颱風事件期間才發布）
         #   {24h|total: {title, valid, areas:{地區:{flat|mountain:{lo,hi,hl}}}}}
         #   ★ 縣市級區間，供上下界參考與比對；不覆蓋逐站 ETR2 等精細資料
