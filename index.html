@@ -879,6 +879,45 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
     </div>
 
+    <!-- 區塊：預報校驗（POD/FAR/CSI） -->
+    <div class="sec" id="sec-verify" style="display:none">
+      <div class="sec-h" onclick="toggleSec('verify')">
+        <span>預報校驗</span>
+        <span class="sec-arrow" id="arrow-verify">▸</span>
+      </div>
+      <div class="sec-body" id="body-verify" style="display:none">
+        <div style="display:flex;gap:4px;margin-bottom:5px;align-items:center">
+          <select id="vf-scope" onchange="renderVerify()"
+            style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+            <option value="全臺">全臺</option>
+            <option value="山區">山區</option>
+            <option value="淺山區">淺山區</option>
+            <option value="平地">平地</option>
+            <option value="沿海地區">沿海地區</option>
+          </select>
+          <select id="vf-days" onchange="renderVerify()"
+            style="flex:0 0 auto;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+            <option value="7">近 7 日</option>
+            <option value="14">近 14 日</option>
+            <option value="30">近 30 日</option>
+            <option value="60">近 60 日</option>
+            <option value="1">單日</option>
+          </select>
+          <input id="vf-date" type="date" onchange="renderVerify()"
+            style="font-size:11px;padding:2px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+        </div>
+        <div id="vf-table" style="font-size:10px"></div>
+        <canvas id="cv-verify" style="width:100%;height:190px;display:block;
+          margin-top:6px;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-verify', event)"
+          onmousemove="showChartTooltip(event,'cv-verify')"
+          onmouseleave="hideChartTooltip()"></canvas>
+      </div>
+    </div>
+
     <!-- 區塊：融合校正明細（僅融合模式顯示） -->
     <div class="sec" id="sec-blend" style="display:none">
       <div class="sec-h" onclick="toggleSec('blend')">
@@ -3121,6 +3160,161 @@ function drawCountyTowns(canvasId){
   }
 }
 
+// ══════════════════════════════════════════════════════════
+//  預報校驗（POD / FAR / CSI / 偏差比）
+//  ★ 判準：1mm 有效降水、逐日累積比對。
+//    命中＝兩邊有雨且誤差 ≤30%；誤報＝報多；漏報＝報少或沒報到。
+//  ★ CSI 不納入「正確無雨」—— 臺灣多數日子多數鄉鎮沒雨，
+//    納入會把分數灌到 0.9 以上，看不出模式差異。
+// ══════════════════════════════════════════════════════════
+const VF_MODELS = ['best', 'ecmwf', 'gfs', 'icon', 'jma', 'aifs', 'graphcast'];
+const VF_NAME = {best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS', icon:'ICON',
+                 jma:'JMA', aifs:'EC-AIFS', graphcast:'GraphCast'};
+function _vfScores(c){
+  const h = c.hit || 0, m = c.miss || 0, f = c['false'] || 0;
+  const r = (x, d)=> d ? Math.round(x / d * 1000) / 1000 : null;
+  return {POD: r(h, h+m), FAR: r(f, h+f), CSI: r(h, h+m+f), BIAS: r(h+f, h+m),
+          n: h + m + f};
+}
+// 取所選範圍的逐日資料 → [{date, scores:{model:{...}}}]
+function _vfSeries(){
+  const V = window.VERIFY_DATA;
+  if(!V || !V.days) return [];
+  const scope = (document.getElementById('vf-scope') || {}).value || '全臺';
+  const nDays = parseInt((document.getElementById('vf-days') || {}).value) || 7;
+  const pick = (document.getElementById('vf-date') || {}).value || '';
+  let keys = Object.keys(V.days).sort();
+  if(nDays === 1){
+    keys = pick ? keys.filter(k=>k === pick) : keys.slice(-1);
+  } else {
+    keys = keys.slice(-nDays);
+  }
+  return keys.map(k=>{
+    const day = (V.days[k] || {})[scope] || {};
+    const sc = {};
+    VF_MODELS.forEach(m=>{ if(day[m]) sc[m] = _vfScores(day[m]); });
+    return {date: k, scores: sc, raw: day};
+  });
+}
+function renderVerify(){
+  const el = document.getElementById('vf-table');
+  if(!el) return;
+  const ser = _vfSeries();
+  if(!ser.length){
+    el.innerHTML = '<div style="color:#7a94ac">尚無校驗資料（需累積至少一天）</div>';
+    try{ drawVerifyChart(); }catch(e){}
+    return;
+  }
+  // 彙整所選期間（各模式的列聯表相加後再算分數，而非分數平均——
+  // 分數平均會讓樣本少的日子佔同等權重）
+  const agg = {};
+  ser.forEach(d=>{
+    VF_MODELS.forEach(m=>{
+      const c = d.raw[m];
+      if(!c) return;
+      const a = agg[m] || (agg[m] = {hit:0, miss:0, 'false':0, correct_neg:0});
+      ['hit','miss','false','correct_neg'].forEach(k=> a[k] += (c[k] || 0));
+    });
+  });
+  const rows = Object.keys(agg).map(m=>({m, s: _vfScores(agg[m]), c: agg[m]}))
+                     .sort((a, b)=>(b.s.CSI ?? -1) - (a.s.CSI ?? -1));
+  const col = v => v == null ? '#7a94ac'
+    : v >= 0.7 ? '#40d060' : v >= 0.5 ? '#FFFF00' : v >= 0.3 ? '#FF8C00' : '#FF4444';
+  const fmt = v => v == null ? '—' : v.toFixed(2);
+  const period = ser.length === 1 ? ser[0].date
+    : `${ser[0].date} ~ ${ser[ser.length-1].date}（${ser.length} 日）`;
+  el.innerHTML = `<div style="color:#5a7a95;font-size:9px;margin-bottom:3px">
+      ${period}　門檻 ≥1mm　CSI 由高至低</div>
+    <table style="width:100%;border-collapse:collapse;font-size:10px">
+      <tr style="color:#6bc8e8">
+        <th style="text-align:left;padding:2px 3px">模式</th>
+        <th style="text-align:right">POD</th><th style="text-align:right">FAR</th>
+        <th style="text-align:right">CSI</th><th style="text-align:right">偏差比</th>
+        <th style="text-align:right">樣本</th></tr>
+      ${rows.map(r=>`<tr style="border-top:1px solid #12283c">
+        <td style="padding:2px 3px;color:#cfe4f5">${VF_NAME[r.m] || r.m}</td>
+        <td style="text-align:right;color:${col(r.s.POD)}">${fmt(r.s.POD)}</td>
+        <td style="text-align:right;color:${col(r.s.FAR == null ? null : 1 - r.s.FAR)}">${fmt(r.s.FAR)}</td>
+        <td style="text-align:right;color:${col(r.s.CSI)};font-weight:700">${fmt(r.s.CSI)}</td>
+        <td style="text-align:right;color:#9fc8e8">${fmt(r.s.BIAS)}</td>
+        <td style="text-align:right;color:#5a7a95">${r.s.n}</td></tr>`).join('')}
+    </table>
+    <div style="color:#5a7a95;font-size:9px;margin-top:3px">
+      POD 命中率（越高越好）　FAR 誤報率（越低越好）　CSI 綜合　偏差比 &gt;1 報太多</div>`;
+  try{ drawVerifyChart(); }catch(e){ console.warn('校驗圖失敗', e); }
+}
+// 時間序列圖：各模式的 CSI 隨日期變化
+function drawVerifyChart(canvasId){
+  const cv = document.getElementById(canvasId || 'cv-verify');
+  if(!cv) return;
+  const isZoom = (canvasId === 'chart-zoom-canvas');
+  const ser = _vfSeries();
+  const F = _fitCanvas(cv, 300, isZoom ? 900 : 190);
+  const ctx = F.ctx, CW = F.w, CH = F.h;
+  if(ser.length < 2){
+    ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
+    ctx.fillText('需至少 2 日才能繪製趨勢', 12, 24);
+    return;
+  }
+  const fs = isZoom ? 15 : 9;
+  const pL = isZoom ? 70 : 34, pR = isZoom ? 40 : 14;
+  const pT = isZoom ? 44 : 16, pB = isZoom ? 66 : 34;
+  const iw = CW - pL - pR, ih = CH - pT - pB;
+  const X = i => pL + iw * (ser.length === 1 ? 0.5 : i / (ser.length - 1));
+  const Y = v => pT + ih * (1 - v);           // CSI 介於 0~1
+  ctx.strokeStyle = '#12283c'; ctx.fillStyle = '#5a7a95';
+  ctx.font = `${fs}px sans-serif`; ctx.textAlign = 'right';
+  for(let v = 0; v <= 1.0001; v += 0.25){
+    ctx.beginPath(); ctx.moveTo(pL, Y(v)); ctx.lineTo(pL + iw, Y(v)); ctx.stroke();
+    ctx.fillText(v.toFixed(2), pL - 4, Y(v) + fs*0.35);
+  }
+  // X 軸日期（首末與中間）
+  ctx.textAlign = 'center';
+  const stepI = Math.max(1, Math.ceil(ser.length / (isZoom ? 12 : 5)));
+  ser.forEach((d, i)=>{
+    if(i % stepI && i !== ser.length - 1) return;
+    ctx.fillStyle = '#5a7a95';
+    ctx.fillText(d.date.slice(5), X(i), CH - pB + fs + 2);
+  });
+  // 各模式一條線（用融合明細同一組色）
+  const COL = {best:'#6bc8e8', ecmwf:'#40d060', gfs:'#FFFF00', icon:'#FF8C00',
+               jma:'#FF66CC', aifs:'#c8a8e8', graphcast:'#a0d8ff'};
+  VF_MODELS.forEach(m=>{
+    const pts = ser.map((d, i)=>({i, v: d.scores[m] && d.scores[m].CSI}))
+                   .filter(p=>p.v != null);
+    if(pts.length < 2) return;
+    ctx.strokeStyle = COL[m] || '#9fc8e8';
+    ctx.lineWidth = isZoom ? 3 : 1.6;
+    ctx.beginPath();
+    pts.forEach((p, k)=> k ? ctx.lineTo(X(p.i), Y(p.v)) : ctx.moveTo(X(p.i), Y(p.v)));
+    ctx.stroke();
+    pts.forEach(p=>{
+      ctx.beginPath(); ctx.arc(X(p.i), Y(p.v), isZoom?4:2, 0, Math.PI*2);
+      ctx.fillStyle = COL[m] || '#9fc8e8'; ctx.fill();
+    });
+  });
+  // 圖例
+  ctx.font = `${fs}px sans-serif`;
+  const shown = VF_MODELS.filter(m=>ser.some(d=>d.scores[m]));
+  const wU = shown.map(m=>ctx.measureText(VF_NAME[m] || m).width + (isZoom?30:16));
+  let lx = (CW - wU.reduce((a,b)=>a+b, 0)) / 2;
+  const ly = CH - (isZoom ? 14 : 6);
+  shown.forEach((m, i)=>{
+    ctx.fillStyle = COL[m] || '#9fc8e8';
+    ctx.fillRect(lx, ly - fs*0.75, isZoom?12:8, isZoom?3:2);
+    ctx.fillStyle = '#7a94ac'; ctx.textAlign = 'left';
+    ctx.fillText(VF_NAME[m] || m, lx + (isZoom?16:11), ly);
+    lx += wU[i];
+  });
+  ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'left';
+  ctx.fillText('CSI', 4, pT - 4);
+  if(isZoom){
+    ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
+    const scope = (document.getElementById('vf-scope') || {}).value || '全臺';
+    ctx.fillText(`${scope} 預報校驗 CSI 趨勢（門檻 ≥1mm）`, CW/2, 26);
+  }
+}
+
 function renderRankList(){
   // 標題隨範圍變化
   const _rt = document.getElementById('rank-title');
@@ -4791,7 +4985,7 @@ function updateInfo(t){
     if(it) it.textContent = scope;
 
     // 顯示：不需單一鄉鎮即可繪製的圖表
-    const showAll = ['countytowns', 'etrphase', 'elevrain', 'margin', 'rank'];
+    const showAll = ['countytowns', 'etrphase', 'elevrain', 'margin', 'rank', 'verify'];
     showAll.forEach(nm=>{
       const el = document.getElementById('sec-' + nm);
       if(el) el.style.display = 'block';
@@ -4816,6 +5010,7 @@ function updateInfo(t){
     _safe(()=>drawElevRainChart(null), '雨量與海拔分佈');
     _safe(()=>drawMarginChart(null), '警戒餘裕');
     _safe(()=>renderRankList(), '雨量排行');
+    _safe(()=>renderVerify(), '預報校驗');
     _safe(()=>renderBlendDetail(null), '融合明細');
     if(!_pickedCounty) _safe(()=>updateAllDistrictCharts(), '分署整合圖');
     // 套用展開/收合狀態
@@ -4963,6 +5158,13 @@ function updateInfo(t){
     const rEl = document.getElementById('sec-rank');
     if(rEl) rEl.style.display = (TOWNSHIPS||[]).length ? 'block' : 'none';
     try{ renderRankList(); }catch(e){ console.warn('排行失敗', e); }
+
+    // 預報校驗（有資料才顯示）
+    const vEl2 = document.getElementById('sec-verify');
+    const hasVf = !!(window.VERIFY_DATA && window.VERIFY_DATA.days
+                     && Object.keys(window.VERIFY_DATA.days).length);
+    if(vEl2) vEl2.style.display = hasVf ? 'block' : 'none';
+    if(hasVf){ try{ renderVerify(); }catch(e){ console.warn('校驗面板失敗', e); } }
 
     // 融合校正明細（僅融合模式顯示）
     try{ renderBlendDetail(t); }catch(e){ console.warn('融合明細失敗', e); }
@@ -5776,6 +5978,17 @@ async function tryLoadLive(){
       console.log('颱風動態載入：', window.TYPHOON_TRACK.map(t=>t.name_zh).join('、'));
     }
     if(typeof showTyphoon !== 'undefined' && showTyphoon) renderTyphoonLayer();
+
+    // ── 預報校驗（verify.json，保留 60 天供回溯）──
+    try{
+      const vr = await fetch('verify.json?t=' + Date.now());
+      if(vr.ok){
+        window.VERIFY_DATA = await vr.json();
+        const nd = Object.keys((window.VERIFY_DATA || {}).days || {}).length;
+        console.log(`verify.json 載入：${nd} 天校驗記錄`
+          + `（門檻 ≥${(window.VERIFY_DATA || {}).threshold ?? 1}mm）`);
+      }
+    }catch(e){ console.warn('verify.json 尚未產生（需執行過一次主排程）'); }
 
     // ── 逐時觀測雨量（rain_hourly.json，由高頻腳本累積 50 小時）──
     //   ★ 這是「過去逐時」的唯一資料來源：測站逐時實測，
@@ -10800,6 +11013,7 @@ function toggleChartZoom(canvasId, ev){
     'cv-wind-hr-gust': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風）` : '',
     'cv-wind-hr-est': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風推估）` : '',
     'cv-stnrank': selected ? `${selected.county}${selected.township} 測站雨量排名` : '',
+    'cv-verify': '預報校驗 CSI 趨勢',
     'cv-countytowns': (_pickedCounty || '') + ' 各鄉鎮',
     'cv-elevrain': '海拔與雨量分布（地形雨效應）',
     'cv-etrphase': '雨量與地形分佈',
@@ -10815,7 +11029,9 @@ function toggleChartZoom(canvasId, ev){
   if(titleEl) titleEl.textContent = titleMap[canvasId] || '';
   _zoomCanvasType = canvasId;
 
-  if(canvasId === 'cv-countytowns'){
+  if(canvasId === 'cv-verify'){
+    drawVerifyChart('chart-zoom-canvas');
+  } else if(canvasId === 'cv-countytowns'){
     drawCountyTowns('chart-zoom-canvas');
   } else if(canvasId === 'cv-elevrain'){
     drawElevRainChart(selected, 'chart-zoom-canvas');
