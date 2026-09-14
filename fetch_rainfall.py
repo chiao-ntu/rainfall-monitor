@@ -1838,7 +1838,7 @@ PAST48_CACHE = {}    # key -> 過去48h逐時模式回算（前天+昨天，圖�
 def fetch_openmeteo_model(townships, model='best_match'):
     """
     抓取 Open-Meteo 多模式預報（涵蓋全部15天，從現在起）
-    model: 'best_match'（ECMWF+GFS最佳組合）/ 'ecmwf_ifs025' / 'gfs_seamless' / 'icon_seamless'
+    model: 'best_match' / 'ecmwf_ifs' / 'gfs_seamless' / 'jma_seamless' / AI 模式
     """
     # ★ 模式分兩類，前端也分開呈現：
     #   物理模式 —— 傳統數值天氣預報，可直接取代/併入既有綜合
@@ -1850,7 +1850,6 @@ def fetch_openmeteo_model(townships, model='best_match'):
         'ecmwf_ifs':     'ECMWF IFS HRES 9km',   # ★ 官方物理、9km、前90h逐時
         'ecmwf_ifs025':  'ECMWF IFS 0.25°',      # 舊版：25km、3h、延遲2小時
         'gfs_seamless':  'NOAA GFS',
-        'icon_seamless': 'DWD ICON',
         'jma_seamless':  'JMA（日本氣象廳）',
         # ── AI 模式 ──
         'ecmwf_aifs025_single': 'ECMWF AIFS（AI）',
@@ -1938,7 +1937,9 @@ def fetch_openmeteo_model(townships, model='best_match'):
     return result, result_max_hourly, result_hourly
 
 # ★ 要抓的模式清單。物理與 AI 分開，前端也依此分組呈現。
-OM_PHYSICAL = ['best_match', 'ecmwf_ifs', 'gfs_seamless', 'icon_seamless', 'jma_seamless']
+# ★ ICON 已移除：其偏差比長期偏高（實測山區 3.16、平地 1.88），
+#   納入融合加權會汙染結果。保留代號但不抓取。
+OM_PHYSICAL = ['best_match', 'ecmwf_ifs', 'gfs_seamless', 'jma_seamless']
 OM_AI       = ['ecmwf_aifs025_single', 'gfs_graphcast025']
 OM_MODELS   = OM_PHYSICAL + OM_AI
 
@@ -2405,8 +2406,7 @@ def fetch_models_yesterday(townships):
     # ★ 含 AI 模式：AIFS 與 GraphCast 也要追蹤誤差，
     #   它們對極端降雨傾向低估，偏差比會明顯 >1，正好由校正處理。
     MODELS = {'best': 'best_match', 'ecmwf': 'ecmwf_ifs',
-              'gfs': 'gfs_seamless', 'icon': 'icon_seamless',
-              'jma': 'jma_seamless',
+              'gfs': 'gfs_seamless', 'jma': 'jma_seamless',
               'aifs': 'ecmwf_aifs025_single', 'graphcast': 'gfs_graphcast025'}
     out = {}
     for tag, mid in MODELS.items():
@@ -2602,7 +2602,7 @@ def update_verify(out_towns, zones, now_tpe):
             vf = {'days': {}}
     vf.setdefault('days', {})
 
-    MODELS = ('best', 'ecmwf', 'gfs', 'icon', 'jma', 'aifs', 'graphcast')
+    MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast')
     day = {}
     n_used = 0
     for t in out_towns:
@@ -2673,7 +2673,7 @@ def update_model_skill(out_towns, zones, now_tpe):
             skill = {'days': {}}
     skill.setdefault('days', {})
 
-    MODELS = ('best', 'ecmwf', 'gfs', 'icon', 'jma', 'aifs', 'graphcast')
+    MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast')
     day = {}
     n_used = 0
     for t in out_towns:
@@ -3973,13 +3973,11 @@ def main():
         qpf_best  = get_qpf_model('best_match')
         qpf_ecmwf = get_qpf_model('ecmwf_ifs')
         qpf_gfs   = get_qpf_model('gfs_seamless')
-        qpf_icon  = get_qpf_model('icon_seamless')
 
         # 各模式對應的「最大時雨量」（強度分級用，不做累積換算）
         maxh_best  = get_max_hourly_model('best_match')
         maxh_ecmwf = get_max_hourly_model('ecmwf_ifs025')
         maxh_gfs   = get_max_hourly_model('gfs_seamless')
-        maxh_icon  = get_max_hourly_model('icon_seamless')
 
         # CWA 官方 QPF 覆蓋：
         #   (A) 颱風 F-C0041＝精確格點數值 → 覆蓋各模式（真實數值，有意義）。
@@ -4003,7 +4001,7 @@ def main():
                 _v = _qpf_grid_at(_vals, lat, lng)
                 if _v is not None:
                     _cwa_by_idx[_idx] = round(float(_v), 1)
-                    qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = qpf_icon[_idx] = _cwa_by_idx[_idx]
+                    qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = _cwa_by_idx[_idx]
         # (B) 颱風 F-C0041 精確格點（真實數值，覆蓋模式）
         if is_typhoon and typhoon_segs:
             _cur_seg = now_tpe.hour // 6
@@ -4022,7 +4020,7 @@ def main():
                 _v = idw(lat, lng, _pts, _idx) if _pts else None
                 if _v is not None:
                     _cwa_by_idx[_idx] = _v
-                    qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = qpf_icon[_idx] = _v
+                    qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = _v
         # ★ 記錄哪些段是「官方值覆蓋」：這些段四個模式被寫成同一個數值，
         #   融合模式若照常加權會失去意義（等於自己跟自己平均），
         #   故前端在這些段直接採用官方值並標示來源。
@@ -4079,7 +4077,6 @@ def main():
             'qpf_best':  qpf_best,
             'qpf_ecmwf': qpf_ecmwf,
             'qpf_gfs':   qpf_gfs,
-            'qpf_icon':  qpf_icon,
             # ── 新增模式 ──
             'qpf_jma':   get_qpf_model('jma_seamless'),
             'qpf_aifs':  get_qpf_model('ecmwf_aifs025_single'),   # AI
@@ -4109,14 +4106,12 @@ def main():
             'warn_seg':       WARN_SEG_CACHE.get('best_match', {}).get(f"{lat:.4f}_{lng:.4f}", []),
             'warn_seg_ecmwf': WARN_SEG_CACHE.get('ecmwf_ifs025', {}).get(f"{lat:.4f}_{lng:.4f}", []),
             'warn_seg_gfs':   WARN_SEG_CACHE.get('gfs_seamless', {}).get(f"{lat:.4f}_{lng:.4f}", []),
-            'warn_seg_icon':  WARN_SEG_CACHE.get('icon_seamless', {}).get(f"{lat:.4f}_{lng:.4f}", []),
             'warn_seg_hi':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'hi')),
             'warn_seg_lo':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'lo')),
             'qpf_radar_1h': radar_qpf.get(f"{county}{township}"),   # F-B0046 未來1h雷達QPF(mm)
             'maxh_best':  maxh_best,
             'maxh_ecmwf': maxh_ecmwf,
             'maxh_gfs':   maxh_gfs,
-            'maxh_icon':  maxh_icon,
             'obs_6h':[0.0]*8,
             'stations':  enrich_stations_with_etr2(info.get('stations', []), obs, stations, alert_v),
             'daily_rain': _daily_rain_or_qpesums(obs, county, township, qp_daily),  # 觀測優先，無測站改用QPESUMS
@@ -4171,7 +4166,6 @@ def main():
         qpf_best_ns  = get_ns_qpf('best_match')
         qpf_ecmwf_ns = get_ns_qpf('ecmwf_ifs025')
         qpf_gfs_ns   = get_ns_qpf('gfs_seamless')
-        qpf_icon_ns  = get_ns_qpf('icon_seamless')
         daily_ns = [round(sum(qpf_best_ns[d*4:(d+1)*4]),1) for d in range(16)]
 
         station_list = [{'name': stations[s]['name'], 'alert_val': None,
@@ -4195,7 +4189,7 @@ def main():
             'risk_score': [None]*28, 'risk_level': [None]*28,
             'obs_6h':   [0.0]*8,
             'qpf_best':  qpf_best_ns,  'qpf_ecmwf': qpf_ecmwf_ns,
-            'qpf_gfs':   qpf_gfs_ns,   'qpf_icon':  qpf_icon_ns,
+            'qpf_gfs':   qpf_gfs_ns,
             'qpf_hi':    apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'hi')[0],
             'qpf_lo':    apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'lo')[0],
             'maxh_hi':   apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'hi')[1],
@@ -4211,11 +4205,10 @@ def main():
             'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'hi'),
             'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'lo'),
             'maxh_best': get_ns_maxh('best_match'),  'maxh_ecmwf': get_ns_maxh('ecmwf_ifs025'),
-            'maxh_gfs':  get_ns_maxh('gfs_seamless'), 'maxh_icon': get_ns_maxh('icon_seamless'),
+            'maxh_gfs':  get_ns_maxh('gfs_seamless'),
             'warn_seg':       WARN_SEG_CACHE.get('best_match', {}).get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
             'warn_seg_ecmwf': WARN_SEG_CACHE.get('ecmwf_ifs025', {}).get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
             'warn_seg_gfs':   WARN_SEG_CACHE.get('gfs_seamless', {}).get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
-            'warn_seg_icon':  WARN_SEG_CACHE.get('icon_seamless', {}).get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
             'warn_seg_hi':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'hi')),
             'warn_seg_lo':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'lo')),
             'qpf_radar_1h': radar_qpf.get(f"{at['county']}{at['township']}"),   # F-B0046 未來1h雷達QPF(mm)
