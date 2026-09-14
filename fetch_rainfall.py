@@ -3761,6 +3761,9 @@ def get_risk_level(score):
 # 主程式
 # ══════════════════════════════════════════════════
 def main():
+    # ★ 校驗彙整：必須在 main() 開頭就宣告，否則 output 組裝（較前）
+    #   會早於賦值（較後）而拋 UnboundLocalError。
+    _verify_recent = None
     now_utc=datetime.now(timezone.utc)
     now_tpe=now_utc+timedelta(hours=8)
     print('='*52)
@@ -4510,7 +4513,6 @@ def main():
     # ── 誤差追蹤（CMPF 第二階段）──────────────────────
     #   累積「逐來源 × 逐地形」的預測誤差；現階段只記錄與呈現，
     #   不回饋修正預測。待樣本足夠（短期7天/長期30天）再啟用動態加權。
-    _verify_recent = None      # 校驗彙整（未執行時為 None）
     try:
         _zones = {}
         if os.path.exists(TERRAIN_FILE):
