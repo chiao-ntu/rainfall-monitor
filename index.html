@@ -305,12 +305,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b model-btn" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
       <button class="b model-btn"    id="mEcmwf" onclick="setModel('ecmwf')">ECMWF</button>
       <button class="b model-btn"    id="mGfs"   onclick="setModel('gfs')">GFS</button>
-      <button class="b model-btn"    id="mGc"    onclick="setModel('gc')"
-        style="border-color:#7a5a9a;color:#c8a8e8">GFS GraphCast</button>
       <button class="b model-btn"    id="mJma"   onclick="setModel('jma')">JMA</button>
       <span style="color:#3a6080;font-size:10px;padding:0 2px">｜AI</span>
       <button class="b model-btn"    id="mAifs"  onclick="setModel('aifs')"
         style="border-color:#7a5a9a;color:#c8a8e8">EC-AIFS</button>
+      <button class="b model-btn"    id="mGc"    onclick="setModel('gc')"
+        style="border-color:#7a5a9a;color:#c8a8e8">GC-NCEP</button>
       <button class="b model-btn hi-btn"    id="mHi"    onclick="setModel('hi')">強降雨</button>
       <button class="b model-btn lo-btn"    id="mLo"    onclick="setModel('lo')">弱降雨</button>
     </div>
@@ -1808,19 +1808,31 @@ function _doSnap(B){
     //   （地形與渲染層是 <img>，不受影響 —— 這正是「地形正常、界線跑掉」的原因）。
     //   解法：截圖前把各 pane 的 transform 換算成 left/top 絕對定位，
     //   讓 html2canvas 看到的是單純的座標，截完再還原。
+    //   ★ 不只 pane —— Leaflet 的 <svg>／<img> 元素本身也各自帶 transform
+    //     （由 L.DomUtil.setPosition 設定）。只攤平 pane 而漏掉內層元素，
+    //     界線仍會整個偏移（這正是先前修不好的原因）。
     const _panes = [];
-    try{
-      Object.values(map.getPanes()).forEach(pn=>{
-        const tr = getComputedStyle(pn).transform;
-        if(!tr || tr === 'none') return;
-        const m2 = new DOMMatrixReadOnly(tr);
-        _panes.push({el: pn, transform: pn.style.transform,
-                     left: pn.style.left, top: pn.style.top});
-        pn.style.transform = 'none';
-        pn.style.left = m2.m41 + 'px';
-        pn.style.top = m2.m42 + 'px';
-      });
-    }catch(e){ console.warn('pane transform 攤平失敗', e); }
+    const _flat = el2 =>{
+      let tr;
+      try{ tr = getComputedStyle(el2).transform; }catch(e){ return; }
+      if(tr && tr !== 'none'){
+        try{
+          const m2 = new DOMMatrixReadOnly(tr);
+          if(m2.m41 || m2.m42){
+            const cs = getComputedStyle(el2);
+            _panes.push({el: el2, transform: el2.style.transform,
+                         left: el2.style.left, top: el2.style.top});
+            const l0 = parseFloat(cs.left) || 0, t0 = parseFloat(cs.top) || 0;
+            el2.style.transform = 'none';
+            el2.style.left = (l0 + m2.m41) + 'px';
+            el2.style.top = (t0 + m2.m42) + 'px';
+          }
+        }catch(e){}
+      }
+      Array.from(el2.children || []).forEach(_flat);
+    };
+    try{ _flat(map.getPanes().mapPane); }
+    catch(e){ console.warn('transform 攤平失敗', e); }
     const _restorePanes = ()=>_panes.forEach(p=>{
       p.el.style.transform = p.transform;
       p.el.style.left = p.left; p.el.style.top = p.top;
@@ -2228,7 +2240,7 @@ function _blendOverviewHtml(){
          + '</div>';
   }
   const NAMES = {best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS', jma:'JMA',
-                 aifs:'EC-AIFS', gc:'GFS GraphCast'};
+                 aifs:'EC-AIFS', gc:'GC-NCEP'};
   const rows = zones.sort().map(z=>{
     const mm = sk[z] || {};
     // 取該地形表現最好（MAE 最小）的模式
@@ -2593,7 +2605,7 @@ function _modeSourceNote(){
   // 雨量類模式才有多來源；切到非 best/cwa 時提示此圖層不隨模式變動
   if(forecastModel === 'cwa' || forecastModel === 'best') return null;
   const nm = {blend:'FORMOSA', ecmwf:'ECMWF', gfs:'GFS',
-              jma:'JMA', aifs:'EC-AIFS', gc:'GFS GraphCast',
+              jma:'JMA', aifs:'EC-AIFS', gc:'GC-NCEP',
               hi:'強降雨', lo:'弱降雨'}[forecastModel] || forecastModel;
   const layer = {wind:'風力', temp:'氣溫', wave:'浪高'}[mode] || mode;
   return `${nm} 未提供${layer}資料，本圖層顯示 ${src}`;
@@ -2617,7 +2629,7 @@ function _coverageWarn(){
 
   const nm = {best:'CWA+ECMWF', ecmwf:'ECMWF IFS HRES', gfs:'NOAA GFS',
                jma:'JMA', aifs:'EC-AIFS', blend:'FORMOSA',
-              gc:'GFS GraphCast', cwa:'CWA 官方', hi:'強降雨', lo:'弱降雨'
+              gc:'GC-NCEP', cwa:'CWA 官方', hi:'強降雨', lo:'弱降雨'
              }[forecastModel] || forecastModel;
   const layer = {rain:'累積雨量', etr:'ETR2%', risk:'風險指標', warn:'警特報',
                  wind:'風力', temp:'氣溫', wave:'浪高'}[mode] || mode;
@@ -3208,7 +3220,7 @@ function drawCountyTowns(canvasId){
 // ══════════════════════════════════════════════════════════
 const VF_MODELS = ['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast'];
 const VF_NAME = {best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
-                 jma:'JMA', aifs:'EC-AIFS', graphcast:'GraphCast'};
+                 jma:'JMA', aifs:'EC-AIFS', graphcast:'GC-NCEP'};
 function _vfScores(c){
   const h = c.hit || 0, m = c.miss || 0, f = c['false'] || 0;
   const r = (x, d)=> d ? Math.round(x / d * 1000) / 1000 : null;
@@ -3478,7 +3490,7 @@ function renderBlendDetail(t){
   const wSum = avail.reduce((a,m)=>a + ws[m], 0) || 1;
 
   const NAMES = {best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS', jma:'JMA',
-                 aifs:'EC-AIFS', gc:'GFS GraphCast'};
+                 aifs:'EC-AIFS', gc:'GC-NCEP'};
   avail.forEach(m=>{
     const s = sks[m];
     const pct = (ws[m] / wSum * 100).toFixed(0);
@@ -4028,7 +4040,7 @@ function scnApplyAndClose(){
 
 const SCN_MODEL_LABEL = {'':'沿用上方', blend:'FORMOSA', best:'CWA+ECMWF',
   ecmwf:'ECMWF', gfs:'GFS', jma:'JMA',
-  aifs:'EC-AIFS', gc:'GFS GraphCast', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'};
+  aifs:'EC-AIFS', gc:'GC-NCEP', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'};
 
 // TOWN_ZONE 未產生時，_townZone() 退路只會回「山區／平地」，
 // 因此「淺山區／沿海地區」兩列目前對不到任何鄉鎮——在 UI 上標記出來，
@@ -4485,7 +4497,8 @@ function _threeHourAt(t, h, m){
       const ms = p.ms ?? (p.t ? new Date(p.t).getTime() : null);
       if(ms == null) return;
       const d = Math.abs(ms - tgt.getTime());
-      if(d < bd && d <= 3 * 3600e3){ bd = d; best = p; }
+      // 容忍 ±3.5h：逐 3 小時資料的半區間各 1.5h，留餘裕避免邊界落空
+      if(d < bd && d <= 3.5 * 3600e3){ bd = d; best = p; }
     });
     return best;
   };
@@ -4562,8 +4575,14 @@ function getAccum(t){
       //   區間內顯示同值 —— 這是資料本身的尺度，不是沒更新。
       //   實際取值改用「該小時所屬的 3 小時區段」，切換小時時
       //   跨過 3 小時邊界就會變動。
+      // ★ 取不到就回傳「該圖層無資料」，不可往下走到雨量分支
+      //   （先前落到雨量邏輯，於是氣溫時有時無、連界線都消失）。
       const h3 = _threeHourAt(t, _hourIdx, mode);
       if(h3 != null) return h3;
+      const EMPTY = {temp: 'isTemp', wave: 'isWave', wind: 'isWind'}[mode];
+      const r0 = {totalRain: null, etrPct: null, coarse3h: true};
+      if(EMPTY) r0[EMPTY] = true;
+      return r0;
     } else if(mode === 'etr' || mode === 'risk'){
       // ETR2／風險：用「到該小時為止」的累積雨量重算，含前期折減
       const e = _etrAtHour(t, _hourIdx, qpfField);
@@ -4801,10 +4820,6 @@ function _townFill(t, isSel){
       //   浪高看起來沒有資料」的原因。
       fillColor = warnMapColor(totalRain || 0);
       fillOp    = (totalRain||0)>0 ? (isSel?0.93:0.82) : 1.0;
-    } else if(acc.isHourly){
-      // ★ 逐時視窗用時雨量色階（非累積雨量色階）
-      fillColor = _hourlyColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 0.05 : (isSel?0.95:0.85);
     } else if(acc.isTemp){
       // 氣溫：無資料留白（不可視為 0°C）
       fillColor = _tempColor(totalRain) || '#FFFFFF';
@@ -4827,6 +4842,13 @@ function _townFill(t, isSel){
       // ETR2%模式：用 etrColor 對應現況 etr2_pct
       fillColor = totalRain===null ? '#ccddee' : etrColor(totalRain);
       fillOp    = totalRain===null ? 0.12 : (isSel?0.93:0.78);
+    // ★ isHourly 排在各專屬圖層之後、通用分支之前：逐時視窗下氣溫／
+  //   浪高／風力／風險也會帶 isHourly，若先判斷就會被套上時雨量
+  //   色階 —— 這正是「風險指標出現藍色」的原因。
+  } else if(acc.isHourly){
+      // ★ 逐時視窗用時雨量色階（非累積雨量色階）
+      fillColor = _hourlyColor(totalRain) || '#FFFFFF';
+      fillOp    = (totalRain == null) ? 0.05 : (isSel?0.95:0.85);
     } else {
       fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#ccddee':etrColor(etrPct));
       fillOp    = isSel?0.93:0.78;
@@ -6495,7 +6517,7 @@ function onSlider(){
     //   6h 段同理：段索引 s~e 實際涵蓋 (e-s+1) 段，但顯示的終點時刻
     //   是最後一段的「結束」時刻，故天數用 (e-s+1)*6/24 仍正確。
     `${segLabel(s)} → ${segLabel(e)}（共${
-      _custStep === 1 ? `${e - s} 小時` : `${((e-s+1)*6/24).toFixed(1)} 天`
+      _custStep === 1 ? `${e - s} 小時` : `${((e-s)*6/24).toFixed(1)} 天`
     }）${_comp}`;
 
   updateModelRowVisibility(true);
@@ -6631,7 +6653,7 @@ function stepWin(delta){
 //   看地圖時不必回到上方控制列即可切換，三者與上方按鈕雙向同步。
 const NAV_MODEL_LABEL = {blend:'FORMOSA', cwa:'CWA', best:'CWA+ECMWF',
   ecmwf:'ECMWF', gfs:'GFS', jma:'JMA',
-  aifs:'EC-AIFS', gc:'GFS GraphCast', hi:'強降雨', lo:'弱降雨'};
+  aifs:'EC-AIFS', gc:'GC-NCEP', hi:'強降雨', lo:'弱降雨'};
 function _fillNavSelects(){
   const ms = document.getElementById('nav-model');
   if(ms && !ms.options.length){
