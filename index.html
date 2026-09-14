@@ -1794,11 +1794,22 @@ function _doSnap(B){
       console.warn('html2canvas 未載入，無法截圖');
       resolve(); return;
     }
+    // ★ Leaflet 的向量圖層（SVG）掛在帶 CSS transform 的 pane 上，
+    //   且 SVG 尺寸常大於視窗。html2canvas 對這種結構的處理與瀏覽器不同，
+    //   會讓界線與色塊偏移、只截到一部分。
+    //   解法：截圖前強制重設視圖，讓各 pane 的 transform 歸零，
+    //   SVG 的 viewBox 原點與容器對齊後再截。
+    try{ map._resetView(map.getCenter(), map.getZoom(), true); }catch(e){}
+    const r0 = el.getBoundingClientRect();
     html2canvas(el, {
       backgroundColor: '#ffffff',
       scale: 2,                 // 2 倍解析度，投影不糊
       useCORS: true,
       logging: false,
+      // 明確指定擷取範圍與捲動位移，避免 html2canvas 自行推算而偏移
+      width: Math.round(r0.width), height: Math.round(r0.height),
+      windowWidth: Math.round(r0.width), windowHeight: Math.round(r0.height),
+      scrollX: 0, scrollY: 0, x: 0, y: 0,
       // 排除控制項與提示，只留地圖本體
       ignoreElements: n => n.classList && (
         n.classList.contains('leaflet-control-container') ||
@@ -4433,6 +4444,42 @@ function _obsHourlyAt(t, h){
   return (v == null || !isFinite(v)) ? null : v;
 }
 
+// ★ 風力／氣溫／浪高：官方資料為逐 3 小時，取該小時所屬的 3 小時區段值。
+//   同一個區段內的小時顯示同值，跨過邊界才變動。
+function _threeHourAt(t, h, m){
+  const tgt = new Date(Date.now() + h * 3600e3);
+  const pick = arr =>{
+    if(!Array.isArray(arr) || !arr.length) return null;
+    // 取時間最接近且不晚於目標的那一筆（逐 3 小時）
+    let best = null, bd = Infinity;
+    arr.forEach(p=>{
+      const ms = p.ms ?? (p.t ? new Date(p.t).getTime() : null);
+      if(ms == null) return;
+      const d = Math.abs(ms - tgt.getTime());
+      if(d < bd && d <= 3 * 3600e3){ bd = d; best = p; }
+    });
+    return best;
+  };
+  if(m === 'wind'){
+    const p = pick(_windSeries ? _windSeries(t) : null);
+    if(!p) return null;
+    return {totalRain: p.bf, etrPct: p.bf, isWind: true, isHourly: true,
+            windWs: p.ws, windSrc: p.src, coarse3h: true};
+  }
+  if(m === 'temp'){
+    const p = pick(_tempSeries ? _tempSeries(t) : null);
+    if(!p) return null;
+    return {totalRain: p.t, etrPct: p.t, isTemp: true, isHourly: true, coarse3h: true};
+  }
+  if(m === 'wave'){
+    const p = pick(_waveSeries ? _waveSeries(t) : null);
+    if(!p) return null;
+    return {totalRain: p.wave, etrPct: p.wave, isWave: true, isHourly: true,
+            waveDir: p.dir, coarse3h: true};
+  }
+  return null;
+}
+
 function _etrAtHour(t, h, qpfField){
   if(!t || !(t.alert_val > 0)) return null;
   const seg = _nowSeg() + Math.floor((h - 1) / 6);
@@ -4482,8 +4529,12 @@ function getAccum(t){
   //     風力/氣溫/浪高 → 官方只到逐 3 小時，該 3 小時內顯示同值。
   if(_hourIdx != null){
     if(mode === 'temp' || mode === 'wave' || mode === 'wind'){
-      // 這些圖層的原始資料是逐 3 小時，落在同一個 3 小時區間就是同值。
-      // 直接沿用既有取值（它們本來就依 segFrom/segTo 取），不特別處理。
+      // ★ 這些圖層的原始資料是逐 3 小時，故逐時視窗下同一個 3 小時
+      //   區間內顯示同值 —— 這是資料本身的尺度，不是沒更新。
+      //   實際取值改用「該小時所屬的 3 小時區段」，切換小時時
+      //   跨過 3 小時邊界就會變動。
+      const h3 = _threeHourAt(t, _hourIdx, mode);
+      if(h3 != null) return h3;
     } else if(mode === 'etr' || mode === 'risk'){
       // ETR2／風險：用「到該小時為止」的累積雨量重算，含前期折減
       const e = _etrAtHour(t, _hourIdx, qpfField);
@@ -6408,7 +6459,11 @@ function onSlider(){
   else              _comp = '｜觀測＋預測併計';
   if(s < -8) _comp += '（48h前為日觀測分攤）';
   document.getElementById('rng-disp').textContent =
-    `${segLabel(s)} → ${segLabel(e)}（共${((e-s+1)*6/24).toFixed(1)}天）${_comp}`;
+    // ★ 逐時精度下滑桿值是「小時」，不能再乘 6；
+    //   先前一律用 ×6/24，逐時時會算出 6 倍的天數（例如 2.6 天報成 15.5 天）。
+    `${segLabel(s)} → ${segLabel(e)}（共${
+      _custStep === 1 ? `${e - s + 1} 小時` : `${((e-s+1)*6/24).toFixed(1)} 天`
+    }）${_comp}`;
 
   updateModelRowVisibility(true);
   withTransition(()=>{
@@ -9399,6 +9454,12 @@ function _modeHeadRow(t){
   }
   if(_hourIdx != null){
     const acc = getAccum(t);
+    if(acc && acc.coarse3h){
+      // 該圖層的原始資料是逐 3 小時，明確標示以免誤解為沒更新
+      return `<span style="font-size:10px">　+${_hourIdx}h `
+        + `<b>${acc.totalRain != null ? acc.totalRain : '—'}</b>`
+        + '<span style="color:#e8a860">（此圖層官方資料為逐3小時）</span></span>';
+    }
     if(acc && acc.isHourly){
       const c = (acc.totalRain != null)
         ? (RAIN_SCALE.find(b=>acc.totalRain < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color
