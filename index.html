@@ -2800,7 +2800,20 @@ function _coverageWarn(){
     const WD = ['日','一','二','三','四','五','六'];
     tail = `，資料到 ${d.getMonth()+1}月${d.getDate()}日（週${WD[d.getDay()]}）`;
   }
-  return `${nm} 在此時段未提供${layer}資料${tail}`;
+  // ★ 標明「目前選定的時刻」而非只說資料到哪天 —— 先前提示裡的時間
+  //   是用段換算的，與使用者實際切到的小時對不上。
+  let at = '';
+  try{
+    const ms = (typeof _hourIdx !== 'undefined' && _hourIdx != null)
+      ? (Date.now() + _hourIdx * 3600e3)
+      : segTime(Math.max(0, segTo)).getTime();
+    const d2 = new Date(ms);
+    at = `${d2.getMonth()+1}/${d2.getDate()} `
+       + (typeof _hourIdx !== 'undefined' && _hourIdx != null
+          ? `${String(d2.getHours()).padStart(2,'0')}時`
+          : _segPeriodName(d2.getHours()));
+  }catch(e){}
+  return `${nm} 在 ${at} 未提供${layer}資料${tail}`;
 }
 
 function _winSrcLabel(){
@@ -2962,18 +2975,20 @@ function drawEtrWaterfall(t, canvasId){
   const den = _etrDen(t);
 
   // 逐段的 ETR2（含前期折減）；差值即該段的淨貢獻
-  const ns = _nowSeg();
-  const segs = [];
-  for(let k = -4; k <= 12; k++) segs.push(ns + k);     // 過去1天 ~ 未來3天
-  const vals = segs.map(sg=>{
-    const raw = calcEtr2AtSeg(t, sg, qpfField);
+  // ★ 逐小時解析度（使用者指定）：過去 24h ~ 未來 72h，每小時一格。
+  //   先前用 6 小時段，變化被壓成階梯狀，看不出雨停與折減的時點。
+  const HRS = [];
+  for(let hh = -24; hh <= 72; hh++) HRS.push(hh);
+  const vals = HRS.map(hh=>{
+    const raw = _etrAtHour(t, hh, qpfField);      // 已回百分比
     if(raw == null || !isFinite(raw)) return null;
-    return basis === 'pct' ? (raw / den * 100) : raw;
+    return basis === 'pct' ? raw : (raw / 100 * den);
   });
+  const segs = HRS;
   const pts = [];
   for(let i = 1; i < vals.length; i++){
     if(vals[i] == null || vals[i-1] == null) continue;
-    pts.push({seg: segs[i], from: vals[i-1], to: vals[i],
+    pts.push({hr: HRS[i], from: vals[i-1], to: vals[i],
               delta: vals[i] - vals[i-1]});
   }
   if(pts.length < 2){
@@ -3012,7 +3027,7 @@ function drawEtrWaterfall(t, canvasId){
                pL + 3, Y(warn) - 3);
 
   // 現在的位置
-  const nowI = pts.findIndex(p=>p.seg >= ns);
+  const nowI = pts.findIndex(p=>p.hr >= 0);
   if(nowI > 0){
     const xn = pL + iw * nowI / pts.length;
     ctx.strokeStyle = '#ffcc44'; ctx.lineWidth = isZoom?2:1.4;
@@ -3038,7 +3053,7 @@ function drawEtrWaterfall(t, canvasId){
       ctx.beginPath(); ctx.moveTo(X(i) + bw/2, y1);
       ctx.lineTo(X(i+1) - bw/2, y1); ctx.stroke();
     }
-    if(firstCross === null && p.from < warn && p.to >= warn) firstCross = p.seg;
+    if(firstCross === null && p.from < warn && p.to >= warn) firstCross = p.hr;
   });
 
   // 累積值折線
@@ -3052,18 +3067,19 @@ function drawEtrWaterfall(t, canvasId){
   const stepI = Math.max(1, Math.ceil(pts.length / (isZoom ? 14 : 6)));
   pts.forEach((p, i)=>{
     if(i % stepI) return;
-    const d = segTime(p.seg);
-    ctx.fillText(`${d.getMonth()+1}/${d.getDate()} ${_segPeriodName(d.getHours())}`,
+    const d = new Date(Date.now() + p.hr * 3600e3);
+    ctx.fillText(`${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}時`,
                  X(i), CH - pB + fs + 2);
   });
 
   // 摘要：何時達標
   ctx.font = `${isZoom?16:10}px sans-serif`; ctx.textAlign = 'left';
   if(firstCross != null){
-    const d = segTime(firstCross);
+    const d = new Date(Date.now() + firstCross * 3600e3);
     ctx.fillStyle = '#FF6666';
     ctx.fillText(`預估 ${d.getMonth()+1}/${d.getDate()} `
-      + `${_segPeriodName(d.getHours())} 達警戒`, pL, CH - (isZoom?16:6));
+      + `${String(d.getHours()).padStart(2,'0')}時 達警戒（+${firstCross}h）`,
+      pL, CH - (isZoom?16:6));
   } else {
     const last = pts[pts.length-1].to;
     ctx.fillStyle = last >= warn ? '#FF6666' : '#8ad8a0';
@@ -5333,7 +5349,11 @@ function renderLayer(){
   // 縣市邊界（黑色 1px）
   countyLayer = L.layerGroup();
   COUNTY_GEO.features.forEach(feat=>{
-    const opts={color:'#000000',weight:1,fill:false,opacity:0.7,interactive:false};
+    // ★ 深色海底時縣市界改金黃並加粗，否則深底上的黑線看不見
+    const _ds = (typeof _darkSea !== 'undefined' && _darkSea);
+    const opts={color: _ds ? '#f0c040' : '#000000',
+                weight: _ds ? 1.6 : 1, fill:false,
+                opacity: _ds ? 0.95 : 0.7, interactive:false};
     const _c = llOf(feat);                 // 座標快取（同鄉鎮層）
     if(_c.type === 'Polygon'){
       L.polygon(_c.rings, opts).addTo(countyLayer);
@@ -9272,8 +9292,14 @@ function _windSegAt(t, atMs){
   }) || segs[segs.length-1] || null;
 }
 // 目前選取時間視窗的代表時刻（供風力取值）
+// ★ 目前檢視時刻（毫秒）。逐時視窗必須用 _hourIdx 直接推算，
+//   不能再換算成 6 小時段 —— 先前一律走段換算，於是切換小時時
+//   風力／氣溫／浪高永遠停在段邊界不動，提示視窗的時間也對不上。
 function _windAtMs(){
   try{
+    if(typeof _hourIdx !== 'undefined' && _hourIdx != null){
+      return Date.now() + _hourIdx * 3600e3;
+    }
     const seg = (typeof _panelSeg === 'function') ? _panelSeg() : 3;
     return SEG_EPOCH().getTime() + (seg + 1) * 6 * 3600e3;
   }catch(e){ return Date.now(); }
