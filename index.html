@@ -45,6 +45,9 @@ body.panel-full canvas{ max-width:1100px }
 .b.lo-btn{border-color:#3a5a8a;color:#66aaff;background:#0e1626}
 .b.lo-btn:hover{background:#182a44}
 .b.lo-btn.on{background:#1a4a8a;border-color:#66aaff;color:#d0e4ff;font-weight:700}
+/* 僅校驗模式：虛線框標示「可查看但不進融合」 */
+.b.vo-btn{border-style:dashed;border-color:#4a6a8a;color:#8aa8c8}
+.b.vo-btn.on{background:#24384e;border-color:#8ab8e8;color:#cfe4f5;font-weight:700}
 .b.pbtn{border-color:#5a4010;color:#c08030}
 .b.pbtn.on{background:#3a2a0a;border-color:#aa6010;color:#f0a030}
 #cust-ctrl{display:none;flex-direction:column;gap:2px;padding:6px 14px 8px;width:100%;box-sizing:border-box}
@@ -178,6 +181,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bTemp"  onclick="setMode('temp')" style="border-color:#3a8a5a;color:#7ee8a8">氣溫</button>
       <button class="b"    id="bTerrain" onclick="toggleTerrainLayer()"
         style="border-color:#6a5a3a;color:#d8c090">⛰ 地形</button>
+      <button class="b"    id="bWindField" onclick="toggleWindField()"
+        style="border-color:#3a7a8a;color:#7ad8e8">🌀 風場</button>
+      <button class="b"    id="bDarkSea" onclick="toggleDarkSea()"
+        style="border-color:#3a4a6a;color:#8aa8d8">🌊 深色海</button>
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
         style="border-color:#1a4060;color:#8ac8e8">🏷 鄉鎮市區</button>
       <select id="townNameScope" onchange="setTownNameScope(this.value)"
@@ -313,6 +320,14 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#7a5a9a;color:#c8a8e8">GC-NCEP</button>
       <button class="b model-btn hi-btn"    id="mHi"    onclick="setModel('hi')">強降雨</button>
       <button class="b model-btn lo-btn"    id="mLo"    onclick="setModel('lo')">弱降雨</button>
+      <span style="color:#4a6a8a;font-size:10px;margin:0 3px">｜僅校驗</span>
+      <button class="b model-btn vo-btn" id="mIcon" onclick="setModel('icon')">DWD ICON</button>
+      <button class="b model-btn vo-btn" id="mKma"  onclick="setModel('kma')">KMA</button>
+      <button class="b model-btn vo-btn" id="mGem"  onclick="setModel('gem')">GEM</button>
+      <button class="b model-btn vo-btn" id="mUkmo" onclick="setModel('ukmo')">UKMO</button>
+      <button class="b model-btn vo-btn" id="mMf"   onclick="setModel('mf')">Météo-France</button>
+      <button class="b model-btn vo-btn" id="mCma"  onclick="setModel('cma')">CMA</button>
+      <button class="b model-btn vo-btn" id="mBom"  onclick="setModel('bom')">BOM</button>
     </div>
     <span id="sys-note"></span><span id="model-src-note"></span>
   </div>
@@ -682,6 +697,22 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <canvas id="cv-margin" style="width:100%;height:230px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-margin', event)"></canvas>
+
+        <!-- ETR2 瀑布圖：逐時段的累積與折減（選鄉鎮後才有意義） -->
+        <div style="display:flex;gap:4px;margin:8px 0 5px;align-items:center">
+          <span style="font-size:11px;color:#6bc8e8">ETR2 變化</span>
+          <select id="wf-basis" onchange="drawEtrWaterfall(selected)"
+            style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+            <option value="mm">ETR2（mm）</option>
+            <option value="pct">ETR2（%）</option>
+          </select>
+        </div>
+        <canvas id="cv-waterfall" style="width:100%;height:210px;display:block;
+          background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-waterfall', event)"
+          onmousemove="showChartTooltip(event,'cv-waterfall')"
+          onmouseleave="hideChartTooltip()"></canvas>
       </div>
     </div>
     <div class="sec" id="sec-verify">
@@ -1074,7 +1105,10 @@ const MODEL_FIELD = {
   cwa:   'qpf_cwa',
   jma:   'qpf_jma',
   aifs:  'qpf_aifs',    // AI
-  gc:    'qpf_gc',      // AI
+  gc:    'qpf_gc',
+  // ★ 僅校驗模式：可在地圖上查看，但不進 FORMOSA 融合加權
+  icon:'qpf_icon', kma:'qpf_kma', gem:'qpf_gem', ukmo:'qpf_ukmo',
+  mf:'qpf_mf', cma:'qpf_cma', bom:'qpf_bom',      // AI
   blend: 'qpf_blend',   // 融合（CMPF）：由 _blendQpf 動態計算，非後端欄位
 };
 // ★ AI 模式清單：對超出訓練分布的極端降雨傾向低估，
@@ -1384,6 +1418,161 @@ let _stnLayerOn = false, _stnLayer = null, _stnTimer = null;
 // ══════════════════════════════════════════════════════════
 const TERRAIN_RELIEF = {"bounds":[[21.89400185866543,120.04163169146315],[25.29801742002761,122.00964772678445]],"size":[1200,2254],"azimuth":315.0,"altitude":45.0,"stops":[[100,"#F8F9FA"],[500,"#E9ECEF"],[1500,"#CED4DA"],[3000,"#ADB5BD"],[null,"#6C757D"]]};
 let _terrainOn = false, _terrainOverlay = null;
+// ══════════════════════════════════════════════════════════
+//  風場動畫（Windy 式粒子）
+//  ★ 資料：CWA F-D0047 的 WindDirection（8方位）＋ WindSpeed。
+//    風向已在後端換算成度數（氣象慣例：風「來」向）。
+//  ★ 做法：以 368 個鄉鎮的風向風速建立稀疏向量場，粒子依所在位置
+//    的鄰近鄉鎮加權插值後移動，留下淡化的軌跡 —— 與 Windy 相同原理。
+//    不用真實格點是因為官方只給到鄉鎮，硬要內插成細格點會造出假細節。
+// ══════════════════════════════════════════════════════════
+let _windFieldOn = false, _wfCanvas = null, _wfTimer = null, _wfParticles = [];
+const WF_N = 900;              // 粒子數（兼顧流暢與可讀性）
+const WF_LIFE = 90;            // 每顆粒子的壽命（幀）
+// ★ 海洋深色底：只換海域與地圖底色，陸地上各圖層的色階完全不動
+//   （使用者指定）—— 色階是判讀依據，不能因為換配色就改變。
+//   海面上的疊圖（颱風路徑、警戒區框線）另改為亮色以維持對比。
+let _darkSea = false;
+function toggleDarkSea(){
+  _darkSea = !_darkSea;
+  const b = document.getElementById('bDarkSea');
+  if(b) b.classList.toggle('on', _darkSea);
+  const mp = document.getElementById('map');
+  const bg = _darkSea ? '#05101c' : '#ffffff';
+  if(mp) mp.style.background = bg;
+  document.querySelectorAll('.leaflet-container').forEach(el=>{
+    el.style.background = bg;
+  });
+  // 海域遮罩本身
+  try{ if(typeof seaLayer !== 'undefined' && seaLayer)
+         seaLayer.setStyle({fillColor: bg}); }catch(e){}
+  // 海面疊圖改亮色（深色底時白線才看得見）
+  try{ _restyleSeaOverlays(); }catch(e){}
+  try{ renderLayer(); }catch(e){}
+}
+// 颱風路徑、海上警戒框等疊圖的配色
+function _restyleSeaOverlays(){
+  const lineCol = _darkSea ? '#ffffff' : '#333333';
+  [typeof typhoonLayer !== 'undefined' ? typhoonLayer : null,
+   typeof _tyLayer !== 'undefined' ? _tyLayer : null].forEach(L2=>{
+    if(!L2 || !L2.eachLayer) return;
+    L2.eachLayer(l=>{
+      try{
+        if(l.setStyle && l.options && l.options.color &&
+           /#(333|000|222|444)/i.test(l.options.color)) l.setStyle({color: lineCol});
+      }catch(e){}
+    });
+  });
+}
+
+function toggleWindField(){
+  _windFieldOn = !_windFieldOn;
+  const b = document.getElementById('bWindField');
+  if(b) b.classList.toggle('on', _windFieldOn);
+  if(_windFieldOn) _wfStart(); else _wfStop();
+}
+function _wfStop(){
+  if(_wfTimer){ cancelAnimationFrame(_wfTimer); _wfTimer = null; }
+  if(_wfCanvas){ _wfCanvas.remove(); _wfCanvas = null; }
+  _wfParticles = [];
+}
+function _wfStart(){
+  _wfStop();
+  const mp = document.getElementById('map');
+  if(!mp) return;
+  const cv = document.createElement('canvas');
+  cv.id = 'wf-canvas';
+  cv.style.cssText = 'position:absolute;inset:0;z-index:399;pointer-events:none';
+  mp.appendChild(cv);
+  _wfCanvas = cv;
+  const fit = ()=>{
+    const r = mp.getBoundingClientRect();
+    cv.width = Math.round(r.width); cv.height = Math.round(r.height);
+  };
+  fit();
+  map.on('move zoom resize', ()=>{ fit(); _wfParticles = []; });
+  // 取各鄉鎮的風向風速（依目前時間視窗）
+  const nodes = [];
+  (TOWNSHIPS || []).forEach(t=>{
+    if(t.lat == null || t.lng == null) return;
+    const w = _windOf(t);
+    if(!w || w.ws == null) return;
+    const ser = _windSeries(t);
+    let wd = null;
+    if(Array.isArray(ser) && ser.length){
+      const tgt = _windAtMs();
+      let best = null, bd = Infinity;
+      ser.forEach(p=>{
+        if(!p || p.wd == null) return;
+        const d = Math.abs(p.ms - tgt);
+        if(d < bd){ bd = d; best = p; }
+      });
+      if(best) wd = best.wd;
+    }
+    if(wd == null) return;
+    nodes.push({lat: t.lat, lng: t.lng, ws: w.ws, wd});
+  });
+  if(nodes.length < 3){
+    const ctx0 = cv.getContext('2d');
+    ctx0.fillStyle = '#7a94ac'; ctx0.font = '13px sans-serif';
+    ctx0.fillText('此時段無風向資料（CWA 逐 3 小時預報）', 14, 24);
+    return;
+  }
+  console.log(`風場：${nodes.length} 個鄉鎮有風向資料`);
+
+  // 反距離加權：回傳畫布座標處的 [dx, dy]（像素／幀）
+  const uvAt = (x, y)=>{
+    const ll = map.containerPointToLatLng([x, y]);
+    let sw = 0, su = 0, sv = 0;
+    nodes.forEach(n=>{
+      const dx = n.lng - ll.lng, dy = n.lat - ll.lat;
+      const d2 = dx*dx + dy*dy + 1e-4;
+      if(d2 > 0.25) return;                 // 超過約 0.5 度就不納入
+      const w = 1 / d2;
+      // 氣象風向是「來向」，移動方向要反過來
+      const rad = (n.wd + 180) * Math.PI / 180;
+      su += w * Math.sin(rad) * n.ws;
+      sv += w * -Math.cos(rad) * n.ws;
+      sw += w;
+    });
+    if(!sw) return null;
+    const k = 0.06;                          // 速度縮放（像素／幀 per m/s）
+    return [su / sw * k, sv / sw * k];
+  };
+
+  const ctx = cv.getContext('2d');
+  const spawn = ()=>({x: Math.random() * cv.width, y: Math.random() * cv.height,
+                      age: Math.random() * WF_LIFE});
+  for(let i = 0; i < WF_N; i++) _wfParticles.push(spawn());
+
+  const step = ()=>{
+    if(!_windFieldOn || !_wfCanvas) return;
+    // 以半透明黑覆蓋，形成拖尾
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.fillStyle = 'rgba(0,0,0,0.90)';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.lineWidth = 1.2;
+    _wfParticles.forEach(p=>{
+      const uv = uvAt(p.x, p.y);
+      if(!uv || p.age > WF_LIFE ||
+         p.x < 0 || p.y < 0 || p.x > cv.width || p.y > cv.height){
+        Object.assign(p, spawn()); p.age = 0; return;
+      }
+      const nx = p.x + uv[0], ny = p.y + uv[1];
+      const spd = Math.hypot(uv[0], uv[1]);
+      // 依風速著色：慢＝青、快＝黃紅（與蒲福風級的直覺一致）
+      ctx.strokeStyle = spd > 1.2 ? 'rgba(255,120,80,0.85)'
+                      : spd > 0.6 ? 'rgba(255,220,120,0.8)'
+                                  : 'rgba(140,220,240,0.7)';
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(nx, ny); ctx.stroke();
+      p.x = nx; p.y = ny; p.age++;
+    });
+    _wfTimer = requestAnimationFrame(step);
+  };
+  step();
+}
+
 function toggleTerrainLayer(){
   _terrainOn = !_terrainOn;
   const b = document.getElementById('bTerrain');
@@ -1638,7 +1827,12 @@ function fmtDay(d){ return `${d.getMonth()+1}/${d.getDate()}(${WEEKDAY_ZH[d.getD
 //   附帶好處：368 個多邊形用 Canvas 繪製比 SVG 快。
 const map = L.map('map', {
   center:[23.6, 121.0], zoom:7,
-  preferCanvas:false, zoomControl:true
+  // ★ preferCanvas:true —— 向量層用 Canvas 而非 SVG 渲染。
+  //   Leaflet 的 SVG 圖層帶負向 viewBox 原點與 CSS transform，
+  //   html2canvas 會忽略 viewBox，於是界線與色塊整個偏移出畫面
+  //   （地形、渲染層是 <img> 所以位置正確 —— 這正是兩者分離的原因）。
+  //   Canvas 渲染後向量層本身就是點陣，截圖所見即所得。
+  preferCanvas:true, zoomControl:true
 });
 
 // 「回到台灣本島」按鈕：接在放大縮小控制下方，一鍵拉回全島視野
@@ -1770,35 +1964,9 @@ function _doSnap(B){
     //   （地形與渲染層是 <img>，不受影響 —— 這正是「地形正常、界線跑掉」的原因）。
     //   解法：截圖前把各 pane 的 transform 換算成 left/top 絕對定位，
     //   讓 html2canvas 看到的是單純的座標，截完再還原。
-    //   ★ 不只 pane —— Leaflet 的 <svg>／<img> 元素本身也各自帶 transform
-    //     （由 L.DomUtil.setPosition 設定）。只攤平 pane 而漏掉內層元素，
-    //     界線仍會整個偏移（這正是先前修不好的原因）。
-    const _panes = [];
-    const _flat = el2 =>{
-      let tr;
-      try{ tr = getComputedStyle(el2).transform; }catch(e){ return; }
-      if(tr && tr !== 'none'){
-        try{
-          const m2 = new DOMMatrixReadOnly(tr);
-          if(m2.m41 || m2.m42){
-            const cs = getComputedStyle(el2);
-            _panes.push({el: el2, transform: el2.style.transform,
-                         left: el2.style.left, top: el2.style.top});
-            const l0 = parseFloat(cs.left) || 0, t0 = parseFloat(cs.top) || 0;
-            el2.style.transform = 'none';
-            el2.style.left = (l0 + m2.m41) + 'px';
-            el2.style.top = (t0 + m2.m42) + 'px';
-          }
-        }catch(e){}
-      }
-      Array.from(el2.children || []).forEach(_flat);
-    };
-    try{ _flat(map.getPanes().mapPane); }
-    catch(e){ console.warn('transform 攤平失敗', e); }
-    const _restorePanes = ()=>_panes.forEach(p=>{
-      p.el.style.transform = p.transform;
-      p.el.style.left = p.left; p.el.style.top = p.top;
-    });
+    // ★ 向量層已改用 Canvas 渲染（見 map 建立處的 preferCanvas），
+    //   html2canvas 可直接複製點陣內容，不必再攤平 transform。
+    const _restorePanes = ()=>{};
     const r0 = el.getBoundingClientRect();
     html2canvas(el, {
       backgroundColor: '#ffffff',
@@ -2746,6 +2914,152 @@ function _marginColor(pct){
   if(d >= -20) return '#FFFF00';  // 黃：接近（20% 內）
   return '#00FF00';               // 綠：尚有餘裕
 }
+// ══════════════════════════════════════════════════════════
+//  ETR2 瀑布圖
+//  ★ 概念（使用者提議）：ETR2 是「當日雨量累積」與「前期折減」的淨結果，
+//    正好適合瀑布圖 —— 每一段畫出它讓 ETR2 增加多少或減少多少。
+//    紅＝增加（雨量累積，風險上升）；綠＝減少（折減，風險下降）。
+//    折線為累積後的 ETR2 值，虛線為警戒門檻。
+//  ★ 與降雨歷線分開兩張圖（使用者指定）：疊在一起時雨量一大就會
+//    把瀑布壓扁，分開各自看得清楚。
+// ══════════════════════════════════════════════════════════
+function drawEtrWaterfall(t, canvasId){
+  const cv = document.getElementById(canvasId || 'cv-waterfall');
+  if(!cv) return;
+  const isZoom = (canvasId === 'chart-zoom-canvas');
+  const basis = (document.getElementById('wf-basis') || {}).value || 'mm';
+  const F = _fitCanvas(cv, 300, isZoom ? 820 : 210);
+  const ctx = F.ctx, CW = F.w, CH = F.h;
+  const fs = isZoom ? 15 : 9;
+
+  if(!t || !(t.alert_val > 0)){
+    ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
+    ctx.fillText(t ? '此鄉鎮無警戒值，無法計算 ETR2' : '請點選鄉鎮市區查看', 12, 24);
+    return;
+  }
+  const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
+  const den = _etrDen(t);
+
+  // 逐段的 ETR2（含前期折減）；差值即該段的淨貢獻
+  const ns = _nowSeg();
+  const segs = [];
+  for(let k = -4; k <= 12; k++) segs.push(ns + k);     // 過去1天 ~ 未來3天
+  const vals = segs.map(sg=>{
+    const raw = calcEtr2AtSeg(t, sg, qpfField);
+    if(raw == null || !isFinite(raw)) return null;
+    return basis === 'pct' ? (raw / den * 100) : raw;
+  });
+  const pts = [];
+  for(let i = 1; i < vals.length; i++){
+    if(vals[i] == null || vals[i-1] == null) continue;
+    pts.push({seg: segs[i], from: vals[i-1], to: vals[i],
+              delta: vals[i] - vals[i-1]});
+  }
+  if(pts.length < 2){
+    ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
+    ctx.fillText('資料不足', 12, 24);
+    return;
+  }
+
+  const warn = (basis === 'pct') ? 90 : den * 0.9;
+  const allV = pts.flatMap(p=>[p.from, p.to]).concat([warn]);
+  const vMax = Math.max(...allV) * 1.12;
+  const vMin = Math.min(0, ...allV);
+  const pL = isZoom ? 74 : 38, pR = isZoom ? 40 : 14;
+  const pT = isZoom ? 44 : 16, pB = isZoom ? 70 : 38;
+  const iw = CW - pL - pR, ih = CH - pT - pB;
+  const X = i => pL + iw * (i + 0.5) / pts.length;
+  const Y = v => pT + ih * (1 - (v - vMin) / Math.max(1e-9, vMax - vMin));
+  const bw = Math.max(3, iw / pts.length * 0.62);
+
+  // 格線與縱軸
+  ctx.strokeStyle = '#12283c'; ctx.fillStyle = '#5a7a95';
+  ctx.font = `${fs}px sans-serif`; ctx.textAlign = 'right';
+  const span = vMax - vMin;
+  const stepV = span <= 50 ? 10 : span <= 120 ? 25 : span <= 400 ? 50 : 100;
+  for(let v = Math.ceil(vMin/stepV)*stepV; v <= vMax; v += stepV){
+    ctx.beginPath(); ctx.moveTo(pL, Y(v)); ctx.lineTo(pL+iw, Y(v)); ctx.stroke();
+    ctx.fillText(v.toFixed(0) + (basis==='pct' ? '%' : ''), pL - 4, Y(v) + fs*0.35);
+  }
+  // 警戒門檻
+  ctx.strokeStyle = '#FF4444'; ctx.lineWidth = isZoom?2.5:1.6;
+  ctx.setLineDash([isZoom?10:5, isZoom?7:4]);
+  ctx.beginPath(); ctx.moveTo(pL, Y(warn)); ctx.lineTo(pL+iw, Y(warn)); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#FF6666'; ctx.textAlign = 'left';
+  ctx.fillText(basis==='pct' ? '90% 警戒' : `警戒 ${warn.toFixed(0)}mm`,
+               pL + 3, Y(warn) - 3);
+
+  // 現在的位置
+  const nowI = pts.findIndex(p=>p.seg >= ns);
+  if(nowI > 0){
+    const xn = pL + iw * nowI / pts.length;
+    ctx.strokeStyle = '#ffcc44'; ctx.lineWidth = isZoom?2:1.4;
+    ctx.setLineDash([4,3]);
+    ctx.beginPath(); ctx.moveTo(xn, pT); ctx.lineTo(xn, pT+ih); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ffcc44'; ctx.textAlign = 'center';
+    ctx.fillText('現在', xn, pT - 3);
+  }
+
+  // 瀑布長條：紅＝上升、綠＝下降
+  let firstCross = null;
+  pts.forEach((p, i)=>{
+    const y0 = Y(p.from), y1 = Y(p.to);
+    const up = p.delta >= 0;
+    ctx.fillStyle = up ? '#FF4444' : '#40d060';
+    ctx.globalAlpha = 0.88;
+    ctx.fillRect(X(i) - bw/2, Math.min(y0, y1), bw, Math.max(1.5, Math.abs(y1 - y0)));
+    ctx.globalAlpha = 1;
+    // 連接線（瀑布的階梯感）
+    if(i < pts.length - 1){
+      ctx.strokeStyle = '#3a5070'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(X(i) + bw/2, y1);
+      ctx.lineTo(X(i+1) - bw/2, y1); ctx.stroke();
+    }
+    if(firstCross === null && p.from < warn && p.to >= warn) firstCross = p.seg;
+  });
+
+  // 累積值折線
+  ctx.strokeStyle = '#6bc8e8'; ctx.lineWidth = isZoom?3:1.8;
+  ctx.beginPath();
+  pts.forEach((p, i)=> i ? ctx.lineTo(X(i), Y(p.to)) : ctx.moveTo(X(i), Y(p.to)));
+  ctx.stroke();
+
+  // X 軸：時段標籤
+  ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'center';
+  const stepI = Math.max(1, Math.ceil(pts.length / (isZoom ? 14 : 6)));
+  pts.forEach((p, i)=>{
+    if(i % stepI) return;
+    const d = segTime(p.seg);
+    ctx.fillText(`${d.getMonth()+1}/${d.getDate()} ${_segPeriodName(d.getHours())}`,
+                 X(i), CH - pB + fs + 2);
+  });
+
+  // 摘要：何時達標
+  ctx.font = `${isZoom?16:10}px sans-serif`; ctx.textAlign = 'left';
+  if(firstCross != null){
+    const d = segTime(firstCross);
+    ctx.fillStyle = '#FF6666';
+    ctx.fillText(`預估 ${d.getMonth()+1}/${d.getDate()} `
+      + `${_segPeriodName(d.getHours())} 達警戒`, pL, CH - (isZoom?16:6));
+  } else {
+    const last = pts[pts.length-1].to;
+    ctx.fillStyle = last >= warn ? '#FF6666' : '#8ad8a0';
+    ctx.fillText(last >= warn ? '期間內已超過警戒'
+      : `期間內未達警戒（最高 ${last.toFixed(0)}${basis==='pct'?'%':'mm'}）`,
+      pL, CH - (isZoom?16:6));
+  }
+  ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'right';
+  ctx.fillText('紅＝累積上升　綠＝折減下降', CW - pR, CH - (isZoom?16:6));
+
+  if(isZoom){
+    ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(`${t.county}${t.township} ETR2 變化`
+      + `（${basis==='pct'?'%':'mm'}）${_winSrcLabel()}`, CW/2, 26);
+  }
+}
+
 function drawMarginChart(t, canvasId){
   const cv = document.getElementById(canvasId || 'cv-margin');
   if(!cv) return;
@@ -3435,8 +3749,11 @@ function renderBlendDetail(t){
   const el = document.getElementById('blend-detail');
   const sec = document.getElementById('sec-blend');
   if(!el || !sec) return;
-  if(forecastModel !== 'blend'){ sec.style.display = 'none'; return; }
-  sec.style.display = 'block';
+  // 融合明細僅在融合模式有意義；面板保留、內容以提示代替
+  if(forecastModel !== 'blend'){
+    el.innerHTML = '<div style="color:#5a7a95;font-size:11px;padding:6px 2px">切到 FORMOSA 模式可查看融合校正明細</div>';
+    return;
+  }
   // ★ 未選鄉鎮時：顯示全臺各地形的校正概況，切到融合模式立即看得到，
   //   不必先點某個鄉鎮。點選後再切換為該鄉鎮的細節。
   if(!t){ el.innerHTML = _blendOverviewHtml(); return; }
@@ -4461,38 +4778,32 @@ function _obsHourlyAt(t, h){
 // ★ 風力／氣溫／浪高：官方資料為逐 3 小時，取該小時所屬的 3 小時區段值。
 //   同一個區段內的小時顯示同值，跨過邊界才變動。
 function _threeHourAt(t, h, m){
-  const tgt = new Date(Date.now() + h * 3600e3);
-  const pick = arr =>{
-    if(!Array.isArray(arr) || !arr.length) return null;
-    // 取時間最接近且不晚於目標的那一筆（逐 3 小時）
-    let best = null, bd = Infinity;
-    arr.forEach(p=>{
-      const ms = p.ms ?? (p.t ? new Date(p.t).getTime() : null);
-      if(ms == null) return;
-      const d = Math.abs(ms - tgt.getTime());
-      // 容忍 ±3.5h：逐 3 小時資料的半區間各 1.5h，留餘裕避免邊界落空
-      if(d < bd && d <= 3.5 * 3600e3){ bd = d; best = p; }
-    });
-    return best;
-  };
-  if(m === 'wind'){
-    const p = pick(_windSeries ? _windSeries(t) : null);
-    if(!p) return null;
-    return {totalRain: p.bf, etrPct: p.bf, isWind: true, isHourly: true,
-            windWs: p.ws, windSrc: p.src, coarse3h: true};
-  }
-  if(m === 'temp'){
-    const p = pick(_tempSeries ? _tempSeries(t) : null);
-    if(!p) return null;
-    return {totalRain: p.t, etrPct: p.t, isTemp: true, isHourly: true, coarse3h: true};
-  }
-  if(m === 'wave'){
-    const p = pick(_waveSeries ? _waveSeries(t) : null);
-    if(!p) return null;
-    return {totalRain: p.wave, etrPct: p.wave, isWave: true, isHourly: true,
-            waveDir: p.dir, coarse3h: true};
-  }
-  return null;
+  // ★ 三個序列（_windSeries／_tempSeries／_waveSeries）的共同結構是
+  //   {ms, bf, ws, ...}，數值一律放在 bf。先前誤讀 p.t／p.wave，
+  //   於是永遠取不到值 —— 這就是逐時視窗下風力／氣溫／浪高全空的原因。
+  const SER = {wind: _windSeries, temp: _tempSeries, wave: _waveSeries}[m];
+  if(typeof SER !== 'function') return null;
+  let arr;
+  try{ arr = SER(t); }catch(e){ return null; }
+  if(!Array.isArray(arr) || !arr.length) return null;
+  const tgt = Date.now() + h * 3600e3;
+  let best = null, bd = Infinity;
+  arr.forEach(p=>{
+    if(!p || p.ms == null || p.bf == null) return;
+    const d = Math.abs(p.ms - tgt);
+    // 容忍 ±3.5h：逐 3 小時資料的半區間各 1.5h，留餘裕避免邊界落空
+    if(d < bd && d <= 3.5 * 3600e3){ bd = d; best = p; }
+  });
+  if(!best) return null;
+  const v = best.bf;
+  if(m === 'wind')
+    return {totalRain: v, etrPct: v, isWind: true, coarse3h: true,
+            windWs: best.ws, windSrc: best.src};
+  if(m === 'temp')
+    return {totalRain: v, etrPct: v, isTemp: true, coarse3h: true,
+            tmax: best.tmax, tmin: best.tmin};
+  return {totalRain: v, etrPct: v, isWave: true, coarse3h: true,
+          waveDir: best.dir, waveBf: best.ws};
 }
 
 function _etrAtHour(t, h, qpfField){
@@ -5112,22 +5423,10 @@ function updateInfo(t){
     if(it) it.textContent = scope;
 
     // 顯示：不需單一鄉鎮即可繪製的圖表
-    const showAll = ['countytowns', 'etrphase', 'elevrain', 'margin', 'rank', 'verify'];
-    showAll.forEach(nm=>{
-      const el = document.getElementById('sec-' + nm);
-      if(el) el.style.display = 'block';
-    });
-    // 隱藏：必須有單一鄉鎮才有意義的圖表
-    ['now', 'qpf', 'daily', 'seg6', 'district-hyeto', 'stnrank', 'stations',
-     'windday', 'windhr', 'tempday', 'temphr', 'waveday', 'wavehr'].forEach(nm=>{
-      const el = document.getElementById('sec-' + nm);
-      if(el) el.style.display = 'none';
-    });
-    // 各分署整合圖：全臺尺度才顯示
-    ['all-summary', 'all-daily', 'all-hyeto'].forEach(nm=>{
-      const el = document.getElementById('sec-' + nm);
-      if(el) el.style.display = _pickedCounty ? 'none' : 'block';
-    });
+
+    // ★ 面板一律恆顯示（使用者指定）：先前這裡整批隱藏，於是
+    //   使用者切層級時圖表會憑空消失、找不到跑去哪。
+    //   改由 _secHint 在面板內標示，位置固定。
 
     const ctT = document.getElementById('ct-title');
     if(ctT) ctT.textContent = _pickedCounty ? `${_pickedCounty} 各鄉鎮` : '全臺各鄉鎮';
@@ -5136,6 +5435,7 @@ function updateInfo(t){
     _safe(()=>drawEtrPhaseChart(null), '雨量與地形分佈');
     _safe(()=>drawElevRainChart(null), '雨量與海拔分佈');
     _safe(()=>drawMarginChart(null), '警戒餘裕');
+    _safe(()=>drawEtrWaterfall(null), 'ETR2 瀑布圖');
     _safe(()=>renderRankList(), '雨量排行');
     _safe(()=>renderVerify(), '預報校驗');
     _safe(()=>renderBlendDetail(null), '融合明細');
@@ -5158,11 +5458,7 @@ function updateInfo(t){
   _syncMergedSecs(true);
   TOWN_ONLY_SECS.forEach(nm=>_secHint(nm, null));
 
-  // 選取鄉鎮時隱藏各分署整合區塊
-  ['all-summary','all-daily','all-hyeto'].forEach(name=>{
-    const sec = document.getElementById('sec-'+name);
-    if(sec) sec.style.display = 'none';
-  });
+  // ★ 面板恆顯示：各分署摘要在選鄉鎮後仍保留（內容切換由各自的繪製函式處理）
   document.getElementById('iTitle').textContent = `${t.county} ${t.township}`;
   document.getElementById('iCont-hint').style.display = 'none';
 
@@ -5219,7 +5515,6 @@ function updateInfo(t){
   }
 
   // ── 區塊：QPF預測 ──
-  document.getElementById('sec-qpf').style.display = 'block';
   document.getElementById('body-qpf').innerHTML = `
     <div class="ir"><span class="l">時段</span><span class="v" style="font-size:10px">${fmtDay(t0)}→${fmtDay(t1)}（${days}天）</span></div>
     <div class="ir"><span class="l">預測累積QPF</span>${wv('', totalRain!==null ? totalRain+' mm' : '—')}</div>
@@ -5236,9 +5531,10 @@ function updateInfo(t){
   `;
 
   // ── 區塊：逐日趨勢 + 6h分段 + 行政區組體圖 + 測站清單 ──
-  document.getElementById('sec-chart').style.display = 'block';
-  document.getElementById('sec-seg').style.display   = 'block';
-  document.getElementById('sec-hyeto').style.display = 'block';
+  // ★ 面板合併後 sec-chart／sec-hyeto 已不存在（改為 sec-daily／sec-hyeto2），
+  //   原本在此存取它們的 .style 會拋 TypeError，導致後面三個繪製全部沒執行
+  //   —— 這就是「鄉鎮逐日與組體圖永遠空白」的原因。面板現已恆顯示，
+  //   不需要再設 display。
   drawChart(t);
   drawSegs(t);
   drawDistrictHyetograph(t);
@@ -5278,6 +5574,7 @@ function updateInfo(t){
     const mEl = document.getElementById('sec-margin');
     if(mEl) mEl.style.display = hasMg ? 'block' : 'none';
     if(hasMg){ try{ drawMarginChart(t); }catch(e){ console.warn('警戒餘裕圖失敗', e); } }
+    try{ drawEtrWaterfall(t); }catch(e){ console.warn('ETR2 瀑布圖失敗', e); }
 
     // 各鄉鎮分布：全臺或指定縣市都要顯示
     //   ★ 先前只在有選縣市時顯示，於是點了任一鄉鎮後整個區塊消失，
@@ -5322,7 +5619,6 @@ function updateInfo(t){
   }
 
   if(t.stations && t.stations.length){
-    document.getElementById('sec-stations').style.display = 'block';
     const wrap = document.getElementById('body-stations');
     wrap.innerHTML = '';
     t.stations.forEach(s=>{
@@ -5348,7 +5644,6 @@ function updateInfo(t){
       + `（滑鼠移到測站可看雨量趨勢圖${_nLoc ? '、點選可定位' : ''}）`;
     wrap.appendChild(note);
   } else {
-    document.getElementById('sec-stations').style.display = 'none';
   }
 
   // 套用展開/收合狀態
@@ -6352,10 +6647,12 @@ function clearBtns(){
 function setModel(m){
   forecastModel = m;
   ['mBest','mEcmwf','mGfs','mHi','mLo','mCwa','mBlend',
+   'mIcon','mKma','mGem','mUkmo','mMf','mCma','mBom',
    'mJma','mAifs','mGc'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.classList.remove('on');
   });
   const btnMap={best:'mBest',ecmwf:'mEcmwf',gfs:'mGfs',hi:'mHi',lo:'mLo',
+  icon:'mIcon',kma:'mKma',gem:'mGem',ukmo:'mUkmo',mf:'mMf',cma:'mCma',bom:'mBom',
                 cwa:'mCwa',blend:'mBlend',jma:'mJma',aifs:'mAifs',gc:'mGc'};
   const el=document.getElementById(btnMap[m]); if(el) el.classList.add('on');
   // ★ 模式說明已移除（使用者指定）：按鈕名稱本身已足夠辨識，
@@ -6870,15 +7167,7 @@ function init(){
       renderLayer();
       document.getElementById('iTitle').textContent = '點選鄉鎮查看詳情';
       document.getElementById('iCont-hint').style.display = 'block';
-      ['obs','qpf','risk','chart','seg','hyeto','stations'].forEach(name=>{
-        const sec = document.getElementById('sec-'+name);
-        if(sec) sec.style.display = 'none';
-      });
-      // 顯示各分署整合區塊
-      ['all-summary','all-daily','all-hyeto'].forEach(name=>{
-        const sec = document.getElementById('sec-'+name);
-        if(sec) sec.style.display = 'block';
-      });
+      // ★ 面板恆顯示：取消選取時不隱藏任何面板，改由 updateInfo 標示
       setTimeout(()=>updateAllDistrictCharts(), 100);
     }
   });
@@ -8987,7 +9276,8 @@ function _windSeries(t, kind){
     if(K === 'gust_est' && ws != null){ ws = ws * _gustFactor(t); bf = _wsToBf(ws); }
     if(K === 'gust') return;          // 官方陣風不在逐時預報中，另由 GUST_FCST 提供
     if(bf == null) return;
-    out.push({ms, bf, ws, past:true});
+      // 歷史快照沒有風向（wind_hist.json 只存風速與風級）
+    out.push({ms, wd: (rec.wd != null ? rec.wd : null), bf, ws, past:true});
   });
   segs.forEach(sg=>{
     const ms = Date.parse(sg.start || sg.end || '');
@@ -9010,7 +9300,7 @@ function _windSeries(t, kind){
       ws = gws;
     }
     if(bf == null) return;
-    out.push({ms, bf, ws});
+      out.push({ms, wd: (x.wd != null ? x.wd : null), bf, ws});
   });
   return out.sort((a,b)=>a.ms - b.ms);
 }
@@ -11162,6 +11452,7 @@ function toggleChartZoom(canvasId, ev){
     'cv-wind-hr-est': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風推估）` : '',
     'cv-stnrank': selected ? `${selected.county}${selected.township} 測站雨量排名` : '',
     'cv-verify': '預報校驗 CSI 趨勢',
+    'cv-waterfall': 'ETR2 變化（瀑布圖）',
     'cv-countytowns': (_pickedCounty || '') + ' 各鄉鎮',
     'cv-elevrain': '海拔與雨量分布（地形雨效應）',
     'cv-etrphase': '雨量與地形分佈',
@@ -11177,7 +11468,9 @@ function toggleChartZoom(canvasId, ev){
   if(titleEl) titleEl.textContent = titleMap[canvasId] || '';
   _zoomCanvasType = canvasId;
 
-  if(canvasId === 'cv-verify'){
+  if(canvasId === 'cv-waterfall'){
+    drawEtrWaterfall(selected, 'chart-zoom-canvas');
+  } else if(canvasId === 'cv-verify'){
     drawVerifyChart('chart-zoom-canvas');
   } else if(canvasId === 'cv-countytowns'){
     drawCountyTowns('chart-zoom-canvas');

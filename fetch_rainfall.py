@@ -555,6 +555,39 @@ def load_static():
     print(f"靜態警戒值：{len(table)} 個鄉鎮")
     return table
 
+# ★ CWA 風向為中文方位詞（8方位，如「東北風」「偏南風」）。
+#   換算成氣象慣例的度數（風「來」向：北=0、東=90、南=180、西=270），
+#   供前端畫風場動畫。無法辨識時回 None，不猜。
+_WIND_DIR_MAP = {
+    '北': 0, '偏北': 0, '東北': 45, '東': 90, '偏東': 90,
+    '東南': 135, '南': 180, '偏南': 180, '西南': 225,
+    '西': 270, '偏西': 270, '西北': 315,
+    '北北東': 22.5, '東北東': 67.5, '東南東': 112.5, '南南東': 157.5,
+    '南南西': 202.5, '西南西': 247.5, '西北西': 292.5, '北北西': 337.5,
+}
+def _wind_dir_deg(v):
+    """中文方位詞 → 度數。也接受已是數字的情形。"""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v) % 360
+    txt = str(v).strip()
+    if not txt:
+        return None
+    try:                      # 已是數字字串
+        return float(txt) % 360
+    except ValueError:
+        pass
+    key = txt.replace('風', '').replace('方', '').strip()
+    if key in _WIND_DIR_MAP:
+        return _WIND_DIR_MAP[key]
+    # 退路：取最長的可辨識前綴（處理「東北風偏北」這類寫法）
+    for k in sorted(_WIND_DIR_MAP, key=len, reverse=True):
+        if k and k in key:
+            return _WIND_DIR_MAP[k]
+    return None
+
+
 def _numstr(v):
     """把 ">= 11"、"<=3"、"12" 這類字串轉為數值；無法解析回 None。
 
@@ -1570,6 +1603,13 @@ def _extract_pop_wind(raw, county, is_3day):
                             _b = _numstr(ev.get(k))
                             bf = int(_b) if _b is not None else None
                             break
+                    # ★ 風向（F-D0047 的 WindDirection，單位「8方位」）。
+                    #   官方給的是中文方位詞（如「東北風」「偏南風」），
+                    #   換算成度數供前端畫風場動畫。
+                    wd = None
+                    for k in ('WindDirection', 'windDirection'):
+                        if k in ev:
+                            wd = _wind_dir_deg(ev.get(k)); break
                     if ws is None and bf is None: continue
                     # ★ 逐 3 小時資料只有 DataTime（時間點），無 EndTime。
                     #   若 end 等於 start，前端「落在區間內」的判斷會永遠不成立，
@@ -1581,7 +1621,7 @@ def _extract_pop_wind(raw, county, is_3day):
                             end = (_t + _td(hours=(3 if is_3day else 12))).isoformat()
                         except Exception:
                             pass
-                    wsegs.append({'start':start, 'end':end, 'ws':ws, 'bf':bf})
+                    wsegs.append({'start':start, 'end':end, 'ws':ws, 'bf':bf, 'wd':wd})
             # ── 溫度（與風力同一次請求；F-D0047 逐3小時有 Temperature）──
             #   ★ 只認 Temperature／MaxTemperature／MinTemperature 三個專屬鍵，
             #     不可退回通用 'Value'（會把濕度、體感溫度等誤當氣溫）。
@@ -4112,6 +4152,14 @@ def main():
             'qpf_jma':   get_qpf_model('jma_seamless'),
             'qpf_aifs':  get_qpf_model('ecmwf_aifs025_single'),   # AI
             'qpf_gc':    get_qpf_model('gfs_graphcast025'),       # AI
+            # ★ 僅校驗模式：前端可切換查看，但不進 FORMOSA 融合加權
+            'qpf_icon':  get_qpf_model('icon_seamless'),
+            'qpf_kma':   get_qpf_model('kma_seamless'),
+            'qpf_gem':   get_qpf_model('gem_seamless'),
+            'qpf_ukmo':  get_qpf_model('ukmo_seamless'),
+            'qpf_mf':    get_qpf_model('meteofrance_seamless'),
+            'qpf_cma':   get_qpf_model('cma_grapes_global'),
+            'qpf_bom':   get_qpf_model('bom_access_global'),
             # 逐時（IFS HRES 前 90h 為原生逐時，其餘為內插）
             'hourly_ifs': (om_hourly_all.get('ecmwf_ifs') or {}).get(
                             f"{lat:.4f}_{lng:.4f}"),
@@ -4221,6 +4269,14 @@ def main():
             'obs_6h':   [0.0]*8,
             'qpf_best':  qpf_best_ns,  'qpf_ecmwf': qpf_ecmwf_ns,
             'qpf_gfs':   qpf_gfs_ns,
+            # ★ 僅校驗模式（同靜態表分支，前端可查看、不進融合）
+            'qpf_icon':  get_ns_qpf('icon_seamless'),
+            'qpf_kma':   get_ns_qpf('kma_seamless'),
+            'qpf_gem':   get_ns_qpf('gem_seamless'),
+            'qpf_ukmo':  get_ns_qpf('ukmo_seamless'),
+            'qpf_mf':    get_ns_qpf('meteofrance_seamless'),
+            'qpf_cma':   get_ns_qpf('cma_grapes_global'),
+            'qpf_bom':   get_ns_qpf('bom_access_global'),
             'qpf_hi':    apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'hi')[0],
             'qpf_lo':    apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'lo')[0],
             'maxh_hi':   apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'hi')[1],
