@@ -721,26 +721,27 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           onmouseleave="hideChartTooltip()"></canvas>
       </div>
     </div>
-    <div class="sec" id="sec-all-daily" style="display:block">
-      <div class="sec-h" onclick="toggleSec('all-daily')">
-        <span>逐日雨量</span><span class="sec-arrow" id="arrow-all-daily">▾</span>
+    <!-- 區塊：逐日雨量（全臺＝各分署；選鄉鎮＝該鄉鎮 15 天） -->
+    <div class="sec" id="sec-daily">
+      <div class="sec-h" onclick="toggleSec('daily')">
+        <span id="daily-title">逐日雨量</span>
+        <span class="sec-arrow" id="arrow-daily">▸</span>
       </div>
-      <div class="sec-body" id="body-all-daily" style="display:block">
+      <div class="sec-body" id="body-daily" style="display:none">
+        <div id="daily-all">
+
         <canvas id="cv-all-daily" width="280" height="130"
           style="width:100%;height:130px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-all-daily', event)"
           onmousemove="showChartTooltip(event,'cv-all-daily')"
           onmouseleave="hideChartTooltip()"></canvas>
-      </div>
-    </div>
-    <div class="sec" id="sec-chart">
-      <div class="sec-h" onclick="toggleSec('chart')">
-        <span>逐日雨量（15天）</span><span class="sec-arrow" id="arrow-chart">▸</span>
-      </div>
-      <div class="sec-body" id="body-chart" style="display:none">
+        </div>
+        <div id="daily-town" style="display:none">
+
         <canvas id="cv" style="width:100%;height:90px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
           onclick="toggleChartZoom('cv', event)"
           onmousemove="showChartTooltip(event,'cv')" onmouseleave="hideChartTooltip()"></canvas>
+        </div>
       </div>
     </div>
     <div class="sec" id="sec-seg">
@@ -749,23 +750,23 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
       <div class="sec-body" id="seg-rows" style="display:none"></div>
     </div>
-    <div class="sec" id="sec-all-hyeto" style="display:block">
-      <div class="sec-h" onclick="toggleSec('all-hyeto')">
-        <span>組體雨量圖</span><span class="sec-arrow" id="arrow-all-hyeto">▾</span>
+    <!-- 區塊：組體雨量圖（全臺＝各分署；選鄉鎮＝該鄉鎮 -48h~+72h） -->
+    <div class="sec" id="sec-hyeto2">
+      <div class="sec-h" onclick="toggleSec('hyeto2')">
+        <span id="hyeto2-title">組體雨量圖</span>
+        <span class="sec-arrow" id="arrow-hyeto2">▸</span>
       </div>
-      <div class="sec-body" id="body-all-hyeto" style="display:block">
+      <div class="sec-body" id="body-hyeto2" style="display:none">
+        <div id="hyeto-all">
+
         <canvas id="cv-all-hyeto" width="280" height="130"
           style="width:100%;height:130px;display:block;background:#040c14;border-radius:3px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-all-hyeto', event)"
           onmousemove="showChartTooltip(event,'cv-all-hyeto')"
           onmouseleave="hideChartTooltip()"></canvas>
-      </div>
-    </div>
-    <div class="sec" id="sec-hyeto">
-      <div class="sec-h" onclick="toggleSec('hyeto')">
-        <span>行政區組體雨量圖（過去2天+未來2天）</span><span class="sec-arrow" id="arrow-hyeto">▸</span>
-      </div>
-      <div class="sec-body" id="body-hyeto" style="display:none">
+        </div>
+        <div id="hyeto-town" style="display:none">
+
         <canvas id="cv-district-hyeto" width="260" height="100" style="width:100%;height:100px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-district-hyeto', event)"
           onmousemove="showChartTooltip(event,'cv-district-hyeto')" onmouseleave="hideChartTooltip()"></canvas>
@@ -773,6 +774,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           <span><span style="display:inline-block;width:8px;height:8px;background:#4a7ab0;margin-right:3px"></span>觀測(日)</span>
           <span><span style="display:inline-block;width:8px;height:8px;background:#6ad8f0;margin-right:3px"></span>QPF預測(6h)</span>
           <span><span style="display:inline-block;width:14px;height:2px;background:#ff9933;margin-right:3px;vertical-align:middle"></span>ETR2%</span>
+        </div>
         </div>
       </div>
     </div>
@@ -5027,7 +5029,12 @@ function renderLayer(){
 // ════════════════════════════════════════════════
 function wv(cls,txt){return`<span class="v ${cls}">${txt}</span>`;}
 // 分區展開/收合狀態
-const secOpen = {obs:true, qpf:true, risk:true, chart:true, seg:true, hyeto:true, stations:false, 'all-summary':true, 'all-daily':true, 'all-hyeto':true};
+// 分區展開/收合狀態（daily／hyeto2 為合併後的面板鍵名）
+const secOpen = {obs:true, qpf:true, risk:true, seg:true, stations:false,
+  'all-summary':true, daily:true, hyeto2:true,
+  rank:true, countytowns:false, etrphase:false, elevrain:false,
+  margin:false, verify:false, stnrank:false,
+  windday:false, windhr:false, wave:false, temp:false, blend:false};
 function toggleSec(name){
   secOpen[name] = !secOpen[name];
   const body  = document.getElementById('body-'+name)
@@ -5047,8 +5054,26 @@ function toggleSec(name){
 
 // ★ 面板恆顯示：未選鄉鎮時在面板內標示提示，而非整個隱藏。
 //   先前依層級隱藏，使用者會找不到某張圖跑去哪；位置固定才好找。
-const TOWN_ONLY_SECS = ['obs','qpf','chart','seg','hyeto','stnrank',
+// 註：daily／hyeto2 已合併為雙內容面板，由 _syncMergedSecs 處理，不列入此表
+const TOWN_ONLY_SECS = ['obs','qpf','seg','stnrank',
                         'stations','risk','windday','windhr','wave','temp'];
+// ★ 逐日雨量／組體雨量圖：全臺與鄉鎮版合併為同一面板，
+//   依是否選取鄉鎮切換內部內容（先前是兩個獨立面板，內容重複、
+//   使用者要在不同位置找同一種圖）。
+function _syncMergedSecs(hasTown){
+  const pairs = [
+    ['daily', 'daily-all', 'daily-town', '逐日雨量'],
+    ['hyeto2', 'hyeto-all', 'hyeto-town', '組體雨量圖'],
+  ];
+  pairs.forEach(([sec, allId, townId, base])=>{
+    const a = document.getElementById(allId), b = document.getElementById(townId);
+    if(a) a.style.display = hasTown ? 'none' : '';
+    if(b) b.style.display = hasTown ? '' : 'none';
+    const ti = document.getElementById(sec + '-title');
+    if(ti) ti.textContent = base + (hasTown ? '' : '（各分署）');
+  });
+}
+
 function _secHint(name, msg){
   const body = document.getElementById('body-' + name);
   if(!body) return;
@@ -5125,10 +5150,12 @@ function updateInfo(t){
       });
     }catch(e){}
     // ★ 鄉鎮層級面板標示提示，不隱藏（位置固定才好找）
+    _syncMergedSecs(false);
     TOWN_ONLY_SECS.forEach(nm=>_secHint(nm, '請點選鄉鎮市區查看此項目'));
     return;
   }
   // 選了鄉鎮：清除提示、恢復內容顯示
+  _syncMergedSecs(true);
   TOWN_ONLY_SECS.forEach(nm=>_secHint(nm, null));
 
   // 選取鄉鎮時隱藏各分署整合區塊
