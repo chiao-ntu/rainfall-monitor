@@ -321,7 +321,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b model-btn hi-btn"    id="mHi"    onclick="setModel('hi')">強降雨</button>
       <button class="b model-btn lo-btn"    id="mLo"    onclick="setModel('lo')">弱降雨</button>
       <span style="color:#4a6a8a;font-size:10px;margin:0 3px">｜僅校驗</span>
-      <button class="b model-btn vo-btn" id="mIcon" onclick="setModel('icon')">DWD ICON</button>
+      <button class="b model-btn vo-btn" id="mIcon" onclick="setModel('icon')">ICON</button>
       <button class="b model-btn vo-btn" id="mKma"  onclick="setModel('kma')">KMA</button>
       <button class="b model-btn vo-btn" id="mGem"  onclick="setModel('gem')">GEM</button>
       <button class="b model-btn vo-btn" id="mUkmo" onclick="setModel('ukmo')">UKMO</button>
@@ -1920,7 +1920,9 @@ function snapMap(){
         map.invalidateSize({animate:false});
         map.setView(prev.center, prev.zoom, {animate:false});
       });
-    }, 1200);
+      // ★ Canvas 渲染下向量層是同步繪製，只需讓 fitBounds 生效即可；
+      //   先前等 1.2 秒（加上 html2canvas 本身）就是「按下要等 5 秒」的來源。
+    }, 150);
   }));
 }
 // ★ 截圖改為「用地圖自己的投影重畫」，而非把 DOM 節點光柵化。
@@ -1978,10 +1980,14 @@ function _doSnap(B){
       windowWidth: Math.round(r0.width), windowHeight: Math.round(r0.height),
       scrollX: 0, scrollY: 0, x: 0, y: 0,
       // 排除控制項與提示，只留地圖本體
+      // ★ 排除控制項、時段列與 Leaflet 版權標示（圖面應只有地圖本體）
       ignoreElements: n => n.classList && (
         n.classList.contains('leaflet-control-container') ||
         n.id === 'time-nav' || n.id === 'time-nav-show' ||
-        n.id === 'coverage-warn' || n.id === 'compass-wrap'),
+        n.id === 'coverage-warn' || n.id === 'compass-wrap' ||
+        n.classList.contains('leaflet-control-attribution') ||
+        n.classList.contains('leaflet-control') ||
+        n.id === 'scale-box' || n.id === 'colorbar'),
     }).then(cv=>{ _restorePanes(); done(cv); })
       .catch(e=>{ _restorePanes(); console.warn('截圖失敗', e); resolve(); });
   });
@@ -1993,6 +1999,21 @@ map.createPane('seaPane');
 map.getPane('seaPane').style.zIndex = 390;
 map.createPane('townPane');
 map.getPane('townPane').style.zIndex = 395;
+// ★ Canvas 渲染下，每個 pane 的 canvas 是「整片」元素，會攔截落在它上面
+//   的所有點擊 —— 不像 SVG 只在實際畫到的幾何上捕捉事件。
+//   若不處理，位於上層 pane 的 canvas（海域、縣市界）會蓋住鄉鎮色塊，
+//   造成「地圖點不到」。故：只有鄉鎮層需要互動，其餘 pane 一律關閉指標事件。
+function _fixCanvasPointerEvents(){
+  ['seaPane', 'terrainPane', 'overlayPane'].forEach(pn=>{
+    const p2 = map.getPane(pn);
+    if(!p2) return;
+    p2.querySelectorAll('canvas').forEach(c=>{ c.style.pointerEvents = 'none'; });
+  });
+  const tp = map.getPane('townPane');
+  if(tp) tp.querySelectorAll('canvas').forEach(c=>{ c.style.pointerEvents = 'auto'; });
+}
+map.on('layeradd zoomend moveend', ()=>{ try{ _fixCanvasPointerEvents(); }catch(e){} });
+
 const seaLayer = L.rectangle([[-90,-180],[90,180]], {
   pane:'seaPane', color:'none', fillColor:'#ffffff', fillOpacity:1.0, interactive:false
 }).addTo(map);
@@ -3500,7 +3521,7 @@ const VF_MODELS = ['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
                    'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom'];
 // 哪些已是融合成員（表格中標示，便於分辨）
 const VF_IN_BLEND = new Set(['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast']);
-const VF_NAME = {icon:'DWD ICON', kma:'KMA 韓國', gem:'GEM 加拿大',
+const VF_NAME = {icon:'ICON', kma:'KMA 韓國', gem:'GEM 加拿大',
                  ukmo:'UK Met Office', mf:'Météo-France',
                  cma:'CMA GRAPES', bom:'BOM ACCESS',
                  best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
@@ -5069,6 +5090,8 @@ function getObsEtr(t){
 // ════════════════════════════════════════════════
 // ★ 鄉鎮著色邏輯抽成共用函式：地圖（renderLayer）與截圖（_doSnap）
 //   用同一份，否則截圖配色與畫面不一致。
+// ★ Canvas 渲染下半透明色塊會讓白色海底透出更多（SVG 的合成方式不同），
+//   故不透明度由 0.82 提高到 0.92，維持與先前一致的視覺濃度。
 function _townFill(t, isSel){
   // 渲染模式下本島由內插色帶層顯示，polygon 僅留 hover 熱區；
   // 金馬在內插範圍外，維持原色塊。
@@ -5088,7 +5111,7 @@ function _townFill(t, isSel){
         if(v!=null && (band===null || v>band)) band = v;
       }
       const col = cwaBandColor(band);
-      if(col){ fillColor=col; fillOp=isSel?0.93:0.82; }
+      if(col){ fillColor=col; fillOp=isSel?0.96:0.92; }
       else   { fillColor='#FFFFFF'; fillOp=1.0; }   // 無CWA色塊＝白
     } else {
     const acc = getAccum(t);
@@ -5096,26 +5119,26 @@ function _townFill(t, isSel){
     if(acc.isRadar){
       // 雷達1h：用雨量色階，無回波(null)＝白
       fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain);
-      fillOp    = (totalRain==null) ? 1.0 : (isSel?0.93:0.82);
+      fillOp    = (totalRain==null) ? 1.0 : (isSel?0.96:0.92);
     } else if(acc.isWarn){
       // ★ 各 mode 分支必須排在「totalRain === null」之前。
       //   否則警特報未達標(0/null)、浪高內陸(null) 會先被通用的 null 分支
       //   攔成白色，永遠走不到自己的著色邏輯 —— 實測即為「警特報不顯示、
       //   浪高看起來沒有資料」的原因。
       fillColor = warnMapColor(totalRain || 0);
-      fillOp    = (totalRain||0)>0 ? (isSel?0.93:0.82) : 1.0;
+      fillOp    = (totalRain||0)>0 ? (isSel?0.96:0.92) : 1.0;
     } else if(acc.isTemp){
       // 氣溫：無資料留白（不可視為 0°C）
       fillColor = _tempColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?0.93:0.82);
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?0.96:0.92);
     } else if(acc.isWave){
       // 浪高：內陸無值 → 極淡灰（明確表示「非沿海」而非「浪高 0」）
       fillColor = _waveColor(totalRain) || '#e8eef4';
-      fillOp    = (totalRain == null) ? 0.25 : (isSel?0.93:0.82);
+      fillOp    = (totalRain == null) ? 0.25 : (isSel?0.96:0.92);
     } else if(acc.isWind){
       // 風力預測：蒲福風級色階（<4白/4-7綠/7-10黃/10-13紅/>=13紫）
       fillColor = _bfColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?0.93:0.82);
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?0.96:0.92);
     } else if(totalRain === null || totalRain === undefined){
       // 無資料：顯示淡灰色，保留視覺邊界（不設為0.0，否則鄉鎮消失）
       fillColor='#FFFFFF'; fillOp=1.0;
@@ -5182,11 +5205,17 @@ function renderLayer(){
       // ★ 邊框改深灰：原本用 fillColor（與填色同色）等於沒有邊界，
       //   飽和色塊相鄰時完全分不出鄉鎮。選取時仍為黃色高亮。
       // 深灰但不過重：#2a2a2a 太黑會蓋過色塊，改中灰並降低不透明度
-      color: isSel ? '#ffff44' : (_terrainOn ? '#3a3a3a' : '#5a5a5a'),
+      // ★ 深色海底時行政區界改金黃（深底上的深灰線幾乎看不見）
+    color: isSel ? '#ffff44'
+         : (typeof _darkSea !== 'undefined' && _darkSea) ? '#d8a838'
+         : (_terrainOn ? '#3a3a3a' : '#5a5a5a'),
       // ★ 渲染模式下仍畫鄉鎮界（先前 weight 0 等於整個消失）；
       //   界線是判讀行政責任範圍的依據，不該因為換呈現方式就不見。
-      weight: isSel ? 1.5 : (_hideFill ? 0.35 : 0.4),
-      opacity: isSel ? 1 : 0.45,
+      weight: isSel ? 1.6
+        : (typeof _darkSea !== 'undefined' && _darkSea) ? 0.7
+        : (_hideFill ? 0.35 : 0.4),
+      opacity: isSel ? 1
+         : (typeof _darkSea !== 'undefined' && _darkSea) ? 0.85 : 0.45,
       stroke: true,
       fillColor,
       // 地形疊圖開啟時降低填色不透明度，讓下層暈渲透出來
