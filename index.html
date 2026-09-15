@@ -715,43 +715,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           onmouseleave="hideChartTooltip()"></canvas>
       </div>
     </div>
-    <div class="sec" id="sec-verify">
-      <div class="sec-h" onclick="toggleSec('verify')">
-        <span>預報校驗</span>
-        <span class="sec-arrow" id="arrow-verify">▸</span>
-      </div>
-      <div class="sec-body" id="body-verify" style="display:none">
-        <div style="display:flex;gap:4px;margin-bottom:5px;align-items:center">
-          <select id="vf-scope" onchange="renderVerify()"
-            style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
-            border:1px solid #1a4060;border-radius:3px">
-            <option value="全臺">全臺</option>
-            <option value="山區">山區</option>
-            <option value="淺山區">淺山區</option>
-            <option value="平地">平地</option>
-            <option value="沿海地區">沿海地區</option>
-          </select>
-          <select id="vf-days" onchange="renderVerify()"
-            style="flex:0 0 auto;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
-            border:1px solid #1a4060;border-radius:3px">
-            <option value="7">近 7 日</option>
-            <option value="14">近 14 日</option>
-            <option value="30">近 30 日</option>
-            <option value="60">近 60 日</option>
-            <option value="1">單日</option>
-          </select>
-          <input id="vf-date" type="date" onchange="renderVerify()"
-            style="font-size:11px;padding:2px;background:#061220;color:#cfe4f5;
-            border:1px solid #1a4060;border-radius:3px">
-        </div>
-        <div id="vf-table" style="font-size:10px"></div>
-        <canvas id="cv-verify" style="width:100%;height:190px;display:block;
-          margin-top:6px;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-verify', event)"
-          onmousemove="showChartTooltip(event,'cv-verify')"
-          onmouseleave="hideChartTooltip()"></canvas>
-      </div>
-    </div>
     <!-- 區塊：逐日雨量（全臺＝各分署；選鄉鎮＝該鄉鎮 15 天） -->
     <div class="sec" id="sec-daily">
       <div class="sec-h" onclick="toggleSec('daily')">
@@ -909,6 +872,43 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <canvas id="cv-temp-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-temp-hr', event)"
           onmousemove="showChartTooltip(event,'cv-temp-hr')" onmouseleave="hideChartTooltip()"></canvas>
+      </div>
+    </div>
+    <div class="sec" id="sec-verify">
+      <div class="sec-h" onclick="toggleSec('verify')">
+        <span>預報校驗</span>
+        <span class="sec-arrow" id="arrow-verify">▸</span>
+      </div>
+      <div class="sec-body" id="body-verify" style="display:none">
+        <div style="display:flex;gap:4px;margin-bottom:5px;align-items:center">
+          <select id="vf-scope" onchange="renderVerify()"
+            style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+            <option value="全臺">全臺</option>
+            <option value="山區">山區</option>
+            <option value="淺山區">淺山區</option>
+            <option value="平地">平地</option>
+            <option value="沿海地區">沿海地區</option>
+          </select>
+          <select id="vf-days" onchange="renderVerify()"
+            style="flex:0 0 auto;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+            <option value="7">近 7 日</option>
+            <option value="14">近 14 日</option>
+            <option value="30">近 30 日</option>
+            <option value="60">近 60 日</option>
+            <option value="1">單日</option>
+          </select>
+          <input id="vf-date" type="date" onchange="renderVerify()"
+            style="font-size:11px;padding:2px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+        </div>
+        <div id="vf-table" style="font-size:10px"></div>
+        <canvas id="cv-verify" style="width:100%;height:190px;display:block;
+          margin-top:6px;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-verify', event)"
+          onmousemove="showChartTooltip(event,'cv-verify')"
+          onmouseleave="hideChartTooltip()"></canvas>
       </div>
     </div>
     <div class="sec" id="sec-blend">
@@ -2981,8 +2981,11 @@ function drawEtrWaterfall(t, canvasId){
   // 逐段的 ETR2（含前期折減）；差值即該段的淨貢獻
   // ★ 逐小時解析度（使用者指定）：過去 24h ~ 未來 72h，每小時一格。
   //   先前用 6 小時段，變化被壓成階梯狀，看不出雨停與折減的時點。
+  // ★ 範圍依畫布寬度自適應：97 格擠在 260px 時每格不到 3px，
+  //   長條幾乎看不見（這就是「瀑布不見了」）。非放大時縮到 -12~+36h。
   const HRS = [];
-  for(let hh = -24; hh <= 72; hh++) HRS.push(hh);
+  const _lo = isZoom ? -24 : -12, _hi = isZoom ? 72 : 36;
+  for(let hh = _lo; hh <= _hi; hh++) HRS.push(hh);
   const vals = HRS.map(hh=>{
     const raw = _etrAtHour(t, hh, qpfField);      // 已回百分比
     if(raw == null || !isFinite(raw)) return null;
@@ -3010,7 +3013,8 @@ function drawEtrWaterfall(t, canvasId){
   const iw = CW - pL - pR, ih = CH - pT - pB;
   const X = i => pL + iw * (i + 0.5) / pts.length;
   const Y = v => pT + ih * (1 - (v - vMin) / Math.max(1e-9, vMax - vMin));
-  const bw = Math.max(3, iw / pts.length * 0.62);
+  // 長條至少 4px 寬才看得見；格距不足時彼此相鄰（0.9 倍）
+  const bw = Math.max(isZoom ? 6 : 4, iw / pts.length * 0.9);
 
   // 格線與縱軸
   ctx.strokeStyle = '#12283c'; ctx.fillStyle = '#5a7a95';
@@ -5362,7 +5366,7 @@ function renderLayer(){
     // ★ 深色海底時縣市界改金黃並加粗，否則深底上的黑線看不見
     const _ds = (typeof _darkSea !== 'undefined' && _darkSea);
     const opts={color: _ds ? '#f0c040' : '#000000',
-                weight: _ds ? 1.6 : 1, fill:false,
+                weight: 1, fill:false,   // ★ 統一 1.0px（使用者指定）
                 opacity: _ds ? 0.95 : 0.7, interactive:false};
     const _c = llOf(feat);                 // 座標快取（同鄉鎮層）
     if(_c.type === 'Polygon'){
@@ -10023,7 +10027,12 @@ function renderEastAsiaLayer(){
   (EAST_ASIA_GEO.provinces || []).forEach(pv=>{
     (pv.rings || []).forEach(r=>{
       if(r.length < 3) return;
-      L.polyline(r.concat([r[0]]), {color:'#000000', weight:1, opacity:0.7,
+      // ★ 深色海底時國外省界／縣界改金黃並加粗，黑線在深底上看不見
+      const _ds2 = (typeof _darkSea !== 'undefined' && _darkSea);
+      L.polyline(r.concat([r[0]]), {
+        color: _ds2 ? '#f0c040' : '#000000',
+        weight: _ds2 ? 1.4 : 1,
+        opacity: _ds2 ? 0.95 : 0.7,
         fill:false, interactive:false}).addTo(eastAsiaLayer);
     });
   });
