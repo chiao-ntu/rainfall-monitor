@@ -700,7 +700,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 
         <!-- ETR2 瀑布圖：逐時段的累積與折減（選鄉鎮後才有意義） -->
         <div style="display:flex;gap:4px;margin:8px 0 5px;align-items:center">
-          <span style="font-size:11px;color:#6bc8e8">ETR2 變化</span>
+          <span style="font-size:11px;color:#6bc8e8">預測達標時間</span>
           <select id="wf-basis" onchange="drawEtrWaterfall(selected)"
             style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
             border:1px solid #1a4060;border-radius:3px">
@@ -2785,18 +2785,22 @@ function _coverageWarn(){
   const layer = {rain:'累積雨量', etr:'ETR2%', risk:'風險指標', warn:'警特報',
                  wind:'風力', temp:'氣溫', wave:'浪高'}[mode] || mode;
   // 找出該模式最後一個有資料的時段，提示到哪一天為止
-  let lastDay = null;
+  // ★ 最後一個有資料的「段索引」→ 日期。段索引以 SEG_EPOCH（今天 00 時）
+  //   為起點，每段 6 小時，故第 k 段的日期是 SEG_EPOCH + k*6 小時。
+  //   先前用 Math.floor(k/4) 當成「第幾天」再加到今天，但段索引本身
+  //   已含今天，等於多算一天，日期永遠是錯的。
+  let lastSeg = null;
   const t0 = TOWNSHIPS.find(t=>Array.isArray(t[MODEL_FIELD[forecastModel]]));
   if(t0){
     const arr = getQpfArr(t0, MODEL_FIELD[forecastModel] || 'qpf_best');
     for(let k = arr.length - 1; k >= 0; k--){
-      if(arr[k] != null && isFinite(arr[k])){ lastDay = Math.floor(k / 4); break; }
+      if(arr[k] != null && isFinite(arr[k])){ lastSeg = k; break; }
     }
   }
   let tail = '';
-  if(lastDay != null){
-    const d = new Date(); d.setHours(0,0,0,0);
-    d.setDate(d.getDate() + lastDay);
+  if(lastSeg != null){
+    // 該段的「結束」時刻才是資料涵蓋的終點
+    const d = new Date(SEG_EPOCH().getTime() + (lastSeg + 1) * 6 * 3600e3 - 1);
     const WD = ['日','一','二','三','四','五','六'];
     tail = `，資料到 ${d.getMonth()+1}月${d.getDate()}日（週${WD[d.getDay()]}）`;
   }
@@ -3092,7 +3096,7 @@ function drawEtrWaterfall(t, canvasId){
 
   if(isZoom){
     ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
-    ctx.fillText(`${t.county}${t.township} ETR2 變化`
+    ctx.fillText(`${t.county}${t.township} 預測達標時間`
       + `（${basis==='pct'?'%':'mm'}）${_winSrcLabel()}`, CW/2, 26);
   }
 }
@@ -4845,27 +4849,33 @@ function _threeHourAt(t, h, m){
 
 function _etrAtHour(t, h, qpfField){
   if(!t || !(t.alert_val > 0)) return null;
-  const seg = _nowSeg() + Math.floor((h - 1) / 6);
-  // 該段之前的完整段累積 + 本段內到第 h 小時為止的逐時累積
-  const arr = getQpfArr(t, qpfField || (MODEL_FIELD[forecastModel] || 'qpf_best'));
-  if(!Array.isArray(arr)) return null;
-  const segDay = Math.floor(seg / 4);
-  let todayQpf = 0;
-  for(let k = segDay * 4; k < seg; k++) todayQpf += (arr[k] || 0);
-  // 本段內累積
+  // ★ 逐小時累加「今天 00 時到第 h 小時」的雨量。
+  //   先前只累加「當前 6h 段內」的小時，跨段時值不會變，
+  //   於是瀑布圖每 6 小時才跳一次、折線呈階梯狀。
   const now = new Date();
-  const startH = seg * 6;
-  for(let hh = 1; hh <= h; hh++){
-    const idx = now.getHours() + hh;
-    if(idx < startH || idx >= startH + 6) continue;
-    const v = _hourlyAt(t, hh);
-    if(v) todayQpf += v.v;
+  const nowH = now.getHours();          // 今天已過的小時數
+  const tgtH = nowH + h;                // 目標時刻距今天 00 時的小時數
+  let todayQpf = 0;
+  if(tgtH >= 0){
+    // 今天 00 時 ~ 現在：已成觀測，由 daily_rain[0] 涵蓋，不重複累加
+    // 現在 ~ 目標時刻：逐時預報累加
+    const from = Math.max(1, 1);
+    for(let hh = from; hh <= h; hh++){
+      const v = _hourlyAt(t, hh);
+      if(v && v.v != null) todayQpf += v.v;
+    }
+    // 目標在過去（h<0）：從 daily_rain[0] 扣掉尚未發生的時段
+    if(h < 0){
+      for(let hh = h + 1; hh <= 0; hh++){
+        const v = _hourlyAt(t, hh);
+        if(v && v.v != null) todayQpf -= v.v;
+      }
+    }
   }
-  // 前期折減：沿用既有的逐日加權
   const dailyObs = t.daily_rain || [];
   const W = (typeof ETR2_WEIGHTS !== 'undefined')
     ? ETR2_WEIGHTS : [1, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1];
-  let etr = W[0] * ((dailyObs[0] || 0) + todayQpf);
+  let etr = W[0] * Math.max(0, (dailyObs[0] || 0) + todayQpf);
   for(let d = 1; d < W.length; d++) etr += W[d] * (dailyObs[d] || 0);
   const den = _etrDen(t);
   return (den > 0) ? Math.round(etr / den * 1000) / 10 : null;
@@ -5221,14 +5231,14 @@ function renderLayer(){
       // ★ 邊框改深灰：原本用 fillColor（與填色同色）等於沒有邊界，
       //   飽和色塊相鄰時完全分不出鄉鎮。選取時仍為黃色高亮。
       // 深灰但不過重：#2a2a2a 太黑會蓋過色塊，改中灰並降低不透明度
-      // ★ 深色海底時行政區界改金黃（深底上的深灰線幾乎看不見）
+      // ★ 深色海底時鄉鎮界維持黑色（使用者指定）；金黃留給國界／省界
     color: isSel ? '#ffff44'
-         : (typeof _darkSea !== 'undefined' && _darkSea) ? '#d8a838'
+         : (typeof _darkSea !== 'undefined' && _darkSea) ? '#000000'
          : (_terrainOn ? '#3a3a3a' : '#5a5a5a'),
       // ★ 渲染模式下仍畫鄉鎮界（先前 weight 0 等於整個消失）；
       //   界線是判讀行政責任範圍的依據，不該因為換呈現方式就不見。
       weight: isSel ? 1.6
-        : (typeof _darkSea !== 'undefined' && _darkSea) ? 0.7
+        : (typeof _darkSea !== 'undefined' && _darkSea) ? 0.45
         : (_hideFill ? 0.35 : 0.4),
       opacity: isSel ? 1
          : (typeof _darkSea !== 'undefined' && _darkSea) ? 0.85 : 0.45,
@@ -6990,6 +7000,16 @@ function onH1DayChange(){
 // −/＋：逐格切換上一個／下一個小時
 // 自訂範圍滾輪的 −/＋：逐段切換，並維持起 ≤ 迄
 // ★ 地圖上的時段切換：依目前所在的時間視窗類型往前／往後一格。
+// ★ 鍵盤左右鍵切換時段（焦點不在輸入框時才生效）
+document.addEventListener('keydown', ev=>{
+  if(ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+  const el = document.activeElement;
+  if(el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
+  if(ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  ev.preventDefault();
+  try{ stepWin(ev.key === 'ArrowRight' ? 1 : -1); }catch(e){}
+});
+
 function stepWin(delta){
   if(_hourIdx != null){ stepHour(delta); return; }
   if(winKey === 'custom'){
@@ -11507,7 +11527,7 @@ function toggleChartZoom(canvasId, ev){
     'cv-wind-hr-est': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風推估）` : '',
     'cv-stnrank': selected ? `${selected.county}${selected.township} 測站雨量排名` : '',
     'cv-verify': '預報校驗 CSI 趨勢',
-    'cv-waterfall': 'ETR2 變化（瀑布圖）',
+    'cv-waterfall': '預測達標時間',
     'cv-countytowns': (_pickedCounty || '') + ' 各鄉鎮',
     'cv-elevrain': '海拔與雨量分布（地形雨效應）',
     'cv-etrphase': '雨量與地形分佈',
