@@ -1851,6 +1851,14 @@ def fetch_openmeteo_model(townships, model='best_match'):
         'ecmwf_ifs025':  'ECMWF IFS 0.25°',      # 舊版：25km、3h、延遲2小時
         'gfs_seamless':  'NOAA GFS',
         'jma_seamless':  'JMA（日本氣象廳）',
+        # ── 僅校驗、不進融合 ──
+        'icon_seamless':        'DWD ICON（僅校驗）',
+        'kma_seamless':         'KMA 韓國（僅校驗）',
+        'gem_seamless':         'GEM 加拿大（僅校驗）',
+        'ukmo_seamless':        'UK Met Office（僅校驗）',
+        'meteofrance_seamless': 'Météo-France（僅校驗）',
+        'cma_grapes_global':    'CMA GRAPES（僅校驗）',
+        'bom_access_global':    'BOM ACCESS（僅校驗）',
         # ── AI 模式 ──
         'ecmwf_aifs025_single': 'ECMWF AIFS（AI）',
         'gfs_graphcast025':     'GFS GraphCast（AI）',
@@ -1937,11 +1945,25 @@ def fetch_openmeteo_model(townships, model='best_match'):
     return result, result_max_hourly, result_hourly
 
 # ★ 要抓的模式清單。物理與 AI 分開，前端也依此分組呈現。
-# ★ ICON 已移除：其偏差比長期偏高（實測山區 3.16、平地 1.88），
-#   納入融合加權會汙染結果。保留代號但不抓取。
+# ── 模式分三類 ────────────────────────────────────────
+# OM_PHYSICAL / OM_AI：進入 FORMOSA 融合加權的成員。
+# OM_VERIFY_ONLY：★ 只抓取與校驗、不進融合。
+#   用意：新模式在還沒有足夠校驗樣本前，貿然納入加權可能稀釋準確度；
+#   先讓它跑一段時間、累積 POD/FAR/CSI，確認表現再決定是否升級為融合成員。
+#   ICON 也放這裡 —— 它偏差比長期偏高（實測山區 3.16），
+#   先前直接移除，改為保留觀察，資料仍可查但不影響融合結果。
 OM_PHYSICAL = ['best_match', 'ecmwf_ifs', 'gfs_seamless', 'jma_seamless']
 OM_AI       = ['ecmwf_aifs025_single', 'gfs_graphcast025']
-OM_MODELS   = OM_PHYSICAL + OM_AI
+OM_VERIFY_ONLY = [
+    'icon_seamless',          # DWD ICON（德國）
+    'kma_seamless',           # KMA（韓國）——東亞表現通常不錯
+    'gem_seamless',           # GEM（加拿大）
+    'ukmo_seamless',          # UK Met Office
+    'meteofrance_seamless',   # Météo-France ARPEGE
+    'cma_grapes_global',      # CMA GRAPES（中國）
+    'bom_access_global',      # BOM ACCESS（澳洲）
+]
+OM_MODELS   = OM_PHYSICAL + OM_AI + OM_VERIFY_ONLY
 
 
 def fetch_openmeteo(townships):
@@ -2405,9 +2427,14 @@ def fetch_models_yesterday(townships):
     lngs = [t.get('lng', 0) for t in townships]
     # ★ 含 AI 模式：AIFS 與 GraphCast 也要追蹤誤差，
     #   它們對極端降雨傾向低估，偏差比會明顯 >1，正好由校正處理。
+    # ★ 含「僅校驗」模式：它們不進融合，但要累積 POD/FAR/CSI 供評估
     MODELS = {'best': 'best_match', 'ecmwf': 'ecmwf_ifs',
               'gfs': 'gfs_seamless', 'jma': 'jma_seamless',
-              'aifs': 'ecmwf_aifs025_single', 'graphcast': 'gfs_graphcast025'}
+              'aifs': 'ecmwf_aifs025_single', 'graphcast': 'gfs_graphcast025',
+              'icon': 'icon_seamless', 'kma': 'kma_seamless',
+              'gem': 'gem_seamless', 'ukmo': 'ukmo_seamless',
+              'mf': 'meteofrance_seamless', 'cma': 'cma_grapes_global',
+              'bom': 'bom_access_global'}
     out = {}
     for tag, mid in MODELS.items():
         params = {
@@ -2602,7 +2629,9 @@ def update_verify(out_towns, zones, now_tpe):
             vf = {'days': {}}
     vf.setdefault('days', {})
 
-    MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast')
+    # ★ 校驗涵蓋所有模式（含僅校驗者）；融合加權另在 update_model_skill 處理
+    MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
+              'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom')
     day = {}
     n_used = 0
     for t in out_towns:
@@ -2673,6 +2702,8 @@ def update_model_skill(out_towns, zones, now_tpe):
             skill = {'days': {}}
     skill.setdefault('days', {})
 
+    # ★ 只含 FORMOSA 的融合成員：僅校驗模式不得影響動態加權，
+    #   否則等於偷偷混進系統（與使用者要求相反）。
     MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast')
     day = {}
     n_used = 0

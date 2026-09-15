@@ -571,90 +571,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
       <div class="sec-body" id="district-summary" style="display:block"></div>
     </div>
-
-    <div class="sec" id="sec-all-daily" style="display:block">
-      <div class="sec-h" onclick="toggleSec('all-daily')">
-        <span>逐日雨量</span><span class="sec-arrow" id="arrow-all-daily">▾</span>
-      </div>
-      <div class="sec-body" id="body-all-daily" style="display:block">
-        <canvas id="cv-all-daily" width="280" height="130"
-          style="width:100%;height:130px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-all-daily', event)"
-          onmousemove="showChartTooltip(event,'cv-all-daily')"
-          onmouseleave="hideChartTooltip()"></canvas>
-      </div>
-    </div>
-
-    <div class="sec" id="sec-all-hyeto" style="display:block">
-      <div class="sec-h" onclick="toggleSec('all-hyeto')">
-        <span>組體雨量圖</span><span class="sec-arrow" id="arrow-all-hyeto">▾</span>
-      </div>
-      <div class="sec-body" id="body-all-hyeto" style="display:block">
-        <canvas id="cv-all-hyeto" width="280" height="130"
-          style="width:100%;height:130px;display:block;background:#040c14;border-radius:3px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-all-hyeto', event)"
-          onmousemove="showChartTooltip(event,'cv-all-hyeto')"
-          onmouseleave="hideChartTooltip()"></canvas>
-      </div>
-    </div>
-
-    <!-- 區塊：縣市內各鄉鎮（選縣市後顯示） -->
-    <div class="sec" id="sec-countytowns" style="display:none">
-      <div class="sec-h" onclick="toggleSec('countytowns')">
-        <span id="ct-title">縣市內各鄉鎮</span>
-        <span class="sec-arrow" id="arrow-countytowns">▸</span>
-      </div>
-      <div class="sec-body" id="body-countytowns" style="display:none">
-        <div style="display:flex;gap:4px;margin-bottom:5px;align-items:center">
-          <select id="ct-metric" onchange="drawCountyTowns()"
-            style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
-            border:1px solid #1a4060;border-radius:3px">
-            <option value="qpf_rain">預測累積雨量</option>
-            <option value="obs_rain">觀測累積雨量</option>
-            <option value="qpf_etr">預估 ETR2%</option>
-            <option value="obs_etr">觀測 ETR2%</option>
-          </select>
-          <input id="ct-from" type="number" min="1" value="1" onchange="drawCountyTowns()"
-            style="width:44px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
-            border:1px solid #1a4060;border-radius:3px">
-          <span style="font-size:11px;color:#5a7a95">–</span>
-          <input id="ct-to" type="number" min="1" value="20" onchange="drawCountyTowns()"
-            style="width:52px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
-            border:1px solid #1a4060;border-radius:3px">
-          <span id="ct-total" style="font-size:10px;color:#5a7a95"></span>
-        </div>
-        <canvas id="cv-countytowns" style="width:100%;height:280px;display:block;
-          background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-countytowns', event)"></canvas>
-      </div>
-    </div>
-
-    <!-- 區塊：雨量與地形分佈 -->
-    <div class="sec" id="sec-etrphase" style="display:none">
-      <div class="sec-h" onclick="toggleSec('etrphase')">
-        <span>雨量與地形分佈</span><span class="sec-arrow" id="arrow-etrphase">▸</span>
-      </div>
-      <div class="sec-body" id="body-etrphase" style="display:none">
-        <canvas id="cv-etrphase" style="width:100%;height:200px;display:block;
-          background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-etrphase', event)"></canvas>
-      </div>
-    </div>
-
-    <!-- 區塊：地形與雨量關係（散佈圖） -->
-    <div class="sec" id="sec-elevrain" style="display:none">
-      <div class="sec-h" onclick="toggleSec('elevrain')">
-        <span>海拔與雨量</span><span class="sec-arrow" id="arrow-elevrain">▸</span>
-      </div>
-      <div class="sec-body" id="body-elevrain" style="display:none">
-        <canvas id="cv-elevrain" style="width:100%;height:200px;display:block;
-          background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-elevrain', event)"></canvas>
-      </div>
-    </div>
-
-    <!-- 區塊：全臺排行（前 20） -->
-    <div class="sec" id="sec-rank" style="display:none">
+    <div class="sec" id="sec-rank">
       <div class="sec-h" onclick="toggleSec('rank')">
         <span id="rank-title">雨量排行</span><span class="sec-arrow" id="arrow-rank">▸</span>
       </div>
@@ -700,82 +617,56 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           min-height:13px"></div>
       </div>
     </div>
-
-    <!-- 區塊：現況觀測（預設展開） -->
-    <div class="sec" id="sec-obs" style="display:none">
-      <div class="sec-h" onclick="toggleSec('obs')">
-        <span>現況觀測</span><span class="sec-arrow" id="arrow-obs">▾</span>
+    <div class="sec" id="sec-countytowns">
+      <div class="sec-h" onclick="toggleSec('countytowns')">
+        <span id="ct-title">縣市內各鄉鎮</span>
+        <span class="sec-arrow" id="arrow-countytowns">▸</span>
       </div>
-      <div class="sec-body" id="body-obs"></div>
-    </div>
-
-    <!-- 區塊：QPF預測（預設展開） -->
-    <div class="sec" id="sec-qpf" style="display:none">
-      <div class="sec-h" onclick="toggleSec('qpf')">
-        <span>QPF 預測</span><span class="sec-arrow" id="arrow-qpf">▾</span>
-      </div>
-      <div class="sec-body" id="body-qpf"></div>
-    </div>
-
-    <!-- 區塊：逐日趨勢（預設收合） -->
-    <div class="sec" id="sec-chart" style="display:none">
-      <div class="sec-h" onclick="toggleSec('chart')">
-        <span>逐日雨量（15天）</span><span class="sec-arrow" id="arrow-chart">▸</span>
-      </div>
-      <div class="sec-body" id="body-chart" style="display:none">
-        <canvas id="cv" style="width:100%;height:90px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv', event)"
-          onmousemove="showChartTooltip(event,'cv')" onmouseleave="hideChartTooltip()"></canvas>
-      </div>
-    </div>
-
-    <!-- 區塊：6h分段（預設收合） -->
-    <div class="sec" id="sec-seg" style="display:none">
-      <div class="sec-h" onclick="toggleSec('seg')">
-        <span>6小時分段（前48h）</span><span class="sec-arrow" id="arrow-seg">▸</span>
-      </div>
-      <div class="sec-body" id="seg-rows" style="display:none"></div>
-    </div>
-
-    <!-- 區塊：行政區組體雨量圖（緊接在6h分段之後，預設收合） -->
-    <div class="sec" id="sec-hyeto" style="display:none">
-      <div class="sec-h" onclick="toggleSec('hyeto')">
-        <span>行政區組體雨量圖（過去2天+未來2天）</span><span class="sec-arrow" id="arrow-hyeto">▸</span>
-      </div>
-      <div class="sec-body" id="body-hyeto" style="display:none">
-        <canvas id="cv-district-hyeto" width="260" height="100" style="width:100%;height:100px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-district-hyeto', event)"
-          onmousemove="showChartTooltip(event,'cv-district-hyeto')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="display:flex;gap:8px;margin-top:4px;font-size:9px;color:#5a8aaa;flex-wrap:wrap">
-          <span><span style="display:inline-block;width:8px;height:8px;background:#4a7ab0;margin-right:3px"></span>觀測(日)</span>
-          <span><span style="display:inline-block;width:8px;height:8px;background:#6ad8f0;margin-right:3px"></span>QPF預測(6h)</span>
-          <span><span style="display:inline-block;width:14px;height:2px;background:#ff9933;margin-right:3px;vertical-align:middle"></span>ETR2%</span>
+      <div class="sec-body" id="body-countytowns" style="display:none">
+        <div style="display:flex;gap:4px;margin-bottom:5px;align-items:center">
+          <select id="ct-metric" onchange="drawCountyTowns()"
+            style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+            <option value="qpf_rain">預測累積雨量</option>
+            <option value="obs_rain">觀測累積雨量</option>
+            <option value="qpf_etr">預估 ETR2%</option>
+            <option value="obs_etr">觀測 ETR2%</option>
+          </select>
+          <input id="ct-from" type="number" min="1" value="1" onchange="drawCountyTowns()"
+            style="width:44px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+          <span style="font-size:11px;color:#5a7a95">–</span>
+          <input id="ct-to" type="number" min="1" value="20" onchange="drawCountyTowns()"
+            style="width:52px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+          <span id="ct-total" style="font-size:10px;color:#5a7a95"></span>
         </div>
-      </div>
-    </div>
-
-    <!-- 區塊：測站雨量排名（Cleveland dot plot） -->
-    <div class="sec" id="sec-stnrank" style="display:none">
-      <div class="sec-h" onclick="toggleSec('stnrank')">
-        <span>測站雨量排名</span><span class="sec-arrow" id="arrow-stnrank">▸</span>
-      </div>
-      <div class="sec-body" id="body-stnrank" style="display:none">
-        <canvas id="cv-stnrank" style="width:100%;height:220px;display:block;
+        <canvas id="cv-countytowns" style="width:100%;height:280px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-stnrank', event)"></canvas>
+          onclick="toggleChartZoom('cv-countytowns', event)"></canvas>
       </div>
     </div>
-
-    <!-- 區塊：測站清單（預設收合） -->
-    <div class="sec" id="sec-stations" style="display:none">
-      <div class="sec-h" onclick="toggleSec('stations')">
-        <span>觀測站清單</span><span class="sec-arrow" id="arrow-stations">▸</span>
+    <div class="sec" id="sec-etrphase">
+      <div class="sec-h" onclick="toggleSec('etrphase')">
+        <span>雨量與地形分佈</span><span class="sec-arrow" id="arrow-etrphase">▸</span>
       </div>
-      <div class="sec-body" id="body-stations" style="display:none"></div>
+      <div class="sec-body" id="body-etrphase" style="display:none">
+        <canvas id="cv-etrphase" style="width:100%;height:200px;display:block;
+          background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-etrphase', event)"></canvas>
+      </div>
     </div>
-
-    <!-- 區塊：警戒餘裕（測站別） -->
-    <div class="sec" id="sec-margin" style="display:none">
+    <div class="sec" id="sec-elevrain">
+      <div class="sec-h" onclick="toggleSec('elevrain')">
+        <span>海拔與雨量</span><span class="sec-arrow" id="arrow-elevrain">▸</span>
+      </div>
+      <div class="sec-body" id="body-elevrain" style="display:none">
+        <canvas id="cv-elevrain" style="width:100%;height:200px;display:block;
+          background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-elevrain', event)"></canvas>
+      </div>
+    </div>
+    <div class="sec" id="sec-margin">
       <div class="sec-h" onclick="toggleSec('margin')">
         <span>警戒餘裕</span><span class="sec-arrow" id="arrow-margin">▸</span>
       </div>
@@ -793,93 +684,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           onclick="toggleChartZoom('cv-margin', event)"></canvas>
       </div>
     </div>
-
-    <!-- 區塊：風險指標（預設展開） -->
-    <div class="sec" id="sec-risk" style="display:none">
-      <div class="sec-h" onclick="toggleSec('risk')">
-        <span>風險指標</span><span class="sec-arrow" id="arrow-risk">▾</span>
-      </div>
-      <div class="sec-body" id="body-risk"></div>
-    </div>
-
-    <!-- 區塊：逐日風力預測（預設收合） -->
-    <div class="sec" id="sec-windday" style="display:none">
-      <div class="sec-h" onclick="toggleSec('windday')">
-        <span>逐日風力預測（7天）</span><span class="sec-arrow" id="arrow-windday">▸</span>
-      </div>
-      <div class="sec-body" id="body-windday" style="display:none">
-        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">平均風</div>
-        <canvas id="cv-wind-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-day', event)"
-          onmousemove="showChartTooltip(event,'cv-wind-day')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風</div>
-        <canvas id="cv-wind-day-gust" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-day-gust', event)"
-          onmousemove="showChartTooltip(event,'cv-wind-day-gust')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風推估</div>
-        <canvas id="cv-wind-day-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-day-est', event)"
-          onmousemove="showChartTooltip(event,'cv-wind-day-est')" onmouseleave="hideChartTooltip()"></canvas>
-      </div>
-    </div>
-
-    <!-- 區塊：逐時風力預測（預設收合） -->
-    <div class="sec" id="sec-windhr" style="display:none">
-      <div class="sec-h" onclick="toggleSec('windhr')">
-        <span>逐時風力預測（3天）</span><span class="sec-arrow" id="arrow-windhr">▸</span>
-      </div>
-      <div class="sec-body" id="body-windhr" style="display:none">
-        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">平均風</div>
-        <canvas id="cv-wind-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-hr', event)"
-          onmousemove="showChartTooltip(event,'cv-wind-hr')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風</div>
-        <canvas id="cv-wind-hr-gust" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-hr-gust', event)"
-          onmousemove="showChartTooltip(event,'cv-wind-hr-gust')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風推估</div>
-        <canvas id="cv-wind-hr-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wind-hr-est', event)"
-          onmousemove="showChartTooltip(event,'cv-wind-hr-est')" onmouseleave="hideChartTooltip()"></canvas>
-      </div>
-    </div>
-
-    <!-- 區塊：浪高預測（僅沿海鄉鎮，預設收合） -->
-    <div class="sec" id="sec-wave" style="display:none">
-      <div class="sec-h" onclick="toggleSec('wave')">
-        <span>浪高預測</span><span class="sec-arrow" id="arrow-wave">▸</span>
-      </div>
-      <div class="sec-body" id="body-wave" style="display:none">
-        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">逐日（各日最大）</div>
-        <canvas id="cv-wave-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wave-day', event)"
-          onmousemove="showChartTooltip(event,'cv-wave-day')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">逐時</div>
-        <canvas id="cv-wave-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-wave-hr', event)"
-          onmousemove="showChartTooltip(event,'cv-wave-hr')" onmouseleave="hideChartTooltip()"></canvas>
-      </div>
-    </div>
-
-    <!-- 區塊：氣溫預測（預設收合） -->
-    <div class="sec" id="sec-temp" style="display:none">
-      <div class="sec-h" onclick="toggleSec('temp')">
-        <span>氣溫預測</span><span class="sec-arrow" id="arrow-temp">▸</span>
-      </div>
-      <div class="sec-body" id="body-temp" style="display:none">
-        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">逐日（各日最高/最低）</div>
-        <canvas id="cv-temp-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-temp-day', event)"
-          onmousemove="showChartTooltip(event,'cv-temp-day')" onmouseleave="hideChartTooltip()"></canvas>
-        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">逐時</div>
-        <canvas id="cv-temp-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-temp-hr', event)"
-          onmousemove="showChartTooltip(event,'cv-temp-hr')" onmouseleave="hideChartTooltip()"></canvas>
-      </div>
-    </div>
-
-    <!-- 區塊：預報校驗（POD/FAR/CSI） -->
-    <div class="sec" id="sec-verify" style="display:none">
+    <div class="sec" id="sec-verify">
       <div class="sec-h" onclick="toggleSec('verify')">
         <span>預報校驗</span>
         <span class="sec-arrow" id="arrow-verify">▸</span>
@@ -916,9 +721,164 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           onmouseleave="hideChartTooltip()"></canvas>
       </div>
     </div>
-
-    <!-- 區塊：融合校正明細（僅融合模式顯示） -->
-    <div class="sec" id="sec-blend" style="display:none">
+    <div class="sec" id="sec-all-daily" style="display:block">
+      <div class="sec-h" onclick="toggleSec('all-daily')">
+        <span>逐日雨量</span><span class="sec-arrow" id="arrow-all-daily">▾</span>
+      </div>
+      <div class="sec-body" id="body-all-daily" style="display:block">
+        <canvas id="cv-all-daily" width="280" height="130"
+          style="width:100%;height:130px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-all-daily', event)"
+          onmousemove="showChartTooltip(event,'cv-all-daily')"
+          onmouseleave="hideChartTooltip()"></canvas>
+      </div>
+    </div>
+    <div class="sec" id="sec-chart">
+      <div class="sec-h" onclick="toggleSec('chart')">
+        <span>逐日雨量（15天）</span><span class="sec-arrow" id="arrow-chart">▸</span>
+      </div>
+      <div class="sec-body" id="body-chart" style="display:none">
+        <canvas id="cv" style="width:100%;height:90px;display:block;background:#060f18;border-radius:3px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv', event)"
+          onmousemove="showChartTooltip(event,'cv')" onmouseleave="hideChartTooltip()"></canvas>
+      </div>
+    </div>
+    <div class="sec" id="sec-seg">
+      <div class="sec-h" onclick="toggleSec('seg')">
+        <span>6小時分段（前48h）</span><span class="sec-arrow" id="arrow-seg">▸</span>
+      </div>
+      <div class="sec-body" id="seg-rows" style="display:none"></div>
+    </div>
+    <div class="sec" id="sec-all-hyeto" style="display:block">
+      <div class="sec-h" onclick="toggleSec('all-hyeto')">
+        <span>組體雨量圖</span><span class="sec-arrow" id="arrow-all-hyeto">▾</span>
+      </div>
+      <div class="sec-body" id="body-all-hyeto" style="display:block">
+        <canvas id="cv-all-hyeto" width="280" height="130"
+          style="width:100%;height:130px;display:block;background:#040c14;border-radius:3px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-all-hyeto', event)"
+          onmousemove="showChartTooltip(event,'cv-all-hyeto')"
+          onmouseleave="hideChartTooltip()"></canvas>
+      </div>
+    </div>
+    <div class="sec" id="sec-hyeto">
+      <div class="sec-h" onclick="toggleSec('hyeto')">
+        <span>行政區組體雨量圖（過去2天+未來2天）</span><span class="sec-arrow" id="arrow-hyeto">▸</span>
+      </div>
+      <div class="sec-body" id="body-hyeto" style="display:none">
+        <canvas id="cv-district-hyeto" width="260" height="100" style="width:100%;height:100px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-district-hyeto', event)"
+          onmousemove="showChartTooltip(event,'cv-district-hyeto')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="display:flex;gap:8px;margin-top:4px;font-size:9px;color:#5a8aaa;flex-wrap:wrap">
+          <span><span style="display:inline-block;width:8px;height:8px;background:#4a7ab0;margin-right:3px"></span>觀測(日)</span>
+          <span><span style="display:inline-block;width:8px;height:8px;background:#6ad8f0;margin-right:3px"></span>QPF預測(6h)</span>
+          <span><span style="display:inline-block;width:14px;height:2px;background:#ff9933;margin-right:3px;vertical-align:middle"></span>ETR2%</span>
+        </div>
+      </div>
+    </div>
+    <div class="sec" id="sec-obs">
+      <div class="sec-h" onclick="toggleSec('obs')">
+        <span>現況觀測</span><span class="sec-arrow" id="arrow-obs">▾</span>
+      </div>
+      <div class="sec-body" id="body-obs"></div>
+    </div>
+    <div class="sec" id="sec-qpf">
+      <div class="sec-h" onclick="toggleSec('qpf')">
+        <span>QPF 預測</span><span class="sec-arrow" id="arrow-qpf">▾</span>
+      </div>
+      <div class="sec-body" id="body-qpf"></div>
+    </div>
+    <div class="sec" id="sec-stnrank">
+      <div class="sec-h" onclick="toggleSec('stnrank')">
+        <span>測站雨量排名</span><span class="sec-arrow" id="arrow-stnrank">▸</span>
+      </div>
+      <div class="sec-body" id="body-stnrank" style="display:none">
+        <canvas id="cv-stnrank" style="width:100%;height:220px;display:block;
+          background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-stnrank', event)"></canvas>
+      </div>
+    </div>
+    <div class="sec" id="sec-stations">
+      <div class="sec-h" onclick="toggleSec('stations')">
+        <span>觀測站清單</span><span class="sec-arrow" id="arrow-stations">▸</span>
+      </div>
+      <div class="sec-body" id="body-stations" style="display:none"></div>
+    </div>
+    <div class="sec" id="sec-risk">
+      <div class="sec-h" onclick="toggleSec('risk')">
+        <span>風險指標</span><span class="sec-arrow" id="arrow-risk">▾</span>
+      </div>
+      <div class="sec-body" id="body-risk"></div>
+    </div>
+    <div class="sec" id="sec-windday">
+      <div class="sec-h" onclick="toggleSec('windday')">
+        <span>逐日風力預測（7天）</span><span class="sec-arrow" id="arrow-windday">▸</span>
+      </div>
+      <div class="sec-body" id="body-windday" style="display:none">
+        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">平均風</div>
+        <canvas id="cv-wind-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-day', event)"
+          onmousemove="showChartTooltip(event,'cv-wind-day')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風</div>
+        <canvas id="cv-wind-day-gust" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-day-gust', event)"
+          onmousemove="showChartTooltip(event,'cv-wind-day-gust')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風推估</div>
+        <canvas id="cv-wind-day-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-day-est', event)"
+          onmousemove="showChartTooltip(event,'cv-wind-day-est')" onmouseleave="hideChartTooltip()"></canvas>
+      </div>
+    </div>
+    <div class="sec" id="sec-windhr">
+      <div class="sec-h" onclick="toggleSec('windhr')">
+        <span>逐時風力預測（3天）</span><span class="sec-arrow" id="arrow-windhr">▸</span>
+      </div>
+      <div class="sec-body" id="body-windhr" style="display:none">
+        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">平均風</div>
+        <canvas id="cv-wind-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-hr', event)"
+          onmousemove="showChartTooltip(event,'cv-wind-hr')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風</div>
+        <canvas id="cv-wind-hr-gust" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-hr-gust', event)"
+          onmousemove="showChartTooltip(event,'cv-wind-hr-gust')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">陣風推估</div>
+        <canvas id="cv-wind-hr-est" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wind-hr-est', event)"
+          onmousemove="showChartTooltip(event,'cv-wind-hr-est')" onmouseleave="hideChartTooltip()"></canvas>
+      </div>
+    </div>
+    <div class="sec" id="sec-wave">
+      <div class="sec-h" onclick="toggleSec('wave')">
+        <span>浪高預測</span><span class="sec-arrow" id="arrow-wave">▸</span>
+      </div>
+      <div class="sec-body" id="body-wave" style="display:none">
+        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">逐日（各日最大）</div>
+        <canvas id="cv-wave-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wave-day', event)"
+          onmousemove="showChartTooltip(event,'cv-wave-day')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">逐時</div>
+        <canvas id="cv-wave-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-wave-hr', event)"
+          onmousemove="showChartTooltip(event,'cv-wave-hr')" onmouseleave="hideChartTooltip()"></canvas>
+      </div>
+    </div>
+    <div class="sec" id="sec-temp">
+      <div class="sec-h" onclick="toggleSec('temp')">
+        <span>氣溫預測</span><span class="sec-arrow" id="arrow-temp">▸</span>
+      </div>
+      <div class="sec-body" id="body-temp" style="display:none">
+        <div style="font-size:10px;color:#9fc8e8;margin:2px 0 1px">逐日（各日最高/最低）</div>
+        <canvas id="cv-temp-day" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-temp-day', event)"
+          onmousemove="showChartTooltip(event,'cv-temp-day')" onmouseleave="hideChartTooltip()"></canvas>
+        <div style="font-size:10px;color:#9fc8e8;margin:6px 0 1px">逐時</div>
+        <canvas id="cv-temp-hr" style="width:100%;height:150px;display:block;background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-temp-hr', event)"
+          onmousemove="showChartTooltip(event,'cv-temp-hr')" onmouseleave="hideChartTooltip()"></canvas>
+      </div>
+    </div>
+    <div class="sec" id="sec-blend">
       <div class="sec-h" onclick="toggleSec('blend')">
         <span>融合校正明細</span><span class="sec-arrow" id="arrow-blend">▸</span>
       </div>
@@ -3218,8 +3178,16 @@ function drawCountyTowns(canvasId){
 //  ★ CSI 不納入「正確無雨」—— 臺灣多數日子多數鄉鎮沒雨，
 //    納入會把分數灌到 0.9 以上，看不出模式差異。
 // ══════════════════════════════════════════════════════════
-const VF_MODELS = ['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast'];
-const VF_NAME = {best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
+// ★ 校驗涵蓋所有模式，含「僅校驗、不進融合」者 —— 讓新模式先累積
+//   POD/FAR/CSI，確認表現再決定是否納入 FORMOSA。
+const VF_MODELS = ['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
+                   'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom'];
+// 哪些已是融合成員（表格中標示，便於分辨）
+const VF_IN_BLEND = new Set(['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast']);
+const VF_NAME = {icon:'DWD ICON', kma:'KMA 韓國', gem:'GEM 加拿大',
+                 ukmo:'UK Met Office', mf:'Météo-France',
+                 cma:'CMA GRAPES', bom:'BOM ACCESS',
+                 best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
                  jma:'JMA', aifs:'EC-AIFS', graphcast:'GC-NCEP'};
 function _vfScores(c){
   const h = c.hit || 0, m = c.miss || 0, f = c['false'] || 0;
@@ -3283,7 +3251,9 @@ function renderVerify(){
         <th style="text-align:right">CSI</th><th style="text-align:right">偏差比</th>
         <th style="text-align:right">樣本</th></tr>
       ${rows.map(r=>`<tr style="border-top:1px solid #12283c">
-        <td style="padding:2px 3px;color:#cfe4f5">${VF_NAME[r.m] || r.m}</td>
+        <td style="padding:2px 3px;color:#cfe4f5">${VF_NAME[r.m] || r.m}${
+          VF_IN_BLEND.has(r.m) ? '<span style="color:#f0c878;font-size:9px"> ◆</span>' : ''
+        }</td>
         <td style="text-align:right;color:${col(r.s.POD)}">${fmt(r.s.POD)}</td>
         <td style="text-align:right;color:${col(r.s.FAR == null ? null : 1 - r.s.FAR)}">${fmt(r.s.FAR)}</td>
         <td style="text-align:right;color:${col(r.s.CSI)};font-weight:700">${fmt(r.s.CSI)}</td>
@@ -3291,7 +3261,8 @@ function renderVerify(){
         <td style="text-align:right;color:#5a7a95">${r.s.n}</td></tr>`).join('')}
     </table>
     <div style="color:#5a7a95;font-size:9px;margin-top:3px">
-      POD 命中率（越高越好）　FAR 誤報率（越低越好）　CSI 綜合　偏差比 &gt;1 報太多</div>`;
+      POD 命中率（越高越好）　FAR 誤報率（越低越好）　CSI 綜合　偏差比 &gt;1 報太多<br>
+      ◆ 已納入 FORMOSA 融合；無標記者僅校驗、不影響預報結果</div>`;
   try{ drawVerifyChart(); }catch(e){ console.warn('校驗圖失敗', e); }
 }
 // 時間序列圖：各模式的 CSI 隨日期變化
@@ -5074,6 +5045,35 @@ function toggleSec(name){
   }
 }
 
+// ★ 面板恆顯示：未選鄉鎮時在面板內標示提示，而非整個隱藏。
+//   先前依層級隱藏，使用者會找不到某張圖跑去哪；位置固定才好找。
+const TOWN_ONLY_SECS = ['obs','qpf','chart','seg','hyeto','stnrank',
+                        'stations','risk','windday','windhr','wave','temp'];
+function _secHint(name, msg){
+  const body = document.getElementById('body-' + name);
+  if(!body) return;
+  let hint = body.querySelector('.sec-hint');
+  if(msg){
+    if(!hint){
+      hint = document.createElement('div');
+      hint.className = 'sec-hint';
+      hint.style.cssText = 'color:#5a7a95;font-size:11px;padding:8px 4px';
+      body.insertBefore(hint, body.firstChild);
+    }
+    hint.textContent = msg;
+    hint.style.display = 'block';
+    // 顯示提示時藏起內容，避免留著上一次的殘影
+    Array.from(body.children).forEach(c=>{
+      if(c !== hint) c.style.display = 'none';
+    });
+  } else {
+    if(hint) hint.style.display = 'none';
+    Array.from(body.children).forEach(c=>{
+      if(!c.classList || !c.classList.contains('sec-hint')) c.style.display = '';
+    });
+  }
+}
+
 function updateInfo(t){
   // ★ 縣市層級：未選鄉鎮但已選縣市時，只畫縣市內鄉鎮分布與排行，
   //   不進入下方需要單一鄉鎮的流程（否則會存取 t.county 而出錯）。
@@ -5124,8 +5124,13 @@ function updateInfo(t){
         if(a) a.textContent = secOpen[nm] ? '\u25be' : '\u25b8';
       });
     }catch(e){}
+    // ★ 鄉鎮層級面板標示提示，不隱藏（位置固定才好找）
+    TOWN_ONLY_SECS.forEach(nm=>_secHint(nm, '請點選鄉鎮市區查看此項目'));
     return;
   }
+  // 選了鄉鎮：清除提示、恢復內容顯示
+  TOWN_ONLY_SECS.forEach(nm=>_secHint(nm, null));
+
   // 選取鄉鎮時隱藏各分署整合區塊
   ['all-summary','all-daily','all-hyeto'].forEach(name=>{
     const sec = document.getElementById('sec-'+name);
