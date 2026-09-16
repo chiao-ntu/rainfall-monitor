@@ -3014,39 +3014,69 @@ function drawEtrWaterfall(t, canvasId){
   }
 
   const warn = (basis === 'pct') ? 90 : den * 0.9;
-  const allV = pts.flatMap(p=>[p.from, p.to]).concat([warn]);
-  const vMax = Math.max(...allV) * 1.12;
-  const vMin = Math.min(0, ...allV);
-  // ★ 左軸＝時雨量、右軸＝累積雨量／ETR2%，兩側都要留白
-  const pL = isZoom ? 74 : 38, pR = isZoom ? 74 : 40;
-  // ★ 底部保留歷線區的高度
-  const pT = isZoom ? 44 : 16, pB = isZoom ? 215 : 100;
+  // ★ 縱軸依「累積值」自適應，不被警戒線拉滿。
+  //   先前 vMax 取 max(累積, 警戒)：警戒 360mm 而累積只到 32mm 時，
+  //   瀑布長條全被壓在圖表底部看不見（正是使用者截圖的狀況）。
+  //   警戒線若超出範圍，改在頂端標註而非撐開座標軸。
+  const accMax = Math.max(...pts.map(p=>Math.max(p.from, p.to)));
+  const vMin = Math.min(0, ...pts.map(p=>Math.min(p.from, p.to)));
+  const inRange = warn <= accMax * 1.35;
+  const vMax = inRange ? warn * 1.12 : Math.max(1, accMax * 1.35);
+
+  // ★ 單一繪圖區（使用者指定）：左軸時雨量、右軸累積值，疊在同一張圖。
+  const pL = isZoom ? 74 : 40, pR = isZoom ? 74 : 44;
+  const pT = isZoom ? 52 : 26, pB = isZoom ? 76 : 46;
   const iw = CW - pL - pR, ih = CH - pT - pB;
   const X = i => pL + iw * (i + 0.5) / pts.length;
   const Y = v => pT + ih * (1 - (v - vMin) / Math.max(1e-9, vMax - vMin));
-  // 長條至少 4px 寬才看得見；格距不足時彼此相鄰（0.9 倍）
   const bw = Math.max(isZoom ? 6 : 4, iw / pts.length * 0.9);
 
-  // 格線與縱軸
+  // 逐時雨量（左軸）—— 級距獨立，只佔下方 45% 高度，
+  // 避免雨一大就把瀑布整個蓋掉（使用者提醒的重點）
+  const rains = pts.map(p=>{
+    const v = _hourlyAt(t, p.hr);
+    return (v && v.v != null) ? v.v : 0;
+  });
+  const rMax = Math.max(1, ...rains);
+  const hyFrac = 0.45;
+  const RY = v => pT + ih - (v / rMax) * ih * hyFrac;
+
+  // 格線與右軸（累積值）
   ctx.strokeStyle = '#12283c'; ctx.fillStyle = '#5a7a95';
-  ctx.font = `${fs}px sans-serif`; ctx.textAlign = 'right';
+  ctx.font = `${fs}px sans-serif`;
   const span = vMax - vMin;
-  const stepV = span <= 50 ? 10 : span <= 120 ? 25 : span <= 400 ? 50 : 100;
+  const stepV = span <= 20 ? 5 : span <= 50 ? 10 : span <= 120 ? 25
+              : span <= 400 ? 50 : 100;
   for(let v = Math.ceil(vMin/stepV)*stepV; v <= vMax; v += stepV){
     ctx.beginPath(); ctx.moveTo(pL, Y(v)); ctx.lineTo(pL+iw, Y(v)); ctx.stroke();
-    // ★ 右縱軸＝累積雨量／ETR2%（左縱軸留給時雨量）
     ctx.textAlign = 'left';
     ctx.fillText(v.toFixed(0) + (basis==='pct' ? '%' : ''), pL + iw + 4, Y(v) + fs*0.35);
-    ctx.textAlign = 'right';
   }
+  // 左軸（時雨量）
+  ctx.textAlign = 'right';
+  [0, rMax/2, rMax].forEach(v=>{
+    ctx.fillStyle = '#4a8aa0';
+    ctx.fillText(v.toFixed(v < 10 ? 1 : 0), pL - 4, RY(v) + fs*0.35);
+  });
+  ctx.textAlign = 'left'; ctx.fillStyle = '#6bc8e8';
+  ctx.fillText('左軸 時雨量(mm/h)', pL + 2, pT - 5);
+  ctx.textAlign = 'right'; ctx.fillStyle = '#9fc8e8';
+  ctx.fillText(basis==='pct' ? '右軸 ETR2%' : '右軸 累積雨量(mm)', pL + iw, pT - 5);
+
   // 警戒門檻
-  ctx.strokeStyle = '#FF4444'; ctx.lineWidth = isZoom?2.5:1.6;
-  ctx.setLineDash([isZoom?10:5, isZoom?7:4]);
-  ctx.beginPath(); ctx.moveTo(pL, Y(warn)); ctx.lineTo(pL+iw, Y(warn)); ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = '#FF6666'; ctx.textAlign = 'left';
-  ctx.fillText(basis==='pct' ? '90% 警戒' : `警戒 ${warn.toFixed(0)}mm`,
-               pL + 3, Y(warn) - 3);
+  if(inRange){
+    ctx.strokeStyle = '#FF4444'; ctx.lineWidth = isZoom?2.5:1.6;
+    ctx.setLineDash([isZoom?10:5, isZoom?7:4]);
+    ctx.beginPath(); ctx.moveTo(pL, Y(warn)); ctx.lineTo(pL+iw, Y(warn)); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#FF6666'; ctx.textAlign = 'left';
+    ctx.fillText(basis==='pct' ? '90% 警戒' : `警戒 ${warn.toFixed(0)}mm`,
+                 pL + 3, Y(warn) - 3);
+  } else {
+    ctx.fillStyle = '#FF6666'; ctx.textAlign = 'right';
+    ctx.fillText(`↑ 警戒 ${basis==='pct' ? '90%' : warn.toFixed(0)+'mm'}（超出圖表範圍）`,
+                 pL + iw, pT + fs + 2);
+  }
 
   // 現在的位置
   const nowI = pts.findIndex(p=>p.hr >= 0);
@@ -3057,76 +3087,55 @@ function drawEtrWaterfall(t, canvasId){
     ctx.beginPath(); ctx.moveTo(xn, pT); ctx.lineTo(xn, pT+ih); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = '#ffcc44'; ctx.textAlign = 'center';
-    ctx.fillText('現在', xn, pT - 3);
+    ctx.fillText('現在', xn, pT - 5);
   }
 
-  // 瀑布長條：紅＝上升、綠＝下降
+  // 先畫時雨量（在底層），再畫瀑布（在上層）
+  rains.forEach((v, i)=>{
+    if(!(v > 0)) return;
+    ctx.fillStyle = (typeof _hourlyColor === 'function' ? _hourlyColor(v) : null) || '#3aa8c8';
+    ctx.globalAlpha = 0.55;
+    ctx.fillRect(X(i) - bw/2, RY(v), bw, pT + ih - RY(v));
+    ctx.globalAlpha = 1;
+  });
+
+  // 瀑布長條：紅＝上升、綠＝下降、白＝持平
   let firstCross = null;
+  const EPS = 0.05;
   pts.forEach((p, i)=>{
     const y0 = Y(p.from), y1 = Y(p.to);
-    // ★ 上升紅、下降綠、持平白（使用者指定）
-    const EPS = 0.05;
     ctx.fillStyle = (Math.abs(p.delta) < EPS) ? '#e8eef4'
                   : (p.delta > 0) ? '#FF4444' : '#40d060';
-    ctx.globalAlpha = 0.88;
-    ctx.fillRect(X(i) - bw/2, Math.min(y0, y1), bw, Math.max(1.5, Math.abs(y1 - y0)));
+    ctx.globalAlpha = 0.95;
+    ctx.fillRect(X(i) - bw/2, Math.min(y0, y1), bw, Math.max(2, Math.abs(y1 - y0)));
     ctx.globalAlpha = 1;
-    // 連接線（瀑布的階梯感）
-    if(i < pts.length - 1){
-      ctx.strokeStyle = '#3a5070'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(X(i) + bw/2, y1);
-      ctx.lineTo(X(i+1) - bw/2, y1); ctx.stroke();
-    }
     if(firstCross === null && p.from < warn && p.to >= warn) firstCross = p.hr;
   });
 
-  // ★ 累積折線已移除（使用者指定）：瀑布長條本身已表達累積過程，
-  //   折線疊上去只是重複，反而讓圖變花。
-
-  // ★ 底部加逐時降雨歷線（使用者指定）：與 ETR2 變化上下對照，
-  //   才看得出「雨何時下、下多大」與「何時達標」的對應關係。
-  const hyH = isZoom ? 130 : 46;            // 歷線區高度
-  const hyT = pT + ih + (isZoom ? 14 : 6);  // 歷線區頂端
-  const rains = pts.map(p=>{
-    const v = _hourlyAt(t, p.hr);
-    return (v && v.v != null) ? v.v : 0;
-  });
-  const rMax = Math.max(1, ...rains);
-  ctx.strokeStyle = '#12283c';
-  ctx.beginPath(); ctx.moveTo(pL, hyT + hyH); ctx.lineTo(pL + iw, hyT + hyH); ctx.stroke();
-  rains.forEach((v, i)=>{
-    if(!(v > 0)) return;
-    const hh = Math.max(1, v / rMax * hyH);
-    // 長條用時雨量色階，與組體雨量圖一致
-    ctx.fillStyle = (typeof _hourlyColor === 'function' ? _hourlyColor(v) : null) || '#6bc8e8';
-    ctx.globalAlpha = 0.9;
-    ctx.fillRect(X(i) - bw/2, hyT + hyH - hh, bw, hh);
-    ctx.globalAlpha = 1;
-  });
-  ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'right';
-  ctx.font = `${fs}px sans-serif`;
-  ctx.fillText(`${rMax.toFixed(0)}`, pL - 4, hyT + fs*0.9);
-  ctx.textAlign = 'right';
-  ctx.fillText('0', pL - 4, hyT + hyH + fs*0.35);
-  ctx.textAlign = 'left';
-  ctx.fillStyle = '#6bc8e8';
-  ctx.fillText('左軸 時雨量(mm/h)', pL + 2, hyT - 2);
-  ctx.textAlign = 'right';
-  ctx.fillText(basis==='pct' ? '右軸 ETR2%' : '右軸 累積雨量(mm)', pL + iw, hyT - 2);
-
-  // X 軸：時間標籤（格式同組體雨量圖 —— 換日才標日期，其餘只標時）
+  // ★ X 軸：日期與時間分行（同組體雨量圖）—— 先前同一行導致文字重疊
   ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'center';
-  const stepI = Math.max(1, Math.ceil(pts.length / (isZoom ? 16 : 7)));
+  const stepI = Math.max(1, Math.ceil(pts.length / (isZoom ? 14 : 6)));
   let lastDay = null;
   pts.forEach((p, i)=>{
-    if(i % stepI) return;
     const d = new Date(Date.now() + p.hr * 3600e3);
     const dk = d.getDate();
-    const txt = (dk !== lastDay)
-      ? `${d.getMonth()+1}/${dk} ${String(d.getHours()).padStart(2,'0')}時`
-      : `${String(d.getHours()).padStart(2,'0')}時`;
-    lastDay = dk;
-    ctx.fillText(txt, X(i), hyT + hyH + fs + 3);
+    if(i % stepI === 0){
+      ctx.fillStyle = '#5a7a95';
+      ctx.fillText(`${String(d.getHours()).padStart(2,'0')}時`,
+                   X(i), pT + ih + fs + 4);
+    }
+    // 換日時在第二行標日期
+    if(dk !== lastDay){
+      if(lastDay !== null){
+        ctx.fillStyle = '#7a94ac';
+        ctx.fillText(`${d.getMonth()+1}/${dk}`, X(i), pT + ih + fs*2 + 8);
+        ctx.strokeStyle = '#1a3450'; ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(X(i) - bw/2, pT); ctx.lineTo(X(i) - bw/2, pT + ih);
+        ctx.stroke();
+      }
+      lastDay = dk;
+    }
   });
 
   // 摘要：何時達標
@@ -5170,6 +5179,9 @@ function getObsEtr(t){
 //   用同一份，否則截圖配色與畫面不一致。
 // ★ Canvas 渲染下半透明色塊會讓白色海底透出更多（SVG 的合成方式不同），
 //   故不透明度由 0.82 提高到 0.92，維持與先前一致的視覺濃度。
+// ★ 陸地一律不透明（使用者指定）：各圖層先前用 0.78／0.25／0.12／0.05，
+//   深色海底會透上來，陸地看起來深淺不一、發灰發黃。
+//   無資料時用純白 1.0，有值時 0.96（留一點讓地形隱約可見）。
 function _townFill(t, isSel){
   // 渲染模式下本島由內插色帶層顯示，polygon 僅留 hover 熱區；
   // 金馬在內插範圍外，維持原色塊。
@@ -5189,7 +5201,7 @@ function _townFill(t, isSel){
         if(v!=null && (band===null || v>band)) band = v;
       }
       const col = cwaBandColor(band);
-      if(col){ fillColor=col; fillOp=isSel?1:(window._landOpaque?1:0.92); }
+      if(col){ fillColor=col; fillOp=isSel?1:0.96; }
       else   { fillColor='#FFFFFF'; fillOp=1.0; }   // 無CWA色塊＝白
     } else {
     const acc = getAccum(t);
@@ -5198,46 +5210,46 @@ function _townFill(t, isSel){
       // 雷達1h：用雨量色階，無回波(null)＝白
       // ★ 深色海底時陸地仍須純白（不可被下方深色海透出而變灰）
     fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain);
-      fillOp    = (totalRain==null) ? 1.0 : (isSel?1:(window._landOpaque?1:0.92));
+      fillOp    = (totalRain==null) ? 1.0 : (isSel?1:0.96);
     } else if(acc.isWarn){
       // ★ 各 mode 分支必須排在「totalRain === null」之前。
       //   否則警特報未達標(0/null)、浪高內陸(null) 會先被通用的 null 分支
       //   攔成白色，永遠走不到自己的著色邏輯 —— 實測即為「警特報不顯示、
       //   浪高看起來沒有資料」的原因。
       fillColor = warnMapColor(totalRain || 0);
-      fillOp    = (totalRain||0)>0 ? (isSel?1:(window._landOpaque?1:0.92)) : 1.0;
+      fillOp    = (totalRain||0)>0 ? (isSel?1:0.96) : 1.0;
     } else if(acc.isTemp){
       // 氣溫：無資料留白（不可視為 0°C）
       fillColor = _tempColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:(window._landOpaque?1:0.92));
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:0.96);
     } else if(acc.isWave){
       // 浪高：內陸無值 → 極淡灰（明確表示「非沿海」而非「浪高 0」）
       fillColor = _waveColor(totalRain) || '#e8eef4';
-      fillOp    = (totalRain == null) ? 0.25 : (isSel?1:(window._landOpaque?1:0.92));
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:0.96);
     } else if(acc.isWind){
       // 風力預測：蒲福風級色階（<4白/4-7綠/7-10黃/10-13紅/>=13紫）
       fillColor = _bfColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:(window._landOpaque?1:0.92));
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:0.96);
     } else if(totalRain === null || totalRain === undefined){
       // 無資料：顯示淡灰色，保留視覺邊界（不設為0.0，否則鄉鎮消失）
       fillColor='#FFFFFF'; fillOp=1.0;
     } else if(acc.isRisk){
       fillColor = riskColor(totalRain);
-      fillOp    = isSel?0.93:0.78;
+      fillOp    = isSel?1:0.96;
     } else if(acc.isEtrMode){
       // ETR2%模式：用 etrColor 對應現況 etr2_pct
       fillColor = totalRain===null ? '#ccddee' : etrColor(totalRain);
-      fillOp    = totalRain===null ? 0.12 : (isSel?0.93:0.78);
+      fillOp    = totalRain===null ? 1.0 : (isSel?1:0.96);
     // ★ isHourly 排在各專屬圖層之後、通用分支之前：逐時視窗下氣溫／
   //   浪高／風力／風險也會帶 isHourly，若先判斷就會被套上時雨量
   //   色階 —— 這正是「風險指標出現藍色」的原因。
   } else if(acc.isHourly){
       // ★ 逐時視窗用時雨量色階（非累積雨量色階）
       fillColor = _hourlyColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 0.05 : (isSel?0.95:0.85);
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:0.96);
     } else {
       fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#ccddee':etrColor(etrPct));
-      fillOp    = isSel?0.93:0.78;
+      fillOp    = isSel?1:0.96;
     }
     }
   }
