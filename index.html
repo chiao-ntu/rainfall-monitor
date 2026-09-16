@@ -708,7 +708,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             <option value="pct">ETR2（%）</option>
           </select>
         </div>
-        <canvas id="cv-waterfall" style="width:100%;height:210px;display:block;
+        <canvas id="cv-waterfall" style="width:100%;height:300px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-waterfall', event)"
           onmousemove="showChartTooltip(event,'cv-waterfall')"
@@ -1448,6 +1448,9 @@ function toggleDarkSea(){
          seaLayer.setStyle({fillColor: bg}); }catch(e){}
   // 海面疊圖改亮色（深色底時白線才看得見）
   try{ _restyleSeaOverlays(); }catch(e){}
+  // ★ 國外省界／縣界須重繪才會換成金黃 —— 它的顏色是建立時決定的，
+  //   只呼叫 renderLayer() 不會重畫這一層（先前仍是黑色的原因）。
+  try{ renderEastAsiaLayer(); }catch(e){}
   try{ renderLayer(); }catch(e){}
 }
 // 颱風路徑、海上警戒框等疊圖的配色
@@ -1832,7 +1835,10 @@ const map = L.map('map', {
   //   html2canvas 會忽略 viewBox，於是界線與色塊整個偏移出畫面
   //   （地形、渲染層是 <img> 所以位置正確 —— 這正是兩者分離的原因）。
   //   Canvas 渲染後向量層本身就是點陣，截圖所見即所得。
-  preferCanvas:true, zoomControl:true
+  preferCanvas:true, zoomControl:true,
+  // ★ 關閉 Leaflet 內建鍵盤平移：方向鍵改作時段切換／縮放，
+  //   否則它會搶先平移地圖（先前快捷鍵無效的原因）。
+  keyboard:false
 });
 
 // 「回到台灣本島」按鈕：接在放大縮小控制下方，一鍵拉回全島視野
@@ -2966,7 +2972,7 @@ function drawEtrWaterfall(t, canvasId){
   if(!cv) return;
   const isZoom = (canvasId === 'chart-zoom-canvas');
   const basis = (document.getElementById('wf-basis') || {}).value || 'mm';
-  const F = _fitCanvas(cv, 300, isZoom ? 820 : 210);
+  const F = _fitCanvas(cv, 300, isZoom ? 860 : 300);
   const ctx = F.ctx, CW = F.w, CH = F.h;
   const fs = isZoom ? 15 : 9;
 
@@ -3009,7 +3015,8 @@ function drawEtrWaterfall(t, canvasId){
   const vMax = Math.max(...allV) * 1.12;
   const vMin = Math.min(0, ...allV);
   const pL = isZoom ? 74 : 38, pR = isZoom ? 40 : 14;
-  const pT = isZoom ? 44 : 16, pB = isZoom ? 70 : 38;
+  // ★ 底部保留歷線區的高度
+  const pT = isZoom ? 44 : 16, pB = isZoom ? 215 : 100;
   const iw = CW - pL - pR, ih = CH - pT - pB;
   const X = i => pL + iw * (i + 0.5) / pts.length;
   const Y = v => pT + ih * (1 - (v - vMin) / Math.max(1e-9, vMax - vMin));
@@ -3064,20 +3071,48 @@ function drawEtrWaterfall(t, canvasId){
     if(firstCross === null && p.from < warn && p.to >= warn) firstCross = p.hr;
   });
 
-  // 累積值折線
-  ctx.strokeStyle = '#6bc8e8'; ctx.lineWidth = isZoom?3:1.8;
-  ctx.beginPath();
-  pts.forEach((p, i)=> i ? ctx.lineTo(X(i), Y(p.to)) : ctx.moveTo(X(i), Y(p.to)));
-  ctx.stroke();
+  // ★ 累積折線已移除（使用者指定）：瀑布長條本身已表達累積過程，
+  //   折線疊上去只是重複，反而讓圖變花。
 
-  // X 軸：時段標籤
+  // ★ 底部加逐時降雨歷線（使用者指定）：與 ETR2 變化上下對照，
+  //   才看得出「雨何時下、下多大」與「何時達標」的對應關係。
+  const hyH = isZoom ? 130 : 46;            // 歷線區高度
+  const hyT = pT + ih + (isZoom ? 14 : 6);  // 歷線區頂端
+  const rains = pts.map(p=>{
+    const v = _hourlyAt(t, p.hr);
+    return (v && v.v != null) ? v.v : 0;
+  });
+  const rMax = Math.max(1, ...rains);
+  ctx.strokeStyle = '#12283c';
+  ctx.beginPath(); ctx.moveTo(pL, hyT + hyH); ctx.lineTo(pL + iw, hyT + hyH); ctx.stroke();
+  rains.forEach((v, i)=>{
+    if(!(v > 0)) return;
+    const hh = Math.max(1, v / rMax * hyH);
+    // 長條用時雨量色階，與組體雨量圖一致
+    ctx.fillStyle = (typeof _hourlyColor === 'function' ? _hourlyColor(v) : null) || '#6bc8e8';
+    ctx.globalAlpha = 0.9;
+    ctx.fillRect(X(i) - bw/2, hyT + hyH - hh, bw, hh);
+    ctx.globalAlpha = 1;
+  });
+  ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'right';
+  ctx.font = `${fs}px sans-serif`;
+  ctx.fillText(`${rMax.toFixed(0)}`, pL - 4, hyT + fs*0.9);
+  ctx.textAlign = 'left';
+  ctx.fillText('時雨量(mm/h)', pL + 2, hyT + fs*0.9);
+
+  // X 軸：時間標籤（格式同組體雨量圖 —— 換日才標日期，其餘只標時）
   ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'center';
-  const stepI = Math.max(1, Math.ceil(pts.length / (isZoom ? 14 : 6)));
+  const stepI = Math.max(1, Math.ceil(pts.length / (isZoom ? 16 : 7)));
+  let lastDay = null;
   pts.forEach((p, i)=>{
     if(i % stepI) return;
     const d = new Date(Date.now() + p.hr * 3600e3);
-    ctx.fillText(`${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}時`,
-                 X(i), CH - pB + fs + 2);
+    const dk = d.getDate();
+    const txt = (dk !== lastDay)
+      ? `${d.getMonth()+1}/${dk} ${String(d.getHours()).padStart(2,'0')}時`
+      : `${String(d.getHours()).padStart(2,'0')}時`;
+    lastDay = dk;
+    ctx.fillText(txt, X(i), hyT + hyH + fs + 3);
   });
 
   // 摘要：何時達標
@@ -5148,7 +5183,8 @@ function _townFill(t, isSel){
     const {totalRain, etrPct} = acc;
     if(acc.isRadar){
       // 雷達1h：用雨量色階，無回波(null)＝白
-      fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain);
+      // ★ 深色海底時陸地仍須純白（不可被下方深色海透出而變灰）
+    fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain);
       fillOp    = (totalRain==null) ? 1.0 : (isSel?0.96:0.92);
     } else if(acc.isWarn){
       // ★ 各 mode 分支必須排在「totalRain === null」之前。
@@ -5235,17 +5271,14 @@ function renderLayer(){
       // ★ 邊框改深灰：原本用 fillColor（與填色同色）等於沒有邊界，
       //   飽和色塊相鄰時完全分不出鄉鎮。選取時仍為黃色高亮。
       // 深灰但不過重：#2a2a2a 太黑會蓋過色塊，改中灰並降低不透明度
-      // ★ 深色海底時鄉鎮界維持黑色（使用者指定）；金黃留給國界／省界
-    color: isSel ? '#ffff44'
-         : (typeof _darkSea !== 'undefined' && _darkSea) ? '#000000'
-         : (_terrainOn ? '#3a3a3a' : '#5a5a5a'),
+      // ★ 鄉鎮界在深色海底時與白底地圖完全一致（使用者指定）——
+    //   先前改成純黑又加粗，深色底上反而過於搶眼、地圖變糊。
+    color: isSel ? '#ffff44' : (_terrainOn ? '#3a3a3a' : '#5a5a5a'),
       // ★ 渲染模式下仍畫鄉鎮界（先前 weight 0 等於整個消失）；
       //   界線是判讀行政責任範圍的依據，不該因為換呈現方式就不見。
       weight: isSel ? 1.6
-        : (typeof _darkSea !== 'undefined' && _darkSea) ? 0.45
         : (_hideFill ? 0.35 : 0.4),
-      opacity: isSel ? 1
-         : (typeof _darkSea !== 'undefined' && _darkSea) ? 0.85 : 0.45,
+      opacity: isSel ? 1 : 0.45,
       stroke: true,
       fillColor,
       // 地形疊圖開啟時降低填色不透明度，讓下層暈渲透出來
@@ -5634,9 +5667,9 @@ function updateInfo(t){
     //   否則整個區塊不顯示（實測示範資料無測站即完全看不到）。
     const hasMg = (TOWNSHIPS||[]).some(tt=>
       (tt.stations||[]).some(x=>x.etr2_pct != null) || tt.etr2_pct != null);
-    const mEl = document.getElementById('sec-margin');
-    if(mEl) mEl.style.display = hasMg ? 'block' : 'none';
-    if(hasMg){ try{ drawMarginChart(t); }catch(e){ console.warn('警戒餘裕圖失敗', e); } }
+    // ★ 面板恆顯示（漏網的一處）：先前整個藏起來，裡面的餘裕圖與
+    //   瀑布圖看起來就像「沒有即時更新」。
+    try{ drawMarginChart(t); }catch(e){ console.warn('警戒餘裕圖失敗', e); }
     try{ drawEtrWaterfall(t); }catch(e){ console.warn('ETR2 瀑布圖失敗', e); }
 
     // 各鄉鎮分布：全臺或指定縣市都要顯示
@@ -7005,13 +7038,27 @@ function onH1DayChange(){
 // 自訂範圍滾輪的 −/＋：逐段切換，並維持起 ≤ 迄
 // ★ 地圖上的時段切換：依目前所在的時間視窗類型往前／往後一格。
 // ★ 鍵盤左右鍵切換時段（焦點不在輸入框時才生效）
+// ★ 方向鍵：左右＝切換時段、上下＝縮放；按住 Ctrl 才是平移地圖。
 document.addEventListener('keydown', ev=>{
-  if(ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+  const K = ev.key;
+  if(!/^Arrow(Left|Right|Up|Down)$/.test(K)) return;
   const el = document.activeElement;
   if(el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
-  if(ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  if(ev.metaKey || ev.altKey) return;
   ev.preventDefault();
-  try{ stepWin(ev.key === 'ArrowRight' ? 1 : -1); }catch(e){}
+  const PAN = 80;                      // Ctrl＋方向鍵的平移量（像素）
+  try{
+    if(ev.ctrlKey){
+      const d = {ArrowLeft:[-PAN,0], ArrowRight:[PAN,0],
+                 ArrowUp:[0,-PAN], ArrowDown:[0,PAN]}[K];
+      map.panBy(d, {animate:true});
+      return;
+    }
+    if(K === 'ArrowLeft')  stepWin(-1);
+    else if(K === 'ArrowRight') stepWin(1);
+    else if(K === 'ArrowUp')    map.zoomIn(1);
+    else if(K === 'ArrowDown')  map.zoomOut(1);
+  }catch(e){}
 });
 
 function stepWin(delta){
