@@ -320,12 +320,13 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#7a5a9a;color:#c8a8e8">GC-NCEP</button>
       <button class="b model-btn hi-btn"    id="mHi"    onclick="setModel('hi')">強降雨</button>
       <button class="b model-btn lo-btn"    id="mLo"    onclick="setModel('lo')">弱降雨</button>
-      <span style="color:#4a6a8a;font-size:10px;margin:0 3px">｜僅校驗</span>
-      <button class="b model-btn vo-btn" id="mIcon" onclick="setModel('icon')">ICON</button>
-      <button class="b model-btn vo-btn" id="mKma"  onclick="setModel('kma')">KMA</button>
+      <span style="color:#4a6a8a;font-size:10px;margin:0 3px">｜校驗候選</span>
       <button class="b model-btn vo-btn" id="mGem"  onclick="setModel('gem')">GEM</button>
       <button class="b model-btn vo-btn" id="mUkmo" onclick="setModel('ukmo')">UKMO</button>
       <button class="b model-btn vo-btn" id="mMf"   onclick="setModel('mf')">Météo-France</button>
+      <span style="color:#4a6a8a;font-size:10px;margin:0 3px">｜低頻校驗</span>
+      <button class="b model-btn vo-btn" id="mIcon" onclick="setModel('icon')">ICON</button>
+      <button class="b model-btn vo-btn" id="mKma"  onclick="setModel('kma')">KMA</button>
       <button class="b model-btn vo-btn" id="mCma"  onclick="setModel('cma')">CMA</button>
       <button class="b model-btn vo-btn" id="mBom"  onclick="setModel('bom')">BOM</button>
     </div>
@@ -639,6 +640,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
       <div class="sec-body" id="body-countytowns" style="display:none">
         <div style="display:flex;gap:4px;margin-bottom:5px;align-items:center">
+          <select id="ct-zone" onchange="drawCountyTowns()"
+            style="flex:1;font-size:10px;padding:2px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+            <option value="">全部地形</option>
+            <option value="山區">山區</option>
+            <option value="淺山區">淺山區</option>
+            <option value="平地">平地</option>
+            <option value="沿海地區">沿海地區</option>
+          </select>
           <select id="ct-metric" onchange="drawCountyTowns()"
             style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
             border:1px solid #1a4060;border-radius:3px">
@@ -810,6 +820,34 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>測站雨量排名</span><span class="sec-arrow" id="arrow-stnrank">▸</span>
       </div>
       <div class="sec-body" id="body-stnrank" style="display:none">
+        <div style="display:flex;gap:4px;margin-bottom:5px;align-items:center">
+          <select id="sr-metric" onchange="drawStnRank()"
+            style="flex:1;font-size:10px;padding:2px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+            <option value="rain">累積雨量</option>
+            <option value="etr">ETR2%</option>
+          </select>
+          <select id="sr-zone" onchange="drawStnRank()"
+            style="flex:1;font-size:10px;padding:2px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+            <option value="">全部地形</option>
+            <option value="山區">山區</option>
+            <option value="淺山區">淺山區</option>
+            <option value="平地">平地</option>
+            <option value="沿海地區">沿海地區</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:4px;margin-bottom:5px;align-items:center">
+          <span style="font-size:10px;color:#5a7a95">名次</span>
+          <input id="sr-from" type="number" min="1" value="1" onchange="drawStnRank()"
+            style="width:38px;font-size:10px;padding:2px;background:#061220;
+            color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+          <span style="font-size:10px;color:#5a7a95">~</span>
+          <input id="sr-to" type="number" min="1" value="20" onchange="drawStnRank()"
+            style="width:38px;font-size:10px;padding:2px;background:#061220;
+            color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+          <span id="sr-total" style="font-size:10px;color:#5a7a95"></span>
+        </div>
         <canvas id="cv-stnrank" style="width:100%;height:220px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-stnrank', event)"></canvas>
@@ -2465,15 +2503,34 @@ function _blendOverviewHtml(){
 //    依雨量排序，一眼看出雨勢最猛的測站與極端值。
 //    資料來自 t.stations（該鄉鎮的官方雨量站，含今日累積）。
 // ══════════════════════════════════════════════════════════
+// 測站的地形分區：測站本身無分區欄位，退回所屬鄉鎮的分區
+function _stnZone(st){
+  if(!st) return '';
+  if(st.zone) return st.zone;
+  const t2 = (typeof selected !== 'undefined' && selected) ? selected : null;
+  return t2 ? (_townZone(t2) || '') : '';
+}
+
 function drawStnRankChart(t, canvasId){
   const cv = document.getElementById(canvasId || 'cv-stnrank');
   if(!cv || !t) return;
-  const rows = (t.stations || [])
+  // ★ 控制項格式與其他排行面板一致：指標、地形、名次範圍
+  const _srM = (document.getElementById('sr-metric') || {}).value || 'rain';
+  const _srZ = (document.getElementById('sr-zone') || {}).value || '';
+  const _all = (t.stations || [])
     .map(st=>({name: st.name || '', v: (st.daily_rain || [])[0],
                etr: st.etr2_pct, st}))
-    .filter(x=>x.name && x.v != null)
-    .sort((a,b)=>b.v - a.v)
-    .slice(0, 14);                      // 太多會擠成一團
+    .filter(x=>x.name && (_srM === 'etr' ? x.etr != null : x.v != null))
+    .filter(x=>!_srZ || _stnZone(x.st) === _srZ)
+    .sort((a,b)=>(_srM === 'etr' ? (b.etr - a.etr) : (b.v - a.v)));
+  const _srF = Math.max(1, parseInt((document.getElementById('sr-from')||{}).value) || 1);
+  const _srT = Math.max(_srF, parseInt((document.getElementById('sr-to')||{}).value) || 20);
+  const rows = _all.slice(_srF - 1, _srT);
+  const rankOff = _srF - 1;
+  try{
+    const tot = document.getElementById('sr-total');
+    if(tot) tot.textContent = `／共 ${_all.length}`;
+  }catch(e){}
   const isZoom = (canvasId === 'chart-zoom-canvas');
   const F = _fitCanvas(cv, 300, 220);
   const ctx = F.ctx, CW = F.w, CH = F.h;
@@ -2824,6 +2881,35 @@ function _coverageWarn(){
   const layer = {rain:'累積雨量', etr:'ETR2%', risk:'風險指標', warn:'警特報',
                  wind:'風力', temp:'氣溫', wave:'浪高'}[mode] || mode;
   // 找出該模式最後一個有資料的時段，提示到哪一天為止
+  // ★ 風力／氣溫／浪高：時效由各自的序列決定，不能用 QPF 陣列推算
+  //   （先前一律看 QPF，於是浪高說「近期沒資料」卻又標出更後期的日期）。
+  if(mode === 'wind' || mode === 'temp' || mode === 'wave'){
+    const SER = {wind: _windSeries, temp: _tempSeries, wave: _waveSeries}[mode];
+    let lastMs = null, anyPt = false;
+    (TOWNSHIPS || []).slice(0, 60).forEach(tt=>{
+      let arr; try{ arr = SER(tt); }catch(e){ return; }
+      if(!Array.isArray(arr) || !arr.length) return;
+      anyPt = true;
+      arr.forEach(p=>{
+        if(p && p.ms != null && p.bf != null && (lastMs == null || p.ms > lastMs))
+          lastMs = p.ms;
+      });
+    });
+    const layer2 = {wind:'風力', temp:'氣溫', wave:'浪高'}[mode];
+    if(!anyPt) return `目前無${layer2}資料`;
+    const tgt = (_hourIdx != null) ? (Date.now() + _hourIdx * 3600e3)
+                                   : segTime(Math.max(0, segTo)).getTime();
+    if(lastMs != null && tgt > lastMs){
+      const d2 = new Date(lastMs);
+      const WD2 = ['日','一','二','三','四','五','六'];
+      return `此時段未提供${layer2}資料，`
+           + `資料到 ${d2.getMonth()+1}月${d2.getDate()}日`
+           + `${String(d2.getHours()).padStart(2,'0')}時（週${WD2[d2.getDay()]}）`;
+    }
+    // 浪高僅沿海鄉鎮有值，內陸沒有屬正常，不提示
+    return '';
+  }
+
   // ★ 最後一個有資料的「段索引」→ 日期。段索引以 SEG_EPOCH（今天 00 時）
   //   為起點，每段 6 小時，故第 k 段的日期是 SEG_EPOCH + k*6 小時。
   //   先前用 Math.floor(k/4) 當成「第幾天」再加到今天，但段索引本身
@@ -7202,8 +7288,8 @@ const NAV_MODEL_LABEL = {blend:'FORMOSA', cwa:'CWA', best:'CWA+ECMWF',
   ecmwf:'ECMWF', gfs:'GFS', jma:'JMA',
   aifs:'EC-AIFS', gc:'GC-NCEP', hi:'強降雨', lo:'弱降雨',
   // ★ 僅校驗模式也列入（前綴 ⌁ 標示不進融合）
-  icon:'⌁ICON', kma:'⌁KMA', gem:'⌁GEM', ukmo:'⌁UKMO',
-  mf:'⌁Météo-France', cma:'⌁CMA', bom:'⌁BOM'};
+  gem:'⌁GEM', ukmo:'⌁UKMO', mf:'⌁Météo-France',
+  icon:'⌁ICON', kma:'⌁KMA', cma:'⌁CMA', bom:'⌁BOM'};
 function _fillNavSelects(){
   const ms = document.getElementById('nav-model');
   if(ms && !ms.options.length){

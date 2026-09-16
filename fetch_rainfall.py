@@ -1994,28 +1994,39 @@ def fetch_openmeteo_model(townships, model='best_match'):
 #   先前直接移除，改為保留觀察，資料仍可查但不影響融合結果。
 OM_PHYSICAL = ['best_match', 'ecmwf_ifs', 'gfs_seamless', 'jma_seamless']
 OM_AI       = ['ecmwf_aifs025_single', 'gfs_graphcast025']
-OM_VERIFY_ONLY = [
-    'icon_seamless',          # DWD ICON（德國）
-    'kma_seamless',           # KMA（韓國）——東亞表現通常不錯
+# ★ 分兩組（依實測差異性）：
+#   A 組＝候選群，表現若穩定可望納入 FORMOSA，每輪都抓。
+#   B 組＝差異性過大者（ICON/KMA/CMA/BOM），偏差比動輒 5.0 或 0.4，
+#     短期內不會納入融合，改為低頻抓取以減輕 Open-Meteo 限流壓力。
+OM_VERIFY_A = [
     'gem_seamless',           # GEM（加拿大）
-    'ukmo_seamless',          # UK Met Office
+    'ukmo_seamless',          # UK Met Office —— 目前 CSI 最佳
     'meteofrance_seamless',   # Météo-France ARPEGE
-    'cma_grapes_global',      # CMA GRAPES（中國）
+]
+OM_VERIFY_B = [
+    'icon_seamless',          # DWD ICON（德國）—— 偏差比常達 5.0
+    'kma_seamless',           # KMA（韓國）
+    'cma_grapes_global',      # CMA GRAPES（中國）—— 偏差比常低於 0.5
     'bom_access_global',      # BOM ACCESS（澳洲）
 ]
+OM_VERIFY_ONLY = OM_VERIFY_A + OM_VERIFY_B
 # ★ 僅校驗模式改為「輪流抓取」：13 個模式對單一 IP 壓力過大，
 #   實測 Open-Meteo 回 429 限流，ICON／KMA／BOM 常整批失敗。
 #   依日期輪替，每輪只抓其中 3 支 —— 校驗本來就是逐日累積，
 #   隔天補齊不影響統計，反而讓每支都拿得到完整資料。
 def _verify_only_today():
+    """A 組每輪都抓（候選納入融合，需要連續樣本）；
+    B 組輪流，每輪 1 支（差異性大、短期不會納入，降低限流壓力）。
+
+    ★ 若日後 B 組某支表現轉好要納入 FORMOSA，把它移到 OM_VERIFY_A
+      即可恢復每日抓取 —— 這是刻意留的切換點。
+    """
     import datetime as _dt
-    n = len(OM_VERIFY_ONLY)
-    if n == 0:
-        return []
-    doy = _dt.date.today().toordinal()
-    k = 3                                  # 每輪抓 3 支
-    start = (doy * k) % n
-    return [OM_VERIFY_ONLY[(start + i) % n] for i in range(min(k, n))]
+    picks = list(OM_VERIFY_A)
+    if OM_VERIFY_B:
+        doy = _dt.date.today().toordinal()
+        picks.append(OM_VERIFY_B[doy % len(OM_VERIFY_B)])
+    return picks
 
 OM_MODELS   = OM_PHYSICAL + OM_AI + _verify_only_today()
 
