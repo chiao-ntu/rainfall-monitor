@@ -911,6 +911,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             <option value="平地">平地</option>
             <option value="沿海地區">沿海地區</option>
           </select>
+          <select id="vf-metric" onchange="renderVerify()"
+            style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+            <option value="ETS80">ETS ≥80mm（主）</option>
+            <option value="ETS200">ETS ≥200mm</option>
+            <option value="ETS350">ETS ≥350mm</option>
+            <option value="SEDI80">SEDI ≥80mm</option>
+            <option value="basic">相對誤差 30%（基線）</option>
+          </select>
           <select id="vf-days" onchange="renderVerify()"
             style="flex:0 0 auto;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
             border:1px solid #1a4060;border-radius:3px">
@@ -3074,8 +3083,7 @@ function drawEtrWaterfall(t, canvasId){
   ctx.fillStyle = '#FF6666'; ctx.textAlign = 'left';
   ctx.fillText('0 ＝ 達警戒', pL + 3, y0 + fs + 3);
   ctx.fillStyle = '#6bc8e8';
-  ctx.fillText(basis==='pct' ? '距警戒（百分點，負值＝尚有餘裕）'
-                             : '距警戒（mm，負值＝尚有餘裕）', pL + 2, pT - 6);
+  ctx.fillText(basis==='pct' ? '距警戒 ETR2%' : '距警戒累積雨量', pL + 2, pT - 6);
 
   // 現在的位置
   const nowI = pts.findIndex(p=>p.hr >= 0);
@@ -3608,6 +3616,24 @@ const VF_NAME = {icon:'ICON', kma:'KMA 韓國', gem:'GEM 加拿大',
                  cma:'CMA GRAPES', bom:'BOM ACCESS',
                  best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
                  jma:'JMA', aifs:'EC-AIFS', graphcast:'GC-NCEP'};
+// ★ ETS：扣除隨機命中後的 CSI（乾季不虛高，跨季節可比）
+function _vfEts(c){
+  const h = c.hit||0, m = c.miss||0, f = c['false']||0, n0 = h+m+f+(c.correct_neg||0);
+  if(!n0) return null;
+  const hr = (h+f)*(h+m)/n0, den = h+m+f-hr;
+  return Math.abs(den) > 1e-9 ? Math.round((h-hr)/den*1000)/1000 : null;
+}
+// ★ SEDI：罕見事件不退化的指標（極端門檻時 CSI/ETS 會趨近 0）
+function _vfSedi(c){
+  const h = c.hit||0, m = c.miss||0, f = c['false']||0, cn = c.correct_neg||0;
+  if(!(h+m) || !(f+cn)) return null;
+  const H = h/(h+m), F = f/(f+cn);
+  if(!(H>0&&H<1) || !(F>0&&F<1)) return null;
+  const num = Math.log(F)-Math.log(H)-Math.log(1-F)+Math.log(1-H);
+  const den = Math.log(F)+Math.log(H)+Math.log(1-F)+Math.log(1-H);
+  return Math.abs(den) > 1e-9 ? Math.round(num/den*1000)/1000 : null;
+}
+
 function _vfScores(c){
   const h = c.hit || 0, m = c.miss || 0, f = c['false'] || 0;
   const r = (x, d)=> d ? Math.round(x / d * 1000) / 1000 : null;
@@ -3652,22 +3678,42 @@ function renderVerify(){
       if(!c) return;
       const a = agg[m] || (agg[m] = {hit:0, miss:0, 'false':0, correct_neg:0});
       ['hit','miss','false','correct_neg'].forEach(k=> a[k] += (c[k] || 0));
+      // 門檻列聯表一併加總（ETS/SEDI 用）
+      Object.keys(c).filter(k=>k.startsWith('thr')).forEach(tk=>{
+        const ta = a[tk] || (a[tk] = {hit:0, miss:0, 'false':0, correct_neg:0});
+        ['hit','miss','false','correct_neg'].forEach(k=> ta[k] += (c[tk][k] || 0));
+      });
     });
   });
-  const rows = Object.keys(agg).map(m=>({m, s: _vfScores(agg[m]), c: agg[m]}))
-                     .sort((a, b)=>(b.s.CSI ?? -1) - (a.s.CSI ?? -1));
+  // ★ 指標切換（依討論後採用）：主指標為多門檻 ETS，
+  //   罕見門檻用 SEDI，相對誤差保留當基線。
+  const metric = (document.getElementById('vf-metric') || {}).value || 'ETS80';
+  const rows = Object.keys(agg).map(m=>{
+    const sc = _vfScores(agg[m]);
+    if(metric !== 'basic'){
+      const thr = metric.replace(/^(ETS|SEDI)/, '');
+      const td = (agg[m] || {})['thr' + thr];
+      sc.main = td ? (metric.startsWith('SEDI') ? _vfSedi(td) : _vfEts(td)) : null;
+      sc.mainN = td ? (td.hit + td.miss + td['false']) : 0;
+    } else {
+      sc.main = sc.CSI; sc.mainN = sc.n;
+    }
+    return {m, s: sc, c: agg[m]};
+  }).sort((a, b)=>(b.s.main ?? -9) - (a.s.main ?? -9));
   const col = v => v == null ? '#7a94ac'
     : v >= 0.7 ? '#40d060' : v >= 0.5 ? '#FFFF00' : v >= 0.3 ? '#FF8C00' : '#FF4444';
   const fmt = v => v == null ? '—' : v.toFixed(2);
   const period = ser.length === 1 ? ser[0].date
     : `${ser[0].date} ~ ${ser[ser.length-1].date}（${ser.length} 日）`;
   el.innerHTML = `<div style="color:#5a7a95;font-size:9px;margin-bottom:3px">
-      ${period}　門檻 ≥1mm　CSI 由高至低</div>
+      ${period}　${metric === 'basic' ? '相對誤差 30%' : metric.replace(/(\d+)/, ' ≥$1mm')} 由高至低</div>
     <table style="width:100%;border-collapse:collapse;font-size:10px">
       <tr style="color:#6bc8e8">
         <th style="text-align:left;padding:2px 3px">模式</th>
         <th style="text-align:right">POD</th><th style="text-align:right">FAR</th>
-        <th style="text-align:right">CSI</th><th style="text-align:right">偏差比</th>
+        <th style="text-align:right">${
+          metric === 'basic' ? 'CSI' : metric.replace(/(\d+)/, ' ≥$1mm')
+        }</th><th style="text-align:right">偏差比</th>
         <th style="text-align:right">樣本</th></tr>
       ${rows.map(r=>`<tr style="border-top:1px solid #12283c">
         <td style="padding:2px 3px;color:#cfe4f5">${VF_NAME[r.m] || r.m}${
@@ -3675,12 +3721,14 @@ function renderVerify(){
         }</td>
         <td style="text-align:right;color:${col(r.s.POD)}">${fmt(r.s.POD)}</td>
         <td style="text-align:right;color:${col(r.s.FAR == null ? null : 1 - r.s.FAR)}">${fmt(r.s.FAR)}</td>
-        <td style="text-align:right;color:${col(r.s.CSI)};font-weight:700">${fmt(r.s.CSI)}</td>
+        <td style="text-align:right;color:${col(r.s.main)};font-weight:700">${fmt(r.s.main)}</td>
         <td style="text-align:right;color:#9fc8e8">${fmt(r.s.BIAS)}</td>
-        <td style="text-align:right;color:#5a7a95">${r.s.n}</td></tr>`).join('')}
+        <td style="text-align:right;color:#5a7a95">${r.s.mainN ?? r.s.n}</td></tr>`).join('')}
     </table>
     <div style="color:#5a7a95;font-size:9px;margin-top:3px">
-      POD 命中率（越高越好）　FAR 誤報率（越低越好）　CSI 綜合　偏差比 &gt;1 報太多<br>
+      ${metric.startsWith('ETS') ? 'ETS 扣除隨機命中後的綜合指標，0＝與亂猜無異'
+        : metric.startsWith('SEDI') ? 'SEDI 罕見事件專用，極端門檻下仍有鑑別力'
+        : 'CSI 綜合指標，不納入正確無雨'}　偏差比 &gt;1 報太多<br>
       ◆ 已納入 FORMOSA 融合；無標記者僅校驗、不影響預報結果</div>`;
   try{ drawVerifyChart(); }catch(e){ console.warn('校驗圖失敗', e); }
 }
@@ -5201,7 +5249,7 @@ function _townFill(t, isSel){
         if(v!=null && (band===null || v>band)) band = v;
       }
       const col = cwaBandColor(band);
-      if(col){ fillColor=col; fillOp=isSel?1:0.96; }
+      if(col){ fillColor=col; fillOp=isSel?1:1.0; }
       else   { fillColor='#FFFFFF'; fillOp=1.0; }   // 無CWA色塊＝白
     } else {
     const acc = getAccum(t);
@@ -5210,46 +5258,47 @@ function _townFill(t, isSel){
       // 雷達1h：用雨量色階，無回波(null)＝白
       // ★ 深色海底時陸地仍須純白（不可被下方深色海透出而變灰）
     fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain);
-      fillOp    = (totalRain==null) ? 1.0 : (isSel?1:0.96);
+      fillOp    = (totalRain==null) ? 1.0 : (isSel?1:1.0);
     } else if(acc.isWarn){
       // ★ 各 mode 分支必須排在「totalRain === null」之前。
       //   否則警特報未達標(0/null)、浪高內陸(null) 會先被通用的 null 分支
       //   攔成白色，永遠走不到自己的著色邏輯 —— 實測即為「警特報不顯示、
       //   浪高看起來沒有資料」的原因。
       fillColor = warnMapColor(totalRain || 0);
-      fillOp    = (totalRain||0)>0 ? (isSel?1:0.96) : 1.0;
+      fillOp    = (totalRain||0)>0 ? (isSel?1:1.0) : 1.0;
     } else if(acc.isTemp){
       // 氣溫：無資料留白（不可視為 0°C）
       fillColor = _tempColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:0.96);
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:1.0);
     } else if(acc.isWave){
       // 浪高：內陸無值 → 極淡灰（明確表示「非沿海」而非「浪高 0」）
-      fillColor = _waveColor(totalRain) || '#e8eef4';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:0.96);
+      // ★ 內陸無浪高資料時用純白，不可用淺灰（深色海底會顯得髒）
+      fillColor = _waveColor(totalRain) || '#FFFFFF';
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:1.0);
     } else if(acc.isWind){
       // 風力預測：蒲福風級色階（<4白/4-7綠/7-10黃/10-13紅/>=13紫）
       fillColor = _bfColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:0.96);
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:1.0);
     } else if(totalRain === null || totalRain === undefined){
       // 無資料：顯示淡灰色，保留視覺邊界（不設為0.0，否則鄉鎮消失）
       fillColor='#FFFFFF'; fillOp=1.0;
     } else if(acc.isRisk){
       fillColor = riskColor(totalRain);
-      fillOp    = isSel?1:0.96;
+      fillOp    = isSel?1:1.0;
     } else if(acc.isEtrMode){
       // ETR2%模式：用 etrColor 對應現況 etr2_pct
-      fillColor = totalRain===null ? '#ccddee' : etrColor(totalRain);
-      fillOp    = totalRain===null ? 1.0 : (isSel?1:0.96);
+      fillColor = totalRain===null ? '#FFFFFF' : etrColor(totalRain);
+      fillOp    = totalRain===null ? 1.0 : (isSel?1:1.0);
     // ★ isHourly 排在各專屬圖層之後、通用分支之前：逐時視窗下氣溫／
   //   浪高／風力／風險也會帶 isHourly，若先判斷就會被套上時雨量
   //   色階 —— 這正是「風險指標出現藍色」的原因。
   } else if(acc.isHourly){
       // ★ 逐時視窗用時雨量色階（非累積雨量色階）
       fillColor = _hourlyColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:0.96);
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:1.0);
     } else {
-      fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#ccddee':etrColor(etrPct));
-      fillOp    = isSel?1:0.96;
+      fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#FFFFFF':etrColor(etrPct));
+      fillOp    = isSel?1:1.0;
     }
     }
   }

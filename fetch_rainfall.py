@@ -2614,6 +2614,64 @@ def _verify_class(obs, mod):
     return 'miss' if mod < obs else 'false'
 
 
+# ★ 門檻驗證（依使用者討論後採用）：
+#   主指標 —— 日累積 × 多門檻 ETS，門檻取 ETR2 實際警戒帶 80/200/350mm。
+#     ETS 扣掉「隨機猜也會中」的部分，乾季不會虛高，跨季節可比。
+#   輔助 —— 時雨量 × 40mm 門檻 SEDI。短延時強降雨是土石流啟動因子，
+#     且 40mm/h 以上屬罕見事件，CSI/ETS 會退化到 0，只有 SEDI 不會。
+#   參考 —— 既有的日累積相對誤差 30%，保留當基線以銜接先前記錄。
+DAILY_THRESHOLDS  = [80, 200, 350]     # mm／日，比照特報與警戒帶
+HOURLY_THRESHOLD  = 40                 # mm／時，短延時強降雨
+
+
+def _contingency(obs, mod, thr):
+    """單一門檻的列聯表分類：兩邊是否跨過該門檻。"""
+    o, m = (obs >= thr), (mod >= thr)
+    if o and m:        return 'hit'
+    if m and not o:    return 'false'
+    if o and not m:    return 'miss'
+    return 'correct_neg'
+
+
+def _ets(c):
+    """Equitable Threat Score：扣除隨機命中後的 CSI。
+
+    hits_random = (hit+false)(hit+miss) / N
+    ETS = (hit − hits_random) / (hit + miss + false − hits_random)
+    範圍 −1/3 ~ 1；0 代表與亂猜無異。
+    """
+    h, m, f = c.get('hit', 0), c.get('miss', 0), c.get('false', 0)
+    n = h + m + f + c.get('correct_neg', 0)
+    if n == 0:
+        return None
+    hr = (h + f) * (h + m) / n
+    den = h + m + f - hr
+    return round((h - hr) / den, 3) if abs(den) > 1e-9 else None
+
+
+def _sedi(c):
+    """Symmetric Extremal Dependence Index：罕見事件不退化的指標。
+
+    以命中率 H 與誤報率 F 表示：
+      SEDI = [log F − log H − log(1−F) + log(1−H)]
+             / [log F + log H + log(1−F) + log(1−H)]
+    範圍 −1 ~ 1；門檻極端時仍有鑑別力，這是 CSI/ETS 做不到的。
+    H 或 F 落在 0／1 時公式無定義，回 None 而不強行外插。
+    """
+    import math
+    h, m, f = c.get('hit', 0), c.get('miss', 0), c.get('false', 0)
+    cn = c.get('correct_neg', 0)
+    if (h + m) == 0 or (f + cn) == 0:
+        return None
+    H = h / (h + m)          # hit rate
+    F = f / (f + cn)         # false alarm rate
+    if not (0 < H < 1) or not (0 < F < 1):
+        return None
+    num = math.log(F) - math.log(H) - math.log(1 - F) + math.log(1 - H)
+    den = math.log(F) + math.log(H) + math.log(1 - F) + math.log(1 - H)
+    return round(num / den, 3) if abs(den) > 1e-9 else None
+
+
 def _verify_scores(c):
     """由列聯表算 POD / FAR / CSI / 偏差比。
 
@@ -2630,6 +2688,8 @@ def _verify_scores(c):
         'FAR': _r(f, h + f),
         'CSI': _r(h, h + m + f),
         'BIAS': _r(h + f, h + m),
+        'ETS': _ets(c),
+        'SEDI': _sedi(c),
     }
 
 
@@ -2692,6 +2752,12 @@ def update_verify(out_towns, zones, now_tpe):
                 d = day.setdefault(scope, {}).setdefault(m, {
                     'hit': 0, 'miss': 0, 'false': 0, 'correct_neg': 0})
                 d[cls] += 1
+                # ★ 多門檻 ETS（主指標）：每個門檻各一組列聯表
+                for thr in DAILY_THRESHOLDS:
+                    tk = f'thr{thr}'
+                    td = d.setdefault(tk, {'hit': 0, 'miss': 0,
+                                           'false': 0, 'correct_neg': 0})
+                    td[_contingency(float(obs), float(mv), thr)] += 1
             n_used += 1
 
     if not day:
@@ -2707,13 +2773,22 @@ def update_verify(out_towns, zones, now_tpe):
         with open(VERIFY_FILE, 'w', encoding='utf-8') as f:
             json.dump(vf, f, ensure_ascii=False, separators=(',', ':'))
         sc = {m: _verify_scores(day['全臺'][m]) for m in day.get('全臺', {})}
+        # 門檻分數另計（ETS 為主指標）
+        for m2 in day.get('全臺', {}):
+            for thr in DAILY_THRESHOLDS:
+                td = day['全臺'][m2].get(f'thr{thr}')
+                if td:
+                    sc[m2][f'ETS{thr}'] = _ets(td)
+                    sc[m2][f'SEDI{thr}'] = _sedi(td)
         best_m = max(sc, key=lambda m: (sc[m].get('CSI') or -1)) if sc else None
         print(f"  校驗（≥{RAIN_THRESHOLD}mm）：{yday} 比對 {n_used} 筆，"
               f"累積 {len(vf['days'])} 天")
         for m in sorted(sc):
             s_ = sc[m]
+            _e80 = s_.get('ETS80')
             print(f"    {m:10s} POD {s_['POD']}　FAR {s_['FAR']}　"
-                  f"CSI {s_['CSI']}　偏差比 {s_['BIAS']}")
+                  f"CSI {s_['CSI']}　ETS {s_['ETS']}　偏差比 {s_['BIAS']}"
+                  + (f"　ETS@80mm {_e80}" if _e80 is not None else ""))
         if best_m:
             print(f"    昨日 CSI 最佳：{best_m}")
     except Exception as e:
