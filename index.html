@@ -1445,7 +1445,10 @@ function toggleDarkSea(){
   });
   // 海域遮罩本身
   try{ if(typeof seaLayer !== 'undefined' && seaLayer)
-         seaLayer.setStyle({fillColor: bg}); }catch(e){}
+         seaLayer.setStyle({fillColor: bg, fillOpacity: 1.0}); }catch(e){}
+  // ★ 陸地要純白：鄉鎮色塊的不透明度在深色海底時拉滿，
+  //   否則下方深色海會透上來，白色看起來發灰。
+  window._landOpaque = _darkSea;
   // 海面疊圖改亮色（深色底時白線才看得見）
   try{ _restyleSeaOverlays(); }catch(e){}
   // ★ 國外省界／縣界須重繪才會換成金黃 —— 它的顏色是建立時決定的，
@@ -3014,7 +3017,8 @@ function drawEtrWaterfall(t, canvasId){
   const allV = pts.flatMap(p=>[p.from, p.to]).concat([warn]);
   const vMax = Math.max(...allV) * 1.12;
   const vMin = Math.min(0, ...allV);
-  const pL = isZoom ? 74 : 38, pR = isZoom ? 40 : 14;
+  // ★ 左軸＝時雨量、右軸＝累積雨量／ETR2%，兩側都要留白
+  const pL = isZoom ? 74 : 38, pR = isZoom ? 74 : 40;
   // ★ 底部保留歷線區的高度
   const pT = isZoom ? 44 : 16, pB = isZoom ? 215 : 100;
   const iw = CW - pL - pR, ih = CH - pT - pB;
@@ -3030,7 +3034,10 @@ function drawEtrWaterfall(t, canvasId){
   const stepV = span <= 50 ? 10 : span <= 120 ? 25 : span <= 400 ? 50 : 100;
   for(let v = Math.ceil(vMin/stepV)*stepV; v <= vMax; v += stepV){
     ctx.beginPath(); ctx.moveTo(pL, Y(v)); ctx.lineTo(pL+iw, Y(v)); ctx.stroke();
-    ctx.fillText(v.toFixed(0) + (basis==='pct' ? '%' : ''), pL - 4, Y(v) + fs*0.35);
+    // ★ 右縱軸＝累積雨量／ETR2%（左縱軸留給時雨量）
+    ctx.textAlign = 'left';
+    ctx.fillText(v.toFixed(0) + (basis==='pct' ? '%' : ''), pL + iw + 4, Y(v) + fs*0.35);
+    ctx.textAlign = 'right';
   }
   // 警戒門檻
   ctx.strokeStyle = '#FF4444'; ctx.lineWidth = isZoom?2.5:1.6;
@@ -3057,8 +3064,10 @@ function drawEtrWaterfall(t, canvasId){
   let firstCross = null;
   pts.forEach((p, i)=>{
     const y0 = Y(p.from), y1 = Y(p.to);
-    const up = p.delta >= 0;
-    ctx.fillStyle = up ? '#FF4444' : '#40d060';
+    // ★ 上升紅、下降綠、持平白（使用者指定）
+    const EPS = 0.05;
+    ctx.fillStyle = (Math.abs(p.delta) < EPS) ? '#e8eef4'
+                  : (p.delta > 0) ? '#FF4444' : '#40d060';
     ctx.globalAlpha = 0.88;
     ctx.fillRect(X(i) - bw/2, Math.min(y0, y1), bw, Math.max(1.5, Math.abs(y1 - y0)));
     ctx.globalAlpha = 1;
@@ -3097,8 +3106,13 @@ function drawEtrWaterfall(t, canvasId){
   ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'right';
   ctx.font = `${fs}px sans-serif`;
   ctx.fillText(`${rMax.toFixed(0)}`, pL - 4, hyT + fs*0.9);
+  ctx.textAlign = 'right';
+  ctx.fillText('0', pL - 4, hyT + hyH + fs*0.35);
   ctx.textAlign = 'left';
-  ctx.fillText('時雨量(mm/h)', pL + 2, hyT + fs*0.9);
+  ctx.fillStyle = '#6bc8e8';
+  ctx.fillText('左軸 時雨量(mm/h)', pL + 2, hyT - 2);
+  ctx.textAlign = 'right';
+  ctx.fillText(basis==='pct' ? '右軸 ETR2%' : '右軸 累積雨量(mm)', pL + iw, hyT - 2);
 
   // X 軸：時間標籤（格式同組體雨量圖 —— 換日才標日期，其餘只標時）
   ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'center';
@@ -3724,8 +3738,7 @@ function drawVerifyChart(canvasId){
     ctx.fillText(VF_NAME[m] || m, lx + (isZoom?16:11), ly);
     lx += wU[i];
   });
-  ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'left';
-  ctx.fillText('CSI', 4, pT - 4);
+
   if(isZoom){
     ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
     const scope = (document.getElementById('vf-scope') || {}).value || '全臺';
@@ -5176,7 +5189,7 @@ function _townFill(t, isSel){
         if(v!=null && (band===null || v>band)) band = v;
       }
       const col = cwaBandColor(band);
-      if(col){ fillColor=col; fillOp=isSel?0.96:0.92; }
+      if(col){ fillColor=col; fillOp=isSel?1:(window._landOpaque?1:0.92); }
       else   { fillColor='#FFFFFF'; fillOp=1.0; }   // 無CWA色塊＝白
     } else {
     const acc = getAccum(t);
@@ -5185,26 +5198,26 @@ function _townFill(t, isSel){
       // 雷達1h：用雨量色階，無回波(null)＝白
       // ★ 深色海底時陸地仍須純白（不可被下方深色海透出而變灰）
     fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain);
-      fillOp    = (totalRain==null) ? 1.0 : (isSel?0.96:0.92);
+      fillOp    = (totalRain==null) ? 1.0 : (isSel?1:(window._landOpaque?1:0.92));
     } else if(acc.isWarn){
       // ★ 各 mode 分支必須排在「totalRain === null」之前。
       //   否則警特報未達標(0/null)、浪高內陸(null) 會先被通用的 null 分支
       //   攔成白色，永遠走不到自己的著色邏輯 —— 實測即為「警特報不顯示、
       //   浪高看起來沒有資料」的原因。
       fillColor = warnMapColor(totalRain || 0);
-      fillOp    = (totalRain||0)>0 ? (isSel?0.96:0.92) : 1.0;
+      fillOp    = (totalRain||0)>0 ? (isSel?1:(window._landOpaque?1:0.92)) : 1.0;
     } else if(acc.isTemp){
       // 氣溫：無資料留白（不可視為 0°C）
       fillColor = _tempColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?0.96:0.92);
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:(window._landOpaque?1:0.92));
     } else if(acc.isWave){
       // 浪高：內陸無值 → 極淡灰（明確表示「非沿海」而非「浪高 0」）
       fillColor = _waveColor(totalRain) || '#e8eef4';
-      fillOp    = (totalRain == null) ? 0.25 : (isSel?0.96:0.92);
+      fillOp    = (totalRain == null) ? 0.25 : (isSel?1:(window._landOpaque?1:0.92));
     } else if(acc.isWind){
       // 風力預測：蒲福風級色階（<4白/4-7綠/7-10黃/10-13紅/>=13紫）
       fillColor = _bfColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?0.96:0.92);
+      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:(window._landOpaque?1:0.92));
     } else if(totalRain === null || totalRain === undefined){
       // 無資料：顯示淡灰色，保留視覺邊界（不設為0.0，否則鄉鎮消失）
       fillColor='#FFFFFF'; fillOp=1.0;
@@ -5462,6 +5475,7 @@ function toggleSec(name){
 // ★ 面板恆顯示：未選鄉鎮時在面板內標示提示，而非整個隱藏。
 //   先前依層級隱藏，使用者會找不到某張圖跑去哪；位置固定才好找。
 // 註：daily／hyeto2 已合併為雙內容面板，由 _syncMergedSecs 處理，不列入此表
+// 註：margin（含瀑布圖）在全臺層級也有意義，不列入此表
 const TOWN_ONLY_SECS = ['obs','qpf','seg','stnrank',
                         'stations','risk','windday','windhr','wave','temp'];
 // ★ 逐日雨量／組體雨量圖：全臺與鄉鎮版合併為同一面板，
@@ -7054,12 +7068,24 @@ document.addEventListener('keydown', ev=>{
       map.panBy(d, {animate:true});
       return;
     }
-    if(K === 'ArrowLeft')  stepWin(-1);
-    else if(K === 'ArrowRight') stepWin(1);
+    if(K === 'ArrowLeft'){ stepWin(-1); _syncTimeBar(); }
+    else if(K === 'ArrowRight'){ stepWin(1); _syncTimeBar(); }
     else if(K === 'ArrowUp')    map.zoomIn(1);
     else if(K === 'ArrowDown')  map.zoomOut(1);
   }catch(e){}
 });
+
+// ★ 鍵盤切換時段後同步頂部時間列（下拉、標籤、滾輪）——
+//   先前只改內部狀態，頂部仍顯示舊時間，容易讓人誤判。
+function _syncTimeBar(){
+  try{ if(typeof _fillNavSelects === 'function') _fillNavSelects(); }catch(e){}
+  try{ if(typeof _updateSegLabel === 'function') _updateSegLabel(); }catch(e){}
+  try{ if(typeof _syncHourUI === 'function') _syncHourUI(); }catch(e){}
+  try{
+    const lb = document.getElementById('nav-seg-label');
+    if(lb && typeof _winLabel === 'function') lb.textContent = _winLabel();
+  }catch(e){}
+}
 
 function stepWin(delta){
   if(_hourIdx != null){ stepHour(delta); return; }
@@ -9426,7 +9452,7 @@ function _windSeries(t, kind){
       ws = gws;
     }
     if(bf == null) return;
-      out.push({ms, wd: (x.wd != null ? x.wd : null), bf, ws});
+      out.push({ms, wd: (sg.wd != null ? sg.wd : null), bf, ws});
   });
   return out.sort((a,b)=>a.ms - b.ms);
 }
@@ -10078,7 +10104,7 @@ function renderEastAsiaLayer(){
       const _ds2 = (typeof _darkSea !== 'undefined' && _darkSea);
       L.polyline(r.concat([r[0]]), {
         color: _ds2 ? '#f0c040' : '#000000',
-        weight: _ds2 ? 1.4 : 1,
+        weight: 1,          // ★ 統一 1.0px（使用者指定）
         opacity: _ds2 ? 0.95 : 0.7,
         fill:false, interactive:false}).addTo(eastAsiaLayer);
     });
