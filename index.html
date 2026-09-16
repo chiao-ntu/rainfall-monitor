@@ -4927,32 +4927,40 @@ function _obsHourlyAt(t, h){
 
 // ★ 風力／氣溫／浪高：官方資料為逐 3 小時，取該小時所屬的 3 小時區段值。
 //   同一個區段內的小時顯示同值，跨過邊界才變動。
+// ★ 取該時刻的風力／氣溫／浪高值。
+//   資料**不是等間隔**：過去段來自 wind_hist 的排程快照（間隔 1~6h 不等），
+//   未來段前期逐 3 小時、後期逐 12 小時。實測序列間隔 1~12 小時。
+//   先前用「±3.5 小時內最近的一筆」，間隔一超過 7 小時就整段落空，
+//   於是出現「斷斷續續 3~5 小時沒資料」。
+//   改用階梯取值：取「該時刻之前最近的一筆」，其值有效至下一筆為止 ——
+//   這也才是預報序列的正確語意（某時刻發布的預報持續到下次更新）。
 function _threeHourAt(t, h, m){
-  // ★ 三個序列（_windSeries／_tempSeries／_waveSeries）的共同結構是
-  //   {ms, bf, ws, ...}，數值一律放在 bf。先前誤讀 p.t／p.wave，
-  //   於是永遠取不到值 —— 這就是逐時視窗下風力／氣溫／浪高全空的原因。
   const SER = {wind: _windSeries, temp: _tempSeries, wave: _waveSeries}[m];
   if(typeof SER !== 'function') return null;
   let arr;
   try{ arr = SER(t); }catch(e){ return null; }
   if(!Array.isArray(arr) || !arr.length) return null;
+  const pts = arr.filter(p=>p && p.ms != null && p.bf != null)
+                 .sort((a, b)=>a.ms - b.ms);
+  if(!pts.length) return null;
   const tgt = Date.now() + h * 3600e3;
-  let best = null, bd = Infinity;
-  arr.forEach(p=>{
-    if(!p || p.ms == null || p.bf == null) return;
-    const d = Math.abs(p.ms - tgt);
-    // 容忍 ±3.5h：逐 3 小時資料的半區間各 1.5h，留餘裕避免邊界落空
-    if(d < bd && d <= 3.5 * 3600e3){ bd = d; best = p; }
-  });
-  if(!best) return null;
+  // 超出資料範圍才算沒有資料（前後各留 12 小時，對應最寬的間隔）
+  const EDGE = 12 * 3600e3;
+  if(tgt < pts[0].ms - EDGE || tgt > pts[pts.length-1].ms + EDGE) return null;
+  let best = pts[0];
+  for(const p of pts){
+    if(p.ms <= tgt) best = p; else break;
+  }
+  // 目標早於第一筆時，用第一筆（差距已在 EDGE 內）
   const v = best.bf;
+  const stale = Math.abs(tgt - best.ms) > 6 * 3600e3;   // 距錨點過遠時標示
   if(m === 'wind')
-    return {totalRain: v, etrPct: v, isWind: true, coarse3h: true,
+    return {totalRain: v, etrPct: v, isWind: true, coarse3h: true, stale,
             windWs: best.ws, windSrc: best.src};
   if(m === 'temp')
-    return {totalRain: v, etrPct: v, isTemp: true, coarse3h: true,
+    return {totalRain: v, etrPct: v, isTemp: true, coarse3h: true, stale,
             tmax: best.tmax, tmin: best.tmin};
-  return {totalRain: v, etrPct: v, isWave: true, coarse3h: true,
+  return {totalRain: v, etrPct: v, isWave: true, coarse3h: true, stale,
           waveDir: best.dir, waveBf: best.ws};
 }
 
@@ -6816,6 +6824,8 @@ function clearBtns(){
 }
 
 function setModel(m){
+  // ★ 上方按鈕切換後同步頂部時間列的模式下拉（雙向同步）
+  setTimeout(()=>{ try{ _syncNavSelects(); }catch(e){} }, 0);
   forecastModel = m;
   ['mBest','mEcmwf','mGfs','mHi','mLo','mCwa','mBlend',
    'mIcon','mKma','mGem','mUkmo','mMf','mCma','mBom',
@@ -6838,6 +6848,7 @@ function setModel(m){
 }
 
 function setMode(m){
+  setTimeout(()=>{ try{ _syncNavSelects(); }catch(e){} }, 0);
   mode=m;
   ['bRain','bEtr','bRisk','bWarn','bWind','bTemp','bWave'].forEach(id=>{
     const el=document.getElementById(id);
@@ -7189,7 +7200,10 @@ function stepWin(delta){
 //   看地圖時不必回到上方控制列即可切換，三者與上方按鈕雙向同步。
 const NAV_MODEL_LABEL = {blend:'FORMOSA', cwa:'CWA', best:'CWA+ECMWF',
   ecmwf:'ECMWF', gfs:'GFS', jma:'JMA',
-  aifs:'EC-AIFS', gc:'GC-NCEP', hi:'強降雨', lo:'弱降雨'};
+  aifs:'EC-AIFS', gc:'GC-NCEP', hi:'強降雨', lo:'弱降雨',
+  // ★ 僅校驗模式也列入（前綴 ⌁ 標示不進融合）
+  icon:'⌁ICON', kma:'⌁KMA', gem:'⌁GEM', ukmo:'⌁UKMO',
+  mf:'⌁Météo-France', cma:'⌁CMA', bom:'⌁BOM'};
 function _fillNavSelects(){
   const ms = document.getElementById('nav-model');
   if(ms && !ms.options.length){

@@ -2003,7 +2003,21 @@ OM_VERIFY_ONLY = [
     'cma_grapes_global',      # CMA GRAPES（中國）
     'bom_access_global',      # BOM ACCESS（澳洲）
 ]
-OM_MODELS   = OM_PHYSICAL + OM_AI + OM_VERIFY_ONLY
+# ★ 僅校驗模式改為「輪流抓取」：13 個模式對單一 IP 壓力過大，
+#   實測 Open-Meteo 回 429 限流，ICON／KMA／BOM 常整批失敗。
+#   依日期輪替，每輪只抓其中 3 支 —— 校驗本來就是逐日累積，
+#   隔天補齊不影響統計，反而讓每支都拿得到完整資料。
+def _verify_only_today():
+    import datetime as _dt
+    n = len(OM_VERIFY_ONLY)
+    if n == 0:
+        return []
+    doy = _dt.date.today().toordinal()
+    k = 3                                  # 每輪抓 3 支
+    start = (doy * k) % n
+    return [OM_VERIFY_ONLY[(start + i) % n] for i in range(min(k, n))]
+
+OM_MODELS   = OM_PHYSICAL + OM_AI + _verify_only_today()
 
 
 def fetch_openmeteo(townships):
@@ -2019,7 +2033,7 @@ def fetch_openmeteo(townships):
     all_results, all_max_hourly, all_hourly = {}, {}, {}
     for i, model in enumerate(OM_MODELS):
         if i > 0:
-            time.sleep(2)  # 避免連續請求觸發限流
+            time.sleep(4)  # ★ 由 2 秒加長為 4 秒：13 個模式時 2 秒仍會觸發 429
         result, max_hourly, hourly = fetch_openmeteo_model(townships, model)
         if not result and model in ('ecmwf_ifs',):
             # IFS HRES 若不可用，退回 0.25° 版本（至少有 ECMWF 資料）
