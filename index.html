@@ -686,6 +686,27 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>警戒餘裕</span><span class="sec-arrow" id="arrow-margin">▸</span>
       </div>
       <div class="sec-body" id="body-margin" style="display:none">
+        <div style="display:flex;gap:4px;margin-bottom:5px;align-items:center">
+          <span style="font-size:10px;color:#5a7a95">名次</span>
+          <input id="margin-from" type="number" min="1" value="1"
+            onchange="drawMarginChart(selected)"
+            style="width:38px;font-size:10px;padding:2px;background:#061220;
+            color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+          <span style="font-size:10px;color:#5a7a95">~</span>
+          <input id="margin-to" type="number" min="1" value="20"
+            onchange="drawMarginChart(selected)"
+            style="width:38px;font-size:10px;padding:2px;background:#061220;
+            color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+          <select id="margin-zone" onchange="drawMarginChart(selected)"
+            style="flex:1;font-size:10px;padding:2px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+            <option value="">全部地形</option>
+            <option value="山區">山區</option>
+            <option value="淺山區">淺山區</option>
+            <option value="平地">平地</option>
+            <option value="沿海地區">沿海地區</option>
+          </select>
+        </div>
         <div style="display:flex;gap:4px;margin-bottom:5px">
           <select id="margin-basis" onchange="drawMarginChart(selected)"
             style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
@@ -3014,69 +3035,43 @@ function drawEtrWaterfall(t, canvasId){
   }
 
   const warn = (basis === 'pct') ? 90 : den * 0.9;
-  // ★ 縱軸依「累積值」自適應，不被警戒線拉滿。
-  //   先前 vMax 取 max(累積, 警戒)：警戒 360mm 而累積只到 32mm 時，
-  //   瀑布長條全被壓在圖表底部看不見（正是使用者截圖的狀況）。
-  //   警戒線若超出範圍，改在頂端標註而非撐開座標軸。
-  const accMax = Math.max(...pts.map(p=>Math.max(p.from, p.to)));
-  const vMin = Math.min(0, ...pts.map(p=>Math.min(p.from, p.to)));
-  const inRange = warn <= accMax * 1.35;
-  const vMax = inRange ? warn * 1.12 : Math.max(1, accMax * 1.35);
-
-  // ★ 單一繪圖區（使用者指定）：左軸時雨量、右軸累積值，疊在同一張圖。
-  const pL = isZoom ? 74 : 40, pR = isZoom ? 74 : 44;
-  const pT = isZoom ? 52 : 26, pB = isZoom ? 76 : 46;
+  // ★ 改為「餘裕曲線」（使用者指定）：專注回答「距警戒還差多少、何時歸零」。
+  //   先前把時雨量長條疊進來，與組體雨量圖太像，而且雨一大就互相干擾。
+  //   這裡不畫雨量 —— 雨量看組體圖，這張只看餘裕。
+  const marg = pts.map(p=>warn - p.to);          // 正＝還有餘裕，負＝已超過
+  const mMax = Math.max(...marg), mMin = Math.min(...marg);
+  const pad = Math.max(1, (mMax - mMin) * 0.15);
+  const vMax = mMax + pad, vMin = Math.min(mMin - pad, -pad * 0.5);
+  const pL = isZoom ? 78 : 44, pR = isZoom ? 40 : 16;
+  const pT = isZoom ? 52 : 26, pB = isZoom ? 76 : 48;
   const iw = CW - pL - pR, ih = CH - pT - pB;
   const X = i => pL + iw * (i + 0.5) / pts.length;
   const Y = v => pT + ih * (1 - (v - vMin) / Math.max(1e-9, vMax - vMin));
   const bw = Math.max(isZoom ? 6 : 4, iw / pts.length * 0.9);
+  const y0 = Y(0);
 
-  // 逐時雨量（左軸）—— 級距獨立，只佔下方 45% 高度，
-  // 避免雨一大就把瀑布整個蓋掉（使用者提醒的重點）
-  const rains = pts.map(p=>{
-    const v = _hourlyAt(t, p.hr);
-    return (v && v.v != null) ? v.v : 0;
-  });
-  const rMax = Math.max(1, ...rains);
-  const hyFrac = 0.45;
-  const RY = v => pT + ih - (v / rMax) * ih * hyFrac;
+  // 已超過警戒的區域先鋪底
+  ctx.fillStyle = 'rgba(255,68,68,0.10)';
+  ctx.fillRect(pL, y0, iw, Math.max(0, pT + ih - y0));
 
-  // 格線與右軸（累積值）
-  ctx.strokeStyle = '#12283c'; ctx.fillStyle = '#5a7a95';
-  ctx.font = `${fs}px sans-serif`;
+  // 格線與縱軸（單一縱軸：距警戒的餘裕）
+  ctx.strokeStyle = '#12283c'; ctx.font = `${fs}px sans-serif`;
   const span = vMax - vMin;
   const stepV = span <= 20 ? 5 : span <= 50 ? 10 : span <= 120 ? 25
               : span <= 400 ? 50 : 100;
+  ctx.textAlign = 'right';
   for(let v = Math.ceil(vMin/stepV)*stepV; v <= vMax; v += stepV){
     ctx.beginPath(); ctx.moveTo(pL, Y(v)); ctx.lineTo(pL+iw, Y(v)); ctx.stroke();
-    ctx.textAlign = 'left';
-    ctx.fillText(v.toFixed(0) + (basis==='pct' ? '%' : ''), pL + iw + 4, Y(v) + fs*0.35);
+    ctx.fillStyle = '#5a7a95';
+    ctx.fillText(v.toFixed(0) + (basis==='pct' ? '%' : ''), pL - 5, Y(v) + fs*0.35);
   }
-  // 左軸（時雨量）
-  ctx.textAlign = 'right';
-  [0, rMax/2, rMax].forEach(v=>{
-    ctx.fillStyle = '#4a8aa0';
-    ctx.fillText(v.toFixed(v < 10 ? 1 : 0), pL - 4, RY(v) + fs*0.35);
-  });
+  // 零線＝警戒門檻
+  ctx.strokeStyle = '#FF4444'; ctx.lineWidth = isZoom?2.5:1.8;
+  ctx.beginPath(); ctx.moveTo(pL, y0); ctx.lineTo(pL+iw, y0); ctx.stroke();
+  ctx.fillStyle = '#FF6666'; ctx.textAlign = 'left';
+  ctx.fillText('0 ＝ 達警戒', pL + 3, y0 - 4);
   ctx.textAlign = 'left'; ctx.fillStyle = '#6bc8e8';
-  ctx.fillText('左軸 時雨量(mm/h)', pL + 2, pT - 5);
-  ctx.textAlign = 'right'; ctx.fillStyle = '#9fc8e8';
-  ctx.fillText(basis==='pct' ? '右軸 ETR2%' : '右軸 累積雨量(mm)', pL + iw, pT - 5);
-
-  // 警戒門檻
-  if(inRange){
-    ctx.strokeStyle = '#FF4444'; ctx.lineWidth = isZoom?2.5:1.6;
-    ctx.setLineDash([isZoom?10:5, isZoom?7:4]);
-    ctx.beginPath(); ctx.moveTo(pL, Y(warn)); ctx.lineTo(pL+iw, Y(warn)); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = '#FF6666'; ctx.textAlign = 'left';
-    ctx.fillText(basis==='pct' ? '90% 警戒' : `警戒 ${warn.toFixed(0)}mm`,
-                 pL + 3, Y(warn) - 3);
-  } else {
-    ctx.fillStyle = '#FF6666'; ctx.textAlign = 'right';
-    ctx.fillText(`↑ 警戒 ${basis==='pct' ? '90%' : warn.toFixed(0)+'mm'}（超出圖表範圍）`,
-                 pL + iw, pT + fs + 2);
-  }
+  ctx.fillText(basis==='pct' ? '距警戒餘裕（百分點）' : '距警戒餘裕（mm）', pL + 2, pT - 6);
 
   // 現在的位置
   const nowI = pts.findIndex(p=>p.hr >= 0);
@@ -3087,33 +3082,30 @@ function drawEtrWaterfall(t, canvasId){
     ctx.beginPath(); ctx.moveTo(xn, pT); ctx.lineTo(xn, pT+ih); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = '#ffcc44'; ctx.textAlign = 'center';
-    ctx.fillText('現在', xn, pT - 5);
+    ctx.fillText('現在', xn, pT - 6);
   }
 
-  // 先畫時雨量（在底層），再畫瀑布（在上層）
-  rains.forEach((v, i)=>{
-    if(!(v > 0)) return;
-    ctx.fillStyle = (typeof _hourlyColor === 'function' ? _hourlyColor(v) : null) || '#3aa8c8';
-    ctx.globalAlpha = 0.55;
-    ctx.fillRect(X(i) - bw/2, RY(v), bw, pT + ih - RY(v));
-    ctx.globalAlpha = 1;
-  });
-
-  // 瀑布長條：紅＝上升、綠＝下降、白＝持平
+  // 每小時消耗／回補的餘裕：紅＝變少、綠＝回補、白＝持平
   let firstCross = null;
   const EPS = 0.05;
   pts.forEach((p, i)=>{
-    const y0 = Y(p.from), y1 = Y(p.to);
+    const ya = Y(warn - p.from), yb = Y(warn - p.to);
     ctx.fillStyle = (Math.abs(p.delta) < EPS) ? '#e8eef4'
                   : (p.delta > 0) ? '#FF4444' : '#40d060';
-    ctx.globalAlpha = 0.95;
-    ctx.fillRect(X(i) - bw/2, Math.min(y0, y1), bw, Math.max(2, Math.abs(y1 - y0)));
+    ctx.globalAlpha = 0.9;
+    ctx.fillRect(X(i) - bw/2, Math.min(ya, yb), bw, Math.max(2, Math.abs(yb - ya)));
     ctx.globalAlpha = 1;
     if(firstCross === null && p.from < warn && p.to >= warn) firstCross = p.hr;
   });
 
-  // ★ X 軸：日期與時間分行（同組體雨量圖）—— 先前同一行導致文字重疊
-  ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'center';
+  // 餘裕曲線（從高處往零線下降，一眼看出何時歸零）
+  ctx.strokeStyle = '#8ad8f0'; ctx.lineWidth = isZoom?3:2;
+  ctx.beginPath();
+  marg.forEach((v, i)=> i ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v)));
+  ctx.stroke();
+
+  // ★ X 軸：日期與時間分行（同組體雨量圖）
+  ctx.textAlign = 'center';
   const stepI = Math.max(1, Math.ceil(pts.length / (isZoom ? 14 : 6)));
   let lastDay = null;
   pts.forEach((p, i)=>{
@@ -3121,18 +3113,15 @@ function drawEtrWaterfall(t, canvasId){
     const dk = d.getDate();
     if(i % stepI === 0){
       ctx.fillStyle = '#5a7a95';
-      ctx.fillText(`${String(d.getHours()).padStart(2,'0')}時`,
-                   X(i), pT + ih + fs + 4);
+      ctx.fillText(`${String(d.getHours()).padStart(2,'0')}時`, X(i), pT + ih + fs + 5);
     }
-    // 換日時在第二行標日期
     if(dk !== lastDay){
       if(lastDay !== null){
         ctx.fillStyle = '#7a94ac';
-        ctx.fillText(`${d.getMonth()+1}/${dk}`, X(i), pT + ih + fs*2 + 8);
+        ctx.fillText(`${d.getMonth()+1}/${dk}`, X(i), pT + ih + fs*2 + 9);
         ctx.strokeStyle = '#1a3450'; ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(X(i) - bw/2, pT); ctx.lineTo(X(i) - bw/2, pT + ih);
-        ctx.stroke();
+        ctx.moveTo(X(i) - bw/2, pT); ctx.lineTo(X(i) - bw/2, pT + ih); ctx.stroke();
       }
       lastDay = dk;
     }
@@ -3150,11 +3139,11 @@ function drawEtrWaterfall(t, canvasId){
     const last = pts[pts.length-1].to;
     ctx.fillStyle = last >= warn ? '#FF6666' : '#8ad8a0';
     ctx.fillText(last >= warn ? '期間內已超過警戒'
-      : `期間內未達警戒（最高 ${last.toFixed(0)}${basis==='pct'?'%':'mm'}）`,
+      : `期間內未達警戒（最少剩 ${(warn - last).toFixed(0)}${basis==='pct'?'個百分點':'mm'}）`,
       pL, CH - (isZoom?16:6));
   }
   ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'right';
-  ctx.fillText('紅＝累積上升　綠＝折減下降', CW - pR, CH - (isZoom?16:6));
+  ctx.fillText('紅＝餘裕變少　綠＝折減回補　白＝持平', CW - pR, CH - (isZoom?16:6));
 
   if(isZoom){
     ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
@@ -3188,7 +3177,14 @@ function drawMarginChart(t, canvasId){
   });
   if(basis === 'mm') rows.sort((a,b)=>(a.needMm ?? 1e9) - (b.needMm ?? 1e9));   // 需雨量少者在前（最危險）
   else rows.sort((a,b)=>b.pct - a.pct);
-  const top = rows.slice(0, isZoom ? 22 : 12);
+  // ★ 名次範圍與地形篩選（與其他排行一致）
+  const _zf = (document.getElementById('margin-zone') || {}).value || '';
+  const rows2 = _zf ? rows.filter(r=>_townZone(r.t) === _zf) : rows;
+  const _f0 = Math.max(1, parseInt((document.getElementById('margin-from')||{}).value) || 1);
+  const _t0 = Math.max(_f0, parseInt((document.getElementById('margin-to')||{}).value)
+                             || (isZoom ? 22 : 12));
+  const top = rows2.slice(_f0 - 1, _t0);
+  const rankOff = _f0 - 1;
 
   const F = _fitCanvas(cv, 300, 230);
   const ctx = F.ctx, CW = F.w, CH = F.h;
