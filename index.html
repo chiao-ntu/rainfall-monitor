@@ -2499,16 +2499,26 @@ function _stnZone(st){
 
 function drawStnRankChart(t, canvasId){
   const cv = document.getElementById(canvasId || 'cv-stnrank');
-  if(!cv || !t) return;
-  // ★ 控制項格式與其他排行面板一致：指標、地形、名次範圍
+  // ★ 不再要求必須選取鄉鎮：全臺與縣市層級也要能排（使用者指定）
+  if(!cv) return;
+  // ★ 空間尺度隨層級（使用者指定）：全臺→全部測站、
+  //   縣市→該縣市測站、鄉鎮→該鄉鎮測站。與雨量排行同一套邏輯。
   const _srM = (document.getElementById('sr-metric') || {}).value || 'rain';
   const _srZ = (document.getElementById('sr-zone') || {}).value || '';
-  const _all = (t.stations || [])
-    .map(st=>({name: st.name || '', v: (st.daily_rain || [])[0],
-               etr: st.etr2_pct, st}))
-    .filter(x=>x.name && (_srM === 'etr' ? x.etr != null : x.v != null))
-    .filter(x=>!_srZ || _stnZone(x.st) === _srZ)
-    .sort((a,b)=>(_srM === 'etr' ? (b.etr - a.etr) : (b.v - a.v)));
+  let _all = [];
+  if(_rankScope().level === 'all'){
+    (TOWNSHIPS || []).forEach(tt=>{
+      (tt.stations || []).forEach(st=>{
+        const v = (_srM === 'etr') ? st.etr2_pct : (st.daily_rain || [])[0];
+        if(v == null || !isFinite(v) || !st.name) return;
+        _all.push({name: st.name, v, etr: st.etr2_pct, st, zone: _townZone(tt) || ''});
+      });
+    });
+    _all.sort((a, b)=>b.v - a.v);
+  } else {
+    _all = _rankItems(_srM === 'etr' ? 'etr' : 'rain');
+  }
+  if(_srZ) _all = _all.filter(x=>(x.zone || _stnZone(x.st)) === _srZ);
   const _srF = Math.max(1, parseInt((document.getElementById('sr-from')||{}).value) || 1);
   const _srT = Math.max(_srF, parseInt((document.getElementById('sr-to')||{}).value) || 20);
   const rows = _all.slice(_srF - 1, _srT);
@@ -2586,7 +2596,9 @@ function drawStnRankChart(t, canvasId){
   if(isZoom){
     ctx.fillStyle = '#6bc8e8'; ctx.font = 'bold 20px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`${t.county}${t.township} 測站雨量排名（今日累積）`, CW/2, 26);
+    // ★ 標題隨層級
+    const _scL = _rankScope();
+    ctx.fillText(`${_scL.label} 測站${_srM === 'etr' ? ' ETR2%' : '雨量'}排名`, CW/2, 26);
   }
 }
 
@@ -5814,7 +5826,11 @@ function updateInfo(t){
     }catch(e){}
     // ★ 鄉鎮層級面板標示提示，不隱藏（位置固定才好找）
     _syncMergedSecs(false);
-    TOWN_ONLY_SECS.forEach(nm=>_secHint(nm, '請點選鄉鎮市區查看此項目'));
+    // ★ 測站排名在全臺／縣市層級也有意義（尺度隨層級切換），先畫再標提示
+    try{ drawStnRankChart(null); }catch(e){ console.warn('測站排名失敗', e); }
+    TOWN_ONLY_SECS.filter(nm=>nm !== 'stnrank')
+      .forEach(nm=>_secHint(nm, '請點選鄉鎮市區查看此項目'));
+    _secHint('stnrank', null);
     return;
   }
   // 選了鄉鎮：清除提示、恢復內容顯示
