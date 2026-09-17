@@ -5247,18 +5247,19 @@ function getAccum(t){
     }
   }
 
-  // ── 氣溫模式 ──
-  if(mode==='temp'){
-    const w = _tempOf(t);
-    return {totalRain: w.t, etrPct: w.t, isTemp: true,
-            tmax: w.tmax, tmin: w.tmin};
-  }
-
-  // ── 浪高模式（僅沿海預報點有值；內陸留白）──
-  if(mode==='wave'){
-    const w = _waveOf(t);
-    return {totalRain: w.wave, etrPct: w.wave, isWave: true,
-            waveBf: w.bf, waveDir: w.dir};
+  // ★ 氣溫／浪高／風力在「非逐時」視窗也改走階梯取值（_threeHourAt）。
+  //   先前用 _tempOf／_waveOf，它們會鉗在最後一筆不回報超限，
+  //   於是逐日視窗超過資料範圍後畫面完全不變、也不跳提示。
+  //   以視窗終點換算成「距現在幾小時」後查詢，超出範圍就回無資料。
+  if(mode === 'temp' || mode === 'wave' || mode === 'wind'){
+    const _hOff = Math.round(
+      (segTime(Math.max(0, segTo)).getTime() - Date.now()) / 3600e3);
+    const r3 = _threeHourAt(t, _hOff, mode);
+    if(r3) return r3;
+    const EMPTY2 = {temp: 'isTemp', wave: 'isWave', wind: 'isWind'}[mode];
+    const r4 = {totalRain: null, etrPct: null, coarse3h: true};
+    if(EMPTY2) r4[EMPTY2] = true;
+    return r4;
   }
 
   // ── 風力預測模式 ──
@@ -8980,7 +8981,7 @@ function _seaLineSegs(){
     }
   }
   // marching squares：對每個格子的四邊做線性內插求交點，輸出線段
-  const segs = [];
+  let segs = [];
   const P = (i,j)=>[LA0 + j*STEP, LO0 + i*STEP];
   const mid = (a,b,va,vb)=>{
     const t = va/(va-vb);
@@ -9001,9 +9002,70 @@ function _seaLineSegs(){
       for(let k=0;k+1<e.length;k+=2) segs.push([e[k], e[k+1]]);
     }
   }
+  // ★ 裁掉落在陸地上的線段（使用者指出金馬一帶會畫進中國內陸）。
+  //   海警線的定義就是「海域」，畫到陸地上沒有意義也容易誤讀。
+  //   作法：用鄰國省界多邊形（EAST_ASIA_GEO）與臺灣鄉鎮多邊形做
+  //   點在多邊形內測試，線段兩端只要有一端在陸地就整段捨去。
+  const before = segs.length;
+  segs = segs.filter(sg=>!(_onLand(sg[0]) || _onLand(sg[1])));
   _seaLineCache = segs;
-  console.log(`100km 海警線等值線：${segs.length} 段（格網 ${nx}×${ny}，完整海岸點集）`);
+  console.log(`100km 海警線等值線：${segs.length} 段`
+    + `（格網 ${nx}×${ny}；裁掉陸上 ${before - segs.length} 段）`);
   return _seaLineCache;
+}
+
+// ★ 點是否落在陸地上（供海警線裁切用）。
+//   資料來源：EAST_ASIA_GEO 的鄰國省界 + TOWN_GEO 的臺灣鄉鎮。
+//   以經緯度做射線法；多邊形數量不少，故先用外接矩形快速排除。
+let _landBoxes = null;
+function _buildLandBoxes(){
+  const out = [];
+  const addRings = rings=>{
+    (rings || []).forEach(r=>{
+      if(!r || r.length < 3) return;
+      let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+      r.forEach(p=>{
+        const lng = p[1] != null ? p[1] : p.lng, lat = p[0] != null ? p[0] : p.lat;
+        if(lng < x0) x0 = lng; if(lng > x1) x1 = lng;
+        if(lat < y0) y0 = lat; if(lat > y1) y1 = lat;
+      });
+      out.push({box: [x0, y0, x1, y1], ring: r});
+    });
+  };
+  try{
+    (((typeof EAST_ASIA_GEO !== 'undefined' && EAST_ASIA_GEO) || {}).provinces || [])
+      .forEach(pv=>addRings(pv.rings));
+  }catch(e){}
+  try{
+    ((TOWN_GEO || {}).features || []).forEach(f=>{
+      const g = f.geometry || {};
+      if(g.type === 'Polygon') addRings(g.coordinates.map(r=>r.map(c=>[c[1], c[0]])));
+      else if(g.type === 'MultiPolygon')
+        g.coordinates.forEach(pp=>addRings(pp.map(r=>r.map(c=>[c[1], c[0]]))));
+    });
+  }catch(e){}
+  return out;
+}
+function _onLand(pt){
+  if(!pt) return false;
+  const lat = pt[0] != null ? pt[0] : pt.lat;
+  const lng = pt[1] != null ? pt[1] : pt.lng;
+  if(lat == null || lng == null) return false;
+  if(!_landBoxes) _landBoxes = _buildLandBoxes();
+  for(const item of _landBoxes){
+    const b = item.box;
+    if(lng < b[0] || lng > b[2] || lat < b[1] || lat > b[3]) continue;  // 快速排除
+    // 射線法
+    const r = item.ring;
+    let inside = false;
+    for(let i = 0, j = r.length - 1; i < r.length; j = i++){
+      const yi = r[i][0], xi = r[i][1], yj = r[j][0], xj = r[j][1];
+      if(((yi > lat) !== (yj > lat)) &&
+         (lng < (xj - xi) * (lat - yi) / ((yj - yi) || 1e-12) + xi)) inside = !inside;
+    }
+    if(inside) return true;
+  }
+  return false;
 }
 
 function toggleTyphoonLayer(){
