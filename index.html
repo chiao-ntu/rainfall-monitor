@@ -187,10 +187,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bDarkSea" onclick="toggleDarkSea()"
         style="border-color:#3a4a6a;color:#8aa8d8">🌊 深色海</button>
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
-        style="border-color:#1a4060;color:#8ac8e8">🏷 鄉鎮市區</button>
-      <select id="townNameScope" onchange="setTownNameScope(this.value)"
-        style="display:none;font-size:10px;background:#061220;color:#8ac8e8;
-        border:1px solid #1a4060;border-radius:3px;padding:2px 3px;margin-right:3px"></select>
+        style="border-color:#1a4060;color:#8ac8e8">🏷 行政區名</button>
       <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
         style="border-color:#8a6a3a;color:#e8c87a">📍 雨量測站</button>
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
@@ -3570,6 +3567,8 @@ function pickCounty(c){
   }
   if(_eaMode) _setEastAsia(false);
   _pickedCounty = c || '';
+  // 行政區名的範圍跟著換
+  try{ if(showTownName) renderTownNameLayer(); }catch(e){}
   if(!_pickedCounty){ selected = null; updateInfo(null); return; }
   // 縮放到該縣市範圍
   // ★ 只取本島／主要離島範圍：高雄市轄下含東沙（20.7N/116.7E）與
@@ -3917,6 +3916,44 @@ function drawVerifyChart(canvasId){
 //   排行若直接用它，切到浪高圖層時「累積雨量排行」就會拿到浪高值
 //   ——使用者回報的「排行突然全部空白」正是這個原因。
 //   這裡暫時把 mode 切回 'rain'／'etr' 取值後復原，確保取到的是該類別本身。
+// ★ 排行的空間尺度隨層級決定（使用者指定）：
+//   全臺 → 以鄉鎮為單位；選了縣市 → 以該縣市的測站為單位；
+//   選了鄉鎮 → 以該鄉鎮的測站為單位。
+//   邏輯是「範圍劃到哪，就用該範圍中最合適的尺度排」。
+function _rankScope(){
+  if(selected) return {level:'town', label:`${selected.county}${selected.township}`};
+  if(_pickedCounty) return {level:'county', label:_pickedCounty};
+  return {level:'all', label:'全臺'};
+}
+// 取該範圍內的排行項目：回傳 [{name, v, etr, t, st}]
+function _rankItems(want){
+  const sc = _rankScope();
+  const out = [];
+  if(sc.level === 'all'){
+    // 全臺：鄉鎮為單位
+    (TOWNSHIPS || []).forEach(t=>{
+      const v = _accumAs(t, want);
+      if(v == null || !isFinite(v)) return;
+      out.push({name: (t.county||'') + (t.township||''), v, t,
+                zone: _townZone(t) || ''});
+    });
+  } else {
+    // 縣市／鄉鎮：測站為單位
+    const pool = (sc.level === 'town')
+      ? [selected]
+      : (TOWNSHIPS || []).filter(t=>t.county === _pickedCounty);
+    pool.forEach(t=>{
+      if(!t) return;
+      (t.stations || []).forEach(st=>{
+        const v = (want === 'etr') ? st.etr2_pct : (st.daily_rain || [])[0];
+        if(v == null || !isFinite(v)) return;
+        out.push({name: st.name || '', v, t, st, zone: _townZone(t) || ''});
+      });
+    });
+  }
+  return out.sort((a, b)=>b.v - a.v);
+}
+
 function _accumAs(tt, want){
   const saved = mode;
   try{
@@ -3941,11 +3978,29 @@ function renderRankList(){
   const zoneF = (document.getElementById('rank-zone') || {}).value || '';
   const cur = selected ? (selected.county||'') + (selected.township||'') : '';
 
+  // ★ 空間尺度隨層級：全臺→鄉鎮、縣市／鄉鎮→測站
+  const _sc = _rankScope();
+  if(_sc.level !== 'all'){
+    const want = /etr/.test(metric) ? 'etr' : 'rain';
+    const items = _rankItems(want).filter(x=>!zoneF || x.zone === zoneF);
+    const f0 = Math.max(1, parseInt((document.getElementById('rank-from')||{}).value) || 1);
+    const t0 = Math.max(f0, parseInt((document.getElementById('rank-to')||{}).value) || 20);
+    const sub = items.slice(f0 - 1, t0);
+    const tot = document.getElementById('rank-total');
+    if(tot) tot.textContent = `／共 ${items.length}`;
+    if(_rt) _rt.textContent = `${_sc.label} 測站排行`;
+    const u = /etr/.test(metric) ? '%' : 'mm';
+    el.innerHTML = sub.length
+      ? sub.map((x, i)=>`<div style="display:flex;gap:5px;padding:1px 0">
+          <span style="color:#5a7a95;min-width:22px">${f0 + i}</span>
+          <span style="flex:1">${x.name}</span>
+          <span style="color:#9fc8e8">${x.v.toFixed(u==='%'?1:0)}${u}</span></div>`).join('')
+      : '<div style="color:#7a94ac">此範圍內無測站資料</div>';
+    return;
+  }
+
   const rows = [];
   (TOWNSHIPS || []).forEach(tt=>{
-    // ★ 依圖層的縣市選擇篩選：選「全臺」看全部鄉鎮，
-    //   選某縣市則只看該縣市內的鄉鎮。
-    if(_pickedCounty && tt.county !== _pickedCounty) return;
     const z = _townZone(tt) || '平地';
     if(zoneF && z !== zoneF) return;
     let v = null, unit = 'mm';
@@ -9300,7 +9355,12 @@ function _buildTownNameScope(){
   sel.value = townNameScope;
 }
 
+// 保留相容：範圍已改由縣市下拉決定，此函式僅重繪
 function setTownNameScope(v){
+  try{ renderTownNameLayer(); }catch(e){}
+  return;
+  // 以下為舊流程（已停用）
+  // eslint-disable-next-line no-unreachable
   townNameScope = v || 'ALL';
   renderTownNameLayer();
 }
@@ -10273,6 +10333,14 @@ function _windOf(t, kind){
 // 風力來源下拉：僅在風力預測模式顯示
 
 
+// ★ 行政區名的顯示範圍直接跟隨最前面的縣市下拉（使用者指定）：
+//   東亞＝鄰國省縣名、全臺＝所有鄉鎮、選了縣市＝只標該縣市。
+//   先前另有一個 townNameScope 下拉，與縣市下拉重複，已移除。
+function _townNameScope(){
+  if(_eaMode) return '__EA__';
+  return _pickedCounty || '';        // '' 代表全臺
+}
+
 function toggleTownNameLayer(){
   _bindTownNameZoom();
   showTownName = !showTownName;
@@ -10386,7 +10454,9 @@ function renderTownNameLayer(){
   renderEastAsiaLayer();
   if(!showTownName || typeof TOWN_GEO === 'undefined') return;
   const z = map.getZoom();
-  const all = (townNameScope === 'ALL');
+  // ★ 範圍跟隨縣市下拉（東亞模式由上方已提前 return）
+  const _scope = _pickedCounty || 'ALL';
+  const all = (_scope === 'ALL');
   // 全臺模式在低縮放時標籤會糊成一片，故設下限並提示
   if(all && z < 9){
     if(typeof showToast === 'function')
@@ -10398,7 +10468,7 @@ function renderTownNameLayer(){
   let n = 0;
   (TOWN_GEO.features||[]).forEach(f=>{
     const p = f.properties || {};
-    if(!all && p.COUNTYNAME !== townNameScope) return;
+    if(!all && p.COUNTYNAME !== _scope) return;
     // 鄉鎮市區界：比縣市界細、顏色更淡，只描邊不填色，
     // 且不攔截滑鼠事件（interactive:false），以免蓋住底下鄉鎮的點選與 tooltip。
     const g = f.geometry;
@@ -10427,7 +10497,7 @@ function renderTownNameLayer(){
       iconSize:[_w, _h], iconAnchor:[_w/2, _h/2]}), interactive:false}).addTo(townNameLayer);
     n++;
   });
-  console.log(`鄉鎮市區名稱＋界線：${n} 個（${all ? '全臺' : townNameScope}，zoom ${z}）`);
+  console.log(`行政區名＋界線：${n} 個（${all ? '全臺' : _scope}，zoom ${z}）`);
   // 界線畫完後把縣市界拉回上層，維持「縣市界較粗、鄉鎮界較細」的層次
   try{ if(typeof countyBorder !== 'undefined' && countyBorder) countyBorder.bringToFront(); }catch(e){}
 }
