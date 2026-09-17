@@ -170,6 +170,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <select id="countyPick" onchange="pickCounty(this.value); _syncCountyPickers(this.value)"
       style="font-size:10px;padding:2px 5px;background:#061220;color:#cfe4f5;
       border:1px solid #1a4060;border-radius:3px;max-width:130px">
+      <option value="__EA__">東亞（鄰國行政界）</option>
       <option value="">全臺</option>
       </select>
       <button class="b on" id="bRain"  onclick="setMode('rain')" style="border-color:#3a8a5a;color:#7ee8a8">累積雨量</button>
@@ -561,7 +562,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <select id="sbCountyPick" onchange="pickCounty(this.value); _syncCountyPickers(this.value)"
     style="margin:0 14px 6px;font-size:11px;padding:3px 5px;background:#061220;
     color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
-    <option value="">全臺</option>
+    <option value="__EA__">東亞（鄰國行政界）</option>
+      <option value="">全臺</option>
   </select>
 
   <!-- 搜尋：縣市／鄉鎮／雨量站 -->
@@ -2889,8 +2891,9 @@ function _coverageWarn(){
     if(!anyPt) return `目前無${layer2}資料`;
     const tgt = (_hourIdx != null) ? (Date.now() + _hourIdx * 3600e3)
                                    : segTime(Math.max(0, segTo)).getTime();
-    // 留 12 小時餘裕：階梯取值下，最後一筆的值仍有效至下一次更新
-    if(lastMs != null && tgt > lastMs + 12 * 3600e3){
+    // ★ 資料到哪就呈現到哪（使用者指定）：不留餘裕，
+    //   否則最後會多出一段完全不變的值，讓人誤以為還有預報。
+    if(lastMs != null && tgt > lastMs){
       const d2 = new Date(lastMs);
       const WD2 = ['日','一','二','三','四','五','六'];
       return `此時段未提供${layer2}資料，`
@@ -3536,7 +3539,36 @@ function _fillOneCountyPicker(selId){
   sel._filled = true;
   console.log(`縣市選單：填入 ${n} 個縣市（依分署分組）`);
 }
+// ★ 東亞層級：顯示鄰近國家的省／縣界與名稱，臺灣的行政區名先不標。
+//   目的是看區域尺度的天氣系統位置（颱風、鋒面）與周邊的相對關係。
+let _eaMode = false;
+function _setEastAsia(on){
+  _eaMode = !!on;
+  try{
+    if(_eaMode){
+      // 拉到可看見鄰國的視野
+      map.setView([26.5, 122.0], 5, {animate:true});
+      showTownName = true;          // 讓東亞圖層繪製
+      window._eaHideTaiwanNames = true;
+    } else {
+      window._eaHideTaiwanNames = false;
+      map.setView(TW_HOME.center, TW_HOME.zoom, {animate:true});
+    }
+    renderEastAsiaLayer();
+    renderTownNameLayer && renderTownNameLayer();
+  }catch(e){ console.warn('東亞層級切換失敗', e); }
+}
+
 function pickCounty(c){
+  // ★ 東亞層級：不是縣市，走專屬流程
+  if(c === '__EA__'){
+    _pickedCounty = '';
+    selected = null;
+    _setEastAsia(true);
+    updateInfo(null);
+    return;
+  }
+  if(_eaMode) _setEastAsia(false);
   _pickedCounty = c || '';
   if(!_pickedCounty){ selected = null; updateInfo(null); return; }
   // 縮放到該縣市範圍
@@ -3580,8 +3612,8 @@ function drawCountyTowns(canvasId){
     } else if(metric === 'obs_etr'){
       v = getObsEtr(t);
     } else {
-      const a = getAccum(t);
-      v = a && (metric === 'qpf_etr' ? a.etrPct : a.totalRain);
+      // ★ 用排行專用取值，不受地圖當前圖層影響
+      v = _accumAs(t, metric === 'qpf_etr' ? 'etr' : 'rain');
     }
     if(v == null || !isFinite(v)) return;
     rows.push({t, v, zone: _townZone(t) || '平地',
@@ -3880,6 +3912,25 @@ function drawVerifyChart(canvasId){
   }
 }
 
+// ★ 排行專用取值：不受地圖當前圖層影響。
+//   getAccum() 會依 mode 回傳該圖層的值（浪高、氣溫…），
+//   排行若直接用它，切到浪高圖層時「累積雨量排行」就會拿到浪高值
+//   ——使用者回報的「排行突然全部空白」正是這個原因。
+//   這裡暫時把 mode 切回 'rain'／'etr' 取值後復原，確保取到的是該類別本身。
+function _accumAs(tt, want){
+  const saved = mode;
+  try{
+    mode = (want === 'etr') ? 'etr' : 'rain';
+    const a = getAccum(tt);
+    if(!a) return null;
+    return (want === 'etr') ? a.etrPct : a.totalRain;
+  }catch(e){
+    return null;
+  }finally{
+    mode = saved;
+  }
+}
+
 function renderRankList(){
   // 標題隨範圍變化
   const _rt = document.getElementById('rank-title');
@@ -3905,7 +3956,7 @@ function renderRankList(){
       v = mp ? dr[parseInt(mp[1]) + 1] : dr[0];
     }
     else if(metric === 'qpf_rain'){
-      const acc = getAccum(tt); v = acc && acc.totalRain;
+      v = _accumAs(tt, 'rain');
     }
     // ★ 官方現值須用 getObsEtr()（已回百分比），沒有 t.etr2_now 這個欄位
     else if(metric === 'obs_etr'){ v = getObsEtr(tt); unit = '%'; }   // 官方現值，不隨時段
@@ -3913,7 +3964,7 @@ function renderRankList(){
     //   先前固定讀 tt.etr2_pct，切換時段時排行完全不動，
     //   與「預測累積雨量」會變動的行為互相矛盾。
     else if(metric === 'qpf_etr'){
-      const acc = getAccum(tt); v = acc && acc.etrPct; unit = '%';
+      v = _accumAs(tt, 'etr'); unit = '%';
     }
     if(v == null || !isFinite(v)) return;
     rows.push({t: tt, z, v, unit,
@@ -5021,9 +5072,10 @@ function _threeHourAt(t, h, m){
                  .sort((a, b)=>a.ms - b.ms);
   if(!pts.length) return null;
   const tgt = Date.now() + h * 3600e3;
-  // 超出資料範圍才算沒有資料（前後各留 12 小時，對應最寬的間隔）
-  const EDGE = 12 * 3600e3;
-  if(tgt < pts[0].ms - EDGE || tgt > pts[pts.length-1].ms + EDGE) return null;
+  // ★ 嚴格以資料範圍為界（使用者指定）：超過最後一筆就是沒有資料，
+  //   不再往後延伸，避免呈現一段完全不變的假資料。
+  //   起點前留 3 小時（第一筆的值可回溯代表該時段）。
+  if(tgt < pts[0].ms - 3 * 3600e3 || tgt > pts[pts.length-1].ms) return null;
   let best = pts[0];
   for(const p of pts){
     if(p.ms <= tgt) best = p; else break;
@@ -10324,6 +10376,12 @@ function _logModeDistribution(){
 }
 
 function renderTownNameLayer(){
+  // ★ 東亞層級時不標臺灣的行政區名（使用者指定）：
+  //   此層級是看區域尺度的系統位置，臺灣的鄉鎮名會糊成一片。
+  if(window._eaHideTaiwanNames){
+    try{ if(townNameLayer){ map.removeLayer(townNameLayer); townNameLayer = null; } }catch(e){}
+    return;
+  }
   if(townNameLayer){ map.removeLayer(townNameLayer); townNameLayer = null; }
   renderEastAsiaLayer();
   if(!showTownName || typeof TOWN_GEO === 'undefined') return;
