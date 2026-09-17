@@ -639,19 +639,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span class="sec-arrow" id="arrow-countytowns">▸</span>
       </div>
       <div class="sec-body" id="body-countytowns" style="display:none">
-        <div style="display:flex;gap:4px;margin-bottom:5px;align-items:center">
-          <select id="ct-zone" onchange="drawCountyTowns()"
-            style="flex:1;font-size:10px;padding:2px;background:#061220;color:#cfe4f5;
-            border:1px solid #1a4060;border-radius:3px">
-            <option value="">全部地形</option>
-            <option value="山區">山區</option>
-            <option value="淺山區">淺山區</option>
-            <option value="平地">平地</option>
-            <option value="沿海地區">沿海地區</option>
-          </select>
-          <select id="ct-metric" onchange="drawCountyTowns()"
-            style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
-            border:1px solid #1a4060;border-radius:3px">
+        <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:4px;align-items:center">
+          <select id="ct-metric" onchange="drawCountyTowns()" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
             <option value="qpf_rain">預測累積雨量</option>
             <option value="obs_rain">觀測累積雨量</option>
             <option value="qpf_etr">預估 ETR2%</option>
@@ -665,6 +654,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             style="width:52px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
             border:1px solid #1a4060;border-radius:3px">
           <span id="ct-total" style="font-size:10px;color:#5a7a95"></span>
+        </div>
+        <div style="display:flex;gap:3px;margin-bottom:5px">
+          <select id="ct-zone" onchange="drawCountyTowns()" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+            <option value="">全部地形</option>
+            <option value="山區">山區</option>
+            <option value="淺山區">淺山區</option>
+            <option value="平地">平地</option>
+            <option value="沿海地區">沿海地區</option>
+          </select>
         </div>
         <canvas id="cv-countytowns" style="width:100%;height:280px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
@@ -696,33 +694,27 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>警戒餘裕</span><span class="sec-arrow" id="arrow-margin">▸</span>
       </div>
       <div class="sec-body" id="body-margin" style="display:none">
-        <div style="display:flex;gap:4px;margin-bottom:5px;align-items:center">
-          <span style="font-size:10px;color:#5a7a95">名次</span>
-          <input id="margin-from" type="number" min="1" value="1"
-            onchange="drawMarginChart(selected)"
-            style="width:38px;font-size:10px;padding:2px;background:#061220;
-            color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
-          <span style="font-size:10px;color:#5a7a95">~</span>
-          <input id="margin-to" type="number" min="1" value="20"
-            onchange="drawMarginChart(selected)"
-            style="width:38px;font-size:10px;padding:2px;background:#061220;
-            color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
-          <select id="margin-zone" onchange="drawMarginChart(selected)"
-            style="flex:1;font-size:10px;padding:2px;background:#061220;color:#cfe4f5;
+        <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:4px;align-items:center">
+          <select id="margin-metric" onchange="drawMarginChart(selected)" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+            <option value="mm">距警戒雨量（mm）</option>
+            <option value="pct">距警戒百分比（ETR2%）</option>
+          </select>
+          <input id="margin-from" type="number" min="1" value="1" onchange="drawMarginChart(selected)"
+            style="width:44px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
             border:1px solid #1a4060;border-radius:3px">
+          <span style="font-size:11px;color:#5a7a95">–</span>
+          <input id="margin-to" type="number" min="1" value="20" onchange="drawMarginChart(selected)"
+            style="width:52px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+          <span id="margin-total" style="font-size:10px;color:#5a7a95"></span>
+        </div>
+        <div style="display:flex;gap:3px;margin-bottom:5px">
+          <select id="margin-zone" onchange="drawMarginChart(selected)" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
             <option value="">全部地形</option>
             <option value="山區">山區</option>
             <option value="淺山區">淺山區</option>
             <option value="平地">平地</option>
             <option value="沿海地區">沿海地區</option>
-          </select>
-        </div>
-        <div style="display:flex;gap:4px;margin-bottom:5px">
-          <select id="margin-basis" onchange="drawMarginChart(selected)"
-            style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
-            border:1px solid #1a4060;border-radius:3px">
-            <option value="mm">距警戒雨量（mm）</option>
-            <option value="pct">距警戒百分比（ETR2%）</option>
           </select>
         </div>
         <canvas id="cv-margin" style="width:100%;height:230px;display:block;
@@ -820,33 +812,28 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <span>測站雨量排名</span><span class="sec-arrow" id="arrow-stnrank">▸</span>
       </div>
       <div class="sec-body" id="body-stnrank" style="display:none">
-        <div style="display:flex;gap:4px;margin-bottom:5px;align-items:center">
-          <select id="sr-metric" onchange="drawStnRank()"
-            style="flex:1;font-size:10px;padding:2px;background:#061220;color:#cfe4f5;
-            border:1px solid #1a4060;border-radius:3px">
+        <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:4px;align-items:center">
+          <select id="sr-metric" onchange="drawStnRank()" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
             <option value="rain">累積雨量</option>
             <option value="etr">ETR2%</option>
           </select>
-          <select id="sr-zone" onchange="drawStnRank()"
-            style="flex:1;font-size:10px;padding:2px;background:#061220;color:#cfe4f5;
+          <input id="sr-from" type="number" min="1" value="1" onchange="drawStnRank()"
+            style="width:44px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
             border:1px solid #1a4060;border-radius:3px">
+          <span style="font-size:11px;color:#5a7a95">–</span>
+          <input id="sr-to" type="number" min="1" value="20" onchange="drawStnRank()"
+            style="width:52px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+          <span id="sr-total" style="font-size:10px;color:#5a7a95"></span>
+        </div>
+        <div style="display:flex;gap:3px;margin-bottom:5px">
+          <select id="sr-zone" onchange="drawStnRank()" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
             <option value="">全部地形</option>
             <option value="山區">山區</option>
             <option value="淺山區">淺山區</option>
             <option value="平地">平地</option>
             <option value="沿海地區">沿海地區</option>
           </select>
-        </div>
-        <div style="display:flex;gap:4px;margin-bottom:5px;align-items:center">
-          <span style="font-size:10px;color:#5a7a95">名次</span>
-          <input id="sr-from" type="number" min="1" value="1" onchange="drawStnRank()"
-            style="width:38px;font-size:10px;padding:2px;background:#061220;
-            color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
-          <span style="font-size:10px;color:#5a7a95">~</span>
-          <input id="sr-to" type="number" min="1" value="20" onchange="drawStnRank()"
-            style="width:38px;font-size:10px;padding:2px;background:#061220;
-            color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
-          <span id="sr-total" style="font-size:10px;color:#5a7a95"></span>
         </div>
         <canvas id="cv-stnrank" style="width:100%;height:220px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
@@ -2885,21 +2872,25 @@ function _coverageWarn(){
   //   （先前一律看 QPF，於是浪高說「近期沒資料」卻又標出更後期的日期）。
   if(mode === 'wind' || mode === 'temp' || mode === 'wave'){
     const SER = {wind: _windSeries, temp: _tempSeries, wave: _waveSeries}[mode];
+    // ★ 必須掃過全部鄉鎮：浪高只有 109 個沿海鄉鎮有值，
+    //   先前只取前 60 個（多為內陸），得到的時間範圍偏短，
+    //   於是「提示說沒資料、實際卻有更後期的值」。
+    //   掃完即停：找到最晚的時間點就夠了。
     let lastMs = null, anyPt = false;
-    (TOWNSHIPS || []).slice(0, 60).forEach(tt=>{
+    (TOWNSHIPS || []).forEach(tt=>{
       let arr; try{ arr = SER(tt); }catch(e){ return; }
       if(!Array.isArray(arr) || !arr.length) return;
       anyPt = true;
-      arr.forEach(p=>{
-        if(p && p.ms != null && p.bf != null && (lastMs == null || p.ms > lastMs))
-          lastMs = p.ms;
-      });
+      const last = arr[arr.length - 1];
+      if(last && last.ms != null && last.bf != null
+         && (lastMs == null || last.ms > lastMs)) lastMs = last.ms;
     });
     const layer2 = {wind:'風力', temp:'氣溫', wave:'浪高'}[mode];
     if(!anyPt) return `目前無${layer2}資料`;
     const tgt = (_hourIdx != null) ? (Date.now() + _hourIdx * 3600e3)
                                    : segTime(Math.max(0, segTo)).getTime();
-    if(lastMs != null && tgt > lastMs){
+    // 留 12 小時餘裕：階梯取值下，最後一筆的值仍有效至下一次更新
+    if(lastMs != null && tgt > lastMs + 12 * 3600e3){
       const d2 = new Date(lastMs);
       const WD2 = ['日','一','二','三','四','五','六'];
       return `此時段未提供${layer2}資料，`
