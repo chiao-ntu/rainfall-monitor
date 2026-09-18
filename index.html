@@ -1058,7 +1058,7 @@ function showHyetograph(t, s, e){
   // ★ 這裡是「站級」ETR2%（來自 data.json 的站別資料），
   //   etr2_now.json 只覆寫鄉鎮級 t.etr2_pct，故不可掛上官方現值的更新時間。
   // ★ etr2_pct 已是百分比（後端改為 0~100+），不再乘 100
-    if(s.etr2_pct != null) title += `｜本站ETR2% ${Math.round(s.etr2_pct*10)/10}%（主排程值）`;
+    if(s.etr2_pct != null) title += `｜本站ETR2% ${Math.round((_asPct(s.etr2_pct)||0)*10)/10}%（主排程值）`;
   if(!hasStnObs) title += `｜未配對觀測，過去段以鄉鎮回算`;
   document.getElementById('station-pop-title').textContent = title;
 
@@ -1776,7 +1776,7 @@ function renderStationLayer(){
       //   ③ 兩者皆無 → 才是真的沒有觀測依據
       let pct;
       if(st.etr2_pct != null){
-        pct = `<b>${st.etr2_pct.toFixed(0)}%</b>`;   // 已是百分比
+        pct = `<b>${(_asPct(st.etr2_pct)||0).toFixed(0)}%</b>`;
       } else {
         const tv = getObsEtr(t);
         pct = (tv != null)
@@ -2352,7 +2352,7 @@ function onSearchPick(i){
   const t = r.t;
   if(!t) return;
   if(t.lat != null && t.lng != null) map.setView([t.lat, t.lng], 11);
-  selected = t;
+  window._townClickAt = Date.now(); selected = t;
   try{ renderLayer(); }catch(e){}
   try{ updateInfo(t); }catch(e){}
 }
@@ -2537,7 +2537,7 @@ function drawStnRankChart(t, canvasId){
   if(_rankScope().level === 'all'){
     (TOWNSHIPS || []).forEach(tt=>{
       (tt.stations || []).forEach(st=>{
-        const v = (_srM === 'etr') ? st.etr2_pct : (st.daily_rain || [])[0];
+        const v = (_srM === 'etr') ? _asPct(st.etr2_pct) : (st.daily_rain || [])[0];
         if(v == null || !isFinite(v) || !st.name) return;
         _all.push({name: st.name, v, etr: st.etr2_pct, st, zone: _townZone(tt) || ''});
       });
@@ -2823,7 +2823,7 @@ function _bindScatterClick(cv, hits, isZoom){
     ev.stopPropagation();               // 不要同時觸發放大／關閉
     const tt = best.town;
     if(tt.lat != null && tt.lng != null) map.setView([tt.lat, tt.lng], 11);
-    selected = tt;
+    window._townClickAt = Date.now(); selected = tt;
     // 放大檢視時先關閉，才看得到地圖
     if(cv._isZoom && typeof closeChartZoom === 'function'){
       try{ closeChartZoom(); }catch(e){}
@@ -3297,9 +3297,12 @@ function drawMarginChart(t, canvasId){
   const rows = [];
   (TOWNSHIPS || []).forEach(tt=>{
     if(_pickedCounty && tt.county !== _pickedCounty) return;
+    // ★ 警戒餘裕圖固定以「鄉鎮」為單位（使用者指定）：
+    //   這張圖回答的是「哪些行政區快達標」，測站尺度反而不易判讀；
+    //   測站層級的排行看「測站雨量排名」與「觀測站清單」。
     // ★ 用排行專用取值：getAccum 會依地圖當前圖層回傳對應的值，
     //   切到浪高／氣溫時 etrPct 拿到的是浪高或氣溫（資料內容就會錯亂）。
-    const pct = _accumAs(tt, 'etr');
+    const pct = (getObsEtr(tt) != null) ? getObsEtr(tt) : _accumAs(tt, 'etr');
     if(pct == null || !isFinite(pct)) return;
     const den = _etrDen(tt);                       // 警戒值（mm）
     const k = (tt.county||'') + (tt.township||'');
@@ -3414,7 +3417,7 @@ function drawMarginChart(t, canvasId){
       if(typeof closeChartZoom === 'function'){ try{ closeChartZoom(); }catch(e){} }
       const tt = best.t;
       if(tt.lat != null && tt.lng != null) map.setView([tt.lat, tt.lng], 11);
-      selected = tt;
+      window._townClickAt = Date.now(); selected = tt;
       try{ renderLayer(); updateInfo(tt); }catch(e){}
     }, true);
   }
@@ -3661,7 +3664,8 @@ function drawCountyTowns(canvasId){
     } else if(metric === 'margin_mm' || metric === 'margin_pct'){
       // ★ 警戒餘裕：與雨量排行同一套算法（90% 為警戒）
       const den = _etrDen(t);
-      const cur = _accumAs(t, 'etr');
+      // 與「觀測 ETR2%」同源（同雨量排行的處理）
+      const cur = (getObsEtr(t) != null) ? getObsEtr(t) : _accumAs(t, 'etr');
       if(!(den > 0) || cur == null || !isFinite(cur)) return;
       v = (metric === 'margin_pct') ? (90 - cur) : ((90 - cur) / 100 * den);
     } else {
@@ -3790,7 +3794,7 @@ function drawCountyTowns(canvasId){
       if(typeof closeChartZoom === 'function'){ try{ closeChartZoom(); }catch(e){} }
       const tt = best.t;
       if(tt.lat != null && tt.lng != null) map.setView([tt.lat, tt.lng], 11);
-      selected = tt;
+      window._townClickAt = Date.now(); selected = tt;
       try{ renderLayer(); updateInfo(tt); }catch(e){}
     }, true);
   }
@@ -4038,7 +4042,7 @@ function renderStationList(){
     if(!tt) return;
     (tt.stations || []).forEach(st=>{
       if(!st || !st.name) return;
-      const v = (want === 'etr') ? st.etr2_pct : (st.daily_rain || [])[0];
+      const v = (want === 'etr') ? _asPct(st.etr2_pct) : (st.daily_rain || [])[0];
       items.push({st, t: tt, v: (v == null || !isFinite(v)) ? null : v});
     });
   });
@@ -4098,7 +4102,7 @@ function _rankItems(want){
     pool.forEach(t=>{
       if(!t) return;
       (t.stations || []).forEach(st=>{
-        const v = (want === 'etr') ? st.etr2_pct : (st.daily_rain || [])[0];
+        const v = (want === 'etr') ? _asPct(st.etr2_pct) : (st.daily_rain || [])[0];
         if(v == null || !isFinite(v)) return;
         out.push({name: st.name || '', v, t, st, zone: _townZone(t) || ''});
       });
@@ -4161,7 +4165,10 @@ function renderRankList(){
     if(metric === 'margin_mm' || metric === 'margin_pct'){
       const den = _etrDen(tt);
       if(!(den > 0)) return;
-      const cur = _accumAs(tt, 'etr');          // 目前 ETR2%
+      // ★ 與右側「觀測 ETR2%」同源：有官方觀測值就用它，否則退回預測值。
+      //   先前一律用預測值，於是「觀測 ETR2% + 警戒餘裕」加起來不等於 90，
+      //   一眼就看得出兩邊不同源。
+      const cur = (getObsEtr(tt) != null) ? getObsEtr(tt) : _accumAs(tt, 'etr');
       if(cur == null || !isFinite(cur)) return;
       if(metric === 'margin_pct'){ v = 90 - cur; unit = '%'; }
       else { v = (90 - cur) / 100 * den; unit = 'mm'; }
@@ -4249,7 +4256,7 @@ function _rankPick(key){
   const tt = (TOWNSHIPS || []).find(x=>(x.county||'') + (x.township||'') === key);
   if(!tt) return;
   if(tt.lat != null && tt.lng != null) map.setView([tt.lat, tt.lng], 11);
-  selected = tt;
+  window._townClickAt = Date.now(); selected = tt;
   try{ renderLayer(); }catch(e){}
   try{ updateInfo(tt); }catch(e){}
 }
@@ -5584,9 +5591,17 @@ function _etr2NowLabel(){
   return m ? `${m[2]}/${m[3]} ${m[4]}:${m[5]}` : raw;
 }
 
+// ★ 官方觀測 ETR2%。歷史上後端存過「比值」(0.48) 也存過「百分比」(48)，
+//   兩種格式並存時顯示會差 100 倍。這裡自動辨識：
+//   ETR2 極少低於 1.5%，故 ≤1.5 一律視為比值並乘 100。
+//   （後端已統一為百分比，此判斷是為了相容尚未重新部署的舊 data.json）
+function _asPct(v){
+  if(v === null || v === undefined || !isFinite(v)) return null;
+  return (Math.abs(v) <= 1.5) ? v * 100 : v;
+}
 function getObsEtr(t){
-  if(t.etr2_pct === null || t.etr2_pct === undefined) return null;
-  return Math.round(t.etr2_pct * 10) / 10;   // 後端已是百分比
+  const v = _asPct(t.etr2_pct);
+  return (v == null) ? null : Math.round(v * 10) / 10;
 }
 
 // ════════════════════════════════════════════════
@@ -7724,7 +7739,13 @@ function init(){
   }, 100);
 
   // 點選海洋取消選取（在 map 初始化後才能呼叫）
+  // ★ Canvas 渲染下，點鄉鎮色塊會同時觸發圖層的 click 與地圖的 click。
+  //   若地圖的處理直接重置，剛選好的鄉鎮會在同一次點擊中被取消
+  //   ——使用者看到的就是「地圖點不動」。
+  //   故圖層點擊時打一個時間戳，地圖端在 120ms 內忽略。
+  window._townClickAt = 0;
   map.on('click', function(){
+    if(Date.now() - (window._townClickAt || 0) < 120) return;
     // ★ 點地圖空白處（海面）→ 整個回到全臺層級（使用者指定）：
     //   取消選取、清掉縣市篩選，並同步所有地區切換的下拉與面板。
     if(!selected && !_pickedCounty) return;
@@ -7812,7 +7833,7 @@ function updateAllDistrictCharts(){
 function focusTownship(county, township){
   const t = TOWNSHIPS.find(x=>x.county===county && x.township===township);
   if(!t) return;
-  selected = t;
+  window._townClickAt = Date.now(); selected = t;
   renderLayer();
   updateInfo(t);
   document.getElementById('iCont-hint').style.display='none';
