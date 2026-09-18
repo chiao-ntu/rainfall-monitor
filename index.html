@@ -3690,8 +3690,12 @@ function drawCountyTowns(canvasId){
   // ★ 警戒餘裕：0（＝達警戒）放在右邊，長條由左往右逼近 0，
   //   超過警戒則突出到 0 的右側 —— 與警戒餘裕圖的呈現一致。
   const _isMg = /^margin_/.test(metric);
+  // ★ 警戒餘裕：0 在最右。正值（還有餘裕）往左，負值（已超過）往右突出。
+  //   右側保留 12% 寬度給超過的部分，否則負值會被裁掉。
+  const _ovf = 0.12;
   const X = _isMg
-    ? (v => pL + iw * Math.max(0, Math.min(1, 1 - Math.max(0, v) / vMax)))
+    ? (v => pL + iw * Math.max(0, Math.min(1,
+        (1 - _ovf) * (1 - Math.max(-vMax, Math.min(vMax, v)) / vMax) )))
     : (v => pL + iw * Math.min(1, Math.abs(v) / vMax));
   const ZC = {'山區':'#FF0000', '淺山區':'#FFFF00', '平地':'#00FF00', '沿海地區':'#00FFFF'};
   // ★ 一律用雨量色階（與雨量排行一致）：百分比先換算回等效雨量再取色，
@@ -3721,7 +3725,15 @@ function drawCountyTowns(canvasId){
     ctx.fillText(r.name.slice(0, isZoom ? 10 : 5), pL - 9, y + fs*0.35);
     const col = _barCol(r);
     ctx.fillStyle = col; ctx.globalAlpha = 0.9;
+    // ★ 警戒餘裕：0 在最右，長條自 0 往左長（餘裕越多越長）；
+  //   已超過警戒（負值）時長條反向，從 0 往右突出。
+  if(_isMg){
+    const x0 = X(0);                    // 0 的位置（靠右、留超出餘地）
+    const xv = X(r.v);
+    ctx.fillRect(Math.min(x0, xv), y - bh/2, Math.max(1, Math.abs(x0 - xv)), bh);
+  } else {
     ctx.fillRect(pL, y - bh/2, Math.max(1, X(r.v) - pL), bh);
+  }
     ctx.globalAlpha = 1;
     // 地形色細條
     ctx.fillStyle = ZC[r.zone] || '#00FF00';
