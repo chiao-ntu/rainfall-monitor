@@ -7040,8 +7040,22 @@ async function tryLoadLive(){
     //   「並行」背景載入。先前七個是循序 await —— 每個都要等前一個下載完，
     //   總等待時間是七個的加總，使用者得盯著空白畫面。
     //   ★ 資料一筆都沒有少，只是不再擋住首次繪製。
-    window._auxDone = Promise.all([
-      (async()=>{
+    // ★ 並行但限流（最多 3 個同時）：完全並行在頻寬吃緊時會互搶，
+    //   每個都變慢；完全循序又是七個時間相加。3 個是折衷。
+    //   小檔優先，大檔（rain_hourly 232KB）最後，讓輕量面板先能用。
+    const _auxLimit = (tasks, n)=>{
+      let i = 0;
+      const run = ()=>{
+        if(i >= tasks.length) return Promise.resolve();
+        const t = tasks[i++];
+        // tasks 是「工廠函式」而非已啟動的 Promise —— 立即執行的話
+        //   限流不會生效（全部已經在跑了）。
+        return Promise.resolve().then(t).then(run, run);
+      };
+      return Promise.all(Array.from({length: Math.min(n, tasks.length)}, run));
+    };
+    window._auxDone = _auxLimit([
+      ()=>(async()=>{
     // ── 預報校驗（verify.json，保留 60 天供回溯）──
     try{
       const vr = await fetch('verify.json?t=' + Date.now());
@@ -7053,7 +7067,7 @@ async function tryLoadLive(){
       }
     }catch(e){ console.warn('verify.json 尚未產生（需執行過一次主排程）'); }
       })(),
-      (async()=>{
+      ()=>(async()=>{
     // ── 逐時觀測雨量（rain_hourly.json，由高頻腳本累積 50 小時）──
     //   ★ 這是「過去逐時」的唯一資料來源：測站逐時實測，
     //     讓過去視窗也能做到 1 小時解析度（先前只有逐日觀測）。
@@ -7090,7 +7104,7 @@ async function tryLoadLive(){
       }
     }catch(e){ console.warn('rain_hourly.json 讀取失敗（過去逐時不可用）', e.message); }
       })(),
-      (async()=>{
+      ()=>(async()=>{
     // ── 雷達1h QPF：獨立讀 radar.json（由每小時腳本寫，與 data.json 分離避免競態）──
     let _radarDt = d.radar_qpf_time || '';
     try{
@@ -7108,7 +7122,7 @@ async function tryLoadLive(){
       }
     }catch(e){ console.warn('radar.json 載入失敗（不影響其他）：', e.message); }
       })(),
-      (async()=>{
+      ()=>(async()=>{
     // ── ETR2 官方現值：獨立讀 etr2_now.json（由每小時腳本寫）──
     //   ETR2 每小時都在變，等主排程 6h 太慢；覆寫 t.etr2 / t.etr2_pct 兩個欄位，
     //   讓「ETR2%官方現值」與所有以官方值為錨點的推算（calcEtr2AtSeg）一起變新。
@@ -7142,7 +7156,7 @@ async function tryLoadLive(){
       }
     }catch(e){ console.warn('etr2_now.json 載入失敗（沿用 data.json 的值）：', e.message); }
       })(),
-      (async()=>{
+      ()=>(async()=>{
     // ── 颱風動態：獨立讀 typhoon_now.json（由每小時腳本寫）──
     //   颱風變化快，主排程 6 小時太慢；此檔每小時更新，覆寫 data.json 的兩個欄位。
     window.TYPHOON_NOW_TIME = '';
@@ -7159,7 +7173,7 @@ async function tryLoadLive(){
       }
     }catch(e){ console.warn('typhoon_now.json 載入失敗（沿用 data.json 的值）：', e.message); }
       })(),
-      (async()=>{
+      ()=>(async()=>{
     // ── 風力歷史：獨立讀 wind_hist.json（每小時腳本累積）──
     //   CWA 不提供過去的風力預報，故由本系統逐時保存快照，
     //   用於在圖上呈現過去兩天的實際走勢。
@@ -7173,7 +7187,7 @@ async function tryLoadLive(){
       }
     }catch(e){ console.warn('wind_hist.json 載入失敗（圖表僅顯示預報段）：', e.message); }
       })(),
-      (async()=>{
+      ()=>(async()=>{
     // ── 氣溫／浪高歷史：env_hist.json（同樣由每小時腳本累積）──
     //   先前只有風力有歷史，氣溫與浪高圖的「現在」之前整片空白，
     //   與風力圖不一致；補上後三張圖的過去段呈現方式才一致。
@@ -7187,8 +7201,8 @@ async function tryLoadLive(){
       }
     }catch(e){ console.warn('env_hist.json 載入失敗（氣溫/浪高圖僅顯示預報段）：', e.message); }
       })(),
-    ]).then(()=>{
-      console.log('輔助資料載入完成（並行）');
+    ], 3).then(()=>{
+      console.log('輔助資料載入完成');
       // 這些資料到齊後才需要重畫的面板
       try{ if(typeof renderVerify === 'function') renderVerify(); }catch(e){}
       try{ renderLayer(); }catch(e){}
