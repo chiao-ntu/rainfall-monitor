@@ -678,6 +678,45 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           onclick="toggleChartZoom('cv-countytowns', event)"></canvas>
       </div>
     </div>
+    <div class="sec" id="sec-margin">
+      <div class="sec-h" onclick="toggleSec('margin')">
+        <span>警戒餘裕預測達標時間</span><span class="sec-arrow" id="arrow-margin">▸</span>
+      </div>
+      <div class="sec-body" id="body-margin" style="display:none">
+        <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:4px;align-items:center">
+          <select id="margin-metric" onchange="drawEtrWaterfall(selected)" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+            <option value="mm">距警戒雨量（mm）</option>
+            <option value="pct">距警戒百分比（ETR2%）</option>
+          </select>
+          <input id="margin-from" type="number" min="1" value="1" onchange="drawEtrWaterfall(selected)"
+            style="width:44px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+          <span style="font-size:11px;color:#5a7a95">–</span>
+          <input id="margin-to" type="number" min="1" value="20" onchange="drawEtrWaterfall(selected)"
+            style="width:52px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+          <span id="margin-total" style="font-size:10px;color:#5a7a95"></span>
+        </div>
+        <div style="display:flex;gap:3px;margin-bottom:5px">
+          <select id="margin-zone" onchange="drawEtrWaterfall(selected)" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+            <option value="">全部地形</option>
+            <option value="山區">山區</option>
+            <option value="淺山區">淺山區</option>
+            <option value="平地">平地</option>
+            <option value="沿海地區">沿海地區</option>
+          </select>
+        </div>
+        <!-- ★ 原「距警戒雨量／百分比」圖已移除（與下方預測達標時間重複），
+             控制列沿用給預測達標時間使用 -->
+
+        <!-- ETR2 瀑布圖：逐時段的累積與折減（選鄉鎮後才有意義） -->
+        <canvas id="cv-waterfall" style="width:100%;height:300px;display:block;
+          background:#040c14;border-radius:4px;cursor:zoom-in"
+          onclick="toggleChartZoom('cv-waterfall', event)"
+          onmousemove="showChartTooltip(event,'cv-waterfall')"
+          onmouseleave="hideChartTooltip()"></canvas>
+      </div>
+    </div>
     <div class="sec" id="sec-etrphase">
       <div class="sec-h" onclick="toggleSec('etrphase')">
         <span>雨量與地形分佈</span><span class="sec-arrow" id="arrow-etrphase">▸</span>
@@ -696,55 +735,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <canvas id="cv-elevrain" style="width:100%;height:200px;display:block;
           background:#040c14;border-radius:4px;cursor:zoom-in"
           onclick="toggleChartZoom('cv-elevrain', event)"></canvas>
-      </div>
-    </div>
-    <div class="sec" id="sec-margin">
-      <div class="sec-h" onclick="toggleSec('margin')">
-        <span>警戒餘裕</span><span class="sec-arrow" id="arrow-margin">▸</span>
-      </div>
-      <div class="sec-body" id="body-margin" style="display:none">
-        <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:4px;align-items:center">
-          <select id="margin-metric" onchange="drawMarginChart(selected)" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
-            <option value="mm">距警戒雨量（mm）</option>
-            <option value="pct">距警戒百分比（ETR2%）</option>
-          </select>
-          <input id="margin-from" type="number" min="1" value="1" onchange="drawMarginChart(selected)"
-            style="width:44px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
-            border:1px solid #1a4060;border-radius:3px">
-          <span style="font-size:11px;color:#5a7a95">–</span>
-          <input id="margin-to" type="number" min="1" value="20" onchange="drawMarginChart(selected)"
-            style="width:52px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
-            border:1px solid #1a4060;border-radius:3px">
-          <span id="margin-total" style="font-size:10px;color:#5a7a95"></span>
-        </div>
-        <div style="display:flex;gap:3px;margin-bottom:5px">
-          <select id="margin-zone" onchange="drawMarginChart(selected)" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
-            <option value="">全部地形</option>
-            <option value="山區">山區</option>
-            <option value="淺山區">淺山區</option>
-            <option value="平地">平地</option>
-            <option value="沿海地區">沿海地區</option>
-          </select>
-        </div>
-        <canvas id="cv-margin" style="width:100%;height:230px;display:block;
-          background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-margin', event)"></canvas>
-
-        <!-- ETR2 瀑布圖：逐時段的累積與折減（選鄉鎮後才有意義） -->
-        <div style="display:flex;gap:4px;margin:8px 0 5px;align-items:center">
-          <span style="font-size:11px;color:#6bc8e8">預測達標時間</span>
-          <select id="wf-basis" onchange="drawEtrWaterfall(selected)"
-            style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
-            border:1px solid #1a4060;border-radius:3px">
-            <option value="mm">ETR2（mm）</option>
-            <option value="pct">ETR2（%）</option>
-          </select>
-        </div>
-        <canvas id="cv-waterfall" style="width:100%;height:300px;display:block;
-          background:#040c14;border-radius:4px;cursor:zoom-in"
-          onclick="toggleChartZoom('cv-waterfall', event)"
-          onmousemove="showChartTooltip(event,'cv-waterfall')"
-          onmouseleave="hideChartTooltip()"></canvas>
       </div>
     </div>
     <!-- 區塊：逐日雨量（全臺＝各分署；選鄉鎮＝該鄉鎮 15 天） -->
@@ -3125,7 +3115,8 @@ function drawEtrWaterfall(t, canvasId){
   const cv = document.getElementById(canvasId || 'cv-waterfall');
   if(!cv) return;
   const isZoom = (canvasId === 'chart-zoom-canvas');
-  const basis = (document.getElementById('wf-basis') || {}).value || 'mm';
+  // ★ 沿用面板上方統一的控制項（原 wf-basis 已移除）
+  const basis = (document.getElementById('margin-metric') || {}).value || 'mm';
   const F = _fitCanvas(cv, 300, isZoom ? 860 : 300);
   const ctx = F.ctx, CW = F.w, CH = F.h;
   const fs = isZoom ? 15 : 9;
@@ -3730,9 +3721,10 @@ function drawCountyTowns(canvasId){
   // ★ 一律用雨量色階（與雨量排行一致）：百分比先換算回等效雨量再取色，
   //   讓「顏色＝雨量多寡」在所有指標下都成立。
   // ★ 色階依指標而定：雨量 → RAIN_SCALE、ETR2% → ETR_SCALE（同地圖色階）
-  const _SCALE = (unit === '%') ? ETR_SCALE : RAIN_SCALE;
-  const _barCol = r=>(_SCALE.find(b=>Math.abs(r.v) < b.max)
-                      || _SCALE[_SCALE.length-1]).color;
+  const _SCALE = (metric === 'margin_pct') ? MARGIN_PCT_SCALE
+               : (unit === '%') ? ETR_SCALE : RAIN_SCALE;
+  const _barCol = r=>(metric === 'margin_pct') ? marginPctColor(r.v)
+    : (_SCALE.find(b=>Math.abs(r.v) < b.max) || _SCALE[_SCALE.length-1]).color;
 
   ctx.strokeStyle = '#12283c'; ctx.fillStyle = '#5a7a95';
   ctx.font = `${fs}px sans-serif`; ctx.textAlign = 'center';
@@ -3773,18 +3765,17 @@ function drawCountyTowns(canvasId){
   {
     const txt = r.v.toFixed(unit === '%' ? 0 : 1) + unit;
     ctx.fillStyle = '#cfe4f5';
-    if(_isMg){
-      ctx.textAlign = 'right';
-      ctx.fillText(txt, Math.min(X(r.v), X(0)) - 5, y + fs*0.35);
-      ctx.textAlign = 'left';
-    } else {
-      ctx.fillText(txt, X(r.v) + 5, y + fs*0.35);
-    }
+    // ★ 標籤一律靠右（使用者指定）：警戒餘裕的長條偏左，
+    //   標籤若跟著放左邊會跟鄉鎮名擠在一起。
+    ctx.textAlign = 'right';
+    ctx.fillText(txt, pL + iw, y + fs*0.35);
+    ctx.textAlign = 'left';
   }
     hits.push({y, h: bh, t: r.t});
   });
   _drawScaleLegend(ctx, CW, CH, _SCALE, fs, isZoom,
-    `${metName}　左緣細條＝地形分類`);
+    `${metName}`);
+  try{ _drawTerrainLegend(ctx, pL, CH - 4, fs); }catch(e){}
 
   cv._ctHits = hits;
   if(!cv._ctBound){
@@ -4117,6 +4108,42 @@ function _rankItems(want){
   return out.sort((a, b)=>b.v - a.v);
 }
 
+// ★ 警戒餘裕 ETR2% 的專屬色階（使用者指定，以 90% 為基準）：
+//   餘裕 >40 白、40~20 綠、20~0 黃、超過 0~10 紅、超過 10 以上 紫。
+//   （餘裕 = 90 − 目前 ETR2%；負值代表已超過警戒）
+const MARGIN_PCT_SCALE = [
+  {max: -10,      color: '#B040E0', label: '超過10%以上'},
+  {max: 0,        color: '#FF3030', label: '超過10%以內'},
+  {max: 20,       color: '#FFE000', label: '餘裕20%內'},
+  {max: 40,       color: '#40C860', label: '餘裕20~40%'},
+  {max: Infinity, color: '#FFFFFF', label: '餘裕40%以上'},
+];
+function marginPctColor(v){
+  if(v == null || !isFinite(v)) return '#5a7a95';
+  return (MARGIN_PCT_SCALE.find(b=>v < b.max) || MARGIN_PCT_SCALE[MARGIN_PCT_SCALE.length-1]).color;
+}
+
+// ★ 地形分類的色塊圖例（使用者指定）：只寫「左緣細條＝地形分類」
+//   看不出哪個顏色對應哪種地形，直接把色塊畫出來。
+const TERRAIN_COLORS = {'山區':'#FF0000', '淺山區':'#FFFF00',
+                        '平地':'#00FF00', '沿海地區':'#00FFFF'};
+function _drawTerrainLegend(ctx, x, y, fs){
+  let cx = x;
+  ctx.font = `${fs}px sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#5a7a95';
+  ctx.fillText('左緣細條：', cx, y);
+  cx += ctx.measureText('左緣細條：').width + 2;
+  Object.keys(TERRAIN_COLORS).forEach(z=>{
+    ctx.fillStyle = TERRAIN_COLORS[z];
+    ctx.fillRect(cx, y - fs*0.75, fs*0.8, fs*0.8);
+    cx += fs * 0.8 + 3;
+    ctx.fillStyle = '#7a94ac';
+    ctx.fillText(z, cx, y);
+    cx += ctx.measureText(z).width + 7;
+  });
+}
+
 function _accumAs(tt, want){
   const saved = mode;
   try{
@@ -4241,7 +4268,8 @@ function renderRankList(){
     // ★ 色階依指標而定（使用者指定）：
     //   雨量類 → RAIN_SCALE；ETR2% 類 → ETR_SCALE（與 ETR2% 地圖同一套），
     //   這樣一眼就看得出該地區落在哪個級距。
-    const barCol = (r.unit === '%')
+    const barCol = (metric === 'margin_pct') ? marginPctColor(r.v)
+      : (r.unit === '%')
       ? ((ETR_SCALE.find(b=>Math.abs(r.v) < b.max)
           || ETR_SCALE[ETR_SCALE.length-1]).color)
       : ((RAIN_SCALE.find(b=>Math.abs(r.v) < b.max)
@@ -6007,7 +6035,6 @@ function updateInfo(t){
     _safe(()=>drawCountyTowns(), '各鄉鎮圖');
     _safe(()=>drawEtrPhaseChart(null), '雨量與地形分佈');
     _safe(()=>drawElevRainChart(null), '雨量與海拔分佈');
-    _safe(()=>drawMarginChart(null), '警戒餘裕');
     _safe(()=>drawEtrWaterfall(null), 'ETR2 瀑布圖');
     _safe(()=>renderRankList(), '雨量排行');
     _safe(()=>renderVerify(), '預報校驗');
@@ -6152,7 +6179,6 @@ function updateInfo(t){
       (tt.stations||[]).some(x=>x.etr2_pct != null) || tt.etr2_pct != null);
     // ★ 面板恆顯示（漏網的一處）：先前整個藏起來，裡面的餘裕圖與
     //   瀑布圖看起來就像「沒有即時更新」。
-    try{ drawMarginChart(t); }catch(e){ console.warn('警戒餘裕圖失敗', e); }
     try{ drawEtrWaterfall(t); }catch(e){ console.warn('ETR2 瀑布圖失敗', e); }
 
     // 各鄉鎮分布：全臺或指定縣市都要顯示
@@ -12167,7 +12193,6 @@ function toggleChartZoom(canvasId, ev){
     'cv-countytowns': (_pickedCounty || '') + ' 各鄉鎮',
     'cv-elevrain': '海拔與雨量分布（地形雨效應）',
     'cv-etrphase': '雨量與地形分佈',
-    'cv-margin': '全臺最接近警戒的雨量站',
     'cv-temp-day': selected ? `${selected.county}${selected.township} 逐日氣溫預測` : '',
     'cv-temp-hr': selected ? `${selected.county}${selected.township} 逐時氣溫預測` : '',
     'cv-wave-day': selected ? `${selected.county}${selected.township} 逐日浪高預測` : '',
@@ -12189,8 +12214,6 @@ function toggleChartZoom(canvasId, ev){
     drawElevRainChart(selected, 'chart-zoom-canvas');
   } else if(canvasId === 'cv-etrphase'){
     drawEtrPhaseChart(selected, 'chart-zoom-canvas');
-  } else if(canvasId === 'cv-margin'){
-    drawMarginChart(selected, 'chart-zoom-canvas');
   } else if(canvasId === 'cv-stnrank' && selected){
     drawStnRankChart(selected, 'chart-zoom-canvas');
   } else if(canvasId === 'cv-temp-day' && selected){
