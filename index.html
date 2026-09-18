@@ -599,6 +599,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             <option value="qpf_rain">預測累積雨量</option>
             <option value="obs_etr">觀測 ETR2%</option>
             <option value="qpf_etr">預估 ETR2%</option>
+            <option value="margin_mm">警戒餘裕（mm）</option>
+            <option value="margin_pct">警戒餘裕（ETR2%）</option>
           </select>
           <input id="rank-from" type="number" min="1" value="1" onchange="renderRankList()"
             style="width:44px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
@@ -3257,7 +3259,9 @@ function drawMarginChart(t, canvasId){
   const cv = document.getElementById(canvasId || 'cv-margin');
   if(!cv) return;
   const isZoom = (canvasId === 'chart-zoom-canvas');
-  const basisEl = document.getElementById('margin-basis');
+  // ★ id 已統一為 margin-metric（先前仍讀 margin-basis，於是切不到 ETR2%）
+  const basisEl = document.getElementById('margin-metric')
+               || document.getElementById('margin-basis');
   const basis = (basisEl && basisEl.value) || 'mm';
   const key = t ? (t.county||'') + (t.township||'') : '';
 
@@ -4016,6 +4020,18 @@ function renderRankList(){
     const z = _townZone(tt) || '平地';
     if(zoneF && z !== zoneF) return;
     let v = null, unit = 'mm';
+    // ★ 警戒餘裕：距警戒還差多少，值小＝越接近警戒，故升冪排在前。
+    if(metric === 'margin_mm' || metric === 'margin_pct'){
+      const den = _etrDen(tt);
+      if(!(den > 0)) return;
+      const cur = _accumAs(tt, 'etr');          // 目前 ETR2%
+      if(cur == null || !isFinite(cur)) return;
+      if(metric === 'margin_pct'){ v = 90 - cur; unit = '%'; }
+      else { v = (90 - cur) / 100 * den; unit = 'mm'; }
+      rows.push({name: (tt.county||'') + (tt.township||''), v, unit, t: tt,
+                 zone: _townZone(tt) || '平地', asc: true});
+      return;
+    }
     // ★ 觀測雨量也隨時段：過去視窗取該日的觀測值。
     if(metric === 'obs_rain'){
       const dr = tt.daily_rain || [];
@@ -4037,7 +4053,9 @@ function renderRankList(){
     rows.push({t: tt, z, v, unit,
                k: (tt.county||'') + (tt.township||'')});
   });
-  rows.sort((a,b)=>b.v - a.v);
+  // ★ 警戒餘裕升冪（餘裕少＝越接近警戒＝越該關注）；其餘降冪
+  const _asc = /^margin_/.test(metric);
+  rows.sort((a, b)=>_asc ? (a.v - b.v) : (b.v - a.v));
   // ★ 名次範圍：可指定「從第幾名到第幾名」，方便看中後段
   // ★ 起訖名次皆可自訂；結束名次超過總數時自動收到最後一名。
   const fromEl = document.getElementById('rank-from');
@@ -7584,14 +7602,22 @@ function init(){
 
   // 點選海洋取消選取（在 map 初始化後才能呼叫）
   map.on('click', function(){
-    if(selected){
-      selected = null;
-      renderLayer();
-      document.getElementById('iTitle').textContent = '點選鄉鎮查看詳情';
-      document.getElementById('iCont-hint').style.display = 'block';
-      // ★ 面板恆顯示：取消選取時不隱藏任何面板，改由 updateInfo 標示
-      setTimeout(()=>updateAllDistrictCharts(), 100);
-    }
+    // ★ 點地圖空白處（海面）→ 整個回到全臺層級（使用者指定）：
+    //   取消選取、清掉縣市篩選，並同步所有地區切換的下拉與面板。
+    if(!selected && !_pickedCounty) return;
+    selected = null;
+    _pickedCounty = '';
+    try{ _syncCountyPickers(''); }catch(e){}
+    try{ if(_eaMode) _setEastAsia(false); }catch(e){}
+    renderLayer();
+    const it = document.getElementById('iTitle');
+    if(it) it.textContent = '全臺';
+    const hint = document.getElementById('iCont-hint');
+    if(hint) hint.style.display = 'block';
+    // 面板恆顯示：不隱藏，改由 updateInfo 依層級填入
+    try{ updateInfo(null); }catch(e){}
+    try{ if(showTownName) renderTownNameLayer(); }catch(e){}
+    setTimeout(()=>updateAllDistrictCharts(), 100);
   });
 
   // ★ 一切都等真實資料到齊再做：按鈕的日期文字取自 SEG_EPOCH（由
@@ -8963,7 +8989,15 @@ function _seaLineSegs(){
   //   常數由 _genline.js 以同一份程式碼離線產生，座標取小數 3 位（約 100m 精度），
   //   若行政區界圖資更新，重跑該腳本重新產生即可。
   if(typeof SEA_LINE_100KM !== 'undefined' && SEA_LINE_100KM.length){
-    _seaLineCache = SEA_LINE_100KM.map(a=>[[a[0],a[1]],[a[2],a[3]]]);
+    // ★ 裁掉落在陸地上的線段（金馬一帶會畫進中國內陸）。
+    //   海警線的定義就是海域，畫到陸地上沒有意義也容易誤讀。
+    //   先前只在下方的即時計算路徑加了裁切，但實際走的是這條常數路徑
+    //   ——所以看起來完全沒變。
+    const _raw = SEA_LINE_100KM.map(a=>[[a[0],a[1]],[a[2],a[3]]]);
+    const _kept = _raw.filter(sg=>!(_onLand(sg[0]) || _onLand(sg[1])));
+    console.log(`100km 海警線：${_kept.length} 段`
+      + `（原 ${_raw.length}，裁掉陸上 ${_raw.length - _kept.length} 段）`);
+    _seaLineCache = _kept;
     return _seaLineCache;
   }
   if(!_twLandPts().length){ _seaLineCache = []; return _seaLineCache; }
