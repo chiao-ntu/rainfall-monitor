@@ -2612,6 +2612,9 @@ function drawStnRankChart(t, canvasId){
     ctx.globalAlpha = 1;
     ctx.strokeStyle = '#0a1a28'; ctx.lineWidth = 1;
     ctx.strokeRect(pL, y - bh/2, Math.max(1, X(r.v) - pL), bh);
+    // ★ 左緣地形色條（與鄉鎮排行一致，方便辨識測站所在地形）
+    ctx.fillStyle = TERRAIN_COLORS[r.zone || _stnZone(r.st)] || '#5a7a95';
+    ctx.fillRect(pL - 6, y - bh/2, 3, bh);
     // 數值
     ctx.fillStyle = '#cfe4f5'; ctx.textAlign = 'left';
     // ★ 標明單位：ETR2% 與雨量的數值範圍相近，沒有單位會看不出切換到哪個指標
@@ -2637,7 +2640,10 @@ function drawStnRankChart(t, canvasId){
       }
     }, true);
   }
+  // ★ 色階依指標：雨量→RAIN_SCALE、ETR2%→ETR_SCALE（與地圖一致）
+  const _SCALE = (_srM === 'etr') ? ETR_SCALE : RAIN_SCALE;
   _drawScaleLegend(ctx, CW, CH, _SCALE, fs, isZoom, null);
+  try{ _drawTerrainLegend(ctx, pL, CH - 4, fs); }catch(e){}
   if(isZoom){
     ctx.fillStyle = '#6bc8e8'; ctx.font = 'bold 20px sans-serif';
     ctx.textAlign = 'center';
@@ -4101,14 +4107,26 @@ function renderStationList(){
     const where = (sc.level === 'all')
       ? '<span style="color:#5a7a95;font-size:10px"> '
         + ((x.t.county || '') + (x.t.township || '')) + '</span>' : '';
-    row.innerHTML = '<span class="sn">' + (f0 + i) + '. ' + st.name + where
-                  + '</span><span class="sw">' + vStr + '</span>';
+    // ★ 左緣地形色塊（與鄉鎮排行一致，方便辨識所在地形）
+    const zc = TERRAIN_COLORS[_townZone(x.t)] || '#5a7a95';
+    row.innerHTML = '<span class="sn">'
+      + '<span style="display:inline-block;width:3px;height:10px;'
+      + 'background:' + zc + ';margin-right:5px;vertical-align:middle"></span>'
+      + (f0 + i) + '. ' + st.name + where
+      + '</span><span class="sw">' + vStr + '</span>';
     row.addEventListener('mouseenter', e=> showHyetograph(x.t, st, e));
     row.addEventListener('mousemove',  e=> positionHyetograph(e));
     row.addEventListener('mouseleave', hideHyetograph);
-    if(st.lat != null && st.lng != null){
-      row.addEventListener('click', ()=> focusStation(st));
-    }
+    // ★ 一律可點：有座標就定位到測站，否則退回定位到所屬鄉鎮
+    row.addEventListener('click', ()=>{
+      if(st.lat != null && st.lng != null) focusStation(st);
+      else if(x.t && x.t.lat != null) {
+        selected = x.t;
+        window._townClickAt = Date.now();
+        map.setView([x.t.lat, x.t.lng], 11);
+        try{ renderLayer(); updateInfo(x.t); }catch(e){}
+      }
+    });
     wrap.appendChild(row);
   });
 }
@@ -10730,16 +10748,14 @@ function _townNameScope(){
   return _pickedCounty || '';        // '' 代表全臺
 }
 
+// ★ 純粹的顯示開關（使用者指定）：要顯示哪個範圍，由圖層列與右側欄
+//   最上方的地區下拉決定，這裡不再管範圍。
+//   （原本還會操作 townNameScope 下拉，但那個下拉已移除。）
 function toggleTownNameLayer(){
   _bindTownNameZoom();
   showTownName = !showTownName;
   const btn = document.getElementById('bTownName');
-  const sel = document.getElementById('townNameScope');
   if(btn) btn.classList.toggle('on', showTownName);
-  if(sel){
-    _buildTownNameScope();
-    sel.style.display = showTownName ? '' : 'none';
-  }
   renderTownNameLayer();
 }
 
