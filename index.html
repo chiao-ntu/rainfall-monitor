@@ -3295,7 +3295,7 @@ function drawMarginChart(t, canvasId){
     //   測站層級的排行看「測站雨量排名」與「觀測站清單」。
     // ★ 用排行專用取值：getAccum 會依地圖當前圖層回傳對應的值，
     //   切到浪高／氣溫時 etrPct 拿到的是浪高或氣溫（資料內容就會錯亂）。
-    const pct = (getObsEtr(tt) != null) ? getObsEtr(tt) : _accumAs(tt, 'etr');
+    const pct = _etrForMargin(tt);
     if(pct == null || !isFinite(pct)) return;
     const den = _etrDen(tt);                       // 警戒值（mm）
     const k = (tt.county||'') + (tt.township||'');
@@ -3663,7 +3663,7 @@ function drawCountyTowns(canvasId){
       // ★ 警戒餘裕：與雨量排行同一套算法（90% 為警戒）
       const den = _etrDen(t);
       // 與「觀測 ETR2%」同源（同雨量排行的處理）
-      const cur = (getObsEtr(t) != null) ? getObsEtr(t) : _accumAs(t, 'etr');
+      const cur = _etrForMargin(t);
       if(!(den > 0) || cur == null || !isFinite(cur)) return;
       v = (metric === 'margin_pct') ? (90 - cur) : ((90 - cur) / 100 * den);
     } else {
@@ -4144,6 +4144,20 @@ function _drawTerrainLegend(ctx, x, y, fs){
   });
 }
 
+// ★ 警戒餘裕與預測達標時間共用的「目前 ETR2%」。
+//   組成：官方觀測值（已發生、不可被情境改動）
+//         ＋ 從現在到視窗終點的預測增量（會隨情境倍率／加成變動）。
+//   先前只取 getObsEtr（純觀測），於是情境編輯器調了雨量，
+//   餘裕與達標時間完全不動 —— 那正是使用者回報的問題。
+function _etrForMargin(t){
+  if(!t) return null;
+  const obs = getObsEtr(t);
+  const fc  = _accumAs(t, 'etr');
+  // 兩者都有：取較大者（預測已含今日累積時不重複相加）
+  if(obs != null && fc != null) return Math.max(obs, fc);
+  return (obs != null) ? obs : fc;
+}
+
 function _accumAs(tt, want){
   const saved = mode;
   try{
@@ -4201,7 +4215,7 @@ function renderRankList(){
       // ★ 與右側「觀測 ETR2%」同源：有官方觀測值就用它，否則退回預測值。
       //   先前一律用預測值，於是「觀測 ETR2% + 警戒餘裕」加起來不等於 90，
       //   一眼就看得出兩邊不同源。
-      const cur = (getObsEtr(tt) != null) ? getObsEtr(tt) : _accumAs(tt, 'etr');
+      const cur = _etrForMargin(tt);
       if(cur == null || !isFinite(cur)) return;
       if(metric === 'margin_pct'){ v = 90 - cur; unit = '%'; }
       else { v = (90 - cur) / 100 * den; unit = 'mm'; }
