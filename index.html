@@ -2346,7 +2346,9 @@ function onSearchPick(i){
       const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
       polys.forEach(poly=>(poly[0] || []).forEach(c=>pts.push([c[1], c[0]])));
     });
-    if(pts.length) map.fitBounds(L.latLngBounds(pts), {padding:[30,30]});
+    // ★ padding 由 30px 縮到 10px：30px 在小視窗等於少一個 zoom 級距，
+  //   高雄看起來會離得太遠。
+  if(pts.length) map.fitBounds(L.latLngBounds(pts), {padding:[10,10], maxZoom:12});
     return;
   }
   const t = r.t;
@@ -2622,7 +2624,7 @@ function drawStnRankChart(t, canvasId){
       }
     }, true);
   }
-  _drawScaleLegend(ctx, CW, CH, RAIN_SCALE, fs, isZoom, null);
+  _drawScaleLegend(ctx, CW, CH, _SCALE, fs, isZoom, null);
   if(isZoom){
     ctx.fillStyle = '#6bc8e8'; ctx.font = 'bold 20px sans-serif';
     ctx.textAlign = 'center';
@@ -3636,7 +3638,9 @@ function pickCounty(c){
       pts.push([la, lo]);
     }));
   });
-  if(pts.length) map.fitBounds(L.latLngBounds(pts), {padding:[30,30]});
+  // ★ padding 由 30px 縮到 10px：30px 在小視窗等於少一個 zoom 級距，
+  //   高雄看起來會離得太遠。
+  if(pts.length) map.fitBounds(L.latLngBounds(pts), {padding:[10,10], maxZoom:12});
   selected = null;                 // 縣市層級：不指定單一鄉鎮
   try{ renderLayer(); }catch(e){}
   updateInfo(null);
@@ -3725,11 +3729,10 @@ function drawCountyTowns(canvasId){
   const ZC = {'山區':'#FF0000', '淺山區':'#FFFF00', '平地':'#00FF00', '沿海地區':'#00FFFF'};
   // ★ 一律用雨量色階（與雨量排行一致）：百分比先換算回等效雨量再取色，
   //   讓「顏色＝雨量多寡」在所有指標下都成立。
-  const _barCol = r=>{
-    const den = r.t ? (_etrDen(r.t) || 0) : 0;
-    const mm = (unit === '%' && den > 0) ? Math.abs(r.v) / 100 * den : Math.abs(r.v);
-    return (RAIN_SCALE.find(b=>mm < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color;
-  };
+  // ★ 色階依指標而定：雨量 → RAIN_SCALE、ETR2% → ETR_SCALE（同地圖色階）
+  const _SCALE = (unit === '%') ? ETR_SCALE : RAIN_SCALE;
+  const _barCol = r=>(_SCALE.find(b=>Math.abs(r.v) < b.max)
+                      || _SCALE[_SCALE.length-1]).color;
 
   ctx.strokeStyle = '#12283c'; ctx.fillStyle = '#5a7a95';
   ctx.font = `${fs}px sans-serif`; ctx.textAlign = 'center';
@@ -3780,7 +3783,7 @@ function drawCountyTowns(canvasId){
   }
     hits.push({y, h: bh, t: r.t});
   });
-  _drawScaleLegend(ctx, CW, CH, RAIN_SCALE, fs, isZoom,
+  _drawScaleLegend(ctx, CW, CH, _SCALE, fs, isZoom,
     `${metName}　左緣細條＝地形分類`);
 
   cv._ctHits = hits;
@@ -4235,13 +4238,14 @@ function renderRankList(){
     const rank = (window._rankOffset || 0) + i + 1;
     // ★ 長條用數值本身的色階（雨量用雨量色階、百分比用 ETR2 色階），
     //   左緣細條保留地形色 —— 兩種資訊分開，不互相干擾。
-    // ★ 一律用雨量色階（使用者指定）：ETR2% 先換算回等效雨量再取色，
-    //   這樣「顏色＝雨量多寡」在所有指標下都一致，不必另記一套色階。
-    //   先前百分比走 ETR_SCALE，40~60% 帶恰是黃色，讀圖時難以對應。
-    const _den = r.t ? (_etrDen(r.t) || 0) : 0;
-    const _mm = (r.unit === '%' && _den > 0) ? Math.abs(r.v) / 100 * _den : Math.abs(r.v);
-    const barCol = (RAIN_SCALE.find(b=>_mm < b.max)
-                    || RAIN_SCALE[RAIN_SCALE.length-1]).color;
+    // ★ 色階依指標而定（使用者指定）：
+    //   雨量類 → RAIN_SCALE；ETR2% 類 → ETR_SCALE（與 ETR2% 地圖同一套），
+    //   這樣一眼就看得出該地區落在哪個級距。
+    const barCol = (r.unit === '%')
+      ? ((ETR_SCALE.find(b=>Math.abs(r.v) < b.max)
+          || ETR_SCALE[ETR_SCALE.length-1]).color)
+      : ((RAIN_SCALE.find(b=>Math.abs(r.v) < b.max)
+          || RAIN_SCALE[RAIN_SCALE.length-1]).color);
     return `<div onclick="_rankPick('${r.k.replace(/'/g, "")}')"
       style="cursor:pointer;padding:2px 3px;border-radius:2px;
       background:${hi ? '#14344e' : 'transparent'}">
@@ -5603,6 +5607,17 @@ function _asPct(v){
   return v;
 }
 function getObsEtr(t){
+  if(!t) return null;
+  // ★ 優先由「官方 ETR2 值 ÷ 官方警戒值」直接計算，不依賴 etr2_pct 欄位。
+  //   原因：etr2_pct 在不同版本的後端存過比值(1.48)與百分比(148)，
+  //   前端無法從數值本身可靠分辨（1.48 也可能真的是 1.48%）。
+  //   分子分母都是官方值，算出來與水保署一致，格式問題根除。
+  const den = (t.etr2_alert != null && t.etr2_alert > 0) ? t.etr2_alert
+            : (t.alert_val != null && t.alert_val > 0) ? t.alert_val : null;
+  if(t.etr2 != null && isFinite(t.etr2) && den) {
+    return Math.round(t.etr2 / den * 1000) / 10;
+  }
+  // 退路：只有 etr2_pct 時才用它（後端新版已是百分比）
   const v = _asPct(t.etr2_pct);
   return (v == null) ? null : Math.round(v * 10) / 10;
 }
