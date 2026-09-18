@@ -7002,6 +7002,13 @@ async function tryLoadLive(){
     }
     if(typeof showTyphoon !== 'undefined' && showTyphoon) renderTyphoonLayer();
 
+    // ★ 分批載入（使用者指定「資料完整度優先，首次慢一點沒關係」）：
+    //   主資料 data.json 到齊後先讓地圖出來，其餘七個輔助檔改為
+    //   「並行」背景載入。先前七個是循序 await —— 每個都要等前一個下載完，
+    //   總等待時間是七個的加總，使用者得盯著空白畫面。
+    //   ★ 資料一筆都沒有少，只是不再擋住首次繪製。
+    window._auxDone = Promise.all([
+      (async()=>{
     // ── 預報校驗（verify.json，保留 60 天供回溯）──
     try{
       const vr = await fetch('verify.json?t=' + Date.now());
@@ -7012,7 +7019,8 @@ async function tryLoadLive(){
           + `（門檻 ≥${(window.VERIFY_DATA || {}).threshold ?? 1}mm）`);
       }
     }catch(e){ console.warn('verify.json 尚未產生（需執行過一次主排程）'); }
-
+      })(),
+      (async()=>{
     // ── 逐時觀測雨量（rain_hourly.json，由高頻腳本累積 50 小時）──
     //   ★ 這是「過去逐時」的唯一資料來源：測站逐時實測，
     //     讓過去視窗也能做到 1 小時解析度（先前只有逐日觀測）。
@@ -7048,7 +7056,8 @@ async function tryLoadLive(){
           + `${hours.length} 小時序列（測站取最大值聚合）`);
       }
     }catch(e){ console.warn('rain_hourly.json 讀取失敗（過去逐時不可用）', e.message); }
-
+      })(),
+      (async()=>{
     // ── 雷達1h QPF：獨立讀 radar.json（由每小時腳本寫，與 data.json 分離避免競態）──
     let _radarDt = d.radar_qpf_time || '';
     try{
@@ -7065,7 +7074,8 @@ async function tryLoadLive(){
         console.log('radar.json 載入：', _nr, '個鄉鎮雷達值，時間', _radarDt);
       }
     }catch(e){ console.warn('radar.json 載入失敗（不影響其他）：', e.message); }
-
+      })(),
+      (async()=>{
     // ── ETR2 官方現值：獨立讀 etr2_now.json（由每小時腳本寫）──
     //   ETR2 每小時都在變，等主排程 6h 太慢；覆寫 t.etr2 / t.etr2_pct 兩個欄位，
     //   讓「ETR2%官方現值」與所有以官方值為錨點的推算（calcEtr2AtSeg）一起變新。
@@ -7098,7 +7108,8 @@ async function tryLoadLive(){
                     '個較主排程更新），時間', window.ETR2_NOW_TIME);
       }
     }catch(e){ console.warn('etr2_now.json 載入失敗（沿用 data.json 的值）：', e.message); }
-
+      })(),
+      (async()=>{
     // ── 颱風動態：獨立讀 typhoon_now.json（由每小時腳本寫）──
     //   颱風變化快，主排程 6 小時太慢；此檔每小時更新，覆寫 data.json 的兩個欄位。
     window.TYPHOON_NOW_TIME = '';
@@ -7114,7 +7125,8 @@ async function tryLoadLive(){
                     (td.typhoon_warn||[]).length, '份警報單，時間', window.TYPHOON_NOW_TIME);
       }
     }catch(e){ console.warn('typhoon_now.json 載入失敗（沿用 data.json 的值）：', e.message); }
-
+      })(),
+      (async()=>{
     // ── 風力歷史：獨立讀 wind_hist.json（每小時腳本累積）──
     //   CWA 不提供過去的風力預報，故由本系統逐時保存快照，
     //   用於在圖上呈現過去兩天的實際走勢。
@@ -7127,7 +7139,8 @@ async function tryLoadLive(){
         console.log('wind_hist.json 載入：', Object.keys(window.WIND_HIST).length, '小時');
       }
     }catch(e){ console.warn('wind_hist.json 載入失敗（圖表僅顯示預報段）：', e.message); }
-
+      })(),
+      (async()=>{
     // ── 氣溫／浪高歷史：env_hist.json（同樣由每小時腳本累積）──
     //   先前只有風力有歷史，氣溫與浪高圖的「現在」之前整片空白，
     //   與風力圖不一致；補上後三張圖的過去段呈現方式才一致。
@@ -7140,12 +7153,25 @@ async function tryLoadLive(){
         console.log('env_hist.json 載入：', Object.keys(window.ENV_HIST).length, '小時');
       }
     }catch(e){ console.warn('env_hist.json 載入失敗（氣溫/浪高圖僅顯示預報段）：', e.message); }
+      })(),
+    ]).then(()=>{
+      console.log('輔助資料載入完成（並行）');
+      // 這些資料到齊後才需要重畫的面板
+      try{ if(typeof renderVerify === 'function') renderVerify(); }catch(e){}
+      try{ renderLayer(); }catch(e){}
+      try{ updateInfo(selected || null); }catch(e){}
+      // ★ 雷達發布時間由並行區塊中的 radar.json 設定，必須等它到齊才顯示，
+      //   否則會固定顯示「本次無資料」。
+      try{
+        const _rt2 = document.getElementById('radar-time');
+        if(_rt2) _rt2.textContent = _radarDt
+          ? ('發布 ' + _radarDt.replace('T', ' ').slice(5, 16)) : '（本次無資料）';
+      }catch(e){}
+    }).catch(e=>console.warn('輔助資料部分失敗', e));
 
-    // 雷達1h QPF 發布時間顯示
+    // 雷達時間先顯示載入中（實際值由 _auxDone 填入）
     const _rt = document.getElementById('radar-time');
-    if(_rt){
-      _rt.textContent = _radarDt ? ('發布 '+_radarDt.replace('T',' ').slice(5,16)) : '（本次無資料）';
-    }
+    if(_rt) _rt.textContent = '載入中…';
     const sysNote = document.getElementById('sys-note');   // 獨立元素：不被切換模式洗掉
     if(sysNote) sysNote.innerHTML = '';   // 每次載入重建（避免自動更新時重複追加）
     // 使用者只需知道「官方資料是否正常」：有CWA官方QPF覆蓋才亮一個極簡標記，否則不顯示。
