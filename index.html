@@ -3629,7 +3629,10 @@ function pickCounty(c){
     const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
     polys.forEach(poly=>(poly[0] || []).forEach(cc=>{
       const la = cc[1], lo = cc[0];
-      if(la < 21.5 || la > 26.5 || lo < 118.0 || lo > 122.5) return;  // 排除南海諸島
+      // ★ 排除南海諸島（東沙 20.7N/116.7E、南沙 10.4N/114.4E）。
+      //   臺灣本島與主要離島（含金門 118.2E、馬祖 26.4N、澎湖、蘭嶼 121.6E）
+      //   都在此範圍內；高雄轄下的東沙、南沙在範圍外。
+      if(la < 21.85 || la > 26.45 || lo < 118.1 || lo > 122.1) return;
       pts.push([la, lo]);
     }));
   });
@@ -5591,13 +5594,13 @@ function _etr2NowLabel(){
   return m ? `${m[2]}/${m[3]} ${m[4]}:${m[5]}` : raw;
 }
 
-// ★ 官方觀測 ETR2%。歷史上後端存過「比值」(0.48) 也存過「百分比」(48)，
-//   兩種格式並存時顯示會差 100 倍。這裡自動辨識：
-//   ETR2 極少低於 1.5%，故 ≤1.5 一律視為比值並乘 100。
-//   （後端已統一為百分比，此判斷是為了相容尚未重新部署的舊 data.json）
+// ★ 官方觀測 ETR2%。後端已統一輸出百分比（0~100+），直接使用。
+//   先前用「≤1.5 視為比值並乘 100」的猜測來相容舊格式，但那會把
+//   真正的低值（例如桃園區 0.8%）誤放大成 80% —— 觀測值不可以用猜的，
+//   水保署官方數據一旦顯示錯誤會馬上被發現。
 function _asPct(v){
   if(v === null || v === undefined || !isFinite(v)) return null;
-  return (Math.abs(v) <= 1.5) ? v * 100 : v;
+  return v;
 }
 function getObsEtr(t){
   const v = _asPct(t.etr2_pct);

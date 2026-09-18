@@ -1472,6 +1472,14 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                     seen.add(sig)
                     detail.append({'village': reg.get('village',''), 'station': stn,
                                    'alert': av, 'etr2': ev, 'etr2_pct': pct, 'src': src})
+                # ★ 同時填入測站級 ETR2。先前只有 else 分支（無對照表的退路）
+                #   會填，主路徑不填，於是每個鄉鎮的 station_etr2 都是 0 筆，
+                #   前端測站排行的 ETR2% 永遠是空的。
+                _sid = name2sid.get(stn) or name2sid.get(_stn_key(stn))
+                if _sid:
+                    _prev = td['station_etr2'].get(_sid)
+                    if _prev is None or ev > _prev:
+                        td['station_etr2'][_sid] = ev
                 if pct is not None and (best_pct is None or pct > best_pct):
                     best_pct = pct; best_etr2 = ev; best_av = av
             td['etr2'] = best_etr2
