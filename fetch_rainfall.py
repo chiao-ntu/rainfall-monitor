@@ -2754,7 +2754,74 @@ def _verify_summary(vf, days=7):
             'counts': agg}
 
 
-def update_verify(out_towns, zones, now_tpe):
+# ★ 時雨量強度分級（CWA 短延時強降雨標準）
+#   <20 無、20~40 顯著、40~80 強（大雷雨）、≥80 極強
+HOURLY_BANDS = [(20, '無'), (40, '顯著'), (80, '強'), (float('inf'), '極強')]
+
+
+def _obs_max_hourly_yday(ser, station_names, now_tpe):
+    """昨日（00~23 時）該鄉鎮各站的最大單一小時雨量。
+
+    ★ 來源：rain_hourly.json 的 cwa[時間][站名]。
+      時間鍵格式為 'YYYY-MM-DD HH'（由 fetch_qpesums_hourly.py 寫入）。
+      取昨日整天所有小時、所有對到的站，回傳其中最大值。
+      沒有任何一小時對到站就回 None（不以 0 充數 —— 那會被當成
+      「觀測無強降雨」而汙染誤報統計）。
+    """
+    if not ser:
+        return None
+    hrs = ser.get('hours') or []
+    cwa = ser.get('cwa') or {}
+    if not hrs or not cwa:
+        return None
+    yday = (now_tpe - timedelta(days=1)).strftime('%Y-%m-%d')
+    keys = [n for n in (station_names or []) if n]
+    if not keys:
+        return None
+    best = None
+    for hk in hrs:
+        if not str(hk).startswith(yday):
+            continue
+        rec = cwa.get(hk) or {}
+        if not rec:
+            continue
+        # 對站：精確 → 正規化
+        norm = None
+        for n in keys:
+            v = rec.get(n)
+            if v is None:
+                if norm is None:
+                    norm = {_stn_key2(k): k for k in rec}
+                hit = norm.get(_stn_key2(n))
+                v = rec.get(hit) if hit else None
+            if v is None:
+                continue
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if best is None or fv > best:
+                best = fv
+    return best
+
+
+def _fcst_max_hourly_yday(t, model):
+    """昨日的預測最大時雨量。maxh_* 是逐 6h 段的段內最大值，
+    昨日對應段索引 -4 ~ -1（相對今天 00 時），取其中最大。
+
+    ★ 只有 best／ecmwf／gfs 有抓 maxh（其他模式後端未取，
+      硬要涵蓋得多打 API，目前已在被限流，故先做這三個）。
+    """
+    arr = t.get('maxh_' + model)
+    if not isinstance(arr, list) or not arr:
+        return None
+    # maxh 陣列以「今天 00 時」為 index 0，昨日是負索引 → 取開頭前 4 段
+    # （fetch 時已對齊，昨日的段不在陣列內時回 None）
+    vals = [v for v in arr[:4] if v is not None and isinstance(v, (int, float))]
+    return max(vals) if vals else None
+
+
+def update_verify(out_towns, zones, now_tpe, hourly_ser=None):
     """逐日校驗：以 1mm 有效降水為門檻，比對昨日各模式與實際觀測。
 
     ★ 與既有誤差追蹤（model_skill）互補：
@@ -2787,6 +2854,10 @@ def update_verify(out_towns, zones, now_tpe):
             continue
         if t.get('obs_src') in ('neighbor', 'qpesums'):     # 推估值不列入校驗
             continue
+        # 昨日觀測最大時雨量（供時雨量強度驗證；每個鄉鎮算一次）
+        _stn_names = [st.get('name') for st in (t.get('stations') or [])
+                      if isinstance(st, dict) and st.get('name')]
+        _obs_mh = _obs_max_hourly_yday(hourly_ser, _stn_names, now_tpe)
         for m in MODELS:
             mv = (t.get('model_yday') or {}).get(m)
             if mv is None:
@@ -2803,6 +2874,14 @@ def update_verify(out_towns, zones, now_tpe):
                     td = d.setdefault(tk, {'hit': 0, 'miss': 0,
                                            'false': 0, 'correct_neg': 0})
                     td[_contingency(float(obs), float(mv), thr)] += 1
+                # ★ 時雨量強度（輔助指標，SEDI）：只有 best/ecmwf/gfs 有 maxh
+                if m in ('best', 'ecmwf', 'gfs') and _obs_mh is not None:
+                    _fc_mh = _fcst_max_hourly_yday(t, m)
+                    if _fc_mh is not None:
+                        hd = d.setdefault('hourly40', {'hit': 0, 'miss': 0,
+                                                       'false': 0, 'correct_neg': 0})
+                        hd[_contingency(float(_obs_mh), float(_fc_mh),
+                                        HOURLY_THRESHOLD)] += 1
             n_used += 1
 
     if not day:
@@ -2825,15 +2904,23 @@ def update_verify(out_towns, zones, now_tpe):
                 if td:
                     sc[m2][f'ETS{thr}'] = _ets(td)
                     sc[m2][f'SEDI{thr}'] = _sedi(td)
+            # 時雨量強度（僅 best/ecmwf/gfs）
+            hd = day['全臺'][m2].get('hourly40')
+            if hd:
+                sc[m2]['SEDI_H40'] = _sedi(hd)
+                sc[m2]['ETS_H40'] = _ets(hd)
+                sc[m2]['N_H40'] = hd['hit'] + hd['miss'] + hd['false']
         best_m = max(sc, key=lambda m: (sc[m].get('CSI') or -1)) if sc else None
         print(f"  校驗（≥{RAIN_THRESHOLD}mm）：{yday} 比對 {n_used} 筆，"
               f"累積 {len(vf['days'])} 天")
         for m in sorted(sc):
             s_ = sc[m]
+            _h40 = s_.get('SEDI_H40')
             _e80 = s_.get('ETS80')
             print(f"    {m:10s} POD {s_['POD']}　FAR {s_['FAR']}　"
                   f"CSI {s_['CSI']}　ETS {s_['ETS']}　偏差比 {s_['BIAS']}"
-                  + (f"　ETS@80mm {_e80}" if _e80 is not None else ""))
+                  + (f"　ETS@80mm {_e80}" if _e80 is not None else "")
+                  + (f"　SEDI@40mm/h {_h40}" if _h40 is not None else ""))
         if best_m:
             print(f"    昨日 CSI 最佳：{best_m}")
     except Exception as e:
@@ -4724,7 +4811,7 @@ def main():
             _zones = _tz.get('zones', _tz) if isinstance(_tz, dict) else {}
         _skill = update_model_skill(out_towns, _zones, now_tpe)
         # 校驗（POD/FAR/CSI）：與誤差追蹤共用同一批樣本
-        _verify = update_verify(out_towns, _zones, now_tpe)
+        _verify = update_verify(out_towns, _zones, now_tpe, hourly_ser)
         _verify_recent = _verify_summary(_verify)
         output['model_skill'] = summarize_model_skill(_skill, now_tpe)
         # 累積進度：讓前端能說明「還要多久權重才會分化」

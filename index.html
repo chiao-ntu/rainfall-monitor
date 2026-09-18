@@ -959,6 +959,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             <option value="ETS200">ETS ≥200mm</option>
             <option value="ETS350">ETS ≥350mm</option>
             <option value="SEDI80">SEDI ≥80mm</option>
+            <option value="SEDIH40">SEDI 時雨量 ≥40mm/h</option>
             <option value="basic">相對誤差 30%（基線）</option>
           </select>
           <select id="vf-days" onchange="renderVerify()"
@@ -3883,7 +3884,7 @@ function renderVerify(){
       const a = agg[m] || (agg[m] = {hit:0, miss:0, 'false':0, correct_neg:0});
       ['hit','miss','false','correct_neg'].forEach(k=> a[k] += (c[k] || 0));
       // 門檻列聯表一併加總（ETS/SEDI 用）
-      Object.keys(c).filter(k=>k.startsWith('thr')).forEach(tk=>{
+      Object.keys(c).filter(k=>k.startsWith('thr') || k === 'hourly40').forEach(tk=>{
         const ta = a[tk] || (a[tk] = {hit:0, miss:0, 'false':0, correct_neg:0});
         ['hit','miss','false','correct_neg'].forEach(k=> ta[k] += (c[tk][k] || 0));
       });
@@ -3894,7 +3895,12 @@ function renderVerify(){
   const metric = (document.getElementById('vf-metric') || {}).value || 'ETS80';
   const rows = Object.keys(agg).map(m=>{
     const sc = _vfScores(agg[m]);
-    if(metric !== 'basic'){
+    if(metric === 'SEDIH40'){
+      // ★ 時雨量強度（僅 best/ecmwf/gfs 有 maxh，其餘模式沒有樣本）
+      const hd = (agg[m] || {}).hourly40;
+      sc.main = hd ? _vfSedi(hd) : null;
+      sc.mainN = hd ? (hd.hit + hd.miss + hd['false']) : 0;
+    } else if(metric !== 'basic'){
       const thr = metric.replace(/^(ETS|SEDI)/, '');
       const td = (agg[m] || {})['thr' + thr];
       sc.main = td ? (metric.startsWith('SEDI') ? _vfSedi(td) : _vfEts(td)) : null;
@@ -3910,13 +3916,17 @@ function renderVerify(){
   const period = ser.length === 1 ? ser[0].date
     : `${ser[0].date} ~ ${ser[ser.length-1].date}（${ser.length} 日）`;
   el.innerHTML = `<div style="color:#5a7a95;font-size:9px;margin-bottom:3px">
-      ${period}　${metric === 'basic' ? '相對誤差 30%' : metric.replace(/(\d+)/, ' ≥$1mm')} 由高至低</div>
+      ${period}　${metric === 'basic' ? '相對誤差 30%'
+        : metric === 'SEDIH40' ? '時雨量 ≥40mm/h'
+        : metric.replace(/(\d+)/, ' ≥$1mm')} 由高至低</div>
     <table style="width:100%;border-collapse:collapse;font-size:10px">
       <tr style="color:#6bc8e8">
         <th style="text-align:left;padding:2px 3px">模式</th>
         <th style="text-align:right">POD</th><th style="text-align:right">FAR</th>
         <th style="text-align:right">${
-          metric === 'basic' ? 'CSI' : metric.replace(/(\d+)/, ' ≥$1mm')
+          metric === 'basic' ? 'CSI'
+          : metric === 'SEDIH40' ? 'SEDI ≥40mm/h'
+          : metric.replace(/(\d+)/, ' ≥$1mm')
         }</th><th style="text-align:right">偏差比</th>
         <th style="text-align:right">樣本</th></tr>
       ${rows.map(r=>`<tr style="border-top:1px solid #12283c">
@@ -3930,7 +3940,8 @@ function renderVerify(){
         <td style="text-align:right;color:#5a7a95">${r.s.mainN ?? r.s.n}</td></tr>`).join('')}
     </table>
     <div style="color:#5a7a95;font-size:9px;margin-top:3px">
-      ${metric.startsWith('ETS') ? 'ETS 扣除隨機命中後的綜合指標，0＝與亂猜無異'
+      ${metric === 'SEDIH40' ? '時雨量強度：只有 CWA+ECMWF／ECMWF／GFS 有最大時雨量資料'
+        : metric.startsWith('ETS') ? 'ETS 扣除隨機命中後的綜合指標，0＝與亂猜無異'
         : metric.startsWith('SEDI') ? 'SEDI 罕見事件專用，極端門檻下仍有鑑別力'
         : 'CSI 綜合指標，不納入正確無雨'}　偏差比 &gt;1 報太多<br>
       ◆ 已納入 FORMOSA 融合；無標記者僅校驗、不影響預報結果</div>`;
