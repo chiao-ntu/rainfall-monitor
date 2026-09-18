@@ -2979,9 +2979,9 @@ function drawEtrPhaseChart(t, canvasId){
   const pts = [];
   (TOWNSHIPS || []).forEach(tt=>{
     if(_pickedCounty && tt.county !== _pickedCounty) return;
-    const acc = getAccum(tt);
-    if(!acc) return;
-    const v = acc.totalRain, e = acc.etrPct;
+    // ★ 用排行專用取值，不受地圖當前圖層影響（切到浪高／氣溫時
+    //   getAccum 回傳的是該圖層的值，這張圖就會畫出錯誤內容）。
+    const v = _accumAs(tt, 'rain'), e = _accumAs(tt, 'etr');
     if(v == null || e == null || !isFinite(v) || !isFinite(e)) return;
     const k = (tt.county||'') + (tt.township||'');
     pts.push({v, e, zone: _townZone(tt) || '平地', mine: k === key, town: tt});
@@ -3269,8 +3269,9 @@ function drawMarginChart(t, canvasId){
   const rows = [];
   (TOWNSHIPS || []).forEach(tt=>{
     if(_pickedCounty && tt.county !== _pickedCounty) return;
-    const acc = getAccum(tt);
-    const pct = acc && acc.etrPct;
+    // ★ 用排行專用取值：getAccum 會依地圖當前圖層回傳對應的值，
+    //   切到浪高／氣溫時 etrPct 拿到的是浪高或氣溫（資料內容就會錯亂）。
+    const pct = _accumAs(tt, 'etr');
     if(pct == null || !isFinite(pct)) return;
     const den = _etrDen(tt);                       // 警戒值（mm）
     const k = (tt.county||'') + (tt.township||'');
@@ -4028,8 +4029,11 @@ function renderRankList(){
       if(cur == null || !isFinite(cur)) return;
       if(metric === 'margin_pct'){ v = 90 - cur; unit = '%'; }
       else { v = (90 - cur) / 100 * den; unit = 'mm'; }
-      rows.push({name: (tt.county||'') + (tt.township||''), v, unit, t: tt,
-                 zone: _townZone(tt) || '平地', asc: true});
+      // ★ k 是點選跳轉用的鍵，其他指標都有帶，先前漏掉導致 r.k 為
+      //   undefined、呼叫 .replace 就整個拋錯（排行看起來「不會動」）。
+      rows.push({name: tt.township || ((tt.county||'') + (tt.township||'')),
+                 k: (tt.county||'') + (tt.township||''),
+                 v, unit, t: tt, zone: _townZone(tt) || '平地'});
       return;
     }
     // ★ 觀測雨量也隨時段：過去視窗取該日的觀測值。
