@@ -73,7 +73,13 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   user-select:none}
 .sec-h:hover{background:#0f2c40}
 .sec-arrow{font-size:10px;color:#4a90b8}
-.sec-body{padding:8px 10px}
+.sec-body{padding:8px 10px;box-sizing:border-box;max-width:100%;overflow-x:hidden}
+/* ★ 面板內容一律不得超出邊界（不同螢幕寬度下都成立）：
+   canvas 與圖片隨容器縮放；控制列可換行；長字串斷行而非撐寬。 */
+.sec-body canvas,.sec-body img{max-width:100%;height:auto;display:block}
+.sec-body select,.sec-body input{max-width:100%;box-sizing:border-box}
+.sec-body>div{max-width:100%;box-sizing:border-box}
+.sec-body{overflow-wrap:anywhere}
 #cv{display:block;width:100%;height:90px;background:#060f18;border-radius:3px}
 .sr{display:grid;grid-template-columns:72px 1fr 44px;align-items:center;gap:4px;margin-bottom:4px;font-size:10px}
 .sl2{color:#3a7090}.sbw{background:#050e18;border-radius:2px;height:6px;overflow:hidden}.sb2{height:100%;border-radius:2px}.sv{text-align:right;color:#9ab8d0}
@@ -4079,17 +4085,23 @@ function renderRankList(){
     return;
   }
   const ZC = {'山區':'#FF0000', '淺山區':'#FFFF00', '平地':'#00FF00', '沿海地區':'#00FFFF'};
-  const vMax = top[0].v || 1;
+  const vMax = Math.max(...top.map(x=>Math.abs(x.v || 0)), 1);
   el.innerHTML = top.map((r, i)=>{
-    const w = Math.max(2, r.v / vMax * 100);
+    // ★ 長條寬度夾在 0~100%：警戒餘裕會有負值，
+    //   直接除以 vMax 會算出負寬或超過 100%，長條就衝出面板邊界。
+    const w = Math.max(2, Math.min(100, Math.abs(r.v) / (Math.abs(vMax) || 1) * 100));
     const hi = r.k === cur;
     // ★ 名次要加上起始偏移（選「11–30 名」時應顯示 11 而非 1）
     const rank = (window._rankOffset || 0) + i + 1;
     // ★ 長條用數值本身的色階（雨量用雨量色階、百分比用 ETR2 色階），
     //   左緣細條保留地形色 —— 兩種資訊分開，不互相干擾。
-    const barCol = (r.unit === '%')
-      ? ((ETR_SCALE.find(b=>r.v < b.max) || ETR_SCALE[ETR_SCALE.length-1]).color)
-      : ((RAIN_SCALE.find(b=>r.v < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color);
+    // ★ 一律用雨量色階（使用者指定）：ETR2% 先換算回等效雨量再取色，
+    //   這樣「顏色＝雨量多寡」在所有指標下都一致，不必另記一套色階。
+    //   先前百分比走 ETR_SCALE，40~60% 帶恰是黃色，讀圖時難以對應。
+    const _den = r.t ? (_etrDen(r.t) || 0) : 0;
+    const _mm = (r.unit === '%' && _den > 0) ? Math.abs(r.v) / 100 * _den : Math.abs(r.v);
+    const barCol = (RAIN_SCALE.find(b=>_mm < b.max)
+                    || RAIN_SCALE[RAIN_SCALE.length-1]).color;
     return `<div onclick="_rankPick('${r.k.replace(/'/g, "")}')"
       style="cursor:pointer;padding:2px 3px;border-radius:2px;
       background:${hi ? '#14344e' : 'transparent'}">
