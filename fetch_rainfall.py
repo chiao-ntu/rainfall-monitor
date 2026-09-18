@@ -1352,7 +1352,11 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
             unmatched.append(name)
 
         etr2_val = station_etr2.get(sid) if sid else None
-        etr2_pct = round(etr2_val/alert_val, 4) if (etr2_val is not None and alert_val and alert_val > 0) else None
+        # ★ 單位是「百分比」（0~100+），不是比值。
+        #   前端的排行、餘裕圖、色階都以 % 為單位；先前存成 0~1 的比值，
+        #   顯示時會變成 0 或 1 這種無意義的數字。
+        etr2_pct = (round(etr2_val / alert_val * 100, 1)
+                    if (etr2_val is not None and alert_val and alert_val > 0) else None)
         daily    = station_daily.get(sid, [0.0]*15) if sid else [0.0]*15
         # ★ 帶上座標與海拔：供前端做「海拔 vs 雨量」散佈圖與測站底圖著色。
         #   海拔查自 station_elev.json（由 20m DTM 離線產生，見 build_station_elev.py）。
@@ -1381,6 +1385,14 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
 
     if unmatched:
         print(f"    [未匹配測站 {len(unmatched)}個]: {', '.join(unmatched[:8])}{'...' if len(unmatched)>8 else ''}")
+    # ★ 診斷：測站 ETR2% 的填充率。實測全為 None，需知道卡在哪一關
+    #   （站名沒比對到 sid、或 station_etr2 本身是空的、或缺 alert_val）。
+    _n = len(enriched)
+    _withSid = sum(1 for e in enriched if e.get('sid'))
+    _withEtr = sum(1 for e in enriched if e.get('etr2_pct') is not None)
+    if _n and not _withEtr:
+        print(f"    [測站ETR2 診斷] {_n} 站：比對到站號 {_withSid}、"
+              f"station_etr2 有 {len(station_etr2)} 筆、alert_val={alert_val}")
     return enriched
 
 def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=None):
@@ -4112,7 +4124,10 @@ def main():
 
         obs=town_obs.get(key,{})
         etr2_val    = obs.get('etr2')
-        etr2_pct    = obs.get('etr2_pct')   # 小數，0.48=48%
+        # ★ 統一為百分比（0~100+）：先前鄉鎮級與測站級都存比值，
+        #   前端各處再各自乘 100，容易漏改。一律在後端轉好。
+        _pct_raw    = obs.get('etr2_pct')
+        etr2_pct    = (round(_pct_raw * 100, 1) if _pct_raw is not None else None)
         etr2_src    = obs.get('etr2_src')          # 'swcb'/'mixed'/'cwa'
         etr2_alert  = obs.get('etr2_alert')        # 最高單元的官方警戒值（前端算%分母）
         etr2_prev   = prev_etr2.get(key)           # 上一輪官方 ETR2（趨勢比較基準）
