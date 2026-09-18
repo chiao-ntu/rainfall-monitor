@@ -2581,7 +2581,9 @@ function drawStnRankChart(t, canvasId){
     ctx.strokeRect(pL, y - bh/2, Math.max(1, X(r.v) - pL), bh);
     // 數值
     ctx.fillStyle = '#cfe4f5'; ctx.textAlign = 'left';
-    ctx.fillText(r.v.toFixed(0), X(r.v) + (isZoom ? 11 : 7), y + fs*0.35);
+    // ★ 標明單位：ETR2% 與雨量的數值範圍相近，沒有單位會看不出切換到哪個指標
+  ctx.fillText(r.v.toFixed(_srM === 'etr' ? 1 : 0) + (_srM === 'etr' ? '%' : ''),
+               X(r.v) + (isZoom ? 11 : 7), y + fs*0.35);
     ctx.textAlign = 'right';
     hits.push({x: (pL + X(r.v))/2, y, st: r.st, w: X(r.v) - pL, h: bh});
   });
@@ -3685,7 +3687,12 @@ function drawCountyTowns(canvasId){
   //   長條寬度就變成負數或超出畫面。
   const vMax = Math.max(10,
     Math.ceil(Math.max(...shown.map(x=>Math.abs(x.v || 0))) * 1.15 / 10) * 10);
-  const X = v => pL + iw * Math.min(1, Math.abs(v) / vMax);
+  // ★ 警戒餘裕：0（＝達警戒）放在右邊，長條由左往右逼近 0，
+  //   超過警戒則突出到 0 的右側 —— 與警戒餘裕圖的呈現一致。
+  const _isMg = /^margin_/.test(metric);
+  const X = _isMg
+    ? (v => pL + iw * Math.max(0, Math.min(1, 1 - Math.max(0, v) / vMax)))
+    : (v => pL + iw * Math.min(1, Math.abs(v) / vMax));
   const ZC = {'山區':'#FF0000', '淺山區':'#FFFF00', '平地':'#00FF00', '沿海地區':'#00FFFF'};
   // ★ 一律用雨量色階（與雨量排行一致）：百分比先換算回等效雨量再取色，
   //   讓「顏色＝雨量多寡」在所有指標下都成立。
@@ -3700,6 +3707,7 @@ function drawCountyTowns(canvasId){
   const step = vMax <= 50 ? 10 : vMax <= 200 ? 50 : 100;
   for(let v = 0; v <= vMax; v += step){
     ctx.beginPath(); ctx.moveTo(X(v), pT); ctx.lineTo(X(v), pT + ih); ctx.stroke();
+    // 警戒餘裕時刻度標為「還差多少」，0 在最右
     ctx.fillText(String(v), X(v), CH - pB + fs + 2);
   }
   const hits = [];
