@@ -1579,13 +1579,13 @@ function _wfStart(){
     const ser = _windSeries(t);
     let wd = null;
     if(Array.isArray(ser) && ser.length){
+      // ★ 階梯取值（與其他圖層一致）：取該時刻之前最近的一筆，
+      //   有效至下一筆為止。用「最接近」會在資料間隔大時取到未來的值。
       const tgt = _windAtMs();
-      let best = null, bd = Infinity;
-      ser.forEach(p=>{
-        if(!p || p.wd == null) return;
-        const d = Math.abs(p.ms - tgt);
-        if(d < bd){ bd = d; best = p; }
-      });
+      const pts = ser.filter(p=>p && p.ms != null && p.wd != null)
+                     .sort((a, b)=>a.ms - b.ms);
+      let best = pts.length ? pts[0] : null;
+      for(const p of pts){ if(p.ms <= tgt) best = p; else break; }
       if(best) wd = best.wd;
     }
     if(wd == null) return;
@@ -1598,6 +1598,27 @@ function _wfStart(){
     return;
   }
   console.log(`風場：${nodes.length} 個鄉鎮有風向資料`);
+  // ★ 圖例：粒子顏色對應風速，沒有圖例會看不出快慢
+  const _wfLegend = ()=>{
+    const ctx2 = cv.getContext('2d');
+    const items = [['rgba(140,220,240,0.9)', '弱'],
+                   ['rgba(255,220,120,0.9)', '中'],
+                   ['rgba(255,120,80,0.95)', '強']];
+    let lx = 10, ly = cv.height - 10;
+    ctx2.font = '11px sans-serif'; ctx2.textAlign = 'left';
+    ctx2.fillStyle = 'rgba(4,12,20,0.75)';
+    ctx2.fillRect(4, ly - 16, 132, 20);
+    ctx2.fillStyle = '#7a94ac';
+    ctx2.fillText('風速', lx, ly);
+    lx += 26;
+    items.forEach(([c, t2])=>{
+      ctx2.strokeStyle = c; ctx2.lineWidth = 2.5;
+      ctx2.beginPath(); ctx2.moveTo(lx, ly - 4); ctx2.lineTo(lx + 14, ly - 4); ctx2.stroke();
+      lx += 17;
+      ctx2.fillStyle = '#9fc8e8'; ctx2.fillText(t2, lx, ly);
+      lx += 16;
+    });
+  };
 
   // 反距離加權：回傳畫布座標處的 [dx, dy]（像素／幀）
   const uvAt = (x, y)=>{
@@ -1647,6 +1668,7 @@ function _wfStart(){
       ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(nx, ny); ctx.stroke();
       p.x = nx; p.y = ny; p.age++;
     });
+    try{ _wfLegend(); }catch(e){}
     _wfTimer = requestAnimationFrame(step);
   };
   step();
@@ -7406,6 +7428,8 @@ function setWin(key){
   //   逐一報錯），避免這裡再維護一份會漏掉的清單。
   hideNoData();
   _refreshAfterFactorChange();
+  // ★ 風場隨時間視窗更新（風向會變，粒子場必須重建）
+  try{ if(_windFieldOn) _wfStart(); }catch(e){}
 }
 
 function updateModelRowVisibility(show){
