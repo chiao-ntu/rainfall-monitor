@@ -853,7 +853,24 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <div class="sec-h" onclick="toggleSec('stations')">
         <span>觀測站清單</span><span class="sec-arrow" id="arrow-stations">▸</span>
       </div>
-      <div class="sec-body" id="body-stations" style="display:none"></div>
+      <div class="sec-body" id="body-stations" style="display:none">
+        <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:4px;align-items:center">
+          <select id="sl-metric" onchange="renderStationList()"
+            style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;
+            color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+            <option value="rain">累積雨量</option>
+            <option value="etr">ETR2%</option>
+          </select>
+          <input id="sl-from" type="number" min="1" value="1" onchange="renderStationList()"
+            style="width:44px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+          <span style="font-size:11px;color:#5a7a95">–</span>
+          <input id="sl-to" type="number" min="1" value="20" onchange="renderStationList()"
+            style="width:52px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+          <span id="sl-total" style="font-size:10px;color:#5a7a95"></span>
+        </div>
+      </div>
     </div>
     <div class="sec" id="sec-risk">
       <div class="sec-h" onclick="toggleSec('risk')">
@@ -4004,6 +4021,64 @@ function _rankScope(){
   return {level:'all', label:'全臺'};
 }
 // 取該範圍內的排行項目：回傳 [{name, v, etr, t, st}]
+// ★ 觀測站清單：範圍隨層級（使用者指定）。
+//   全臺→全部測站、縣市→該縣市測站、鄉鎮→該鄉鎮測站；
+//   依所選指標（累積雨量／ETR2%）排序，高的在前。
+function renderStationList(){
+  const wrap = document.getElementById('body-stations');
+  if(!wrap) return;
+  const sc = _rankScope();
+  const want = ((document.getElementById('sl-metric') || {}).value === 'etr')
+             ? 'etr' : 'rain';
+  const items = [];
+  const pool = (sc.level === 'all') ? (TOWNSHIPS || [])
+    : (sc.level === 'town') ? [selected]
+    : (TOWNSHIPS || []).filter(tt=>tt.county === _pickedCounty);
+  pool.forEach(tt=>{
+    if(!tt) return;
+    (tt.stations || []).forEach(st=>{
+      if(!st || !st.name) return;
+      const v = (want === 'etr') ? st.etr2_pct : (st.daily_rain || [])[0];
+      items.push({st, t: tt, v: (v == null || !isFinite(v)) ? null : v});
+    });
+  });
+  items.sort((a, b)=>(b.v == null ? -1 : b.v) - (a.v == null ? -1 : a.v));
+  const f0 = Math.max(1, parseInt((document.getElementById('sl-from')||{}).value) || 1);
+  const t0 = Math.max(f0, parseInt((document.getElementById('sl-to')||{}).value) || 20);
+  const shown = items.slice(f0 - 1, t0);
+  const tot = document.getElementById('sl-total');
+  if(tot) tot.textContent = '／共 ' + items.length;
+  wrap.querySelectorAll('.station-row, .sl-note').forEach(e=>e.remove());
+  if(!shown.length){
+    const d = document.createElement('div');
+    d.className = 'sl-note';
+    d.style.cssText = 'color:#7a94ac;font-size:11px;padding:6px 2px';
+    d.textContent = '此範圍內無測站資料';
+    wrap.appendChild(d);
+    return;
+  }
+  const u = (want === 'etr') ? '%' : 'mm';
+  shown.forEach((x, i)=>{
+    const st = x.st;
+    const row = document.createElement('div');
+    row.className = 'station-row';
+    row.style.cursor = 'pointer';
+    const vStr = (x.v == null) ? '—' : x.v.toFixed(u === '%' ? 1 : 0) + u;
+    const where = (sc.level === 'all')
+      ? '<span style="color:#5a7a95;font-size:10px"> '
+        + ((x.t.county || '') + (x.t.township || '')) + '</span>' : '';
+    row.innerHTML = '<span class="sn">' + (f0 + i) + '. ' + st.name + where
+                  + '</span><span class="sw">' + vStr + '</span>';
+    row.addEventListener('mouseenter', e=> showHyetograph(x.t, st, e));
+    row.addEventListener('mousemove',  e=> positionHyetograph(e));
+    row.addEventListener('mouseleave', hideHyetograph);
+    if(st.lat != null && st.lng != null){
+      row.addEventListener('click', ()=> focusStation(st));
+    }
+    wrap.appendChild(row);
+  });
+}
+
 function _rankItems(want){
   const sc = _rankScope();
   const out = [];
@@ -5918,9 +5993,11 @@ function updateInfo(t){
     _syncMergedSecs(false);
     // ★ 測站排名在全臺／縣市層級也有意義（尺度隨層級切換），先畫再標提示
     try{ drawStnRankChart(null); }catch(e){ console.warn('測站排名失敗', e); }
-    TOWN_ONLY_SECS.filter(nm=>nm !== 'stnrank')
+    try{ renderStationList(); }catch(e){ console.warn('觀測站清單失敗', e); }
+    TOWN_ONLY_SECS.filter(nm=>nm !== 'stnrank' && nm !== 'stations')
       .forEach(nm=>_secHint(nm, '請點選鄉鎮市區查看此項目'));
     _secHint('stnrank', null);
+    _secHint('stations', null);
     return;
   }
   // 選了鄉鎮：清除提示、恢復內容顯示
@@ -6087,33 +6164,8 @@ function updateInfo(t){
     }
   }
 
-  if(t.stations && t.stations.length){
-    const wrap = document.getElementById('body-stations');
-    wrap.innerHTML = '';
-    t.stations.forEach(s=>{
-      const row = document.createElement('div');
-      row.className = 'station-row';
-      row.style.cursor = 'pointer';
-      const alertStr = (s.alert_val!=null) ? s.alert_val+' mm' : '—';
-      row.innerHTML = `<span class="sn">${s.name}</span><span class="sw">${alertStr}</span>`;
-      row.addEventListener('mouseenter', (e)=> showHyetograph(t, s, e));
-      row.addEventListener('mousemove',  (e)=> positionHyetograph(e));
-      row.addEventListener('mouseleave', hideHyetograph);
-      // ★ 點選測站 → 地圖定位到該站實際位置並標示
-      if(s.lat != null && s.lng != null){
-        row.title = '點選可定位到此測站';
-        row.addEventListener('click', ()=> focusStation(s));
-      }
-      wrap.appendChild(row);
-    });
-    const note = document.createElement('div');
-    note.style.cssText = 'font-size:10px;color:#3a6080;margin-top:4px';
-    const _nLoc = t.stations.filter(x=>x.lat != null).length;
-    note.textContent = `共 ${t.stations.length} 個測站，警戒值取最大值`
-      + `（滑鼠移到測站可看雨量趨勢圖${_nLoc ? '、點選可定位' : ''}）`;
-    wrap.appendChild(note);
-  } else {
-  }
+  // ★ 觀測站清單改由 renderStationList() 依層級繪製（全臺／縣市／鄉鎮）
+  try{ renderStationList(); }catch(e){ console.warn('觀測站清單失敗', e); }
 
   // 套用展開/收合狀態
   Object.keys(secOpen).forEach(name=>{
