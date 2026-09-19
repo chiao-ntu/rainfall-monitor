@@ -1703,11 +1703,19 @@ def _extract_pop_wind(raw, county, is_3day):
 
             # 同一時段可能被多個元素重複掃到，依 start 去重（保留有 bf 者）
             if wsegs:
+                # ★ 同一 start 的多筆要「合併」而非「取代」：
+                #   風速與風向來自不同元素，若只保留有 bf 的那筆，
+                #   帶 wd 的筆會被整個丟掉 —— 那正是前端拿不到風向的原因。
+                #   逐欄補齊：各欄位取第一個非 None 的值。
                 dedup = {}
                 for w in wsegs:
                     k = w['start']
-                    if k not in dedup or (dedup[k].get('bf') is None and w.get('bf') is not None):
-                        dedup[k] = w
+                    if k not in dedup:
+                        dedup[k] = dict(w)
+                    else:
+                        for _f in ('ws', 'bf', 'wd', 'end'):
+                            if dedup[k].get(_f) is None and w.get(_f) is not None:
+                                dedup[k][_f] = w[_f]
                 WIND_FCST.setdefault(county, {})[name] = sorted(
                     dedup.values(), key=lambda x: x.get('start') or '')
     except Exception as e:

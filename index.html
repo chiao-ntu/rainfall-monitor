@@ -177,7 +177,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       style="font-size:10px;padding:2px 5px;background:#061220;color:#cfe4f5;
       border:1px solid #1a4060;border-radius:3px;max-width:130px">
       <!-- ★ 全臺為預設選中（使用者指定）；東亞列在其上 -->
-      <option value="__EA__">東亞（鄰國行政界）</option>
+      <option value="__EA__">東亞</option>
       <option value="" selected>全臺</option>
       </select>
       <button class="b on" id="bRain"  onclick="setMode('rain')" style="border-color:#3a8a5a;color:#7ee8a8">累積雨量</button>
@@ -478,11 +478,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         title="點擊選擇時段"
         style="font-size:11px;color:#9fc8e8;min-width:140px;
         text-align:center;cursor:pointer;text-decoration:underline dotted"></span>
-      <!-- ★ 時段選擇器：點時間欄位直接跳出（使用者指定） -->
-      <div id="time-picker" style="display:none;position:absolute;z-index:1200;
-        background:#0a1c2e;border:1px solid #1a4060;border-radius:6px;padding:8px;
-        box-shadow:0 4px 18px rgba(0,0,0,.6);max-height:320px;overflow-y:auto;
-        min-width:190px"></div>
       <button class="b" onclick="stepWin(1)" style="padding:1px 8px;font-size:12px">▶</button>
       <select id="nav-layer" onchange="setMode(this.value)"
         style="font-size:10px;padding:1px 3px;background:#061220;color:#7ee8a8;
@@ -600,7 +595,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     style="margin:0 14px 6px;font-size:11px;padding:3px 5px;background:#061220;
     color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
     <!-- ★ 全臺為預設選中（使用者指定）；東亞列在其上 -->
-      <option value="__EA__">東亞（鄰國行政界）</option>
+      <option value="__EA__">東亞</option>
       <option value="" selected>全臺</option>
   </select>
 
@@ -7948,8 +7943,20 @@ function _syncTimeBar(){
 //   避免使用者選到沒有預報的日期）；逐時／6h 模式列出對應時段。
 function openTimePicker(ev){
   if(ev) ev.stopPropagation();
-  const box = document.getElementById('time-picker');
-  if(!box) return;
+  // ★ 選單掛在 <body>，不放在時間列裡。
+  //   放在時間列時會被容器裁切（看不到），而且量寬度時的
+  //   display:block 若中途出錯就會留下一片隱形遮罩，
+  //   讓整張地圖點不動 —— 使用者回報的正是這個。
+  let box = document.getElementById('time-picker');
+  if(!box){
+    box = document.createElement('div');
+    box.id = 'time-picker';
+    box.style.cssText = 'display:none;position:fixed;z-index:3000;'
+      + 'background:#0a1c2e;border:1px solid #1a4060;border-radius:6px;padding:6px;'
+      + 'box-shadow:0 4px 18px rgba(0,0,0,.6);max-height:320px;overflow-y:auto;'
+      + 'min-width:190px';
+    document.body.appendChild(box);
+  }
   if(box.style.display === 'block'){ box.style.display = 'none'; return; }
   const items = [];
   const WD = ['日','一','二','三','四','五','六'];
@@ -8009,7 +8016,7 @@ function openTimePicker(ev){
     const mr = mp ? mp.getBoundingClientRect() : {left: 0, right: window.innerWidth};
     box.style.visibility = 'hidden';
     box.style.display = 'block';
-    const bw = box.offsetWidth || 200;
+    const bw = box.offsetWidth || 200;   // 量完一定會在下方設回 visibility
     let left = r.left;
     if(left + bw > mr.right - 8) left = mr.right - bw - 8;   // 不越過地圖右緣
     if(left < mr.left + 4) left = mr.left + 4;
