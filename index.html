@@ -473,8 +473,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <option value="day">逐日</option>
       </select>
       <button class="b" onclick="stepWin(-1)" style="padding:1px 8px;font-size:12px">◀</button>
-      <span id="time-nav-label" style="font-size:11px;color:#9fc8e8;min-width:140px;
-        text-align:center"></span>
+      <span id="time-nav-label" onclick="openTimePicker(event)"
+        title="點擊選擇時段"
+        style="font-size:11px;color:#9fc8e8;min-width:140px;
+        text-align:center;cursor:pointer;text-decoration:underline dotted"></span>
+      <!-- ★ 時段選擇器：點時間欄位直接跳出（使用者指定） -->
+      <div id="time-picker" style="display:none;position:absolute;z-index:1200;
+        background:#0a1c2e;border:1px solid #1a4060;border-radius:6px;padding:8px;
+        box-shadow:0 4px 18px rgba(0,0,0,.6);max-height:320px;overflow-y:auto;
+        min-width:190px"></div>
       <button class="b" onclick="stepWin(1)" style="padding:1px 8px;font-size:12px">▶</button>
       <select id="nav-layer" onchange="setMode(this.value)"
         style="font-size:10px;padding:1px 3px;background:#061220;color:#7ee8a8;
@@ -7934,6 +7941,81 @@ function _syncTimeBar(){
   }catch(e){}
 }
 
+// ★ 點時間欄位 → 跳出時段選擇器（使用者指定）。
+//   逐日模式列出日期（等同月曆的作用，但只列有資料的日子，
+//   避免使用者選到沒有預報的日期）；逐時／6h 模式列出對應時段。
+function openTimePicker(ev){
+  if(ev) ev.stopPropagation();
+  const box = document.getElementById('time-picker');
+  if(!box) return;
+  if(box.style.display === 'block'){ box.style.display = 'none'; return; }
+  const items = [];
+  const WD = ['日','一','二','三','四','五','六'];
+  if(_hourIdx != null){
+    // 逐時：-48 ~ +90 小時
+    for(let h = -48; h <= 90; h++){
+      const d = new Date(Date.now() + h * 3600e3);
+      items.push({label: `${d.getMonth()+1}/${d.getDate()}（${WD[d.getDay()]}）`
+        + ` ${String(d.getHours()).padStart(2,'0')} 時`,
+        on: (h === _hourIdx), act: ()=>{ setWin('fut1h_' + h); }});
+    }
+  } else if(/^fut6_/.test(winKey)){
+    for(let k = 1; k <= 8; k++){
+      const d = segTime(k - 1);
+      items.push({label: `第 ${k} 段　${d.getMonth()+1}/${d.getDate()} `
+        + `${_segPeriodName(d.getHours())}`,
+        on: (winKey === 'fut6_' + k), act: ()=>setWin('fut6_' + k)});
+    }
+  } else {
+    // 逐日：過去 9 天 + 今天 + 未來 15 天
+    for(let k = 8; k >= 0; k--){
+      const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate() - k - 1);
+      items.push({label: `${d.getMonth()+1}/${d.getDate()}（${WD[d.getDay()]}）觀測`,
+        on: (winKey === 'past' + k), act: ()=>setWin('past' + k)});
+    }
+    const t0 = new Date(); t0.setHours(0,0,0,0);
+    items.push({label: `${t0.getMonth()+1}/${t0.getDate()}（${WD[t0.getDay()]}）今天`,
+      on: (winKey === 'today'), act: ()=>setWin('today')});
+    for(let n = 2; n <= 16; n++){
+      const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate() + n - 1);
+      items.push({label: `${d.getMonth()+1}/${d.getDate()}（${WD[d.getDay()]}）預報`,
+        on: (winKey === 'day' + n), act: ()=>setWin('day' + n)});
+    }
+  }
+  box.innerHTML = '';
+  items.forEach(it=>{
+    const row = document.createElement('div');
+    row.textContent = it.label;
+    row.style.cssText = 'padding:3px 8px;font-size:11px;cursor:pointer;border-radius:3px;'
+      + (it.on ? 'background:#1a4a8a;color:#d0e4ff;font-weight:700'
+               : 'color:#cfe4f5');
+    row.addEventListener('mouseenter', ()=>{ if(!it.on) row.style.background = '#12283c'; });
+    row.addEventListener('mouseleave', ()=>{ if(!it.on) row.style.background = ''; });
+    row.addEventListener('click', ()=>{
+      box.style.display = 'none';
+      try{ it.act(); _syncTimeBar(); }catch(e){ console.warn('切換時段失敗', e); }
+    });
+    box.appendChild(row);
+  });
+  // 定位在時間欄位下方
+  const lb = document.getElementById('time-nav-label');
+  if(lb){
+    const r = lb.getBoundingClientRect();
+    box.style.left = Math.max(6, r.left) + 'px';
+    box.style.top = (r.bottom + 4) + 'px';
+  }
+  box.style.display = 'block';
+  // 捲到目前選中的項目
+  const cur = box.querySelector('div[style*="1a4a8a"]');
+  if(cur && cur.scrollIntoView) cur.scrollIntoView({block: 'center'});
+  const close = e2 =>{
+    if(box.contains(e2.target)) return;
+    box.style.display = 'none';
+    document.removeEventListener('click', close, true);
+  };
+  setTimeout(()=>document.addEventListener('click', close, true), 0);
+}
+
 function stepWin(delta){
   if(_hourIdx != null){ stepHour(delta); return; }
   if(winKey === 'custom'){
@@ -11120,14 +11202,14 @@ function _logModeDistribution(){
 }
 
 function renderTownNameLayer(){
-  // ★ 東亞層級時不標臺灣的行政區名（使用者指定）：
-  //   此層級是看區域尺度的系統位置，臺灣的鄉鎮名會糊成一片。
-  if(window._eaHideTaiwanNames){
-    try{ if(townNameLayer){ map.removeLayer(townNameLayer); townNameLayer = null; } }catch(e){}
-    return;
-  }
   if(townNameLayer){ map.removeLayer(townNameLayer); townNameLayer = null; }
+  // ★ 界線一律先畫（由地區層級決定要不要畫鄰國），與名稱無關。
+  //   先前東亞層級會提前 return，連 renderEastAsiaLayer() 都沒呼叫到，
+  //   於是切層級與按鈕的狀態互相打架。
   renderEastAsiaLayer();
+  // 東亞層級不標臺灣的鄉鎮名（會糊成一片），但鄰國省縣名仍由
+  // renderEastAsiaLayer 依「行政區名」按鈕決定。
+  if(window._eaHideTaiwanNames) return;
   if(!showTownName || typeof TOWN_GEO === 'undefined') return;
   const z = map.getZoom();
   // ★ 範圍跟隨縣市下拉（東亞模式由上方已提前 return）
