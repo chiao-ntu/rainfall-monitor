@@ -1617,10 +1617,23 @@ function _wfStart(){
     if(wd == null) return;
     nodes.push({lat: t.lat, lng: t.lng, ws: w.ws, wd});
   });
+  // ★ 診斷：分別統計「有風速」與「有風向」的鄉鎮數。
+  //   風速 368 個有值但風場是空的 → 表示 wd 欄位沒進來（後端未抓或格式不符）。
+  let _nWs = 0, _nWd = 0;
+  (TOWNSHIPS || []).forEach(t=>{
+    const w2 = _windOf(t);
+    if(w2 && w2.ws != null) _nWs++;
+    const s2 = _windSeries(t);
+    if(Array.isArray(s2) && s2.some(p=>p && p.wd != null)) _nWd++;
+  });
+  console.log(`風場診斷：有風速 ${_nWs} 個鄉鎮、有風向 ${_nWd} 個鄉鎮`
+    + `｜可用節點 ${nodes.length}`);
   if(nodes.length < 3){
     const ctx0 = cv.getContext('2d');
     ctx0.fillStyle = '#7a94ac'; ctx0.font = '13px sans-serif';
-    ctx0.fillText('此時段無風向資料（CWA 逐 3 小時預報）', 14, 24);
+    ctx0.fillText(_nWd === 0
+      ? '無風向資料：後端 wind_fcst 缺 wd 欄位（需重新部署 fetch_rainfall.py）'
+      : '此時段無風向資料（CWA 逐 3 小時預報）', 14, 24);
     return;
   }
   console.log(`風場：${nodes.length} 個鄉鎮有風向資料`);
@@ -7343,16 +7356,25 @@ async function tryLoadLive(){
         //     與警戒判讀一致：局部強降雨才是關鍵，平均會稀釋掉）。
         const hours = hd.hours || [];
         const cwa = hd.cwa || {};
-        const SID2TOWN = {};
+        // ★ rain_hourly.json 的鍵是「站名」不是站號（fetch_qpesums_hourly
+        //   以 out[nm] 寫入）。先前用 st.sid 去對，於是永遠對不到，
+        //   載入後是「0 個鄉鎮」，動畫與過去逐時都拿不到資料。
+        //   改以站名對，並加正規化（去掉 s/w/tp 等後綴）當退路。
+        const NORM = x => String(x || '').trim()
+          .replace(/[sSwWtTpP]+$/, '').replace(/[()（）\s]/g, '');
+        const NAME2TOWN = {}, NORM2TOWN = {};
         (TOWNSHIPS || []).forEach(t=>{
           const k = (t.county||'') + (t.township||'');
-          (t.stations || []).forEach(st=>{ if(st.sid) SID2TOWN[st.sid] = k; });
+          (t.stations || []).forEach(st=>{
+            if(st.name){ NAME2TOWN[st.name] = k; NORM2TOWN[NORM(st.name)] = k; }
+            if(st.sid) NAME2TOWN[st.sid] = k;      // 站號也留著，兩種都能對
+          });
         });
         const agg = {};
         hours.forEach((hk, hi)=>{
           const snap = cwa[hk] || {};
           Object.keys(snap).forEach(sid=>{
-            const k = SID2TOWN[sid];
+            const k = NAME2TOWN[sid] || NORM2TOWN[NORM(sid)];
             if(!k) return;
             if(!agg[k]) agg[k] = new Array(hours.length).fill(null);
             const v = snap[sid];
