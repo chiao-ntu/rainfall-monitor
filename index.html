@@ -842,21 +842,21 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
       <div class="sec-body" id="body-stnrank" style="display:none">
         <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:4px;align-items:center">
-          <select id="sr-metric" onchange="drawStnRank()" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+          <select id="sr-metric" onchange="drawStnRankChart(selected)" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
             <option value="rain">累積雨量</option>
-            <option value="etr">ETR2%（官方觀測，不隨時段變）</option>
+            <option value="etr">ETR2%</option>
           </select>
-          <input id="sr-from" type="number" min="1" value="1" onchange="drawStnRank()"
+          <input id="sr-from" type="number" min="1" value="1" onchange="drawStnRankChart(selected)"
             style="width:44px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
             border:1px solid #1a4060;border-radius:3px">
           <span style="font-size:11px;color:#5a7a95">–</span>
-          <input id="sr-to" type="number" min="1" value="20" onchange="drawStnRank()"
+          <input id="sr-to" type="number" min="1" value="20" onchange="drawStnRankChart(selected)"
             style="width:52px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
             border:1px solid #1a4060;border-radius:3px">
           <span id="sr-total" style="font-size:10px;color:#5a7a95"></span>
         </div>
         <div style="display:flex;gap:3px;margin-bottom:5px">
-          <select id="sr-zone" onchange="drawStnRank()" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
+          <select id="sr-zone" onchange="drawStnRankChart(selected)" style="flex:1;min-width:110px;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
             <option value="">全部地形</option>
             <option value="山區">山區</option>
             <option value="淺山區">淺山區</option>
@@ -1591,7 +1591,12 @@ function _wfStart(){
   if(!mp) return;
   const cv = document.createElement('canvas');
   cv.id = 'wf-canvas';
-  cv.style.cssText = 'position:absolute;inset:0;z-index:399;pointer-events:none';
+  // ★ z-index 必須高於所有 Leaflet pane：
+  //   seaPane 390、townPane 395、overlayPane 400、markerPane 600。
+  //   原本設 399 會被鄉鎮色塊（townPane，且陸地已改為完全不透明）
+  //   與縣市界蓋住 —— 節點都建好了卻什麼都看不到，正是這個原因。
+  //   取 650（低於 popupPane 700，不擋彈出視窗）。
+  cv.style.cssText = 'position:absolute;inset:0;z-index:650;pointer-events:none';
   mp.appendChild(cv);
   _wfCanvas = cv;
   const fit = ()=>{
@@ -1691,8 +1696,14 @@ function _wfStart(){
       sw += w;
     });
     if(!sw) return null;
-    const k = 0.06;                          // 速度縮放（像素／幀 per m/s）
-    return [su / sw * k, sv / sw * k];
+    // ★ 速度縮放：實測平均風常在 2~6 m/s，原本 0.06 只有 0.12 px/幀，
+    //   幾乎看不出在動。改為基礎位移 + 風速加成，弱風也看得到流向。
+    const k = 0.35;
+    const base = 0.8;                        // 最低可視位移（像素／幀）
+    const ux = su / sw, uy = sv / sw;
+    const mag = Math.hypot(ux, uy) || 1e-6;
+    const px = base + mag * k;                 // 實際位移量
+    return [ux / mag * px, uy / mag * px];
   };
 
   const ctx = cv.getContext('2d');
@@ -2626,7 +2637,9 @@ function drawStnRankChart(t, canvasId){
     if(tot) tot.textContent = `／共 ${_all.length}`;
   }catch(e){}
   const isZoom = (canvasId === 'chart-zoom-canvas');
-  const F = _fitCanvas(cv, 300, 220);
+  // ★ 放大時要給足高度，否則畫布只有 220px 而容器很大，
+  //   其餘區域就是一片黑（其他圖表都有依 isZoom 調整，這裡漏了）。
+  const F = _fitCanvas(cv, 300, isZoom ? 820 : 220);
   const ctx = F.ctx, CW = F.w, CH = F.h;
   if(!rows.length){
     ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
