@@ -249,6 +249,32 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       style="border-color:#3a6a9a;color:#8ab8e8;text-decoration:none;display:inline-block">✎ 繪圖地圖</a>
   </div>
   <div id="cust-ctrl">
+    <!-- ★ 時間動畫：併在自訂範圍裡（使用者指定），在選定的範圍內播放 -->
+    <div class="sl-wrap" style="width:100%;justify-content:flex-end;gap:6px;
+         margin-bottom:3px">
+      <button class="b" id="bPlay" onclick="toggleAnim()"
+        style="border-color:#3a8a5a;color:#7ee8a8;padding:1px 9px">▶ 播放</button>
+      <span style="font-size:10px;color:#5a7a95">幀距</span>
+      <select id="anim-step" onchange="_animRebuild()"
+        style="font-size:10px;padding:1px 4px;background:#061220;color:#cfe4f5;
+        border:1px solid #1a4060;border-radius:3px">
+        <option value="60">1 小時</option>
+        <option value="30">30 分鐘</option>
+        <option value="10">10 分鐘</option>
+      </select>
+      <span style="font-size:10px;color:#5a7a95">速度</span>
+      <select id="anim-fps"
+        style="font-size:10px;padding:1px 4px;background:#061220;color:#cfe4f5;
+        border:1px solid #1a4060;border-radius:3px">
+        <option value="6">慢</option>
+        <option value="12" selected>中</option>
+        <option value="24">快</option>
+      </select>
+      <button class="b" id="bAnimExport" onclick="exportAnim()"
+        style="border-color:#8a6a3a;color:#e8c87a;padding:1px 9px">⬇ 影片</button>
+      <span id="anim-pos" style="font-size:10px;color:#9fc8e8;min-width:96px;
+        text-align:right"></span>
+    </div>
     <div class="sl-wrap" style="width:100%;justify-content:flex-end;gap:6px">
       <span style="font-size:10px;color:#5a7a95">精度</span>
       <select id="cust-step" onchange="setCustStep(this.value)"
@@ -5341,6 +5367,7 @@ function _hourlyAt(t, h){
     return (ov == null) ? null : {v: ov, approx: false, obs: true};
   }
   if(h < 1) return null;
+  // ★ 動畫會傳入小數小時（內插用），Math.floor 仍正確定位到 6h 段
   const seg = _nowSeg() + Math.floor((h - 1) / 6);
   const a = getQpfArr(t, MODEL_FIELD[forecastModel] || 'qpf_best');
   const segTotal = (Array.isArray(a) && a[seg] != null) ? a[seg] : null;
@@ -5358,6 +5385,7 @@ function _hourlyAt(t, h){
     }
     const sum = hrs.reduce((x, y)=>x + y, 0);
     const now = new Date();
+    // ★ 小數小時：在相鄰兩小時之間線性內插（累積量單調，內插有物理意義）
     const idxInSeg = (now.getHours() + h) - base;
     if(idxInSeg >= 0 && idxInSeg < 6){
       if(sum > 0.05){
@@ -5400,6 +5428,212 @@ function _obsHourlyAt(t, h){
 //   於是出現「斷斷續續 3~5 小時沒資料」。
 //   改用階梯取值：取「該時刻之前最近的一筆」，其值有效至下一筆為止 ——
 //   這也才是預報序列的正確語意（某時刻發布的預報持續到下次更新）。
+// ══════════════════════════════════════════════════════════
+//  時間內插引擎（動畫用）
+//  ★ 原則（與使用者討論後定案）：
+//    內插「底層的連續量」，再由內插後的值推導級距與顏色。
+//    這樣每一幀的顏色必定落在圖例的某一格，不會出現混色產生的
+//    中間色（例如白→紅直接混成粉紅，跳過藍綠黃三個級距）。
+//    二元狀態（警特報有無）不內插，改用淡入淡出。
+//  ★ 內插出來的不是官方預報，畫面會標示「⚡ 內插顯示」。
+// ══════════════════════════════════════════════════════════
+
+// 線性內插（連續量：雨量、ETR2%、風速、浪高、氣溫）
+// ══════════════════════════════════════════════════════════
+//  時間動畫播放
+//  ★ 在自訂範圍選定的區間內播放（使用者指定）。
+//    幀距可選 1 小時／30 分／10 分；資料點之間以內插補齊，
+//    每幀畫面角落標示是否為內插值。
+// ══════════════════════════════════════════════════════════
+let _animOn = false, _animTimer = null, _animIdx = 0, _animFrames = [];
+let _animSavedHour = null;
+
+// 依自訂範圍與幀距建立幀序列（每幀記「距現在幾小時」，可為小數）
+function _animBuildFrames(){
+  const stepMin = parseInt((document.getElementById('anim-step') || {}).value) || 60;
+  // 自訂範圍的起訖（滑桿值）；非自訂範圍時用目前視窗的前後 24h
+  let h0, h1;
+  const sS = document.getElementById('slS'), sE = document.getElementById('slE');
+  if(winKey === 'custom' && sS && sE){
+    const a = parseInt(sS.value), b = parseInt(sE.value);
+    if(_custStep === 1){ h0 = Math.min(a, b); h1 = Math.max(a, b); }
+    else { h0 = Math.min(a, b) * 6; h1 = (Math.max(a, b) + 1) * 6; }
+  } else {
+    h0 = 0; h1 = 24;
+  }
+  const out = [];
+  for(let h = h0; h <= h1 + 1e-9; h += stepMin / 60) out.push(Math.round(h * 100) / 100);
+  return out;
+}
+
+function _animRebuild(){
+  _animFrames = _animBuildFrames();
+  _animIdx = 0;
+  const el = document.getElementById('anim-pos');
+  if(el) el.textContent = _animFrames.length ? `0 / ${_animFrames.length}` : '';
+}
+
+// 套用某一幀：設定 _hourIdx 並重繪（小數小時交給內插）
+function _animApply(i){
+  if(!_animFrames.length) return;
+  const h = _animFrames[i];
+  _hourIdx = h;
+  try{ renderLayer(); }catch(e){}
+  try{ if(_windFieldOn) _wfStart(); }catch(e){}
+  try{ _syncTimeBar(); }catch(e){}
+  const el = document.getElementById('anim-pos');
+  if(el){
+    const d = new Date(Date.now() + h * 3600e3);
+    const exact = Math.abs(h - Math.round(h)) < 1e-6;
+    el.innerHTML = `${d.getMonth()+1}/${d.getDate()} `
+      + `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+      + (exact ? '' : ' <span style="color:#e8a860">⚡</span>')
+      + ` <span style="color:#5a7a95">${i+1}/${_animFrames.length}</span>`;
+  }
+}
+
+// ★ 匯出 GIF：逐幀擷取地圖後編碼。
+//   用既有的 html2canvas（已載入），不另外引入編碼函式庫 ——
+//   改以 WebM 錄製（瀏覽器原生 MediaRecorder），檔案更小、畫質更好，
+//   且不需要額外的 GIF 編碼器。若瀏覽器不支援才退回逐幀 PNG 下載。
+async function exportAnim(){
+  if(!_animFrames.length) _animRebuild();
+  if(!_animFrames.length){ alert('請先設定自訂時間範圍'); return; }
+  const mp = document.getElementById('map');
+  if(!mp) return;
+  const btn = document.getElementById('bAnimExport');
+  const setTxt = t => { if(btn) btn.textContent = t; };
+  const saved = _hourIdx;
+  try{
+    const cv = document.createElement('canvas');
+    const r = mp.getBoundingClientRect();
+    cv.width = Math.round(r.width); cv.height = Math.round(r.height);
+    const ctx = cv.getContext('2d');
+    if(!cv.captureStream || typeof MediaRecorder === 'undefined'){
+      alert('此瀏覽器不支援影片錄製，請改用截圖功能');
+      return;
+    }
+    const fps = parseInt((document.getElementById('anim-fps') || {}).value) || 12;
+    const stream = cv.captureStream(fps);
+    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+      ? 'video/webm;codecs=vp9' : 'video/webm';
+    const rec = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: 6e6});
+    const chunks = [];
+    rec.ondataavailable = e => { if(e.data && e.data.size) chunks.push(e.data); };
+    const done = new Promise(res => { rec.onstop = res; });
+    rec.start();
+    for(let i = 0; i < _animFrames.length; i++){
+      setTxt(`錄製 ${i+1}/${_animFrames.length}`);
+      _animApply(i);
+      await new Promise(rs => requestAnimationFrame(()=>requestAnimationFrame(rs)));
+      const shot = await html2canvas(mp, {
+        backgroundColor: '#ffffff', scale: 1, useCORS: true, logging: false,
+        ignoreElements: n => n.classList && (
+          n.classList.contains('leaflet-control') ||
+          n.classList.contains('leaflet-control-attribution'))
+      });
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(shot, 0, 0, cv.width, cv.height);
+      // 時間戳記（影片沒有旁邊的面板可看）
+      const h = _animFrames[i];
+      const d = new Date(Date.now() + h * 3600e3);
+      const exact = Math.abs(h - Math.round(h)) < 1e-6;
+      ctx.fillStyle = 'rgba(4,12,20,0.75)';
+      ctx.fillRect(8, 8, exact ? 150 : 210, 24);
+      ctx.fillStyle = '#cfe4f5'; ctx.font = '14px sans-serif';
+      ctx.fillText(`${d.getMonth()+1}/${d.getDate()} `
+        + `${String(d.getHours()).padStart(2,'0')}:`
+        + `${String(d.getMinutes()).padStart(2,'0')}`
+        + (exact ? '' : '　⚡ 內插顯示'), 14, 25);
+      await new Promise(rs => setTimeout(rs, 1000 / fps));
+    }
+    rec.stop();
+    await done;
+    const blob = new Blob(chunks, {type: 'video/webm'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `rainfall_${new Date().toISOString().slice(0,16).replace(/[-:T]/g,'')}.webm`;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+  }catch(e){
+    console.warn('動畫匯出失敗', e);
+    alert('匯出失敗：' + (e && e.message ? e.message : e));
+  }finally{
+    setTxt('⬇ GIF');
+    _hourIdx = saved;
+    try{ renderLayer(); _syncTimeBar(); }catch(e){}
+  }
+}
+
+function toggleAnim(){
+  _animOn = !_animOn;
+  const b = document.getElementById('bPlay');
+  if(b){
+    b.textContent = _animOn ? '⏸ 暫停' : '▶ 播放';
+    b.classList.toggle('on', _animOn);
+  }
+  if(!_animOn){
+    if(_animTimer){ clearTimeout(_animTimer); _animTimer = null; }
+    // 還原播放前的時刻，避免使用者以為資料被改了
+    if(_animSavedHour != null){ _hourIdx = _animSavedHour; _animSavedHour = null; }
+    try{ renderLayer(); _syncTimeBar(); }catch(e){}
+    return;
+  }
+  _animSavedHour = _hourIdx;
+  if(!_animFrames.length) _animRebuild();
+  const fps = parseInt((document.getElementById('anim-fps') || {}).value) || 12;
+  const tick = ()=>{
+    if(!_animOn) return;
+    _animApply(_animIdx);
+    _animIdx = (_animIdx + 1) % _animFrames.length;
+    _animTimer = setTimeout(tick, 1000 / fps);
+  };
+  tick();
+}
+
+function _lerp(a, b, f){
+  if(a == null || b == null || !isFinite(a) || !isFinite(b)) return null;
+  return a + (b - a) * f;
+}
+
+// ★ 圓周內插（風向專用）：350°→10° 必須走 0°（短弧 20°），
+//   線性內插會走 180°，風向整個反轉。
+function _lerpDeg(a, b, f){
+  if(a == null || b == null || !isFinite(a) || !isFinite(b)) return null;
+  let d = ((b - a) % 360 + 540) % 360 - 180;   // 取 -180~180 的短弧
+  return ((a + d * f) % 360 + 360) % 360;
+}
+
+// ★ Catmull-Rom 樣條（颱風路徑專用）：官方產品畫路徑也是這種做法。
+//   四個控制點 p0~p3，f 為 p1→p2 之間的比例。
+function _catmull(p0, p1, p2, p3, f){
+  const f2 = f * f, f3 = f2 * f;
+  return 0.5 * ((2 * p1) +
+                (-p0 + p2) * f +
+                (2*p0 - 5*p1 + 4*p2 - p3) * f2 +
+                (-p0 + 3*p1 - 3*p2 + p3) * f3);
+}
+
+// 在一串 {ms, ...} 點上取 t 時刻的內插結果
+//   fields：要線性內插的欄位；degFields：要圓周內插的欄位
+function _interpAt(pts, tMs, fields, degFields){
+  if(!Array.isArray(pts) || !pts.length) return null;
+  const a = pts.filter(p=>p && p.ms != null).sort((x, y)=>x.ms - y.ms);
+  if(!a.length) return null;
+  if(tMs <= a[0].ms) return Object.assign({}, a[0], {_exact: true});
+  if(tMs >= a[a.length-1].ms)
+    return Object.assign({}, a[a.length-1], {_exact: true});
+  let i = 0;
+  while(i < a.length - 1 && a[i+1].ms <= tMs) i++;
+  const p1 = a[i], p2 = a[i+1];
+  const span = p2.ms - p1.ms;
+  const f = span > 0 ? (tMs - p1.ms) / span : 0;
+  const out = {ms: tMs, _exact: (f === 0)};
+  (fields || []).forEach(k=>{ out[k] = _lerp(p1[k], p2[k], f); });
+  (degFields || []).forEach(k=>{ out[k] = _lerpDeg(p1[k], p2[k], f); });
+  return out;
+}
+
 function _threeHourAt(t, h, m){
   const SER = {wind: _windSeries, temp: _tempSeries, wave: _waveSeries}[m];
   if(typeof SER !== 'function') return null;
