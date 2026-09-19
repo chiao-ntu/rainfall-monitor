@@ -176,8 +176,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <select id="countyPick" onchange="pickCounty(this.value); _syncCountyPickers(this.value)"
       style="font-size:10px;padding:2px 5px;background:#061220;color:#cfe4f5;
       border:1px solid #1a4060;border-radius:3px;max-width:130px">
+      <!-- ★ 全臺為預設選中（使用者指定）；東亞列在其上 -->
       <option value="__EA__">東亞（鄰國行政界）</option>
-      <option value="">全臺</option>
+      <option value="" selected>全臺</option>
       </select>
       <button class="b on" id="bRain"  onclick="setMode('rain')" style="border-color:#3a8a5a;color:#7ee8a8">累積雨量</button>
       <button class="b"    id="bEtr"   onclick="setMode('etr')" style="border-color:#3a8a5a;color:#7ee8a8">ETR2%</button>
@@ -598,8 +599,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <select id="sbCountyPick" onchange="pickCounty(this.value); _syncCountyPickers(this.value)"
     style="margin:0 14px 6px;font-size:11px;padding:3px 5px;background:#061220;
     color:#cfe4f5;border:1px solid #1a4060;border-radius:3px">
-    <option value="__EA__">東亞（鄰國行政界）</option>
-      <option value="">全臺</option>
+    <!-- ★ 全臺為預設選中（使用者指定）；東亞列在其上 -->
+      <option value="__EA__">東亞（鄰國行政界）</option>
+      <option value="" selected>全臺</option>
   </select>
 
   <!-- 搜尋：縣市／鄉鎮／雨量站 -->
@@ -7998,11 +8000,22 @@ function openTimePicker(ev){
     box.appendChild(row);
   });
   // 定位在時間欄位下方
+  // ★ 定位：先靠時間欄位，但不可被右側狀態列蓋住 ——
+  //   以地圖容器的右緣為界，超出就往左推。
   const lb = document.getElementById('time-nav-label');
   if(lb){
     const r = lb.getBoundingClientRect();
-    box.style.left = Math.max(6, r.left) + 'px';
+    const mp = document.getElementById('map');
+    const mr = mp ? mp.getBoundingClientRect() : {left: 0, right: window.innerWidth};
+    box.style.visibility = 'hidden';
+    box.style.display = 'block';
+    const bw = box.offsetWidth || 200;
+    let left = r.left;
+    if(left + bw > mr.right - 8) left = mr.right - bw - 8;   // 不越過地圖右緣
+    if(left < mr.left + 4) left = mr.left + 4;
+    box.style.left = Math.round(left) + 'px';
     box.style.top = (r.bottom + 4) + 'px';
+    box.style.visibility = '';
   }
   box.style.display = 'block';
   // 捲到目前選中的項目
@@ -11140,7 +11153,9 @@ function renderEastAsiaLayer(){
     });
   });
   // 省名／縣名：由「行政區名」按鈕決定；縮放太小時不標（避免糊成一片）
-  if(showTownName && z >= 7){
+  // ★ 東亞視野的縮放是 5，門檻 7 會讓省縣名完全不顯示。
+  //   地區範圍大時標籤本來就稀疏，放寬到 4 才合理。
+  if(showTownName && z >= 4){
     const fs = z >= 9 ? 11 : 10;
     (EAST_ASIA_GEO.provinces || []).forEach(pv=>{
       const nm = pv.name_zht || pv.name;

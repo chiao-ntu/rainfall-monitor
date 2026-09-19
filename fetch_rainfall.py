@@ -1593,6 +1593,29 @@ def _extract_pop_wind(raw, county, is_3day):
             #   ★ 不以 ElementName 比對（其實際字串未經證實，猜錯就整批無資料）。
             #     改為掃描所有元素，看 ElementValue 內是否含 WindSpeed／BeaufortScale
             #     這兩個「值欄位名」——官方文件已明列，比元素名稱可靠。
+            # ★ 風向是**獨立的元素**（WindDirection），與風速不在同一個
+            #   WeatherElement 裡。先前把 wd 寫在風速的迴圈內，
+            #   風向元素會因為沒有 WindSpeed 而在 `continue` 被丟掉，
+            #   風速元素又讀不到 WindDirection —— 於是 wd 永遠是 None。
+            #   故先單獨掃一遍風向，以 start 時間為鍵，再併進風速序列。
+            _wd_by_start = {}
+            for we in we_list:
+                for t in we.get('Time', we.get('time', [])):
+                    def _f0(*keys):
+                        for k in keys:
+                            v = t.get(k)
+                            if v not in (None, '', ' '): return v
+                        return ''
+                    _st = _f0('StartTime', 'startTime', 'DataTime', 'dataTime')
+                    _ev = t.get('ElementValue', t.get('elementValue', [{}]))
+                    if isinstance(_ev, list): _ev = _ev[0] if _ev else {}
+                    for k in ('WindDirection', 'windDirection'):
+                        if k in _ev:
+                            _d = _wind_dir_deg(_ev.get(k))
+                            if _d is not None and _st:
+                                _wd_by_start[_st] = _d
+                            break
+
             wsegs = []
             for we in we_list:
                 for t in we.get('Time', we.get('time',[])):
@@ -1623,13 +1646,8 @@ def _extract_pop_wind(raw, county, is_3day):
                             _b = _numstr(ev.get(k))
                             bf = int(_b) if _b is not None else None
                             break
-                    # ★ 風向（F-D0047 的 WindDirection，單位「8方位」）。
-                    #   官方給的是中文方位詞（如「東北風」「偏南風」），
-                    #   換算成度數供前端畫風場動畫。
-                    wd = None
-                    for k in ('WindDirection', 'windDirection'):
-                        if k in ev:
-                            wd = _wind_dir_deg(ev.get(k)); break
+                    # 風向由上方預先掃出的對照表取得（同一時間點）
+                    wd = _wd_by_start.get(start)
                     if ws is None and bf is None: continue
                     # ★ 逐 3 小時資料只有 DataTime（時間點），無 EndTime。
                     #   若 end 等於 start，前端「落在區間內」的判斷會永遠不成立，
@@ -1801,6 +1819,11 @@ def fetch_all_pop_bundle(counties_needed):
     print(f"  打包檔：{n_ok} 份檔案、PoP3d {len(pop3d_all)} 鄉鎮、"
           f"PoP7d {len(pop7d_all)} 鄉鎮、風力 "
           f"{sum(len(v) for v in WIND_FCST.values())} 鄉鎮")
+    # ★ 風向的抓取狀況：風場動畫全靠這個欄位，抓不到就是空的
+    _nwd = sum(1 for _c in WIND_FCST.values() for _segs in _c.values()
+               if any(_x.get('wd') is not None for _x in (_segs or [])))
+    print(f"    風向（WindDirection）：{_nwd} 個鄉鎮有值"
+          + ("　⚠ 風場動畫將無法顯示" if _nwd == 0 else ""))
     return pop3d_all, pop7d_all
 
 
