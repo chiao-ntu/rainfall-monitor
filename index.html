@@ -1604,7 +1604,18 @@ function _wfStart(){
     cv.width = Math.round(r.width); cv.height = Math.round(r.height);
   };
   fit();
-  map.on('move zoom resize', ()=>{ fit(); _wfParticles = []; });
+  // ★ 移動／縮放後只需重設畫布並把粒子散到新視野，
+  //   不可清空陣列 —— 清空後 forEach 沒東西可跑，粒子永遠不會重生，
+  //   畫面就一片空白（使用者回報「一移動風場就消失」）。
+  const reseed = ()=>{
+    fit();
+    for(const p of _wfParticles){
+      p.x = Math.random() * cv.width;
+      p.y = Math.random() * cv.height;
+      p.age = Math.random() * WF_LIFE;
+    }
+  };
+  map.on('move zoom resize', reseed);
   // 取各鄉鎮的風向風速（依目前時間視窗）
   const nodes = [];
   (TOWNSHIPS || []).forEach(t=>{
@@ -1687,7 +1698,9 @@ function _wfStart(){
     nodes.forEach(n=>{
       const dx = n.lng - ll.lng, dy = n.lat - ll.lat;
       const d2 = dx*dx + dy*dy + 1e-4;
-      if(d2 > 0.25) return;                 // 超過約 0.5 度就不納入
+      // ★ 涵蓋 100km 海警線與外海：0.5 度（約 55km）太小，
+      //   海上完全沒有粒子。放寬到 2.5 度（約 275km）。
+      if(d2 > 6.25) return;
       const w = 1 / d2;
       // 氣象風向是「來向」，移動方向要反過來
       const rad = (n.wd + 180) * Math.PI / 180;
@@ -1703,7 +1716,7 @@ function _wfStart(){
     const ux = su / sw, uy = sv / sw;
     const mag = Math.hypot(ux, uy) || 1e-6;
     const px = base + mag * k;                 // 實際位移量
-    return [ux / mag * px, uy / mag * px];
+    return [ux / mag * px, uy / mag * px, mag]; // 第三項＝真實風速(m/s)
   };
 
   const ctx = cv.getContext('2d');
@@ -1726,11 +1739,13 @@ function _wfStart(){
         Object.assign(p, spawn()); p.age = 0; return;
       }
       const nx = p.x + uv[0], ny = p.y + uv[1];
-      const spd = Math.hypot(uv[0], uv[1]);
-      // 依風速著色：慢＝青、快＝黃紅（與蒲福風級的直覺一致）
-      ctx.strokeStyle = spd > 1.2 ? 'rgba(255,120,80,0.85)'
-                      : spd > 0.6 ? 'rgba(255,220,120,0.8)'
-                                  : 'rgba(140,220,240,0.7)';
+      // ★ 依「真實風速（m/s）」著色，不是像素位移 ——
+      //   位移已含基礎量，用它判斷會讓弱風也變紅。
+      //   分界比照蒲福風級：<5.5 輕、5.5~10.8 中、≥10.8 強（6級以上）。
+      const ws0 = uv[2] || 0;
+      ctx.strokeStyle = ws0 >= 10.8 ? 'rgba(255,120,80,0.9)'
+                      : ws0 >= 5.5  ? 'rgba(255,220,120,0.85)'
+                                    : 'rgba(140,220,240,0.75)';
       ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(nx, ny); ctx.stroke();
       p.x = nx; p.y = ny; p.age++;
     });
@@ -12729,7 +12744,7 @@ function toggleChartZoom(canvasId, ev){
     'cv-wind-hr': selected ? `${selected.county}${selected.township} 逐時風力預測（平均風）` : '',
     'cv-wind-hr-gust': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風）` : '',
     'cv-wind-hr-est': selected ? `${selected.county}${selected.township} 逐時風力預測（陣風推估）` : '',
-    'cv-stnrank': selected ? `${selected.county}${selected.township} 測站雨量排名` : '',
+    'cv-stnrank': (typeof _rankScope === 'function' ? _rankScope().label : '全臺') + ' 測站雨量排名',
     'cv-verify': '預報校驗 CSI 趨勢',
     'cv-waterfall': '預測達標時間',
     'cv-countytowns': (_pickedCounty || '') + ' 各鄉鎮',
@@ -12756,7 +12771,9 @@ function toggleChartZoom(canvasId, ev){
     drawElevRainChart(selected, 'chart-zoom-canvas');
   } else if(canvasId === 'cv-etrphase'){
     drawEtrPhaseChart(selected, 'chart-zoom-canvas');
-  } else if(canvasId === 'cv-stnrank' && selected){
+  // ★ 不再要求 selected：全臺與縣市層級也有內容，
+  //   先前這個條件讓未選鄉鎮時分派不到繪製函式，放大後就是一片黑。
+  } else if(canvasId === 'cv-stnrank'){
     drawStnRankChart(selected, 'chart-zoom-canvas');
   } else if(canvasId === 'cv-temp-day' && selected){
     drawTempDayChart(selected, 'chart-zoom-canvas');
