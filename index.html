@@ -3641,7 +3641,10 @@ function _setEastAsia(on){
     if(_eaMode){
       // 拉到可看見鄰國的視野
       map.setView([26.5, 122.0], 5, {animate:true});
-      showTownName = true;          // 讓東亞圖層繪製
+      // ★ 地區下拉只管「縮放與行政區界的繪製」，不碰名稱顯示（使用者指定）。
+      //   名稱要不要顯示一律由「行政區名」按鈕決定。
+      //   先前這裡強制 showTownName = true，於是切層級時按鈕狀態與
+      //   實際顯示對不上。
       window._eaHideTaiwanNames = true;
     } else {
       window._eaHideTaiwanNames = false;
@@ -5387,11 +5390,19 @@ function _hourlyAt(t, h){
     const now = new Date();
     // ★ 小數小時：在相鄰兩小時之間線性內插（累積量單調，內插有物理意義）
     const idxInSeg = (now.getHours() + h) - base;
-    if(idxInSeg >= 0 && idxInSeg < 6){
+    if(idxInSeg >= -1e-9 && idxInSeg < 6){
       if(sum > 0.05){
-        // 依 IFS 的時間分布比例分配所選模式的段總量
-        const v = segTotal * hrs[idxInSeg] / sum;
-        return {v: Math.round(v * 10) / 10, approx: false};
+        // ★ 支援小數索引（動畫用）：在相鄰兩小時之間線性內插。
+        //   先前直接用 hrs[idxInSeg]，小數索引會取到 undefined，
+        //   計算結果變 NaN，畫面上就是「突然下幾百毫米然後停」。
+        //   時雨量在一小時內的變化是連續的，內插有物理意義。
+        const i0 = Math.floor(idxInSeg);
+        const fr = idxInSeg - i0;
+        const a0 = hrs[i0] != null ? hrs[i0] : 0;
+        const a1 = (i0 + 1 < 6 && hrs[i0+1] != null) ? hrs[i0+1] : a0;
+        const shape = a0 + (a1 - a0) * fr;
+        const v = segTotal * shape / sum;
+        return {v: Math.round(v * 10) / 10, approx: (fr > 1e-9)};
       }
       // IFS 該段全無雨 → 平均分配（形狀無資訊）
       return {v: Math.round(segTotal / 6 * 10) / 10, approx: true};
@@ -10999,7 +11010,11 @@ function toggleTownNameLayer(){
 let eastAsiaLayer = null;
 function renderEastAsiaLayer(){
   if(eastAsiaLayer){ map.removeLayer(eastAsiaLayer); eastAsiaLayer = null; }
-  if(!showTownName || typeof EAST_ASIA_GEO === 'undefined') return;
+  // ★ 界線的繪製由「地區層級」決定（東亞層級才畫鄰國省縣界）；
+  //   名稱要不要標則看「行政區名」按鈕（下方 z>=7 的區塊）。
+  //   先前兩者都綁在 showTownName，切層級與按鈕會互相干擾。
+  const _wantBorder = (typeof _eaMode !== 'undefined' && _eaMode) || showTownName;
+  if(!_wantBorder || typeof EAST_ASIA_GEO === 'undefined') return;
   const z = map.getZoom();
   eastAsiaLayer = L.layerGroup().addTo(map);
   // 國界：較粗、偏亮；省界：細、更淡（與臺灣鄉鎮界的層次一致）
@@ -11020,8 +11035,8 @@ function renderEastAsiaLayer(){
         fill:false, interactive:false}).addTo(eastAsiaLayer);
     });
   });
-  // 省名／縣名：格式與臺灣鄉鎮名一致；縮放太小時不標（避免糊成一片）
-  if(z >= 7){
+  // 省名／縣名：由「行政區名」按鈕決定；縮放太小時不標（避免糊成一片）
+  if(showTownName && z >= 7){
     const fs = z >= 9 ? 11 : 10;
     (EAST_ASIA_GEO.provinces || []).forEach(pv=>{
       const nm = pv.name_zht || pv.name;
