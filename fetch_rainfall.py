@@ -3091,10 +3091,32 @@ def build_adaptive_blend(skill_summary, verify_recent=None):
                 w *= max(0.5, min(1.2, 30.0 / max(10.0, mae)))
             picks[m] = round(w, 3)
             detail.append(f'{m}={cfg["label"]}({bias:.2f})')
-        # 全被排除時退回等權重，寧可不準也不能沒有預報
+        # ★ 全數排除時：不退回「所有模式等權重」（那等於把最離譜的也拉進來），
+        #   改為挑「相對最好的」——以 |ln(偏差比)| 為主、MAE 為輔排序，
+        #   取前三名並依名次給遞減權重。
+        #   理由：沒有模式達標時，使用者仍需要一個預報；此時最合理的
+        #   選擇是「錯得最少的那幾個」，而不是全部平均。
         if not picks:
-            picks = {m: 1.0 for m in (mmap or {})}
-            detail.append('全數排除→退回等權重')
+            import math as _m
+            cand = []
+            for m, v in (mmap or {}).items():
+                b = v.get('bias')
+                mae = v.get('mae')
+                if b is None or b <= 0:
+                    continue
+                # 偏差比離 1 的距離（取對數讓 2 倍與 0.5 倍同等嚴重）
+                score = abs(_m.log(b)) + (mae or 50) / 100.0
+                cand.append((score, m, b, mae))
+            cand.sort()
+            for rank, (sc, m, b, mae) in enumerate(cand[:3]):
+                picks[m] = round([0.6, 0.4, 0.25][rank], 3)
+                detail.append(f'{m}=相對最佳#{rank+1}({b:.2f})')
+            if picks:
+                excluded = [m for m in (mmap or {}) if m not in picks]
+                detail.append('無模式達標→取相對最佳三名')
+            else:
+                picks = {m: 1.0 for m in (mmap or {})}
+                detail.append('無任何可用樣本→等權重')
         out[zone] = {'models': picks, 'excluded': excluded,
                      'note': '、'.join(sorted(detail))}
     return out

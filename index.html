@@ -1795,7 +1795,21 @@ function _wfStart(){
     }
     const m2 = Math.hypot(ux, uy) || 1e-6;
     const px = base + ws * k;
-    const support = Math.max(0, Math.min(1, 1 - Math.sqrt(c.d2) / 1.2));
+    // ★ 支撐度要用「粒子當下的位置」重算，不能沿用抽測站當時的距離。
+    //   先前用 c.d2（抽中的瞬間），粒子飄出資料範圍後 support 不變，
+    //   就會拖出一條無限延伸的線 —— 使用者看到的正是這個。
+    let near = 9e9;
+    const ll2 = map.containerPointToLatLng([x, y]);
+    nodes.forEach(n=>{
+      const dx = n.lng - ll2.lng, dy = n.lat - ll2.lat;
+      const d = dx*dx + dy*dy;
+      if(d < near) near = d;
+    });
+    const dist = Math.sqrt(near);
+    // 超過 1.2 度就不再畫（回 null → 粒子重生），
+    // 0.7~1.2 度之間漸進淡出，避免硬邊。
+    if(dist > 1.2) return null;
+    const support = Math.max(0, Math.min(1, (1.2 - dist) / 0.5));
     return [ux / m2 * px, uy / m2 * px, ws, support];
   };
 
