@@ -1574,6 +1574,33 @@ function _restyleSeaOverlays(){
   });
 }
 
+// ★ 只更新風場節點（風向／風速），不動粒子 ——
+//   動畫每幀呼叫，粒子因此能連續流動而非每幀重置。
+function _wfRefreshNodes(){
+  const nodes = window._wfNodes;
+  if(!Array.isArray(nodes)) return;
+  nodes.length = 0;
+  (TOWNSHIPS || []).forEach(t=>{
+    if(t.lat == null || t.lng == null) return;
+    const w = _windOf(t);
+    if(!w || w.ws == null) return;
+    const ser = _windSeries(t);
+    let wd = null;
+    if(Array.isArray(ser) && ser.length){
+      const tgt = _windAtMs();
+      const pts = ser.filter(p=>p && p.ms != null && p.wd != null)
+                     .sort((a, b)=>a.ms - b.ms);
+      let best = pts.length ? pts[0] : null;
+      for(const p of pts){ if(p.ms <= tgt) best = p; else break; }
+      if(best) wd = best.wd;
+    }
+    if(wd == null) return;
+    nodes.push({lat: t.lat, lng: t.lng, ws: w.ws, wd});
+  });
+  // 節點換了，粒子重抽所屬測站（但位置與軌跡保留）
+  (_wfParticles || []).forEach(p=>{ p.node = null; });
+}
+
 function toggleWindField(){
   _windFieldOn = !_windFieldOn;
   const b = document.getElementById('bWindField');
@@ -1613,11 +1640,14 @@ function _wfStart(){
       p.x = Math.random() * cv.width;
       p.y = Math.random() * cv.height;
       p.age = Math.random() * WF_LIFE;
+      p.node = null;                    // 視野變了，重抽所屬測站
     }
   };
   map.on('move zoom resize', reseed);
   // 取各鄉鎮的風向風速（依目前時間視窗）
-  const nodes = [];
+  // ★ 存成模組層變數，動畫時只更新內容、不重建粒子
+  const nodes = (window._wfNodes = window._wfNodes || []);
+  nodes.length = 0;
   (TOWNSHIPS || []).forEach(t=>{
     if(t.lat == null || t.lng == null) return;
     const w = _windOf(t);
@@ -1692,57 +1722,50 @@ function _wfStart(){
   };
 
   // 反距離加權：回傳畫布座標處的 [dx, dy]（像素／幀）
-  const uvAt = (x, y)=>{
+  // ★ 隨機取樣取代向量平均（使用者提議，氣象上更誠實）：
+  //   每顆粒子依高斯權重「抽一個測站」跟隨它的風向，而不是先把
+  //   鄰站平均成一個向量。
+  //   風向一致的區域 —— 抽到誰都差不多，粒子整齊流動，看起來與平均法相同。
+  //   風向分歧的區域 —— 粒子自然分成幾群往不同方向走，呈現真實的亂流感，
+  //   而不是被平均成一個假的旋渦、也不是整片消失。
+  //   粒子總數不變，等於自動依分歧程度「分掉」密度。
+  //   ★ 每顆粒子固定跟隨同一個測站（存在 p.node），否則每幀重抽
+  //     會抖動成雜訊而非流線。
+  const pickNode = (x, y)=>{
     const ll = map.containerPointToLatLng([x, y]);
-    let sw = 0, su = 0, sv = 0, sm = 0;
+    let tot = 0;
+    const cand = [];
     nodes.forEach(n=>{
       const dx = n.lng - ll.lng, dy = n.lat - ll.lat;
       const d2 = dx*dx + dy*dy + 1e-4;
-      // ★ 影響半徑 1.2 度（約 130km）：剛好涵蓋 100km 海警線。
-      //   不可再放大 —— 資料源只有臺灣陸域的 368 個鄉鎮，
-      //   外推到數百公里會由反距離加權「合成」出不存在的環流
-      //   （例如臺灣與東沙之間出現假的輻合帶），與其他模式比對時
-      //   會被當成真的特徵。寧可沒有，不要造假。
+      // 影響半徑 1.2 度（約 130km）：涵蓋 100km 海警線，不再外推
       if(d2 > 1.44) return;
-      // 高斯核：權重平滑遞減，σ≈0.45 度（約 50km，與測站間距相當）
-      const w = Math.exp(-d2 / (2 * 0.45 * 0.45));
-      // 氣象風向是「來向」，移動方向要反過來
-      const rad = (n.wd + 180) * Math.PI / 180;
-      su += w * Math.sin(rad) * n.ws;
-      sv += w * -Math.cos(rad) * n.ws;
-      sw += w;
-      sm += w * n.ws;
+      const w = Math.exp(-d2 / (2 * 0.45 * 0.45));   // σ≈50km
+      tot += w;
+      cand.push({n, w, d2});
     });
-    if(!sw) return null;
-    // ★ 支撐度：最近測點的距離。越遠代表越是外推，粒子會畫得越淡，
-    //   讓判讀者一眼看出哪裡是實測支撐、哪裡只是延伸。
-    let near = 9e9;
-    nodes.forEach(n=>{
-      const dx = n.lng - ll.lng, dy = n.lat - ll.lat;
-      const d = dx*dx + dy*dy;
-      if(d < near) near = d;
-    });
-    const support = Math.max(0, Math.min(1, 1 - Math.sqrt(near) / 1.2));
-    // ★ 速度縮放：實測平均風常在 2~6 m/s，原本 0.06 只有 0.12 px/幀，
-    //   幾乎看不出在動。改為基礎位移 + 風速加成，弱風也看得到流向。
-    const k = 0.35;
-    const base = 0.8;                        // 最低可視位移（像素／幀）
-    const ux = su / sw, uy = sv / sw;
-    const mag = Math.hypot(ux, uy) || 1e-6;
-    // ★ 方向一致性：合成向量長度 ÷ 各站風速的加權平均。
-    //   鄰站風向一致時接近 1；彼此抵消時接近 0。
-    //   接近 0 代表「這裡的風向由分歧的測站硬湊出來」——
-    //   不論用哪種核，畫出來都是內插產物（使用者看到的渦流）。
-    //   誠實的做法是不畫，而不是畫一個看起來很篤定的旋渦。
-    const coh = (sm > 0) ? Math.min(1, mag / (sm / sw)) : 0;
-    if(coh < 0.35) return null;
-    const px = base + mag * k;                 // 實際位移量
-    return [ux / mag * px, uy / mag * px, mag, support * coh]; // [dx,dy,風速,可信度]
+    if(!cand.length) return null;
+    let r = Math.random() * tot;
+    for(const c of cand){ r -= c.w; if(r <= 0) return c; }
+    return cand[cand.length - 1];
   };
+
+  // 依該粒子所屬測站算位移
+  const uvOf = (c)=>{
+    if(!c) return null;
+    const n = c.n;
+    const k = 0.35, base = 0.8;                 // 基礎位移 + 風速加成
+    const px = base + (n.ws || 0) * k;
+    const rad = (n.wd + 180) * Math.PI / 180;   // 氣象風向是「來向」
+    // 支撐度：離該測站越遠越淡
+    const support = Math.max(0, Math.min(1, 1 - Math.sqrt(c.d2) / 1.2));
+    return [Math.sin(rad) * px, -Math.cos(rad) * px, n.ws || 0, support];
+  };
+
 
   const ctx = cv.getContext('2d');
   const spawn = ()=>({x: Math.random() * cv.width, y: Math.random() * cv.height,
-                      age: Math.random() * WF_LIFE});
+                      age: Math.random() * WF_LIFE, node: null});
   for(let i = 0; i < WF_N; i++) _wfParticles.push(spawn());
 
   const step = ()=>{
@@ -1754,10 +1777,14 @@ function _wfStart(){
     ctx.globalCompositeOperation = 'source-over';
     ctx.lineWidth = 1.2;
     _wfParticles.forEach(p=>{
-      const uv = uvAt(p.x, p.y);
+      // ★ 粒子固定跟隨一個測站；重生時才重抽（每幀重抽會變雜訊）
+      if(!p.node) p.node = pickNode(p.x, p.y);
+      const uv = uvOf(p.node);
       if(!uv || p.age > WF_LIFE ||
          p.x < 0 || p.y < 0 || p.x > cv.width || p.y > cv.height){
-        Object.assign(p, spawn()); p.age = 0; return;
+        Object.assign(p, spawn()); p.age = 0;
+        p.node = pickNode(p.x, p.y);
+        return;
       }
       const nx = p.x + uv[0], ny = p.y + uv[1];
       // ★ 依「真實風速（m/s）」著色，不是像素位移 ——
@@ -5606,7 +5633,10 @@ function _animApply(i){
   const h = _animFrames[i];
   _hourIdx = h;
   try{ renderLayer(); }catch(e){}
-  try{ if(_windFieldOn) _wfStart(); }catch(e){}
+  // ★ 不要每幀 _wfStart()：那會重建整個風場、粒子全部重置，
+  //   錄下來就是一格一格的靜止（使用者回報「有些秒數完全不會動」）。
+  //   改為只更新節點的風向風速，粒子繼續沿著自己的軌跡流動。
+  try{ if(_windFieldOn && typeof _wfRefreshNodes === 'function') _wfRefreshNodes(); }catch(e){}
   try{ _syncTimeBar(); }catch(e){}
   const el = document.getElementById('anim-pos');
   if(el){
@@ -5695,7 +5725,9 @@ async function exportAnim(){
         + `${String(d.getHours()).padStart(2,'0')}:`
         + `${String(d.getMinutes()).padStart(2,'0')}`
         + (exact ? '' : '　⚡ 內插顯示'), 14, 25);
-      await new Promise(rs => setTimeout(rs, 1000 / fps));
+      // ★ 讓風場粒子在兩幀之間實際推進若干步，錄下來才是連續流動。
+      //   html2canvas 擷取的是當下狀態，不等粒子自己跑。
+      await new Promise(rs => setTimeout(rs, Math.max(60, 1000 / fps)));
     }
     rec.stop();
     await done;
