@@ -1694,7 +1694,7 @@ function _wfStart(){
   // 反距離加權：回傳畫布座標處的 [dx, dy]（像素／幀）
   const uvAt = (x, y)=>{
     const ll = map.containerPointToLatLng([x, y]);
-    let sw = 0, su = 0, sv = 0;
+    let sw = 0, su = 0, sv = 0, sm = 0;
     nodes.forEach(n=>{
       const dx = n.lng - ll.lng, dy = n.lat - ll.lat;
       const d2 = dx*dx + dy*dy + 1e-4;
@@ -1704,12 +1704,14 @@ function _wfStart(){
       //   （例如臺灣與東沙之間出現假的輻合帶），與其他模式比對時
       //   會被當成真的特徵。寧可沒有，不要造假。
       if(d2 > 1.44) return;
-      const w = 1 / d2;
+      // 高斯核：權重平滑遞減，σ≈0.45 度（約 50km，與測站間距相當）
+      const w = Math.exp(-d2 / (2 * 0.45 * 0.45));
       // 氣象風向是「來向」，移動方向要反過來
       const rad = (n.wd + 180) * Math.PI / 180;
       su += w * Math.sin(rad) * n.ws;
       sv += w * -Math.cos(rad) * n.ws;
       sw += w;
+      sm += w * n.ws;
     });
     if(!sw) return null;
     // ★ 支撐度：最近測點的距離。越遠代表越是外推，粒子會畫得越淡，
@@ -1727,8 +1729,15 @@ function _wfStart(){
     const base = 0.8;                        // 最低可視位移（像素／幀）
     const ux = su / sw, uy = sv / sw;
     const mag = Math.hypot(ux, uy) || 1e-6;
+    // ★ 方向一致性：合成向量長度 ÷ 各站風速的加權平均。
+    //   鄰站風向一致時接近 1；彼此抵消時接近 0。
+    //   接近 0 代表「這裡的風向由分歧的測站硬湊出來」——
+    //   不論用哪種核，畫出來都是內插產物（使用者看到的渦流）。
+    //   誠實的做法是不畫，而不是畫一個看起來很篤定的旋渦。
+    const coh = (sm > 0) ? Math.min(1, mag / (sm / sw)) : 0;
+    if(coh < 0.35) return null;
     const px = base + mag * k;                 // 實際位移量
-    return [ux / mag * px, uy / mag * px, mag, support]; // [dx,dy,風速,支撐度]
+    return [ux / mag * px, uy / mag * px, mag, support * coh]; // [dx,dy,風速,可信度]
   };
 
   const ctx = cv.getContext('2d');
@@ -5622,10 +5631,28 @@ async function exportAnim(){
   const btn = document.getElementById('bAnimExport');
   const setTxt = t => { if(btn) btn.textContent = t; };
   const saved = _hourIdx;
+  // ★ 固定取景（與截圖同一套）：臺灣置中、外延到海警線附近。
+  //   先前直接錄螢幕上的地圖，尺寸隨視窗變動，也會錄到使用者當下的
+  //   縮放與平移，每次結果都不一樣。
+  const SNAP_H2 = 900;
+  const B2 = [[21.30, 119.30], [25.90, 122.80]];   // 本島 + 約 100km 海域
+  const my2 = la => Math.log(Math.tan(Math.PI/4 + la*Math.PI/360));
+  const dy2 = Math.abs(my2(B2[1][0]) - my2(B2[0][0]));
+  const dx2 = Math.abs(B2[1][1] - B2[0][1]) * Math.PI/180;
+  const SNAP_W2 = Math.max(400, Math.round(SNAP_H2 * dx2 / dy2));
+  const prevView = { w: mp.style.width, h: mp.style.height, flex: mp.style.flex,
+                     snap: map.options.zoomSnap,
+                     center: map.getCenter(), zoom: map.getZoom() };
   try{
+    mp.style.flex = 'none';
+    mp.style.width = SNAP_W2 + 'px';
+    mp.style.height = SNAP_H2 + 'px';
+    map.options.zoomSnap = 0;
+    map.invalidateSize({animate: false});
+    map.fitBounds(L.latLngBounds(B2), {animate: false, padding: [0, 0]});
+    await new Promise(rs => setTimeout(rs, 300));
     const cv = document.createElement('canvas');
-    const r = mp.getBoundingClientRect();
-    cv.width = Math.round(r.width); cv.height = Math.round(r.height);
+    cv.width = SNAP_W2; cv.height = SNAP_H2;
     const ctx = cv.getContext('2d');
     if(!cv.captureStream || typeof MediaRecorder === 'undefined'){
       alert('此瀏覽器不支援影片錄製，請改用截圖功能');
@@ -5682,8 +5709,16 @@ async function exportAnim(){
     console.warn('動畫匯出失敗', e);
     alert('匯出失敗：' + (e && e.message ? e.message : e));
   }finally{
-    setTxt('⬇ GIF');
+    setTxt('⬇ 影片');
     _hourIdx = saved;
+    // 還原取景（尺寸、縮放吸附、原本的視野）
+    try{
+      mp.style.width = prevView.w; mp.style.height = prevView.h;
+      mp.style.flex = prevView.flex;
+      map.options.zoomSnap = prevView.snap;
+      map.invalidateSize({animate: false});
+      map.setView(prevView.center, prevView.zoom, {animate: false});
+    }catch(e){}
     try{ renderLayer(); _syncTimeBar(); }catch(e){}
   }
 }
