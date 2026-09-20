@@ -3031,6 +3031,75 @@ def update_model_skill(out_towns, zones, now_tpe):
     return skill
 
 
+# ★ 自適應模式選用（依使用者設計）：
+#   逐地形評估各模式，分四類後給不同權重 ——
+#     准   偏差比接近 1 且 MAE 小      → 權重最高
+#     多報 趨勢對但量偏高（偏差比 >1）  → 納入但權重降低，並做偏差校正
+#     少報 趨勢對但量偏低（偏差比 <1）  → 同上
+#     亂報 偏差比極端或 MAE 過大        → 直接排除，但仍持續校驗
+#   各地形獨立判定，選用的模式與權重都可能不同。
+#   ★ 排除不等於停止追蹤：被排除的模式照樣記錄誤差與 POD/FAR/CSI，
+#     表現轉好時會自動回到融合（這是刻意設計的回收機制）。
+MODEL_TIERS = {
+    'good':  {'bias': (0.80, 1.25), 'w': 1.00, 'label': '準'},
+    'over':  {'bias': (1.25, 2.50), 'w': 0.45, 'label': '多報'},
+    'under': {'bias': (0.40, 0.80), 'w': 0.45, 'label': '少報'},
+    # 其餘（偏差比 <0.40 或 >2.50）一律排除
+}
+ADAPT_MIN_N = 20          # 樣本數門檻：不足就不下判斷（用等權重）
+ADAPT_MAE_CAP = 60.0      # MAE 上限（mm）：再準的偏差比也救不了離譜的誤差
+
+
+def build_adaptive_blend(skill_summary, verify_recent=None):
+    """由誤差追蹤產生「逐地形的模式選用與權重」。
+
+    回傳 {地形: {'models': {模式: 權重}, 'excluded': [...], 'note': str}}
+    前端的 FORMOSA 融合直接讀這份，不必自行判斷。
+    """
+    out = {}
+    if not skill_summary:
+        return out
+    for zone, mmap in skill_summary.items():
+        picks, excluded, detail = {}, [], []
+        for m, v in (mmap or {}).items():
+            bias = v.get('bias')
+            mae = v.get('mae')
+            n = v.get('n') or 0
+            if bias is None or n < ADAPT_MIN_N:
+                # 樣本不足：保留但給中等權重，避免新模式永遠進不來
+                picks[m] = 0.6
+                detail.append(f'{m}=樣本不足({n})')
+                continue
+            if mae is not None and mae > ADAPT_MAE_CAP:
+                excluded.append(m)
+                detail.append(f'{m}=MAE過大({mae:.0f})')
+                continue
+            tier = None
+            for name, cfg in MODEL_TIERS.items():
+                lo, hi = cfg['bias']
+                if lo <= bias < hi:
+                    tier = (name, cfg)
+                    break
+            if tier is None:
+                excluded.append(m)
+                detail.append(f'{m}=偏差比離譜({bias:.2f})')
+                continue
+            name, cfg = tier
+            # 同一層內再依 MAE 微調：MAE 小者權重略高
+            w = cfg['w']
+            if mae is not None:
+                w *= max(0.5, min(1.2, 30.0 / max(10.0, mae)))
+            picks[m] = round(w, 3)
+            detail.append(f'{m}={cfg["label"]}({bias:.2f})')
+        # 全被排除時退回等權重，寧可不準也不能沒有預報
+        if not picks:
+            picks = {m: 1.0 for m in (mmap or {})}
+            detail.append('全數排除→退回等權重')
+        out[zone] = {'models': picks, 'excluded': excluded,
+                     'note': '、'.join(sorted(detail))}
+    return out
+
+
 def summarize_model_skill(skill, now_tpe):
     """彙整近期誤差 → {地形: {模式: {bias, mae, n, days}}}。
 
@@ -4845,6 +4914,15 @@ def main():
         _verify = update_verify(out_towns, _zones, now_tpe, hourly_ser)
         _verify_recent = _verify_summary(_verify)
         output['model_skill'] = summarize_model_skill(_skill, now_tpe)
+        # ★ 自適應選用：逐地形決定「用哪些模式、各給多少權重」
+        output['adaptive_blend'] = build_adaptive_blend(
+            output['model_skill'], _verify_recent)
+        for _z, _v in (output['adaptive_blend'] or {}).items():
+            _ms = _v.get('models') or {}
+            _top = sorted(_ms.items(), key=lambda x: -x[1])[:4]
+            print(f"  自適應融合｜{_z}：採用 {len(_ms)} 個模式"
+                  + (f"、排除 {len(_v.get('excluded') or [])} 個" if _v.get('excluded') else "")
+                  + "　" + "、".join(f"{m}×{w}" for m, w in _top))
         # 累積進度：讓前端能說明「還要多久權重才會分化」
         _days_all = sorted((_skill.get('days') or {}).keys())
         _n7 = sum(1 for d in _days_all

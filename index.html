@@ -1750,16 +1750,53 @@ function _wfStart(){
     return cand[cand.length - 1];
   };
 
-  // 依該粒子所屬測站算位移
-  const uvOf = (c)=>{
+  // 鄰站的加權平均場（供一致性判斷與流線混合用）
+  const avgAt = (x, y)=>{
+    const ll = map.containerPointToLatLng([x, y]);
+    let sw = 0, su = 0, sv = 0, sm = 0;
+    nodes.forEach(n=>{
+      const dx = n.lng - ll.lng, dy = n.lat - ll.lat;
+      const d2 = dx*dx + dy*dy + 1e-4;
+      if(d2 > 1.44) return;
+      const w = Math.exp(-d2 / (2 * 0.45 * 0.45));
+      const rad = (n.wd + 180) * Math.PI / 180;
+      su += w * Math.sin(rad) * n.ws;
+      sv += w * -Math.cos(rad) * n.ws;
+      sw += w; sm += w * n.ws;
+    });
+    if(!sw) return null;
+    const ux = su / sw, uy = sv / sw;
+    const mag = Math.hypot(ux, uy);
+    // 一致性：合成長度 ÷ 風速加權平均。1＝完全一致、0＝彼此抵消
+    const coh = (sm > 0) ? Math.min(1, mag / (sm / sw)) : 0;
+    return {ux, uy, mag, coh};
+  };
+
+  // ★ 混合模式（使用者指定）：
+  //   一致性高 → 直接用平均場，粒子走整齊的流線。
+  //   一致性低 → 主要跟隨自己抽中的測站（呈現真實的分歧），
+  //     但仍混入一部分平均場，讓軌跡帶點弧度而不是八方直線。
+  //   權重就用 coh 本身：coh=1 純流線、coh=0 仍保留 25% 的共同分量。
+  const uvOf = (c, x, y)=>{
     if(!c) return null;
     const n = c.n;
     const k = 0.35, base = 0.8;                 // 基礎位移 + 風速加成
-    const px = base + (n.ws || 0) * k;
     const rad = (n.wd + 180) * Math.PI / 180;   // 氣象風向是「來向」
-    // 支撐度：離該測站越遠越淡
+    let ux = Math.sin(rad), uy = -Math.cos(rad);
+    let ws = n.ws || 0;
+    const A = avgAt(x, y);
+    if(A && A.mag > 1e-6){
+      // 共同分量的比例：一致性高時幾乎全用平均場
+      const f = 0.25 + 0.75 * A.coh;
+      const ax = A.ux / A.mag, ay = A.uy / A.mag;
+      ux = ux * (1 - f) + ax * f;
+      uy = uy * (1 - f) + ay * f;
+      ws = ws * (1 - A.coh) + A.mag * A.coh;
+    }
+    const m2 = Math.hypot(ux, uy) || 1e-6;
+    const px = base + ws * k;
     const support = Math.max(0, Math.min(1, 1 - Math.sqrt(c.d2) / 1.2));
-    return [Math.sin(rad) * px, -Math.cos(rad) * px, n.ws || 0, support];
+    return [ux / m2 * px, uy / m2 * px, ws, support];
   };
 
 
@@ -1779,7 +1816,7 @@ function _wfStart(){
     _wfParticles.forEach(p=>{
       // ★ 粒子固定跟隨一個測站；重生時才重抽（每幀重抽會變雜訊）
       if(!p.node) p.node = pickNode(p.x, p.y);
-      const uv = uvOf(p.node);
+      const uv = uvOf(p.node, p.x, p.y);
       if(!uv || p.age > WF_LIFE ||
          p.x < 0 || p.y < 0 || p.x > cv.width || p.y > cv.height){
         Object.assign(p, spawn()); p.age = 0;
@@ -2548,8 +2585,14 @@ function _skillOf(t, model){
 
 // 融合後的 QPF 陣列（與其他模式同格式：60 個 6h 段）
 function _blendQpf(t){
+  // ★ 自適應選用（後端逐地形判定）：哪些模式該納入、各給多少權重，
+  //   由 adaptive_blend 決定。亂報的模式直接不列入，多報／少報降低權重。
+  //   後端沒有這份資料時（尚未部署或樣本不足）才退回原本的 MAE 加權。
+  const _zone = _townZone(t) || '';
+  const _ab = ((window.ADAPTIVE_BLEND || {})[_zone] || {}).models || null;
   const arrs = {}, sk = {};
   BLEND_MODELS.forEach(m=>{
+    if(_ab && _ab[m] == null) return;        // 該地形排除此模式
     const a = t[MODEL_FIELD[m]];
     if(Array.isArray(a) && a.length){ arrs[m] = a; sk[m] = _skillOf(t, m); }
   });
@@ -2559,6 +2602,27 @@ function _blendQpf(t){
 
   // ② 動態加權：MAE 越小權重越高（w = 1/(MAE+ε)）；無樣本者退回等權重
   const W = {};
+  // 後端已給權重就直接用
+  if(_ab){
+    let ok = false;
+    avail.forEach(m=>{ if(_ab[m] != null){ W[m] = _ab[m]; ok = true; } });
+    if(ok){
+      avail.forEach(m=>{ if(W[m] == null) W[m] = 0.3; });
+      const wS = avail.reduce((a, m)=>a + W[m], 0) || 1;
+      const out = [];
+      const len = Math.max(...avail.map(m=>arrs[m].length));
+      for(let i = 0; i < len; i++){
+        let s2 = 0, w2 = 0;
+        avail.forEach(m=>{
+          const v = arrs[m][i];
+          if(v == null || !isFinite(v)) return;
+          s2 += v * W[m]; w2 += W[m];
+        });
+        out.push(w2 > 0 ? Math.round(s2 / w2 * 10) / 10 : null);
+      }
+      return out;
+    }
+  }
   let anySkill = false;
   avail.forEach(m=>{
     const s = sk[m];
@@ -7437,7 +7501,15 @@ async function tryLoadLive(){
     window.WAVE_FCST = d.wave_fcst || {};   // 沿海浪高（僅沿海鄉鎮）
     window.TIDE_FCST = d.tide_fcst || {};   // 鄉鎮潮汐（滿潮/乾潮時刻與潮高）
     window.ALL_STATIONS = d.all_stations || null;    // 全臺測站（含座標/海拔）
-    window.MODEL_SKILL = d.model_skill || {};        // 逐地形×逐模式的近期誤差
+    window.MODEL_SKILL = d.model_skill || {};
+    // 自適應融合：逐地形的模式選用與權重（後端每輪重算）
+    window.ADAPTIVE_BLEND = d.adaptive_blend || {};
+    try{
+      const _zs = Object.keys(window.ADAPTIVE_BLEND);
+      if(_zs.length) console.log('自適應融合載入：' + _zs.map(z=>
+        z + ' ' + Object.keys((window.ADAPTIVE_BLEND[z].models)||{}).length + ' 模式'
+      ).join('、'));
+    }catch(e){}        // 逐地形×逐模式的近期誤差
     window.SKILL_PROGRESS = d.skill_progress || null;   // 樣本累積進度
     window.FORECASTER_PRECIP = d.forecaster_precip || {};  // 官方研判雨量區間
     if(Object.keys(window.MODEL_SKILL).length){
