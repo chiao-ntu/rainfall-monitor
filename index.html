@@ -1698,9 +1698,12 @@ function _wfStart(){
     nodes.forEach(n=>{
       const dx = n.lng - ll.lng, dy = n.lat - ll.lat;
       const d2 = dx*dx + dy*dy + 1e-4;
-      // ★ 涵蓋 100km 海警線與外海：0.5 度（約 55km）太小，
-      //   海上完全沒有粒子。放寬到 2.5 度（約 275km）。
-      if(d2 > 6.25) return;
+      // ★ 影響半徑 1.2 度（約 130km）：剛好涵蓋 100km 海警線。
+      //   不可再放大 —— 資料源只有臺灣陸域的 368 個鄉鎮，
+      //   外推到數百公里會由反距離加權「合成」出不存在的環流
+      //   （例如臺灣與東沙之間出現假的輻合帶），與其他模式比對時
+      //   會被當成真的特徵。寧可沒有，不要造假。
+      if(d2 > 1.44) return;
       const w = 1 / d2;
       // 氣象風向是「來向」，移動方向要反過來
       const rad = (n.wd + 180) * Math.PI / 180;
@@ -1709,6 +1712,15 @@ function _wfStart(){
       sw += w;
     });
     if(!sw) return null;
+    // ★ 支撐度：最近測點的距離。越遠代表越是外推，粒子會畫得越淡，
+    //   讓判讀者一眼看出哪裡是實測支撐、哪裡只是延伸。
+    let near = 9e9;
+    nodes.forEach(n=>{
+      const dx = n.lng - ll.lng, dy = n.lat - ll.lat;
+      const d = dx*dx + dy*dy;
+      if(d < near) near = d;
+    });
+    const support = Math.max(0, Math.min(1, 1 - Math.sqrt(near) / 1.2));
     // ★ 速度縮放：實測平均風常在 2~6 m/s，原本 0.06 只有 0.12 px/幀，
     //   幾乎看不出在動。改為基礎位移 + 風速加成，弱風也看得到流向。
     const k = 0.35;
@@ -1716,7 +1728,7 @@ function _wfStart(){
     const ux = su / sw, uy = sv / sw;
     const mag = Math.hypot(ux, uy) || 1e-6;
     const px = base + mag * k;                 // 實際位移量
-    return [ux / mag * px, uy / mag * px, mag]; // 第三項＝真實風速(m/s)
+    return [ux / mag * px, uy / mag * px, mag, support]; // [dx,dy,風速,支撐度]
   };
 
   const ctx = cv.getContext('2d');
@@ -1743,9 +1755,11 @@ function _wfStart(){
       //   位移已含基礎量，用它判斷會讓弱風也變紅。
       //   分界比照蒲福風級：<5.5 輕、5.5~10.8 中、≥10.8 強（6級以上）。
       const ws0 = uv[2] || 0;
-      ctx.strokeStyle = ws0 >= 10.8 ? 'rgba(255,120,80,0.9)'
-                      : ws0 >= 5.5  ? 'rgba(255,220,120,0.85)'
-                                    : 'rgba(140,220,240,0.75)';
+      const sup = (uv[3] == null) ? 1 : uv[3];
+      const al = (0.25 + 0.65 * sup).toFixed(2);   // 外推處明顯較淡
+      ctx.strokeStyle = ws0 >= 10.8 ? `rgba(255,120,80,${al})`
+                      : ws0 >= 5.5  ? `rgba(255,220,120,${al})`
+                                    : `rgba(140,220,240,${al})`;
       ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(nx, ny); ctx.stroke();
       p.x = nx; p.y = ny; p.age++;
     });
@@ -5636,8 +5650,13 @@ async function exportAnim(){
           n.classList.contains('leaflet-control') ||
           n.classList.contains('leaflet-control-attribution'))
       });
+      // ★ html2canvas 會依 devicePixelRatio 回傳較大的畫布，
+      //   直接 drawImage(shot,0,0,w,h) 會把「原尺寸的左上角一塊」
+      //   塞進目標，於是影片只看得到一小塊範圍。
+      //   明確指定來源矩形為 shot 的完整尺寸。
       ctx.clearRect(0, 0, cv.width, cv.height);
-      ctx.drawImage(shot, 0, 0, cv.width, cv.height);
+      ctx.drawImage(shot, 0, 0, shot.width, shot.height,
+                          0, 0, cv.width, cv.height);
       // 時間戳記（影片沒有旁邊的面板可看）
       const h = _animFrames[i];
       const d = new Date(Date.now() + h * 3600e3);
@@ -6326,12 +6345,21 @@ function renderLayer(){
     }
   }catch(e){}
   try{ _logModeDistribution(); }catch(e){}
-  // 渲染模式：重算內插色帶層（防抖180ms：拉時間軸時不連續重算，停下才算一次）
+  // 渲染模式：重算內插色帶層
+  //   ★ 防抖 180ms 的用意是「拉時間軸時不連續重算」，但動畫每幀約 83ms
+  //     （12fps），每次都在前一次觸發前重設計時器 —— 渲染層永遠不會重繪，
+  //     畫面就一片空白。動畫播放中改為同步重繪，不防抖。
   if(_blurOn){
-    clearTimeout(window._interpDebounce);
-    window._interpDebounce = setTimeout(()=>{
+    const _playing = (typeof _animOn !== 'undefined' && _animOn);
+    if(_playing){
+      clearTimeout(window._interpDebounce);
       try{ renderInterpolated(); }catch(e){ console.error('內插渲染失敗:', e); }
-    }, 180);
+    } else {
+      clearTimeout(window._interpDebounce);
+      window._interpDebounce = setTimeout(()=>{
+        try{ renderInterpolated(); }catch(e){ console.error('內插渲染失敗:', e); }
+      }, 180);
+    }
   }
   // 同步更新左側兩面板（各自獨立，錯誤不互相影響）
   try{ updateEtrAlertPanel(); }catch(e){ console.error('ETR面板更新失敗:', e); }
