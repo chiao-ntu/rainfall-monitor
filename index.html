@@ -5762,6 +5762,25 @@ function _fcRollMax(t, h0, h1){
   return (R && R.cov >= 0.8) ? R : null;
 }
 
+// ★ 未來 90 小時的滾動峰值與發生時刻（預警用）：
+//   回傳 {m1, m3, m6, at6}，at6＝最大 6 小時累積的起始小時（距現在）
+function _fcPeak(t, H = 90){
+  const vals = [];
+  for(let h = 1; h <= H; h++){ const r = _hourlyAt(t, h); vals.push(r ? r.v : null); }
+  if(vals.filter(v=>v != null).length < 6) return null;
+  const v = vals.map(x=>x == null ? 0 : x);
+  let m1 = 0, m3 = 0, m6 = 0, at6 = null;
+  for(let i = 0; i < v.length; i++){
+    if(v[i] > m1) m1 = v[i];
+    if(i + 3 <= v.length){ const s3 = v[i]+v[i+1]+v[i+2]; if(s3 > m3) m3 = s3; }
+    if(i + 6 <= v.length){
+      let s6 = 0; for(let k = 0; k < 6; k++) s6 += v[i+k];
+      if(s6 > m6){ m6 = s6; at6 = i + 1; }
+    }
+  }
+  return {m1, m3, m6, at6};
+}
+
 function _obsHourlyAt(t, h){
   const H = window.RAIN_HOURLY;
   if(!H || h >= 0) return null;
@@ -11750,7 +11769,21 @@ async function renderDisasterLayer(){
       + (a2 && a2.station ? `<br>代表站：${a2.station}` : '')
       + (z.t1h ? `<br>降雨注意值 1h ${z.t1h}／3h ${z.t3h}／6h ${z.t6h} mm` : '')
       + ((z.station1 || z.station2)
-          ? `<br>參考站：${[z.station1, z.station2].filter(Boolean).join('、')}` : '');
+          ? `<br>參考站：${[z.station1, z.station2].filter(Boolean).join('、')}` : '')
+      + (()=>{
+          const tw = (TOWNSHIPS || []).find(x=>x.county === z.county && x.township === z.township);
+          const pk = tw ? _fcPeak(tw) : null;
+          if(!pk) return '';
+          const hit = (v, thr)=> (thr != null && v >= thr)
+            ? `<b style="color:#ff6060">${Math.round(v)}</b>` : Math.round(v);
+          let when = '';
+          if(pk.at6 != null){
+            const d = new Date(Date.now() + pk.at6 * 3600e3);
+            when = `（${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}時起）`;
+          }
+          return `<br>未來90h最大 1h ${hit(pk.m1, z.t1h)}／3h ${hit(pk.m3, z.t3h)}`
+            + `／6h ${hit(pk.m6, z.t6h)} mm${when}`;
+        })();
     const g = streams[z.id];
     if(g && Array.isArray(g.l) && g.l.length){
       g.l.forEach(seg=>{

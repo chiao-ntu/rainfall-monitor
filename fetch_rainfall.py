@@ -2899,6 +2899,12 @@ def update_verify(out_towns, zones, now_tpe, hourly_ser=None):
                 d = day.setdefault(scope, {}).setdefault(m, {
                     'hit': 0, 'miss': 0, 'false': 0, 'correct_neg': 0})
                 d[cls] += 1
+                # ★ 降雨發生與否（10mm，不看量差）：專門抓包牌式亂報。
+                #   全臺都報大雨、實際只有局部下 → 大量「誤報」，
+                #   誤報率與 ETS 會直接反映出來，總量比卻可能剛好湊成 1。
+                od = d.setdefault('occ10', {'hit': 0, 'miss': 0,
+                                            'false': 0, 'correct_neg': 0})
+                od[_contingency(float(obs), float(mv), 10.0)] += 1
                 # ★ 多門檻 ETS（主指標）：每個門檻各一組列聯表
                 for thr in DAILY_THRESHOLDS:
                     tk = f'thr{thr}'
@@ -3002,8 +3008,11 @@ def update_model_skill(out_towns, zones, now_tpe):
             mv = (t.get('model_yday') or {}).get(m)
             if mv is None:
                 continue
-            if obs < 10.0 and mv < 10.0:      # 無雨日：比值無意義
-                continue
+            # ★ 無雨日加回來（使用者指定）：先前兩邊都 <10mm 就跳過，
+            #   正確報「沒雨」的模式拿不到任何分數，而包牌模式在乾燥處的
+            #   誤報（觀測 0、預報 80）卻照算 —— 等於只懲罰、不獎勵。
+            #   無雨日對總量比沒有影響（兩邊都加 0），但會讓 MAE 反映
+            #   「整體」準確度：報對乾燥的模式 MAE 下降，包牌的維持高檔。
             d = day.setdefault(zone, {}).setdefault(m, {
                 'n': 0, 'sum_obs': 0.0, 'sum_mod': 0.0, 'sum_ae': 0.0})
             d['n'] += 1
@@ -3056,7 +3065,53 @@ ADAPT_CORE = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast')
 ADAPT_MAE_CAP = 60.0      # MAE 上限（mm）：再準的偏差比也救不了離譜的誤差
 
 
-def build_adaptive_blend(skill_summary, verify_recent=None):
+# ★ 降雨型態技術（逐地形、近 7 天）：由 verify.json 的列聯表彙整。
+#   優先用 occ10（10mm 發生與否，新增）；舊資料沒有時退回 thr80。
+#   verify.json 保留 60 天，所以 thr80 部署當下就有歷史可用，不必等。
+PATTERN_DAYS = 7
+PATTERN_FAR_MAX = 0.75     # 誤報率上限：超過視為包牌
+PATTERN_ETS_MIN = 0.05     # ETS 下限：低於此與亂猜無異
+PATTERN_MIN_FC = 8         # 預報有雨次數門檻（算誤報率所需）
+PATTERN_MIN_OB = 5         # 實際有雨次數門檻（算 ETS 所需）
+
+
+def zone_pattern_skill(vf, now_tpe, days=PATTERN_DAYS):
+    """回傳 {地形: {模式: {far, ets, fc, ob, src}}}"""
+    out = {}
+    if not vf:
+        return out
+    cut = (now_tpe - timedelta(days=days)).strftime('%Y-%m-%d')
+    agg = {}
+    for d, scopes in (vf.get('days') or {}).items():
+        if d < cut:
+            continue
+        for z, mmap in (scopes or {}).items():
+            if z == '全臺':
+                continue
+            for m, c in (mmap or {}).items():
+                src = 'occ10' if isinstance(c.get('occ10'), dict) else (
+                      'thr80' if isinstance(c.get('thr80'), dict) else None)
+                if not src:
+                    continue
+                a = agg.setdefault(z, {}).setdefault(m, {
+                    'hit': 0, 'miss': 0, 'false': 0, 'correct_neg': 0, 'src': set()})
+                for k in ('hit', 'miss', 'false', 'correct_neg'):
+                    a[k] += (c[src] or {}).get(k, 0)
+                a['src'].add(src)
+    for z, mmap in agg.items():
+        for m, a in mmap.items():
+            fc = a['hit'] + a['false']
+            ob = a['hit'] + a['miss']
+            out.setdefault(z, {})[m] = {
+                'far': round(a['false'] / fc, 3) if fc else None,
+                'ets': _ets(a),
+                'fc': fc, 'ob': ob,
+                'src': '/'.join(sorted(a['src'])),
+            }
+    return out
+
+
+def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
     """由誤差追蹤產生「逐地形的模式選用與權重」。
 
     回傳 {地形: {'models': {模式: 權重}, 'excluded': [...], 'note': str}}
@@ -3096,6 +3151,19 @@ def build_adaptive_blend(skill_summary, verify_recent=None):
                 excluded.append(m)
                 detail.append(f'{m}=MAE過大({mae:.0f})')
                 continue
+            # ★ 降雨型態篩選（使用者指出的包牌問題）：
+            #   偏差比是總量比，多報與少報會互相抵銷，無法反映
+            #   「雨下在哪裡」對不對。先看誤報率與 ETS，不及格直接排除。
+            P = ((pattern or {}).get(zone) or {}).get(m) or {}
+            pf, pe = P.get('far'), P.get('ets')
+            if P.get('fc', 0) >= PATTERN_MIN_FC and pf is not None and pf >= PATTERN_FAR_MAX:
+                excluded.append(m)
+                detail.append(f'{m}=包牌(誤報率{pf:.2f})')
+                continue
+            if P.get('ob', 0) >= PATTERN_MIN_OB and pe is not None and pe <= PATTERN_ETS_MIN:
+                excluded.append(m)
+                detail.append(f'{m}=型態無技術(ETS {pe:.2f})')
+                continue
             tier = None
             for name, cfg in MODEL_TIERS.items():
                 lo, hi = cfg['bias']
@@ -3111,6 +3179,9 @@ def build_adaptive_blend(skill_summary, verify_recent=None):
             w = cfg['w']
             if mae is not None:
                 w *= max(0.5, min(1.2, 30.0 / max(10.0, mae)))
+            # 再依降雨型態技術（ETS）微調：型態抓得準的權重略高
+            if P.get('ob', 0) >= PATTERN_MIN_OB and pe is not None:
+                w *= max(0.7, min(1.3, 0.8 + pe))
             picks[m] = round(w, 3)
             detail.append(f'{m}={cfg["label"]}({bias:.2f})')
         # ★ 全數排除時：不退回「所有模式等權重」（那等於把最離譜的也拉進來），
@@ -4960,8 +5031,9 @@ def main():
         _verify_recent = _verify_summary(_verify)
         output['model_skill'] = summarize_model_skill(_skill, now_tpe)
         # ★ 自適應選用：逐地形決定「用哪些模式、各給多少權重」
+        _pattern = zone_pattern_skill(_verify, now_tpe) if _verify else {}
         output['adaptive_blend'] = build_adaptive_blend(
-            output['model_skill'], _verify_recent)
+            output['model_skill'], _verify_recent, _pattern)
         for _z, _v in (output['adaptive_blend'] or {}).items():
             _ms = _v.get('models') or {}
             _top = sorted(_ms.items(), key=lambda x: -x[1])[:4]
