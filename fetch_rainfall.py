@@ -2980,9 +2980,13 @@ def update_model_skill(out_towns, zones, now_tpe):
             skill = {'days': {}}
     skill.setdefault('days', {})
 
-    # ★ 只含 FORMOSA 的融合成員：僅校驗模式不得影響動態加權，
-    #   否則等於偷偷混進系統（與使用者要求相反）。
-    MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast')
+    # ★ 涵蓋全部模式（含原本「僅校驗」者）：
+    #   自適應融合要能評估 UKMO、Météo-France 等是否值得納入，
+    #   前提是它們也有誤差記錄。先前只追蹤 6 個融合成員，
+    #   其餘模式永遠沒有偏差比與 MAE，自適應機制根本看不到它們。
+    #   是否真的納入融合，由 build_adaptive_blend 依 7 天表現決定。
+    MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
+              'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom')
     day = {}
     n_used = 0
     for t in out_towns:
@@ -3061,7 +3065,13 @@ def build_adaptive_blend(skill_summary, verify_recent=None):
         return out
     for zone, mmap in skill_summary.items():
         picks, excluded, detail = {}, [], []
-        for m, v in (mmap or {}).items():
+        for m, v0 in (mmap or {}).items():
+            # ★ 以「過去 7 天」為評估單位（使用者指定）。
+            #   summarize_model_skill 的結構是 {short:{…}, long:{…}}，
+            #   short 即 7 天窗。先前直接讀 v.get('bias') 永遠是 None
+            #   （值在巢狀的 short/long 裡），等於所有模式都被當成
+            #   「樣本不足」—— 自適應機制從來沒有真正運作過。
+            v = (v0 or {}).get('short') or {}
             bias = v.get('bias')
             mae = v.get('mae')
             n = v.get('n') or 0
@@ -3099,7 +3109,8 @@ def build_adaptive_blend(skill_summary, verify_recent=None):
         if not picks:
             import math as _m
             cand = []
-            for m, v in (mmap or {}).items():
+            for m, v0 in (mmap or {}).items():
+                v = (v0 or {}).get('short') or {}
                 b = v.get('bias')
                 mae = v.get('mae')
                 if b is None or b <= 0:

@@ -1611,6 +1611,21 @@ function _hexA(hex, a){
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a.toFixed(2)})`;
 }
 
+// 當下縮放的「每 m/s 風速對應幾 px/幀」。
+//   時間壓縮倍率 TL：畫面上 1 秒 ＝ 真實 TL 秒。
+//   以 zoom 7 時 10 m/s ≈ 4.3 px/幀 為基準反推（與先前視覺一致）。
+const WF_TIMELAPSE = 16000;
+function _wfPxPerMs(){
+  try{
+    const c = map.getCenter();
+    const p1 = map.latLngToContainerPoint(c);
+    const p2 = map.latLngToContainerPoint([c.lat + 0.1, c.lng]);   // 0.1° ≈ 11.1 km
+    const pxPerKm = Math.abs(p2.y - p1.y) / 11.1;
+    // 1 m/s × TL 秒 ÷ 60 幀 ＝ 每幀走的公尺 → 換成 km → 換成 px
+    return (1 * WF_TIMELAPSE / 60 / 1000) * pxPerKm;
+  }catch(e){ return 0.42; }
+}
+
 function toggleWindField(){
   _windFieldOn = !_windFieldOn;
   const b = document.getElementById('bWindField');
@@ -1789,10 +1804,13 @@ function _wfStart(){
   const uvOf = (c, x, y)=>{
     if(!c) return null;
     const n = c.n;
-    // ★ 速度與實際風速成正比（使用者指出先前只有顏色差、速度都一樣）。
-    //   base 原本是 0.8，等於把 2 m/s 與 20 m/s 的差距從 10 倍壓成 3 倍。
-    //   改為極小的下限，只避免完全靜止。
-    const k = 0.42, base = 0.12;
+    // ★ 速度 ＝ 真實風速 × 固定的時間壓縮倍率，再換算成當下縮放的像素。
+    //   真實時間下 10 m/s 在 zoom 7 每 65 秒才移動 1 px，完全看不出在動，
+    //   所以必須壓縮時間（Windy 也是同一數量級）。關鍵是「比例正確」：
+    //   先前用固定的 px/幀，放大地圖時粒子看起來變慢、縮小時變快，
+    //   同樣的風在不同縮放下速度不一致。現在依 km/px 換算，
+    //   任何縮放下「同樣風速走過同樣的地理距離」。
+    const k = _wfPxPerMs(), base = 0.05;
     const rad = (n.wd + 180) * Math.PI / 180;   // 氣象風向是「來向」
     let ux = Math.sin(rad), uy = -Math.cos(rad);
     let ws = n.ws || 0;
@@ -2621,8 +2639,15 @@ function _blendQpf(t){
   const _zone = _townZone(t) || '';
   const _ab = ((window.ADAPTIVE_BLEND || {})[_zone] || {}).models || null;
   const arrs = {}, sk = {};
-  BLEND_MODELS.forEach(m=>{
-    if(_ab && _ab[m] == null) return;        // 該地形排除此模式
+  // ★ 有自適應選用時，候選名單改用「後端選中的模式」而非固定的
+  //   BLEND_MODELS —— 否則 UKMO、Météo-France 即使被選入，
+  //   前端也不會去讀它們的 QPF。
+  //   後端的鍵與前端 MODEL_FIELD 的鍵一致（graphcast 對應 gc）。
+  const _KEYMAP = {graphcast: 'gc'};
+  const _cand = _ab
+    ? Object.keys(_ab).map(k=>_KEYMAP[k] || k).filter(k=>MODEL_FIELD[k])
+    : BLEND_MODELS;
+  _cand.forEach(m=>{
     const a = t[MODEL_FIELD[m]];
     if(Array.isArray(a) && a.length){ arrs[m] = a; sk[m] = _skillOf(t, m); }
   });
@@ -2635,7 +2660,11 @@ function _blendQpf(t){
   // 後端已給權重就直接用
   if(_ab){
     let ok = false;
-    avail.forEach(m=>{ if(_ab[m] != null){ W[m] = _ab[m]; ok = true; } });
+    const _RK = {gc: 'graphcast'};
+    avail.forEach(m=>{
+      const w0 = (_ab[m] != null) ? _ab[m] : _ab[_RK[m]];
+      if(w0 != null){ W[m] = w0; ok = true; }
+    });
     if(ok){
       avail.forEach(m=>{ if(W[m] == null) W[m] = 0.3; });
       const wS = avail.reduce((a, m)=>a + W[m], 0) || 1;
@@ -11561,28 +11590,98 @@ function toggleDisasterLayer(){
   if(btn) btn.classList.toggle('on', showDisaster);
   renderDisasterLayer();
 }
-function renderDisasterLayer(){
+// ★ 獨立載入潛勢溪流／大崩幾何：原本只在開啟各自圖層時才載入，
+//   二次災害圖層要用同一份幾何定位，不能要求使用者先開那兩個圖層。
+async function _loadDebrisGeo(){
+  if(_debrisGeo) return;
+  try{
+    const r = await fetch('debris_geo.json?t=' + (window._dataGenAt || ''));
+    if(r.ok) _debrisGeo = await r.json();
+  }catch(e){ console.warn('土石流幾何載入失敗（二次災害將退回鄉鎮邊界）', e); }
+}
+async function _loadLsGeo(){
+  if(_lsGeo) return;
+  try{
+    const r = await fetch('landslide_geo.json?t=' + (window._dataGenAt || ''));
+    if(r.ok) _lsGeo = await r.json();
+  }catch(e){ console.warn('大崩幾何載入失敗（二次災害將退回鄉鎮邊界）', e); }
+}
+
+async function renderDisasterLayer(){
   if(disasterLayer){ map.removeLayer(disasterLayer); disasterLayer=null; }
-  if(!showDisaster || !TOWN_GEO) return;
-  const zoneKeys = new Set(DISASTER_ZONES.map(z=>z.county+'|'+z.township));
-  const feats = (TOWN_GEO.features||[]).filter(f=>{
-    const p=f.properties||{};
-    const key=(p.COUNTYNAME||p.county||'')+'|'+(p.TOWNNAME||p.township||'');
-    return zoneKeys.has(key);
-  });
+  if(!showDisaster) return;
+  // ★ 改為實際位置（使用者指定）：先前直接描整個鄉鎮邊界，
+  //   看不出是哪一條溪流、哪一處崩塌地。
+  //   二次災害清單的 id 就是潛勢溪流（DF）／大規模崩塌（SL）的編號，
+  //   可直接對到既有的幾何：
+  //     DF → _debrisGeo.streams[id].l   溪流線段
+  //     SL → _lsGeo[id].p               潛勢範圍多邊形
+  //   對不到幾何的（少數非標準編號）才退回描鄉鎮邊界。
+  try{ if(!_debrisGeo && typeof _loadDebrisGeo === 'function') await _loadDebrisGeo(); }catch(e){}
+  try{ if(!_lsGeo && typeof _loadLsGeo === 'function') await _loadLsGeo(); }catch(e){}
+  const streams = (_debrisGeo && _debrisGeo.streams) || {};
+  const lsg = _lsGeo || {};
   disasterLayer = L.layerGroup().addTo(map);
 
-  // 高辨識度描邊（不透明，避免透出底下縣市界造成雜亂）：
-  //   底層＝黑色 casing（1.8px）拉出輪廓 ＋ 淺藍實線（0.8px）。
-  const geo = { type:'FeatureCollection', features: feats };
-  // (1) 黑色 casing 底
-  L.geoJSON(geo, { style:()=>({
-      color:'#000000', weight:1.8, fill:false, opacity:1, interactive:false, lineJoin:'round'
+  // 受影響程度：與土石流／大崩圖層同一套判定（紅＝達警戒、黃＝接近）
+  const state = z =>{
+    const a = (window.DEBRIS_ALERTS || {})[z.id]
+           || (window.LANDSLIDE_ALERTS || {})[z.id];
+    if(!a) return {col:'#00FFFF', w:2.2, tag:'監測中'};
+    const pct = (a.pct != null) ? a.pct : null;
+    if(a.red || (pct != null && pct >= 1))   return {col:'#FF2020', w:3.4, tag:'達警戒'};
+    if(pct != null && pct >= 0.8)            return {col:'#FFD000', w:2.8, tag:'接近警戒'};
+    return {col:'#00FFFF', w:2.2, tag:'監測中'};
+  };
+
+  const fallback = [];
+  let nLine = 0, nArea = 0;
+  (DISASTER_ZONES || []).forEach(z=>{
+    const st = state(z);
+    const tip = `<b>${z.landmark || z.id}</b>　${st.tag}<br>`
+      + `${z.county}${z.township}${z.village || ''}<br>`
+      + `編號 ${z.id}　${z.category || ''}`
+      + (z.t1h ? `<br>1h ${z.t1h}／3h ${z.t3h}／12h ${z.t12h} mm` : '');
+    const g = streams[z.id];
+    if(g && Array.isArray(g.l) && g.l.length){
+      g.l.forEach(seg=>{
+        const ll = seg.map(c=>[c[1], c[0]]);
+        L.polyline(ll, {color:'#000', weight:st.w + 2, opacity:0.6,
+          interactive:false}).addTo(disasterLayer);
+        L.polyline(ll, {color:st.col, weight:st.w, opacity:1})
+          .bindTooltip(tip, {sticky:true}).addTo(disasterLayer);
+      });
+      nLine++;
+      return;
+    }
+    const d = lsg[z.id];
+    if(d && Array.isArray(d.p) && d.p.length){
+      d.p.forEach(ring=>{
+        const ll = ring.map(c=>[c[1], c[0]]);
+        L.polygon(ll, {color:st.col, weight:st.w, fillColor:st.col,
+          fillOpacity:0.18, opacity:1})
+          .bindTooltip(tip, {sticky:true}).addTo(disasterLayer);
+      });
+      nArea++;
+      return;
+    }
+    fallback.push(z);
+  });
+
+  // 對不到幾何的：退回描鄉鎮邊界（虛線，與實際位置區分）
+  if(fallback.length && TOWN_GEO){
+    const keys = new Set(fallback.map(z=>z.county + '|' + z.township));
+    const feats = (TOWN_GEO.features || []).filter(f=>{
+      const p = f.properties || {};
+      return keys.has((p.COUNTYNAME || p.county || '') + '|' + (p.TOWNNAME || p.township || ''));
+    });
+    L.geoJSON({type:'FeatureCollection', features: feats}, {style:()=>({
+      color:'#00FFFF', weight:1.2, fill:false, opacity:0.7,
+      dashArray:'4 4', interactive:false
     })}).addTo(disasterLayer);
-  // (2) 淺藍實線（#00FFFF）
-  L.geoJSON(geo, { style:()=>({
-      color:'#00FFFF', weight:0.8, fill:false, opacity:1, interactive:false, lineJoin:'round'
-    })}).addTo(disasterLayer);
+  }
+  console.log(`二次災害：溪流 ${nLine} 條、崩塌地 ${nArea} 處、`
+    + `無幾何退回鄉鎮 ${fallback.length} 處（共 ${(DISASTER_ZONES||[]).length}）`);
 }
 
 let _prevDisasterSet = null;  // 上次達標站點（偵測新增）
