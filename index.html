@@ -1530,7 +1530,9 @@ let _terrainOn = false, _terrainOverlay = null;
 //    不用真實格點是因為官方只給到鄉鎮，硬要內插成細格點會造出假細節。
 // ══════════════════════════════════════════════════════════
 let _windFieldOn = false, _wfCanvas = null, _wfTimer = null, _wfParticles = [];
-const WF_N = 900;              // 粒子數（兼顧流暢與可讀性）
+// ★ 粒子數由 900 降到 420：900 顆在臺灣這個面積上過密，
+//   線條糊成一片反而看不出流向（使用者回報「很密很可怕」）。
+const WF_N = 420;
 const WF_LIFE = 90;            // 每顆粒子的壽命（幀）
 // ★ 海洋深色底：只換海域與地圖底色，陸地上各圖層的色階完全不動
 //   （使用者指定）—— 色階是判讀依據，不能因為換配色就改變。
@@ -1599,6 +1601,14 @@ function _wfRefreshNodes(){
   });
   // 節點換了，粒子重抽所屬測站（但位置與軌跡保留）
   (_wfParticles || []).forEach(p=>{ p.node = null; });
+}
+
+// 把 #RRGGBB 轉成帶透明度的 rgba（風場依支撐度淡出用）
+function _hexA(hex, a){
+  const h = String(hex || '#FFFFFF').replace('#', '');
+  const n = parseInt(h.length === 3
+    ? h.split('').map(c=>c + c).join('') : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a.toFixed(2)})`;
 }
 
 function toggleWindField(){
@@ -1702,22 +1712,21 @@ function _wfStart(){
   // ★ 圖例：粒子顏色對應風速，沒有圖例會看不出快慢
   const _wfLegend = ()=>{
     const ctx2 = cv.getContext('2d');
-    const items = [['rgba(140,220,240,0.9)', '弱'],
-                   ['rgba(255,220,120,0.9)', '中'],
-                   ['rgba(255,120,80,0.95)', '強']];
+    // ★ 圖例用蒲福風級，與風力預測圖層同一套
+    const items = BF_BANDS.map(b=>[b.color, b.name]);
     let lx = 10, ly = cv.height - 10;
     ctx2.font = '11px sans-serif'; ctx2.textAlign = 'left';
-    ctx2.fillStyle = 'rgba(4,12,20,0.75)';
-    ctx2.fillRect(4, ly - 16, 132, 20);
+    ctx2.fillStyle = 'rgba(4,12,20,0.8)';
+    ctx2.fillRect(4, ly - 16, 300, 20);
     ctx2.fillStyle = '#7a94ac';
-    ctx2.fillText('風速', lx, ly);
+    ctx2.fillText('風級', lx, ly);
     lx += 26;
     items.forEach(([c, t2])=>{
       ctx2.strokeStyle = c; ctx2.lineWidth = 2.5;
-      ctx2.beginPath(); ctx2.moveTo(lx, ly - 4); ctx2.lineTo(lx + 14, ly - 4); ctx2.stroke();
-      lx += 17;
+      ctx2.beginPath(); ctx2.moveTo(lx, ly - 4); ctx2.lineTo(lx + 12, ly - 4); ctx2.stroke();
+      lx += 15;
       ctx2.fillStyle = '#9fc8e8'; ctx2.fillText(t2, lx, ly);
-      lx += 16;
+      lx += ctx2.measureText(t2).width + 8;
     });
   };
 
@@ -1780,7 +1789,10 @@ function _wfStart(){
   const uvOf = (c, x, y)=>{
     if(!c) return null;
     const n = c.n;
-    const k = 0.35, base = 0.8;                 // 基礎位移 + 風速加成
+    // ★ 速度與實際風速成正比（使用者指出先前只有顏色差、速度都一樣）。
+    //   base 原本是 0.8，等於把 2 m/s 與 20 m/s 的差距從 10 倍壓成 3 倍。
+    //   改為極小的下限，只避免完全靜止。
+    const k = 0.42, base = 0.12;
     const rad = (n.wd + 180) * Math.PI / 180;   // 氣象風向是「來向」
     let ux = Math.sin(rad), uy = -Math.cos(rad);
     let ws = n.ws || 0;
@@ -1841,12 +1853,16 @@ function _wfStart(){
       // ★ 依「真實風速（m/s）」著色，不是像素位移 ——
       //   位移已含基礎量，用它判斷會讓弱風也變紅。
       //   分界比照蒲福風級：<5.5 輕、5.5~10.8 中、≥10.8 強（6級以上）。
+      // ★ 分級沿用風力預測圖層的 BF_BANDS（蒲福風級 4/7/10/13），
+      //   兩個圖層的配色一致，切換時不必重新記一套。
       const ws0 = uv[2] || 0;
+      const bf0 = _wsToBf(ws0);
+      const band = BF_BANDS.find(b=>bf0 < b.max) || BF_BANDS[BF_BANDS.length-1];
       const sup = (uv[3] == null) ? 1 : uv[3];
-      const al = (0.25 + 0.65 * sup).toFixed(2);   // 外推處明顯較淡
-      ctx.strokeStyle = ws0 >= 10.8 ? `rgba(255,120,80,${al})`
-                      : ws0 >= 5.5  ? `rgba(255,220,120,${al})`
-                                    : `rgba(140,220,240,${al})`;
+      const al = 0.25 + 0.65 * sup;                // 外推處明顯較淡
+      ctx.strokeStyle = _hexA(band.color, al);
+      ctx.lineWidth = (isFinite(bf0) && bf0 >= 10) ? 2.0
+                    : (bf0 >= 7) ? 1.6 : 1.2;      // 強風線條略粗
       ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(nx, ny); ctx.stroke();
       p.x = nx; p.y = ny; p.age++;
     });
