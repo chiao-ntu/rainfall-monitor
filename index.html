@@ -1532,7 +1532,7 @@ let _terrainOn = false, _terrainOverlay = null;
 let _windFieldOn = false, _wfCanvas = null, _wfTimer = null, _wfParticles = [];
 // ★ 粒子數由 900 降到 420：900 顆在臺灣這個面積上過密，
 //   線條糊成一片反而看不出流向（使用者回報「很密很可怕」）。
-const WF_N = 420;
+const WF_N = 210;   // 使用者指定再減半（420 → 210）
 const WF_LIFE = 150;   // 配合拖尾拉長（90 → 150 幀）            // 每顆粒子的壽命（幀）
 // ★ 海洋深色底：只換海域與地圖底色，陸地上各圖層的色階完全不動
 //   （使用者指定）—— 色階是判讀依據，不能因為換配色就改變。
@@ -4105,7 +4105,26 @@ function drawCountyTowns(canvasId){
 const VF_MODELS = ['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
                    'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom'];
 // 哪些已是融合成員（表格中標示，便於分辨）
-const VF_IN_BLEND = new Set(['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast']);
+// ★ 融合狀態改為讀後端的自適應選用結果（逐地形），不再寫死 6 個模式。
+//   回傳該模式在幾個地形被採用；0＝全部地形都未納入。
+//   後端尚未產生 adaptive_blend 時退回原本的核心 6 個。
+const VF_CORE = new Set(['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast']);
+const _VF_KEY = {gc: 'graphcast'};
+function _vfBlendZones(m){
+  const ab = window.ADAPTIVE_BLEND || {};
+  const zs = Object.keys(ab);
+  if(!zs.length) return VF_CORE.has(m) ? -1 : 0;     // -1＝無自適應資料、沿用核心
+  const k = _VF_KEY[m] || m;
+  return zs.filter(z=>((ab[z] || {}).models || {})[k] != null).length;
+}
+const VF_IN_BLEND = { has: m => _vfBlendZones(m) !== 0 };
+// 預報校驗表的排序狀態（點欄位標題切換）
+let _vfSortKey = 'main', _vfSortDesc = true;
+function _vfSortBy(k){
+  if(_vfSortKey === k) _vfSortDesc = !_vfSortDesc;
+  else { _vfSortKey = k; _vfSortDesc = (k !== 'FAR'); }   // FAR 越低越好，預設升冪
+  renderVerify();
+}
 const VF_NAME = {icon:'ICON', kma:'KMA 韓國', gem:'GEM 加拿大',
                  ukmo:'UK Met Office', mf:'Météo-France',
                  cma:'CMA GRAPES', bom:'BOM ACCESS',
@@ -4199,7 +4218,21 @@ function renderVerify(){
       sc.main = sc.CSI; sc.mainN = sc.n;
     }
     return {m, s: sc, c: agg[m]};
-  }).sort((a, b)=>(b.s.main ?? -9) - (a.s.main ?? -9));
+  }).sort((a, b)=>{
+    // ★ 依點選的欄位排序（使用者指定）；空值一律排最後
+    const K = _vfSortKey;
+    if(K === 'name'){
+      const x = (VF_NAME[a.m] || a.m), y = (VF_NAME[b.m] || b.m);
+      return _vfSortDesc ? y.localeCompare(x) : x.localeCompare(y);
+    }
+    const g = r => K === 'n' ? (r.s.mainN ?? r.s.n)
+                 : K === 'main' ? r.s.main : r.s[K];
+    const x = g(a), y = g(b);
+    if(x == null && y == null) return 0;
+    if(x == null) return 1;
+    if(y == null) return -1;
+    return _vfSortDesc ? (y - x) : (x - y);
+  });
   const col = v => v == null ? '#7a94ac'
     : v >= 0.7 ? '#40d060' : v >= 0.5 ? '#FFFF00' : v >= 0.3 ? '#FF8C00' : '#FF4444';
   const fmt = v => v == null ? '—' : v.toFixed(2);
@@ -4211,17 +4244,26 @@ function renderVerify(){
         : metric.replace(/(\d+)/, ' ≥$1mm')} 由高至低</div>
     <table style="width:100%;border-collapse:collapse;font-size:10px">
       <tr style="color:#6bc8e8">
-        <th style="text-align:left;padding:2px 3px">模式</th>
-        <th style="text-align:right">POD</th><th style="text-align:right">FAR</th>
-        <th style="text-align:right">${
-          metric === 'basic' ? 'CSI'
-          : metric === 'SEDIH40' ? 'SEDI ≥40mm/h'
-          : metric.replace(/(\d+)/, ' ≥$1mm')
-        }</th><th style="text-align:right">偏差比</th>
-        <th style="text-align:right">樣本</th></tr>
+        ${(()=>{
+          const TH = (k, label, al)=>{
+            const on = (_vfSortKey === k);
+            return `<th onclick="_vfSortBy('${k}')" style="text-align:${al};padding:2px 3px;`
+              + `cursor:pointer;user-select:none;${on ? 'color:#f0c878' : ''}">`
+              + label + (on ? (_vfSortDesc ? ' ▼' : ' ▲') : '') + '</th>';
+          };
+          return TH('name', '模式', 'left') + TH('POD', 'POD', 'right') + TH('FAR', 'FAR', 'right')
+            + TH('main', metric === 'basic' ? 'CSI'
+                 : metric === 'SEDIH40' ? 'SEDI ≥40mm/h'
+                 : metric.replace(/(\d+)/, ' ≥$1mm'), 'right')
+            + TH('BIAS', '偏差比', 'right') + TH('n', '樣本', 'right');
+        })()}</tr>
       ${rows.map(r=>`<tr style="border-top:1px solid #12283c">
         <td style="padding:2px 3px;color:#cfe4f5">${VF_NAME[r.m] || r.m}${
-          VF_IN_BLEND.has(r.m) ? '<span style="color:#f0c878;font-size:9px"> ◆</span>' : ''
+          (()=>{ const n = _vfBlendZones(r.m);
+            if(n === 0) return '';
+            const nz = Object.keys(window.ADAPTIVE_BLEND || {}).length;
+            return `<span style="color:#f0c878;font-size:9px"> ◆${n > 0 && n < nz ? n : ''}</span>`;
+          })()
         }</td>
         <td style="text-align:right;color:${col(r.s.POD)}">${fmt(r.s.POD)}</td>
         <td style="text-align:right;color:${col(r.s.FAR == null ? null : 1 - r.s.FAR)}">${fmt(r.s.FAR)}</td>
@@ -4234,7 +4276,7 @@ function renderVerify(){
         : metric.startsWith('ETS') ? 'ETS 扣除隨機命中後的綜合指標，0＝與亂猜無異'
         : metric.startsWith('SEDI') ? 'SEDI 罕見事件專用，極端門檻下仍有鑑別力'
         : 'CSI 綜合指標，不納入正確無雨'}　偏差比 &gt;1 報太多<br>
-      ◆ 已納入 FORMOSA 融合；無標記者僅校驗、不影響預報結果</div>`;
+      ◆ 已納入 FORMOSA 融合（◆2＝僅 2 個地形採用）；無標記者目前未納入</div>`;
   try{ drawVerifyChart(); }catch(e){ console.warn('校驗圖失敗', e); }
 }
 // 時間序列圖：各模式的 CSI 隨日期變化
@@ -5686,6 +5728,40 @@ function _hourlyAt(t, h){
 //   先前逐時視窗下 ETR2 直接用 6h 段的值，切換小時完全不動。
 // ★ 過去第 h 小時的觀測雨量（h 為負，-1 代表一小時前）。
 //   來源 rain_hourly.json（測站逐時實測），無資料時回 null。
+// 逐時序列的滾動最大值：回傳 {m1, m3, m6, cov}，cov＝有值的小時比例
+function _rollMax(vals){
+  const n = vals.length;
+  const ok = vals.filter(v=>v != null).length;
+  if(!ok) return null;
+  const v = vals.map(x=>x == null ? 0 : x);
+  const roll = w =>{
+    let best = 0;
+    for(let i = 0; i + w <= n; i++){
+      let sm = 0;
+      for(let k = 0; k < w; k++) sm += v[i+k];
+      if(sm > best) best = sm;
+    }
+    return best;
+  };
+  return {m1: Math.max(...v), m3: roll(3), m6: roll(6), cov: ok / n};
+}
+// 過去：逐時觀測（rain_hourly.json）
+function _obsRollMax(t, h0, h1){
+  const vals = [];
+  for(let h = h0; h < Math.min(h1, 0); h++) vals.push(_obsHourlyAt(t, h));
+  return vals.length ? _rollMax(vals) : null;
+}
+// 未來：逐時預報形狀（依所選模式的段總量分配）
+function _fcRollMax(t, h0, h1){
+  const vals = [];
+  for(let h = Math.max(1, h0); h <= h1; h++){
+    const r = _hourlyAt(t, h);
+    vals.push(r ? r.v : null);
+  }
+  const R = vals.length >= 6 ? _rollMax(vals) : null;
+  return (R && R.cov >= 0.8) ? R : null;
+}
+
 function _obsHourlyAt(t, h){
   const H = window.RAIN_HOURLY;
   if(!H || h >= 0) return null;
@@ -11751,7 +11827,22 @@ function _disasterHits(){
       const d = (t.daily_rain||[])[dayIdx];
       if(d == null) return;
       dispRain = d;
-      if(z.t6h != null && d >= z.t6h) met.push({win:'6h†', thr:z.t6h, val:Math.round(d)});
+      // ★ 有逐時觀測（rain_hourly.json，約 47 小時）時，用實測算滾動
+      //   1／3／6 小時最大值，精確比對三個注意值。
+      //   只能用觀測 —— 過去時段的判定是在回答「實際有沒有下到」，
+      //   換成任何模式的逐時值（即使校驗較準）都是以預報取代實測。
+      const t0 = new Date(); t0.setHours(0,0,0,0);
+      const dayStart = t0.getTime() - (dayIdx - 1) * 86400e3 - 86400e3;
+      const h0 = Math.floor((dayStart - Date.now()) / 3600e3);
+      const R = _obsRollMax(t, h0, h0 + 24);
+      if(R && R.cov >= 0.8){
+        if(z.t1h != null && R.m1 >= z.t1h) met.push({win:'1h', thr:z.t1h, val:Math.round(R.m1)});
+        if(z.t3h != null && R.m3 >= z.t3h) met.push({win:'3h', thr:z.t3h, val:Math.round(R.m3)});
+        if(z.t6h != null && R.m6 >= z.t6h) met.push({win:'6h', thr:z.t6h, val:Math.round(R.m6)});
+      } else if(z.t6h != null && d >= z.t6h){
+        // 超出逐時觀測範圍：只能以日累積近似（† 標示）
+        met.push({win:'6h†', thr:z.t6h, val:Math.round(d)});
+      }
     } else {
       const qa = getQpfArr(t, qpfField);
       const mh = t[maxhField] || [];
@@ -11768,6 +11859,12 @@ function _disasterHits(){
         tot += seg;
       }
       dispRain = Math.round(tot*10)/10;
+      // ★ 有逐時預報形狀時，改用真正的滾動 3／6 小時（可跨越段邊界，
+      //   例如 04~10 時）。只取各段最大值會漏掉「兩段交界各下一半」的情況。
+      const hs = Math.max(1, Math.round((segTime(sf).getTime() - Date.now()) / 3600e3));
+      const he = Math.round((segTime(st).getTime() + 6*3600e3 - Date.now()) / 3600e3);
+      const RF = _fcRollMax(t, hs, he);
+      if(RF){ m3 = Math.max(m3, RF.m3); m6 = Math.max(m6, RF.m6); }
       if(z.t1h != null && m1 >= z.t1h) met.push({win:'1h', thr:z.t1h, val:Math.round(m1)});
       if(z.t3h != null && m3 >= z.t3h) met.push({win:'3h', thr:z.t3h, val:Math.round(m3)});
       if(z.t6h != null && m6 >= z.t6h) met.push({win:'6h', thr:z.t6h, val:Math.round(m6)});

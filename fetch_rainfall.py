@@ -3050,7 +3050,9 @@ MODEL_TIERS = {
     'under': {'bias': (0.40, 0.80), 'w': 0.45, 'label': '少報'},
     # 其餘（偏差比 <0.40 或 >2.50）一律排除
 }
-ADAPT_MIN_N = 20          # 樣本數門檻：不足就不下判斷（用等權重）
+ADAPT_MIN_N = 20          # 樣本數門檻：不足就不下判斷
+# 原本就在 FORMOSA 裡的核心成員（樣本不足時仍保留）
+ADAPT_CORE = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast')
 ADAPT_MAE_CAP = 60.0      # MAE 上限（mm）：再準的偏差比也救不了離譜的誤差
 
 
@@ -3076,9 +3078,19 @@ def build_adaptive_blend(skill_summary, verify_recent=None):
             mae = v.get('mae')
             n = v.get('n') or 0
             if bias is None or n < ADAPT_MIN_N:
-                # 樣本不足：保留但給中等權重，避免新模式永遠進不來
-                picks[m] = 0.6
-                detail.append(f'{m}=樣本不足({n})')
+                # ★ 樣本不足時分兩種情況：
+                #   原融合成員（核心 6 個）→ 保留 0.6，避免資料斷一天就把
+                #     整個融合打散。
+                #   新納入的候選（UKMO、GEM…）→ 不納入，必須先用表現證明。
+                #   先前一律給 0.6，連偏差比 5.00 的 ICON 也被拉進融合；
+                #   而 ICON 四天才輪一次，七天內幾乎永遠樣本不足，
+                #   等於永遠以 0.6 混在裡面（違反使用者的要求）。
+                if m in ADAPT_CORE:
+                    picks[m] = 0.6
+                    detail.append(f'{m}=樣本不足({n})，核心保留')
+                else:
+                    excluded.append(m)
+                    detail.append(f'{m}=樣本不足({n})，暫不納入')
                 continue
             if mae is not None and mae > ADAPT_MAE_CAP:
                 excluded.append(m)
