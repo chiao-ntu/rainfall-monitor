@@ -1614,7 +1614,8 @@ function _hexA(hex, a){
 // 當下縮放的「每 m/s 風速對應幾 px/幀」。
 //   時間壓縮倍率 TL：畫面上 1 秒 ＝ 真實 TL 秒。
 //   以 zoom 7 時 10 m/s ≈ 4.3 px/幀 為基準反推（與先前視覺一致）。
-const WF_TIMELAPSE = 16000;
+// 時間壓縮倍率（使用者要求再慢三成：16000 → 11200）
+const WF_TIMELAPSE = 11200;
 function _wfPxPerMs(){
   try{
     const c = map.getCenter();
@@ -6525,6 +6526,8 @@ function renderLayer(){
     }
   });
   countyLayer.addTo(map);
+  // 鄉鎮色塊重繪後，二次災害層（同一張畫布）要重新提到最上面
+  try{ _disasterToFront(); }catch(e){}
   // 模式時效提示
   try{
     const cw = document.getElementById('coverage-warn');
@@ -11607,6 +11610,20 @@ async function _loadLsGeo(){
   }catch(e){ console.warn('大崩幾何載入失敗（二次災害將退回鄉鎮邊界）', e); }
 }
 
+// ★ 二次災害層與鄉鎮色塊共用 townPane 的 canvas：
+//   overlayPane 的 canvas 已關閉指標事件（否則會擋住鄉鎮點擊），
+//   畫在那裡的東西 tooltip 永遠出不來。同一張畫布內 Leaflet 會
+//   統一做命中判斷，兩者都能互動。
+//   但鄉鎮層重繪時會蓋到上面，故每次重繪後把災害層提到最前。
+function _disasterToFront(){
+  try{
+    if(disasterLayer) disasterLayer.eachLayer(l=>{
+      if(l.bringToFront) l.bringToFront();
+      else if(l.eachLayer) l.eachLayer(x=>{ if(x.bringToFront) x.bringToFront(); });
+    });
+  }catch(e){}
+}
+
 async function renderDisasterLayer(){
   if(disasterLayer){ map.removeLayer(disasterLayer); disasterLayer=null; }
   if(!showDisaster) return;
@@ -11638,17 +11655,28 @@ async function renderDisasterLayer(){
   let nLine = 0, nArea = 0;
   (DISASTER_ZONES || []).forEach(z=>{
     const st = state(z);
+    // ★ tooltip 內容與土石流／大崩圖層同一套：ETR2、警戒值、達成率、代表站
+    const a = (window.DEBRIS_ALERTS || {})[z.id] || (window.LANDSLIDE_ALERTS || {})[z.id];
+    const a2 = (a && typeof _withEst === 'function') ? _withEst(a) : a;
+    const etr = a2 ? (a2.etr2_est ?? a2.etr2) : null;
+    const den = a2 ? (a2.alert_adj ?? a2.alert) : null;
+    const pct = (a2 && a2.pct != null) ? Math.round(a2.pct * 100) : null;
     const tip = `<b>${z.landmark || z.id}</b>　${st.tag}<br>`
       + `${z.county}${z.township}${z.village || ''}<br>`
-      + `編號 ${z.id}　${z.category || ''}`
-      + (z.t1h ? `<br>1h ${z.t1h}／3h ${z.t3h}／12h ${z.t12h} mm` : '');
+      + `編號 ${z.id}　${z.type || ''}　${z.category || ''}`
+      + (etr != null && den != null
+          ? `<br>ETR2 <b>${etr}</b> / 警戒值 <b>${den}</b> mm（${pct}%）` : '')
+      + (a2 && a2.station ? `<br>代表站：${a2.station}` : '')
+      + (z.t1h ? `<br>警戒雨量 1h ${z.t1h}／3h ${z.t3h}／12h ${z.t12h} mm` : '')
+      + ((z.station1 || z.station2)
+          ? `<br>參考站：${[z.station1, z.station2].filter(Boolean).join('、')}` : '');
     const g = streams[z.id];
     if(g && Array.isArray(g.l) && g.l.length){
       g.l.forEach(seg=>{
         const ll = seg.map(c=>[c[1], c[0]]);
         L.polyline(ll, {color:'#000', weight:st.w + 2, opacity:0.6,
-          interactive:false}).addTo(disasterLayer);
-        L.polyline(ll, {color:st.col, weight:st.w, opacity:1})
+          interactive:false, pane:'townPane'}).addTo(disasterLayer);
+        L.polyline(ll, {color:st.col, weight:st.w, opacity:1, pane:'townPane'})
           .bindTooltip(tip, {sticky:true}).addTo(disasterLayer);
       });
       nLine++;
@@ -11659,7 +11687,7 @@ async function renderDisasterLayer(){
       d.p.forEach(ring=>{
         const ll = ring.map(c=>[c[1], c[0]]);
         L.polygon(ll, {color:st.col, weight:st.w, fillColor:st.col,
-          fillOpacity:0.18, opacity:1})
+          fillOpacity:0.18, opacity:1, pane:'townPane'})
           .bindTooltip(tip, {sticky:true}).addTo(disasterLayer);
       });
       nArea++;
@@ -11675,11 +11703,22 @@ async function renderDisasterLayer(){
       const p = f.properties || {};
       return keys.has((p.COUNTYNAME || p.county || '') + '|' + (p.TOWNNAME || p.township || ''));
     });
-    L.geoJSON({type:'FeatureCollection', features: feats}, {style:()=>({
-      color:'#00FFFF', weight:1.2, fill:false, opacity:0.7,
-      dashArray:'4 4', interactive:false
-    })}).addTo(disasterLayer);
+    const zByKey = {};
+    fallback.forEach(z=>{ (zByKey[z.county + '|' + z.township] ||= []).push(z); });
+    L.geoJSON({type:'FeatureCollection', features: feats}, {
+      pane: 'townPane',
+      style:()=>({color:'#00FFFF', weight:1.4, fill:false, opacity:0.8, dashArray:'4 4'}),
+      onEachFeature:(f, lyr)=>{
+        const p = f.properties || {};
+        const zs = zByKey[(p.COUNTYNAME || p.county || '') + '|' + (p.TOWNNAME || p.township || '')] || [];
+        lyr.bindTooltip(zs.map(z=>`<b>${z.landmark || z.id}</b>　編號 ${z.id}<br>`
+          + `${z.county}${z.township}${z.village || ''}　${z.category || ''}`
+          + '<br><span style="color:#8aa">（無精確幾何，以鄉鎮範圍標示）</span>').join('<hr style="margin:3px 0">'),
+          {sticky:true});
+      }
+    }).addTo(disasterLayer);
   }
+  _disasterToFront();
   console.log(`二次災害：溪流 ${nLine} 條、崩塌地 ${nArea} 處、`
     + `無幾何退回鄉鎮 ${fallback.length} 處（共 ${(DISASTER_ZONES||[]).length}）`);
 }
