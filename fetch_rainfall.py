@@ -5044,6 +5044,8 @@ def main():
         output['model_skill'] = summarize_model_skill(_skill, now_tpe)
         # ★ 自適應選用：逐地形決定「用哪些模式、各給多少權重」
         _pattern = zone_pattern_skill(_verify, now_tpe) if _verify else {}
+        # 前端 F-c 自動算權重要用同一份型態技術（誤報率、ETS），一併輸出
+        output['pattern_skill'] = _pattern
         output['adaptive_blend'] = build_adaptive_blend(
             output['model_skill'], _verify_recent, _pattern)
         for _z, _v in (output['adaptive_blend'] or {}).items():

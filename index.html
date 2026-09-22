@@ -2706,9 +2706,12 @@ function _fcBias(z, m){
 
 // ★ 面板結構比照情境編輯器：標題列可拖曳、點一下收合；
 //   右上角匯出／匯入，左下角重設為 FORMOSA，右下角確定套用。
-//   ★ 編輯中的改動先存在草稿（_fcDraft），按「確定套用」才寫入並重算，
-//     避免每勾一格地圖就重算一次，也能在套用前反悔。
-let _fcDraft = null, _fcFolded = false;
+//   ★ 改動即時重算；「確定套用」保存設定但不關閉面板；
+//     關閉時若有未保存的改動，回復到上次保存的設定。
+// ★ 即時重算：面板上的改動直接作用在 _fcCfg 並重算地圖；
+//   「確定套用」只負責保存到瀏覽器（不關閉面板）。
+//   _fcSavedJSON 記錄上次保存的狀態，用來判斷有沒有未保存的改動。
+let _fcSavedJSON = null, _fcFolded = false;
 function _fcEnsureBox(){
   let box = document.getElementById('fc-panel');
   if(box) return box;
@@ -2727,6 +2730,8 @@ function _fcEnsureBox(){
       <button class="b" style="font-size:10px;padding:1px 6px" onclick="_fcExport()">匯出</button>
       <label class="b" style="font-size:10px;padding:1px 6px;cursor:pointer">匯入
         <input type="file" accept="application/json" style="display:none" onchange="_fcImport(this)"></label>
+      <button class="b" id="fc-fold-btn" style="font-size:11px;padding:1px 7px"
+        onclick="_fcToggleFold()" title="收合">&#9650;</button>
       <button class="b" style="font-size:11px;padding:1px 7px" onclick="_fcClose()">&#10005;</button>
     </div>
     <div id="fc-body" style="padding:8px 10px;overflow:auto"></div>
@@ -2734,7 +2739,7 @@ function _fcEnsureBox(){
       border-top:1px solid #3a3020">
       <button class="b" onclick="_fcReset()">重設為 FORMOSA</button>
       <span style="flex:1"></span>
-      <button class="b" onclick="_fcApply()"
+      <button class="b" id="fc-apply" onclick="_fcApply()"
         style="border-color:#3a8a5a;color:#7ee8a8">確定套用</button>
     </div>`;
   document.body.appendChild(box);
@@ -2747,19 +2752,45 @@ function _fcToggleFold(force){
   if(b) b.style.display = _fcFolded ? 'none' : 'block';
   if(f) f.style.display = _fcFolded ? 'none' : 'flex';
   if(ind) ind.textContent = _fcFolded ? '▸' : '▾';
+  const fb = document.getElementById('fc-fold-btn');
+  if(fb){ fb.innerHTML = _fcFolded ? '&#9660;' : '&#9650;'; fb.title = _fcFolded ? '展開' : '收合'; }
 }
+// ★ 自動權重：與後端 FORMOSA 自適應融合同一套公式。
+//   偏差比分層（準 1.00／多報、少報 0.45）× MAE 係數 × ETS 係數。
+//   FORMOSA 會排除的模式（偏差比離譜、MAE 過大、包牌…），使用者仍可
+//   手動勾選；此時給偏低的 0.2，表示「你選了，但資料不支持它」。
+function _fcAutoWeight(z, m){
+  const k = _FC_SK[m] || m;
+  const v = (((window.MODEL_SKILL || {})[z] || {})[k] || {}).short || {};
+  const P = ((window.PATTERN_SKILL || {})[z] || {})[k] || {};
+  const bias = v.bias, mae = v.mae, n = v.n || 0;
+  if(bias == null || n < 20) return 0.6;                 // 樣本不足：中等權重
+  if(mae != null && mae > 60) return 0.2;
+  if(P.fc >= 8 && P.far != null && P.far >= 0.75) return 0.2;   // 包牌
+  if(P.ob >= 5 && P.ets != null && P.ets <= 0.05) return 0.2;   // 型態無技術
+  let w;
+  if(bias >= 0.80 && bias < 1.25) w = 1.00;
+  else if((bias >= 1.25 && bias < 2.50) || (bias >= 0.40 && bias < 0.80)) w = 0.45;
+  else return 0.2;                                        // 偏差比離譜
+  if(mae != null) w *= Math.max(0.5, Math.min(1.2, 30 / Math.max(10, mae)));
+  if(P.ob >= 5 && P.ets != null) w *= Math.max(0.7, Math.min(1.3, 0.8 + P.ets));
+  return Math.round(w * 100) / 100;
+}
+
 function openFcPanel(){
   const box = _fcEnsureBox();
   // 已開啟 → 切換收合（與情境編輯器相同）
   if(box.style.display === 'flex'){ _fcToggleFold(); return; }
-  _fcDraft = JSON.parse(JSON.stringify(_fcLoad()));
+  _fcLoad();
+  _fcSavedJSON = JSON.stringify(_fcCfg);
   box.style.display = 'flex';
   _fcToggleFold(false);
   _fcRender();
 }
 function _fcRender(){
   const body = document.getElementById('fc-body');
-  if(!body || !_fcDraft) return;
+  if(!body || !_fcCfg) return;
+  _fcMarkDirty();
   const bcol = b => b == null ? '#5a7a95'
     : (b >= 0.8 && b < 1.25) ? '#7ee8a8' : (b >= 0.4 && b < 2.5) ? '#f0c878' : '#ff7070';
   let h = `<table style="border-collapse:collapse">
@@ -2768,7 +2799,7 @@ function _fcRender(){
   FC_MODELS.forEach(([m, lab])=>{
     h += `<tr style="border-top:1px solid #16314a"><td style="padding:3px 6px">${lab}</td>`;
     FC_ZONES.forEach(z=>{
-      const w = (_fcDraft[z] && _fcDraft[z][m] != null) ? _fcDraft[z][m] : 0;
+      const w = (_fcCfg[z] && _fcCfg[z][m] != null) ? _fcCfg[z][m] : 0;
       const b = _fcBias(z, m);
       h += `<td style="padding:2px 6px;white-space:nowrap">
         <input type="checkbox" ${w > 0 ? 'checked' : ''}
@@ -2783,32 +2814,48 @@ function _fcRender(){
   });
   body.innerHTML = h + '</table>';
 }
-// 編輯只改草稿，不重算
+// 改動即時作用並重算地圖（切到 F-c 時才看得到效果）
+function _fcRecalc(){
+  (TOWNSHIPS || []).forEach(t=>{ t._fcCache = null; });
+  if(forecastModel === 'fc'){ try{ _refreshAfterFactorChange(); }catch(e){} }
+}
+// 未保存時「確定套用」按鈕亮起
+function _fcMarkDirty(){
+  const b = document.getElementById('fc-apply');
+  if(!b) return;
+  const dirty = (_fcSavedJSON != null && JSON.stringify(_fcCfg) !== _fcSavedJSON);
+  b.style.background = dirty ? '#1a4a2a' : '';
+  b.style.fontWeight = dirty ? '700' : '';
+}
 function _fcSet(z, m, w, fromCheck){
-  if(!_fcDraft) _fcDraft = JSON.parse(JSON.stringify(_fcLoad()));
-  _fcDraft[z] = _fcDraft[z] || {};
-  if(fromCheck) w = w ? (_fcDraft[z][m] > 0 ? _fcDraft[z][m] : 1) : 0;
-  _fcDraft[z][m] = Math.max(0, Math.min(5, w || 0));
+  _fcLoad();
+  _fcCfg[z] = _fcCfg[z] || {};
+  // ★ 勾選時依 FORMOSA 的公式自動算權重；之後仍可在數字框手動調整
+  if(fromCheck) w = w ? _fcAutoWeight(z, m) : 0;
+  _fcCfg[z][m] = Math.max(0, Math.min(5, w || 0));
+  _fcRecalc();
   _fcRender();
 }
-function _fcReset(){ _fcDraft = _fcDefault(); _fcRender(); }
-// 確定套用：草稿寫入、存檔、清快取、重算地圖與面板
+function _fcReset(){ _fcCfg = _fcDefault(); _fcRecalc(); _fcRender(); }
+// 確定套用：保存目前設定，面板保持開啟
 function _fcApply(){
-  if(!_fcDraft) return;
-  _fcCfg = JSON.parse(JSON.stringify(_fcDraft));
   _fcSave();
-  (TOWNSHIPS || []).forEach(t=>{ t._fcCache = null; });
-  try{ _refreshAfterFactorChange(); }catch(e){}
-  _fcClose();
+  _fcSavedJSON = JSON.stringify(_fcCfg);
+  _fcMarkDirty();
 }
+// 關閉：有未保存的改動時，回復到上次保存的設定
 function _fcClose(){
   const b = document.getElementById('fc-panel');
   if(b) b.style.display = 'none';
-  _fcDraft = null;                 // 未套用的改動捨棄
+  if(_fcSavedJSON != null && JSON.stringify(_fcCfg) !== _fcSavedJSON){
+    try{ _fcCfg = JSON.parse(_fcSavedJSON); }catch(e){}
+    _fcRecalc();
+  }
+  _fcSavedJSON = null;
 }
 function _fcExport(){
   const data = {type: 'FORMOSA-customise', version: 1,
-                saved: new Date().toISOString(), config: _fcDraft || _fcLoad()};
+                saved: new Date().toISOString(), config: _fcLoad()};
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'}));
   a.download = `FORMOSA-customise_${new Date().toISOString().slice(0,10)}.json`;
@@ -2833,7 +2880,8 @@ function _fcImport(inp){
           clean[z][m] = isFinite(v) ? Math.max(0, Math.min(5, v)) : 0;
         });
       });
-      _fcDraft = clean;
+      _fcCfg = clean;
+      _fcRecalc();
       _fcRender();
     }catch(e){ alert('匯入失敗：' + e.message); }
     inp.value = '';
@@ -7910,6 +7958,7 @@ async function tryLoadLive(){
     window.MODEL_SKILL = d.model_skill || {};
     // 自適應融合：逐地形的模式選用與權重（後端每輪重算）
     window.ADAPTIVE_BLEND = d.adaptive_blend || {};
+    window.PATTERN_SKILL = d.pattern_skill || {};   // F-c 自動權重用（誤報率、ETS）
     try{
       const _zs = Object.keys(window.ADAPTIVE_BLEND);
       if(_zs.length) console.log('自適應融合載入：' + _zs.map(z=>
