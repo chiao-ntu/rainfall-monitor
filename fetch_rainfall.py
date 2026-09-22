@@ -3060,6 +3060,13 @@ MODEL_TIERS = {
     # 其餘（偏差比 <0.40 或 >2.50）一律排除
 }
 ADAPT_MIN_N = 20          # 樣本數門檻：不足就不下判斷
+# ★ 雨量體積門檻（實測補上的一道關）：
+#   偏差比是 Σ觀測 ÷ Σ模式，兩個都接近 0 時比值毫無意義。
+#   實例：沿海地區整週只下 8.0mm，ICON 報 7.5mm → 偏差比 1.07 被判「準」，
+#   但同一週山區觀測 621.5mm、ICON 只報 59.7mm（偏差比 10.41）。
+#   樣本「筆數」夠不代表有雨可評，必須看雨量體積。
+ADAPT_MIN_OBS = 100.0     # 該地形近 7 天的觀測總量（mm）
+ADAPT_MIN_MOD = 20.0      # 模式的預報總量（mm）：幾乎沒報雨也無從評起
 # ★ 使用者判定排除的模式（立即生效，不等資料累積）。
 #   自動的降雨型態篩選需要「有沒有下」的列聯表，那份資料部署後才開始
 #   累積；既有的 80mm 門檻表抓不到 CMA（近 7 天它沒報過 ≥80mm）。
@@ -3142,7 +3149,11 @@ def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
             bias = v.get('bias')
             mae = v.get('mae')
             n = v.get('n') or 0
-            if bias is None or n < ADAPT_MIN_N:
+            vol_o = v.get('obs')
+            vol_m = v.get('mod')
+            thin = (vol_o is not None and vol_o < ADAPT_MIN_OBS) or \
+                   (vol_m is not None and vol_m < ADAPT_MIN_MOD)
+            if bias is None or n < ADAPT_MIN_N or thin:
                 # ★ 樣本不足時分兩種情況：
                 #   原融合成員（核心 6 個）→ 保留 0.6，避免資料斷一天就把
                 #     整個融合打散。
@@ -3150,12 +3161,14 @@ def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
                 #   先前一律給 0.6，連偏差比 5.00 的 ICON 也被拉進融合；
                 #   而 ICON 四天才輪一次，七天內幾乎永遠樣本不足，
                 #   等於永遠以 0.6 混在裡面（違反使用者的要求）。
+                why = (f'雨量太少(觀測{vol_o:.0f}/預報{vol_m:.0f}mm)'
+                       if thin and vol_o is not None else f'樣本不足({n})')
                 if m in ADAPT_CORE:
                     picks[m] = 0.6
-                    detail.append(f'{m}=樣本不足({n})，核心保留')
+                    detail.append(f'{m}={why}，核心保留')
                 else:
                     excluded.append(m)
-                    detail.append(f'{m}=樣本不足({n})，暫不納入')
+                    detail.append(f'{m}={why}，暫不納入')
                 continue
             if mae is not None and mae > ADAPT_MAE_CAP:
                 excluded.append(m)
@@ -3259,7 +3272,9 @@ def summarize_model_skill(skill, now_tpe):
                 out.setdefault(z, {}).setdefault(m, {})[span] = {
                     'bias': round(max(0.2, min(5.0, a['sum_obs'] / a['sum_mod'])), 3),
                     'mae': round(a['sum_ae'] / a['n'], 1),
-                    'n': a['n'], 'days': a['days']}
+                    'n': a['n'], 'days': a['days'],
+                    # ★ 雨量體積：判斷「這段期間有沒有雨可以評」用
+                    'obs': round(a['sum_obs'], 1), 'mod': round(a['sum_mod'], 1)}
     return out
 
 
