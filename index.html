@@ -1582,31 +1582,36 @@ function _restyleSeaOverlays(){
 // ★ 只更新風場節點（風向／風速），不動粒子 ——
 //   動畫每幀呼叫，粒子因此能連續流動而非每幀重置。
 function _wfRefreshNodes(){
+  // ★ 原地更新節點（不重建陣列、不清空粒子的所屬測站）：
+  //   先前每幀 nodes.length=0 重建、並把每顆粒子的 p.node 清掉重抽，
+  //   粒子每一幀都換跟隨對象，方向亂跳 —— 風場「卡卡的」另一個原因。
+  //   ★ 風向風速依時間連續內插（風向走圓周短弧），流場隨時間平滑轉向，
+  //     不會在預報時刻瞬間轉彎。
   const nodes = window._wfNodes;
   if(!Array.isArray(nodes)) return;
-  nodes.length = 0;
+  if(!nodes._byKey){
+    nodes._byKey = {};
+    nodes.forEach(n=>{ if(n.key) nodes._byKey[n.key] = n; });
+  }
+  const tgt = _windAtMs();
   (TOWNSHIPS || []).forEach(t=>{
     if(t.lat == null || t.lng == null) return;
-    const w = _windOf(t);
-    if(!w || w.ws == null) return;
     const ser = _windSeries(t);
-    let wd = null;
-    if(Array.isArray(ser) && ser.length){
-      const tgt = _windAtMs();
-      const pts = ser.filter(p=>p && p.ms != null && p.wd != null)
-                     .sort((a, b)=>a.ms - b.ms);
-      let best = pts.length ? pts[0] : null;
-      for(const p of pts){ if(p.ms <= tgt) best = p; else break; }
-      if(best) wd = best.wd;
+    if(!Array.isArray(ser) || !ser.length) return;
+    const pts = ser.filter(p=>p && p.ms != null && p.wd != null && p.ws != null);
+    if(!pts.length) return;
+    const r = _interpAt(pts, tgt, ['ws'], ['wd']);
+    if(!r || r.ws == null || r.wd == null) return;
+    const key = (t.county || '') + (t.township || '');
+    const n = nodes._byKey[key];
+    if(n){ n.ws = r.ws; n.wd = r.wd; }
+    else {
+      const n2 = {lat: t.lat, lng: t.lng, ws: r.ws, wd: r.wd, key};
+      nodes.push(n2); nodes._byKey[key] = n2;
     }
-    if(wd == null) return;
-    nodes.push({lat: t.lat, lng: t.lng, ws: w.ws, wd});
   });
-  // 節點換了，粒子重抽所屬測站（但位置與軌跡保留）
-  (_wfParticles || []).forEach(p=>{ p.node = null; });
 }
 
-// 把 #RRGGBB 轉成帶透明度的 rgba（風場依支撐度淡出用）
 function _hexA(hex, a){
   const h = String(hex || '#FFFFFF').replace('#', '');
   const n = parseInt(h.length === 3
@@ -1677,6 +1682,7 @@ function _wfStart(){
   // ★ 存成模組層變數，動畫時只更新內容、不重建粒子
   const nodes = (window._wfNodes = window._wfNodes || []);
   nodes.length = 0;
+  nodes._byKey = null;
   (TOWNSHIPS || []).forEach(t=>{
     if(t.lat == null || t.lng == null) return;
     const w = _windOf(t);
@@ -1694,7 +1700,7 @@ function _wfStart(){
       if(best) wd = best.wd;
     }
     if(wd == null) return;
-    nodes.push({lat: t.lat, lng: t.lng, ws: w.ws, wd});
+    nodes.push({lat: t.lat, lng: t.lng, ws: w.ws, wd, key: (t.county || '') + (t.township || '')});
   });
   // ★ 診斷：分別統計「有風速」與「有風向」的鄉鎮數。
   //   風速 368 個有值但風場是空的 → 表示 wd 欄位沒進來（後端未抓或格式不符）。
@@ -6140,11 +6146,242 @@ function _animRebuild(){
 }
 
 // 套用某一幀：設定 _hourIdx 並重繪（小數小時交給內插）
+// ══════════════════════════════════════════════════════════
+//  動畫專用重繪
+//  ★ 播放時不呼叫 renderLayer()：它每幀重建 368 個鄉鎮並重算完整
+//    tooltip，實測約 140ms／幀，主執行緒被卡住，風場粒子跟著停頓 ——
+//    這就是「卡卡的」主因。播放中只改填色；停止時再完整重繪一次。
+//  ★ 級距改變時做 350ms 的顏色漸層（使用者指定「從淺到深」）：
+//    過渡期間的中間色只存在一瞬間，停下來時一定是圖例上的顏色。
+// ══════════════════════════════════════════════════════════
+const ANIM_TWEEN_MS = 350;
+const _animTweens = new Map();
+let _animTweenRAF = null;
+function _hexRgb(h){
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(h || '').trim());
+  if(!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function _rgbHex(c){
+  return '#' + c.map(v=>Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('');
+}
+function _animPaint(){
+  if(!townLayer) return;
+  const now = performance.now();
+  townLayer.eachLayer(poly=>{
+    const t = poly._tw;
+    if(!t) return;
+    let f;
+    try{ f = _townFill(t, t === selected); }catch(e){ return; }
+    if(!f || !f.fillColor) return;
+    const to = f.fillColor;
+    if(poly._animTo === to) return;              // 顏色沒變就不動
+    poly._animTo = to;
+    if(f.fillOpacity != null) poly.setStyle({fillOpacity: f.fillOpacity});
+    const from = poly._animShown || poly.options.fillColor || to;
+    const a = _hexRgb(from), b = _hexRgb(to);
+    if(!a || !b){ poly.setStyle({fillColor: to}); poly._animShown = to; return; }
+    _animTweens.set(poly, {a, b, to, t0: now});
+  });
+  if(!_animTweenRAF && _animTweens.size) _animTweenRAF = requestAnimationFrame(_animTweenStep);
+}
+function _animTweenStep(){
+  _animTweenRAF = null;
+  const now = performance.now();
+  _animTweens.forEach((tw, poly)=>{
+    const k = Math.min(1, (now - tw.t0) / ANIM_TWEEN_MS);
+    if(k >= 1){
+      poly.setStyle({fillColor: tw.to}); poly._animShown = tw.to;
+      _animTweens.delete(poly); return;
+    }
+    const e = k < 0.5 ? 2*k*k : 1 - Math.pow(-2*k + 2, 2) / 2;   // 緩入緩出
+    const hex = _rgbHex(tw.a.map((v, i)=>Math.round(v + (tw.b[i] - v) * e)));
+    poly.setStyle({fillColor: hex}); poly._animShown = hex;
+  });
+  if(_animTweens.size) _animTweenRAF = requestAnimationFrame(_animTweenStep);
+}
+function _animPaintReset(){
+  _animTweens.clear();
+  if(_animTweenRAF){ cancelAnimationFrame(_animTweenRAF); _animTweenRAF = null; }
+  if(townLayer) townLayer.eachLayer(p=>{ p._animTo = null; p._animShown = null; });
+}
+
+// ══════════════════════════════════════════════════════════
+//  颱風動畫（真正連續）
+//  ★ 過去路徑、現在位置、預報點串成一條時間軸：
+//    位置用 Catmull-Rom 樣條（官方畫路徑的做法），暴風半徑線性內插。
+//  ★ 兩個動畫幀之間再以 requestAnimationFrame 平滑推進，
+//    颱風不會一格一格瞬移，暴風圈也不會瞬間放大縮小。
+//  ★ 七級風暴風圈觸及的鄉鎮閃爍，並記下首次觸及時刻。
+// ══════════════════════════════════════════════════════════
+let _tyA = null;   // {tl, layer, hitLayer, prevH, curH, t0, dur, raf, hit:Set, first:{}}
+function _tyTimeline(ty){
+  const pts = [];
+  const add = (ms, p)=>{
+    if(!isFinite(ms) || p.lat == null || p.lng == null) return;
+    pts.push({ms, lat: +p.lat, lng: +p.lng,
+              r15: (p.r15 != null ? +p.r15 : null), r25: (p.r25 != null ? +p.r25 : null)});
+  };
+  (ty.past || []).forEach(p=>add(Date.parse(p.t), p));
+  if(ty.current) add(Date.parse(ty.current.t || ''), ty.current);
+  (ty.forecast || []).forEach(f=>{
+    const base = Date.parse(f.init || (ty.current && ty.current.t) || '');
+    add(base + (f.fh || 0) * 3600e3, f);
+  });
+  pts.sort((a, b)=>a.ms - b.ms);
+  const out = [];
+  pts.forEach(p=>{ if(!out.length || p.ms - out[out.length-1].ms > 60e3) out.push(p);
+                   else Object.assign(out[out.length-1], p); });
+  // 缺半徑的點沿用相鄰值，避免暴風圈忽然消失
+  for(const k of ['r15', 'r25']){
+    let last = null;
+    out.forEach(p=>{ if(p[k] == null) p[k] = last; else last = p[k]; });
+    last = null;
+    for(let i = out.length - 1; i >= 0; i--){ if(out[i][k] == null) out[i][k] = last; else last = out[i][k]; }
+  }
+  return out;
+}
+function _tyAt(tl, ms){
+  if(!tl || tl.length < 2 || ms < tl[0].ms || ms > tl[tl.length-1].ms) return null;
+  let i = 0;
+  while(i < tl.length - 2 && tl[i+1].ms <= ms) i++;
+  const p1 = tl[i], p2 = tl[i+1];
+  const p0 = tl[i-1] || p1, p3 = tl[i+2] || p2;
+  const f = (ms - p1.ms) / ((p2.ms - p1.ms) || 1);
+  const lin = (a, b)=> (a == null || b == null) ? (a ?? b) : a + (b - a) * f;
+  return {lat: _catmull(p0.lat, p1.lat, p2.lat, p3.lat, f),
+          lng: _catmull(p0.lng, p1.lng, p2.lng, p3.lng, f),
+          r15: lin(p1.r15, p2.r15), r25: lin(p1.r25, p2.r25)};
+}
+function _kmBetween(a1, o1, a2, o2){
+  const R = 6371, d2r = Math.PI / 180;
+  const da = (a2 - a1) * d2r, dO = (o2 - o1) * d2r;
+  const x = Math.sin(da/2)**2 + Math.cos(a1*d2r) * Math.cos(a2*d2r) * Math.sin(dO/2)**2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
+}
+function _tyAnimStart(){
+  if(_tyA || typeof showTyphoon === 'undefined' || !showTyphoon) return;
+  const list = (window.TYPHOON_TRACK || []).map(ty=>({ty, tl: _tyTimeline(ty)}))
+                .filter(x=>x.tl.length >= 2);
+  if(!list.length) return;
+  // 靜態颱風圖層先收起（避免固定位置的暴風圈與移動中的重疊），停止後還原
+  try{ if(typhoonLayer){ map.removeLayer(typhoonLayer); typhoonLayer = null; } }catch(e){}
+  const layer = L.layerGroup().addTo(map);
+  list.forEach(x=>{
+    // 路徑底線（淡）
+    L.polyline(x.tl.map(p=>[p.lat, p.lng]), {pane:'townPane', color:'#ffffff',
+      weight:1.2, opacity:0.45, dashArray:'4 4', interactive:false}).addTo(layer);
+    x.c15 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#f5a623', weight:2,
+      dashArray:'6 4', fillColor:'#f5a623', fillOpacity:0.08, interactive:false}).addTo(layer);
+    x.c25 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#e8453c', weight:2,
+      fillColor:'#e8453c', fillOpacity:0.10, interactive:false}).addTo(layer);
+    x.eye = L.circleMarker([0, 0], {pane:'townPane', radius:6, color:'#000', weight:2,
+      fillColor:'#ff2d2d', fillOpacity:1, interactive:false}).addTo(layer);
+  });
+  // 各鄉鎮邊界取樣點（判斷暴風圈是否觸及用，不只看中心點）
+  const towns = [];
+  if(townLayer) townLayer.eachLayer(poly=>{
+    const t = poly._tw; if(!t) return;
+    const flat = [];
+    const walk = a=>{ if(!a) return; if(a.lat != null) flat.push(a); else a.forEach(walk); };
+    walk(poly.getLatLngs());
+    const step = Math.max(1, Math.floor(flat.length / 40));
+    towns.push({t, poly, pts: flat.filter((_, k)=>k % step === 0),
+                key: (t.county || '') + (t.township || '')});
+  });
+  _tyA = {list, layer, towns, hitLayer: L.layerGroup().addTo(map),
+          prevH: null, curH: null, t0: 0, dur: 100, raf: null, hit: new Set(), first: {}};
+  _tyA.raf = requestAnimationFrame(_tyAnimLoop);
+}
+function _tyAnimSetHour(h){
+  if(!_tyA) _tyAnimStart();
+  if(!_tyA) return;
+  const fps = parseInt((document.getElementById('anim-fps') || {}).value) || 12;
+  _tyA.prevH = (_tyA.curH == null) ? h : _tyA.curH;
+  _tyA.curH = h;
+  _tyA.t0 = performance.now();
+  _tyA.dur = 1000 / fps;
+  // 觸及判定以「本幀時刻」為準
+  const ms = Date.now() + h * 3600e3;
+  const hit = new Set();
+  _tyA.list.forEach(x=>{
+    const P = _tyAt(x.tl, ms);
+    if(!P || !P.r15) return;
+    _tyA.towns.forEach(tw=>{
+      if(tw.pts.some(q=>_kmBetween(P.lat, P.lng, q.lat, q.lng) <= P.r15)){
+        hit.add(tw.key);
+        if(!_tyA.first[tw.key]) _tyA.first[tw.key] = ms;
+      }
+    });
+  });
+  const changed = hit.size !== _tyA.hit.size || [...hit].some(k=>!_tyA.hit.has(k));
+  _tyA.hit = hit;
+  if(changed) _tyRebuildHits();
+}
+function _tyRebuildHits(){
+  if(!_tyA) return;
+  _tyA.hitLayer.clearLayers();
+  _tyA.towns.forEach(tw=>{
+    if(!_tyA.hit.has(tw.key)) return;
+    const d = new Date(_tyA.first[tw.key]);
+    L.polygon(tw.poly.getLatLngs(), {pane:'townPane', color:'#ff3030', weight:3,
+      fill:false, opacity:1})
+      .bindTooltip(`<b>${tw.t.county}${tw.t.township}</b><br>七級風暴風圈首次觸及：`
+        + `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:`
+        + `${String(d.getMinutes()).padStart(2,'0')}`, {sticky:true})
+      .addTo(_tyA.hitLayer);
+  });
+}
+function _tyAnimLoop(){
+  if(!_tyA) return;
+  const now = performance.now();
+  if(_tyA.curH != null){
+    const k = Math.min(1, (now - _tyA.t0) / (_tyA.dur || 1));
+    const h = _tyA.prevH + (_tyA.curH - _tyA.prevH) * k;   // 兩幀之間平滑推進
+    const ms = Date.now() + h * 3600e3;
+    _tyA.list.forEach(x=>{
+      const P = _tyAt(x.tl, ms);
+      const on = !!P;
+      [x.c15, x.c25, x.eye].forEach(l=>l.setStyle({opacity: on ? 1 : 0,
+        fillOpacity: on ? (l === x.eye ? 1 : (l === x.c15 ? 0.08 : 0.10)) : 0}));
+      if(!P) return;
+      x.eye.setLatLng([P.lat, P.lng]);
+      x.c15.setLatLng([P.lat, P.lng]).setRadius((P.r15 || 0) * 1000);
+      x.c25.setLatLng([P.lat, P.lng]).setRadius((P.r25 || 0) * 1000);
+      if(!P.r25) x.c25.setStyle({opacity: 0, fillOpacity: 0});
+    });
+    // 觸及鄉鎮閃爍（週期約 0.8 秒）
+    const op = 0.25 + 0.75 * Math.abs(Math.sin(now / 800 * Math.PI));
+    _tyA.hitLayer.eachLayer(l=>l.setStyle({opacity: op}));
+    try{ _tyA.layer.eachLayer(l=>l.bringToFront && l.bringToFront());
+         _tyA.hitLayer.eachLayer(l=>l.bringToFront && l.bringToFront()); }catch(e){}
+  }
+  _tyA.raf = requestAnimationFrame(_tyAnimLoop);
+}
+function _tyAnimStop(){
+  if(!_tyA) return;
+  if(_tyA.raf) cancelAnimationFrame(_tyA.raf);
+  const hits = Object.keys(_tyA.first);
+  if(hits.length){
+    console.log('暴風圈首次觸及：' + hits.sort((a, b)=>_tyA.first[a] - _tyA.first[b]).map(k=>{
+      const d = new Date(_tyA.first[k]);
+      return `${k} ${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}時`;
+    }).join('、'));
+  }
+  try{ map.removeLayer(_tyA.layer); map.removeLayer(_tyA.hitLayer); }catch(e){}
+  _tyA = null;
+  try{ renderTyphoonLayer(); }catch(e){}
+}
+
 function _animApply(i){
   if(!_animFrames.length) return;
   const h = _animFrames[i];
   _hourIdx = h;
-  try{ renderLayer(); }catch(e){}
+  // 播放中只改顏色；渲染模式（色帶內插）仍需整張重算
+  if(typeof _blurOn !== 'undefined' && _blurOn){ try{ renderLayer(); }catch(e){} }
+  else { try{ _animPaint(); }catch(e){ try{ renderLayer(); }catch(e2){} } }
+  try{ _tyAnimSetHour(h); }catch(e){}
   // ★ 不要每幀 _wfStart()：那會重建整個風場、粒子全部重置，
   //   錄下來就是一格一格的靜止（使用者回報「有些秒數完全不會動」）。
   //   改為只更新節點的風向風速，粒子繼續沿著自己的軌跡流動。
@@ -6254,6 +6491,8 @@ async function exportAnim(){
     alert('匯出失敗：' + (e && e.message ? e.message : e));
   }finally{
     setTxt('⬇ 影片');
+    try{ _tyAnimStop(); }catch(e){}
+    try{ _animPaintReset(); }catch(e){}
     _hourIdx = saved;
     // 還原取景（尺寸、縮放吸附、原本的視野）
     try{
@@ -6276,6 +6515,8 @@ function toggleAnim(){
   }
   if(!_animOn){
     if(_animTimer){ clearTimeout(_animTimer); _animTimer = null; }
+    try{ _tyAnimStop(); }catch(e){}
+    try{ _animPaintReset(); }catch(e){}
     // 還原播放前的時刻，避免使用者以為資料被改了
     if(_animSavedHour != null){ _hourIdx = _animSavedHour; _animSavedHour = null; }
     try{ renderLayer(); _syncTimeBar(); }catch(e){}
@@ -6894,6 +7135,7 @@ function renderLayer(){
         selected=t; renderLayer(); updateInfo(t);
       });
     }
+    poly._tw = t;                 // 動畫改色用：直接對到鄉鎮，不必重建圖層
     poly.addTo(townLayer);
   });
   townLayer.addTo(map);
