@@ -2730,8 +2730,6 @@ function _fcEnsureBox(){
       <button class="b" style="font-size:10px;padding:1px 6px" onclick="_fcExport()">匯出</button>
       <label class="b" style="font-size:10px;padding:1px 6px;cursor:pointer">匯入
         <input type="file" accept="application/json" style="display:none" onchange="_fcImport(this)"></label>
-      <button class="b" id="fc-fold-btn" style="font-size:11px;padding:1px 7px"
-        onclick="_fcToggleFold()" title="收合">&#9650;</button>
       <button class="b" style="font-size:11px;padding:1px 7px" onclick="_fcClose()">&#10005;</button>
     </div>
     <div id="fc-body" style="padding:8px 10px;overflow:auto"></div>
@@ -2752,8 +2750,6 @@ function _fcToggleFold(force){
   if(b) b.style.display = _fcFolded ? 'none' : 'block';
   if(f) f.style.display = _fcFolded ? 'none' : 'flex';
   if(ind) ind.textContent = _fcFolded ? '▸' : '▾';
-  const fb = document.getElementById('fc-fold-btn');
-  if(fb){ fb.innerHTML = _fcFolded ? '&#9660;' : '&#9650;'; fb.title = _fcFolded ? '展開' : '收合'; }
 }
 // ★ 自動權重：與後端 FORMOSA 自適應融合同一套公式。
 //   偏差比分層（準 1.00／多報、少報 0.45）× MAE 係數 × ETS 係數。
