@@ -337,29 +337,31 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <!-- 預報模式選擇列（未來時段才顯示） -->
   <div class="ctrl-row" id="model-row-wrap" style="display:none">
     <div class="bg" id="model-row">
+      
+      <span style="color:#4a6a8a;font-size:10px;margin:0 3px 0 0">融合校正</span>
       <button class="b model-btn on" id="mBlend" onclick="setModel('blend')"
         style="border-color:#c8a45a;color:#f0c878">FORMOSA</button>
+      <button class="b model-btn" id="mFc" onclick="setModel('fc')" title="FORMOSA-customise：自選各地形採用的模式與權重" style="border-color:#8a6a3a;color:#f0c878">F-c</button><button class="b" onclick="openFcPanel()" title="編輯 F-c" style="padding:1px 5px;border-color:#8a6a3a;color:#f0c878">✎</button>
       <button class="b model-btn"    id="mCwa"   onclick="setModel('cwa')">CWA</button>
       <button class="b model-btn" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
-      <button class="b model-btn"    id="mEcmwf" onclick="setModel('ecmwf')">ECMWF</button>
-      <button class="b model-btn"    id="mGfs"   onclick="setModel('gfs')">GFS</button>
+      <button class="b model-btn hi-btn"    id="mHi"    onclick="setModel('hi')">強降雨</button>
+      <button class="b model-btn lo-btn"    id="mLo"    onclick="setModel('lo')">弱降雨</button>
+      <span style="color:#4a6a8a;font-size:10px;margin:0 3px">｜傳統物理</span>
       <button class="b model-btn"    id="mJma"   onclick="setModel('jma')">JMA</button>
-      <span style="color:#3a6080;font-size:10px;padding:0 2px">｜AI</span>
+      <button class="b model-btn" id="mUkmo" onclick="setModel('ukmo')">UKMO</button>
+      <button class="b model-btn" id="mMf"   onclick="setModel('mf')">Météo-France</button>
+      <button class="b model-btn"    id="mGfs"   onclick="setModel('gfs')">GFS</button>
+      <button class="b model-btn"    id="mEcmwf" onclick="setModel('ecmwf')">ECMWF</button>
+      <button class="b model-btn" id="mGem"  onclick="setModel('gem')">GEM</button>
+      <button class="b model-btn" id="mIcon" onclick="setModel('icon')">ICON</button>
+      <button class="b model-btn" id="mKma"  onclick="setModel('kma')">KMA</button>
+      <button class="b model-btn" id="mBom"  onclick="setModel('bom')">BOM</button>
+      <button class="b model-btn" id="mCma"  onclick="setModel('cma')">CMA</button>
+      <span style="color:#4a6a8a;font-size:10px;margin:0 3px">｜AI</span>
       <button class="b model-btn"    id="mAifs"  onclick="setModel('aifs')"
         style="border-color:#7a5a9a;color:#c8a8e8">EC-AIFS</button>
       <button class="b model-btn"    id="mGc"    onclick="setModel('gc')"
         style="border-color:#7a5a9a;color:#c8a8e8">GC-NCEP</button>
-      <button class="b model-btn hi-btn"    id="mHi"    onclick="setModel('hi')">強降雨</button>
-      <button class="b model-btn lo-btn"    id="mLo"    onclick="setModel('lo')">弱降雨</button>
-      <span style="color:#4a6a8a;font-size:10px;margin:0 3px">｜校驗候選</span>
-      <button class="b model-btn vo-btn" id="mGem"  onclick="setModel('gem')">GEM</button>
-      <button class="b model-btn vo-btn" id="mUkmo" onclick="setModel('ukmo')">UKMO</button>
-      <button class="b model-btn vo-btn" id="mMf"   onclick="setModel('mf')">Météo-France</button>
-      <span style="color:#4a6a8a;font-size:10px;margin:0 3px">｜低頻校驗</span>
-      <button class="b model-btn vo-btn" id="mIcon" onclick="setModel('icon')">ICON</button>
-      <button class="b model-btn vo-btn" id="mKma"  onclick="setModel('kma')">KMA</button>
-      <button class="b model-btn vo-btn" id="mCma"  onclick="setModel('cma')">CMA</button>
-      <button class="b model-btn vo-btn" id="mBom"  onclick="setModel('bom')">BOM</button>
     </div>
     <span id="sys-note"></span><span id="model-src-note"></span>
   </div>
@@ -1213,6 +1215,7 @@ const MODEL_FIELD = {
   icon:'qpf_icon', kma:'qpf_kma', gem:'qpf_gem', ukmo:'qpf_ukmo',
   mf:'qpf_mf', cma:'qpf_cma', bom:'qpf_bom',      // AI
   blend: 'qpf_blend',   // 融合（CMPF）：由 _blendQpf 動態計算，非後端欄位
+  fc:    'qpf_fc',      // FORMOSA-customise：使用者自選的模式與權重（_fcQpf 計算）
 };
 // ★ AI 模式清單：對超出訓練分布的極端降雨傾向低估，
 //   融合時的偏差校正上限放寬（物理模式 2.0、AI 模式 3.0）。
@@ -2635,6 +2638,133 @@ function _skillOf(t, model){
 }
 
 // 融合後的 QPF 陣列（與其他模式同格式：60 個 6h 段）
+// ══════════════════════════════════════════════════════════
+//  F-c（FORMOSA-customise）：使用者自選各地形採用的模式與權重
+//  ★ 設定存在瀏覽器（與情境編輯器相同），只影響自己的畫面。
+//    未設定的地形沿用 FORMOSA 自適應結果當起始值。
+// ══════════════════════════════════════════════════════════
+const FC_LS_KEY = 'rainfall_fc_v1';
+const FC_ZONES  = ['山區', '淺山區', '平地', '沿海地區'];
+const FC_MODELS = [                       // 與按鈕列同一順序
+  ['jma','JMA'], ['ukmo','UKMO'], ['mf','Météo-France'], ['gfs','GFS'],
+  ['ecmwf','ECMWF'], ['gem','GEM'], ['icon','ICON'], ['kma','KMA'],
+  ['bom','BOM'], ['cma','CMA'], ['best','CWA+ECMWF'], ['aifs','EC-AIFS'], ['gc','GC-NCEP']];
+const _FC_SK = {gc: 'graphcast'};          // 前端鍵 → 後端鍵
+let _fcCfg = null;                         // {地形: {模式: 權重}}；權重 0＝不採用
+
+function _fcLoad(){
+  if(_fcCfg) return _fcCfg;
+  try{ _fcCfg = JSON.parse(localStorage.getItem(FC_LS_KEY) || 'null'); }catch(e){ _fcCfg = null; }
+  if(!_fcCfg || typeof _fcCfg !== 'object') _fcCfg = _fcDefault();
+  return _fcCfg;
+}
+function _fcSave(){
+  try{ localStorage.setItem(FC_LS_KEY, JSON.stringify(_fcCfg)); }catch(e){}
+}
+// 起始值：FORMOSA 目前的自適應選用（扣掉使用者排除清單）
+function _fcDefault(){
+  const out = {};
+  FC_ZONES.forEach(z=>{
+    const ab = ((window.ADAPTIVE_BLEND || {})[z] || {}).models || {};
+    out[z] = {};
+    FC_MODELS.forEach(([m])=>{
+      const w = ab[_FC_SK[m] || m];
+      out[z][m] = (w != null && !BLEND_BLOCK.has(m)) ? Math.round(w * 100) / 100 : 0;
+    });
+  });
+  return out;
+}
+function _fcKey(){ try{ return JSON.stringify(_fcLoad()); }catch(e){ return ''; } }
+
+function _fcQpf(t){
+  const cfg = (_fcLoad() || {})[_townZone(t) || ''] || {};
+  const use = Object.keys(cfg).filter(m=>cfg[m] > 0 && MODEL_FIELD[m]);
+  if(!use.length) return _blendQpf(t);    // 該地形一個都沒勾：退回 FORMOSA
+  const arrs = {};
+  use.forEach(m=>{ const a = t[MODEL_FIELD[m]]; if(Array.isArray(a) && a.length) arrs[m] = a; });
+  const avail = Object.keys(arrs);
+  if(!avail.length) return _blendQpf(t);
+  const len = Math.max(...avail.map(m=>arrs[m].length));
+  const out = [];
+  for(let i = 0; i < len; i++){
+    let sm = 0, sw = 0;
+    avail.forEach(m=>{
+      const v = arrs[m][i];
+      if(v == null || !isFinite(v)) return;
+      sm += v * cfg[m]; sw += cfg[m];
+    });
+    out.push(sw > 0 ? Math.round(sm / sw * 10) / 10 : null);
+  }
+  return out;
+}
+
+// 近 7 天偏差比（誤差追蹤 short 窗）
+function _fcBias(z, m){
+  const v = (((window.MODEL_SKILL || {})[z] || {})[_FC_SK[m] || m] || {}).short || {};
+  return (v.bias != null) ? v.bias : null;
+}
+
+function openFcPanel(){
+  _fcLoad();
+  let box = document.getElementById('fc-panel');
+  if(!box){
+    box = document.createElement('div');
+    box.id = 'fc-panel';
+    box.style.cssText = 'position:fixed;z-index:3100;left:50%;top:70px;transform:translateX(-50%);'
+      + 'background:#0a1c2e;border:1px solid #3a5070;border-radius:8px;padding:10px 12px;'
+      + 'box-shadow:0 6px 24px rgba(0,0,0,.65);max-height:78vh;overflow:auto;color:#cfe4f5;'
+      + 'font-size:11px;min-width:560px';
+    document.body.appendChild(box);
+  }
+  const bcol = b => b == null ? '#5a7a95'
+    : (b >= 0.8 && b < 1.25) ? '#7ee8a8' : (b >= 0.4 && b < 2.5) ? '#f0c878' : '#ff7070';
+  let h = `<div style="display:flex;align-items:center;margin-bottom:8px">
+    <b style="font-size:13px;color:#f0c878">F-c　FORMOSA-customise</b>
+    <span style="flex:1"></span>
+    <button class="b" onclick="_fcReset()" style="margin-right:4px">重設為 FORMOSA</button>
+    <button class="b" onclick="_fcClose()">✕</button></div>
+    <table style="border-collapse:collapse">
+    <tr><th style="text-align:left;padding:3px 6px">模式</th>`
+    + FC_ZONES.map(z=>`<th style="padding:3px 8px">${z}</th>`).join('') + '</tr>';
+  FC_MODELS.forEach(([m, lab])=>{
+    h += `<tr style="border-top:1px solid #16314a"><td style="padding:3px 6px">${lab}</td>`;
+    FC_ZONES.forEach(z=>{
+      const w = _fcCfg[z] && _fcCfg[z][m] != null ? _fcCfg[z][m] : 0;
+      const b = _fcBias(z, m);
+      h += `<td style="padding:2px 6px;white-space:nowrap">
+        <input type="checkbox" ${w > 0 ? 'checked' : ''}
+          onchange="_fcSet('${z}','${m}', this.checked ? 1 : 0, true)">
+        <input type="number" min="0" max="5" step="0.1" value="${w > 0 ? w : ''}"
+          placeholder="—" onchange="_fcSet('${z}','${m}', parseFloat(this.value)||0)"
+          style="width:44px;font-size:10px;padding:1px 3px;background:#061220;color:#cfe4f5;
+          border:1px solid #1a4060;border-radius:3px">
+        <span style="color:${bcol(b)};font-size:10px">${b != null ? b.toFixed(2) : '—'}</span></td>`;
+    });
+    h += '</tr>';
+  });
+  h += '</table>';
+  box.innerHTML = h;
+  box.style.display = 'block';
+}
+function _fcSet(z, m, w, fromCheck){
+  _fcLoad();
+  _fcCfg[z] = _fcCfg[z] || {};
+  // 勾選時沒有權重就給 1；取消勾選歸零
+  if(fromCheck) w = w ? (_fcCfg[z][m] > 0 ? _fcCfg[z][m] : 1) : 0;
+  _fcCfg[z][m] = Math.max(0, Math.min(5, w || 0));
+  _fcSave();
+  (TOWNSHIPS || []).forEach(t=>{ t._fcCache = null; });
+  if(forecastModel === 'fc'){ try{ _refreshAfterFactorChange(); }catch(e){} }
+  openFcPanel();
+}
+function _fcReset(){
+  _fcCfg = _fcDefault(); _fcSave();
+  (TOWNSHIPS || []).forEach(t=>{ t._fcCache = null; });
+  if(forecastModel === 'fc'){ try{ _refreshAfterFactorChange(); }catch(e){} }
+  openFcPanel();
+}
+function _fcClose(){ const b = document.getElementById('fc-panel'); if(b) b.style.display = 'none'; }
+
 function _blendQpf(t){
   // ★ 自適應選用（後端逐地形判定）：哪些模式該納入、各給多少權重，
   //   由 adaptive_blend 決定。亂報的模式直接不列入，多報／少報降低權重。
@@ -3766,7 +3896,7 @@ function downloadAllCsv(){
   MODELS.forEach(([nm, m])=>{
     cols.push([`${nm}_本視窗mm`, t=>{
       const f = MODEL_FIELD[m];
-      const a = (f === 'qpf_blend') ? _blendQpf(t) : (t[f] || []);
+      const a = (f === 'qpf_blend') ? _blendQpf(t) : (f === 'qpf_fc') ? _fcQpf(t) : (t[f] || []);
       let s = 0, has = false;
       for(let i = Math.max(0, segFrom); i <= Math.max(0, segTo); i++){
         if(a[i] != null){ s += a[i]; has = true; }
@@ -4968,6 +5098,10 @@ function getQpfArr(t, qpfField){
     t._hiloCache = out;
     }
   }
+  if(qpfField === 'qpf_fc'){
+    const k2 = (window._dataGenAt || '') + '|' + _factorKey() + '|' + _fcKey();
+    if(!t._fcCache || t._fcKeyV !== k2){ t._fcCache = _fcQpf(t); t._fcKeyV = k2; }
+  }
   if(qpfField === 'qpf_blend'){
     if(!t._blendCache || t._blendKey !== ((window._dataGenAt || '') + '|' + _factorKey())){
       t._blendCache = _blendQpf(t);
@@ -4978,6 +5112,7 @@ function getQpfArr(t, qpfField){
     //   融合是本系統的推估值（非官方值），本來就該接受這些調整。
   }
   const base = (qpfField === 'qpf_blend' ? t._blendCache
+              : qpfField === 'qpf_fc' ? t._fcCache
               : (qpfField === 'qpf_hi' || qpfField === 'qpf_lo') ? t._hiloCache
               : t[qpfField])
              || t.qpf_15d || new Array(60).fill(0);
@@ -8484,12 +8619,14 @@ function stepWin(delta){
 // 收合／展開地圖時段列
 // ★ 時段列的三個下拉：模式、時間尺度、圖層。
 //   看地圖時不必回到上方控制列即可切換，三者與上方按鈕雙向同步。
-const NAV_MODEL_LABEL = {blend:'FORMOSA', cwa:'CWA', best:'CWA+ECMWF',
-  ecmwf:'ECMWF', gfs:'GFS', jma:'JMA',
-  aifs:'EC-AIFS', gc:'GC-NCEP', hi:'強降雨', lo:'弱降雨',
-  // ★ 僅校驗模式也列入（前綴 ⌁ 標示不進融合）
-  gem:'⌁GEM', ukmo:'⌁UKMO', mf:'⌁Météo-France',
-  icon:'⌁ICON', kma:'⌁KMA', cma:'⌁CMA', bom:'⌁BOM'};
+const NAV_MODEL_LABEL = {
+  // 融合校正
+  blend:'FORMOSA', fc:'F-c', cwa:'CWA', best:'CWA+ECMWF', hi:'強降雨', lo:'弱降雨',
+  // 傳統物理（依近期校驗表現排序）
+  jma:'JMA', ukmo:'UKMO', mf:'Météo-France', gfs:'GFS', ecmwf:'ECMWF',
+  gem:'GEM', icon:'ICON', kma:'KMA', bom:'BOM', cma:'CMA',
+  // AI
+  aifs:'EC-AIFS', gc:'GC-NCEP'};
 function _fillNavSelects(){
   const ms = document.getElementById('nav-model');
   if(ms && !ms.options.length){
@@ -11741,150 +11878,122 @@ function _disasterToFront(){
 async function renderDisasterLayer(){
   if(disasterLayer){ map.removeLayer(disasterLayer); disasterLayer=null; }
   if(!showDisaster) return;
-  // ★ 改為實際位置（使用者指定）：先前直接描整個鄉鎮邊界，
-  //   看不出是哪一條溪流、哪一處崩塌地。
-  //   二次災害清單的 id 就是潛勢溪流（DF）／大規模崩塌（SL）的編號，
-  //   可直接對到既有的幾何：
-  //     DF → _debrisGeo.streams[id].l   溪流線段
-  //     SL → _lsGeo[id].p               潛勢範圍多邊形
-  //   對不到幾何的（少數非標準編號）才退回描鄉鎮邊界。
-  try{ if(!_debrisGeo && typeof _loadDebrisGeo === 'function') await _loadDebrisGeo(); }catch(e){}
-  try{ if(!_lsGeo && typeof _loadLsGeo === 'function') await _loadLsGeo(); }catch(e){}
+  // ★ 統一圖標（使用者指定，與大規模崩塌同一種設計）：
+  //   先前依資料來源分別畫成溪流線、崩塌範圍、虛線圓，看起來像三種東西。
+  //   現在一律取一個代表點，畫實心圓 + 「!」符號，顏色表示受影響程度。
+  //   代表點的來源依序：
+  //     DF 潛勢溪流 → 溪流線沿長度的中點
+  //     LL 大規模崩塌 → 潛勢範圍的形心
+  //     其餘（SL 等） → 第一／第二參考雨量站座標
+  //     都沒有 → 鄉鎮中心
+  try{ await _loadDebrisGeo(); }catch(e){}
+  try{ await _loadLsGeo(); }catch(e){}
   const streams = (_debrisGeo && _debrisGeo.streams) || {};
   const lsg = _lsGeo || {};
+  const AS = window.ALL_STATIONS || {};
   disasterLayer = L.layerGroup().addTo(map);
 
-  // 受影響程度：與土石流／大崩圖層同一套判定（紅＝達警戒、黃＝接近）
   const state = z =>{
-    const a = (window.DEBRIS_ALERTS || {})[z.id]
-           || (window.LANDSLIDE_ALERTS || {})[z.id];
-    if(!a) return {col:'#00FFFF', w:2.2, tag:'監測中'};
-    const pct = (a.pct != null) ? a.pct : null;
-    if(a.red || (pct != null && pct >= 1))   return {col:'#FF2020', w:3.4, tag:'達警戒'};
-    if(pct != null && pct >= 0.8)            return {col:'#FFD000', w:2.8, tag:'接近警戒'};
-    return {col:'#00FFFF', w:2.2, tag:'監測中'};
+    const a = (window.DEBRIS_ALERTS || {})[z.id] || (window.LANDSLIDE_ALERTS || {})[z.id];
+    const pct = (a && a.pct != null) ? a.pct : null;
+    if(a && (a.red || (pct != null && pct >= 1))) return {col:'#FF2020', tag:'達警戒', rank:2};
+    if(pct != null && pct >= 0.8)                return {col:'#FFD000', tag:'接近警戒', rank:1};
+    return {col:'#00C8FF', tag:'監測中', rank:0};
+  };
+  // 溪流線沿長度的中點（[lng,lat] 座標）
+  const midOfLines = segs =>{
+    const pts = [];
+    segs.forEach(sg=>sg.forEach(c=>pts.push([c[1], c[0]])));
+    if(!pts.length) return null;
+    let tot = 0; const acc = [0];
+    for(let k = 1; k < pts.length; k++){
+      tot += Math.hypot(pts[k][0]-pts[k-1][0], pts[k][1]-pts[k-1][1]); acc.push(tot);
+    }
+    const half = tot / 2;
+    const k = acc.findIndex(x=>x >= half);
+    return pts[Math.max(0, k)];
+  };
+  const centroid = rings =>{
+    let la = 0, lo = 0, n = 0;
+    rings.forEach(r=>r.forEach(c=>{ la += c[1]; lo += c[0]; n++; }));
+    return n ? [la / n, lo / n] : null;
   };
 
-  const fallback = [];
-  let nLine = 0, nArea = 0;
-  (DISASTER_ZONES || []).forEach(z=>{
+  // 先求每一處的代表點與來源
+  const items = (DISASTER_ZONES || []).map(z=>{
+    let ll = null, src = '';
+    const g = streams[z.id];
+    if(g && Array.isArray(g.l) && g.l.length){ ll = midOfLines(g.l); src = '潛勢溪流'; }
+    if(!ll){ const d = lsg[z.id]; if(d && Array.isArray(d.p) && d.p.length){ ll = centroid(d.p); src = '大規模崩塌'; } }
+    let sidUsed = null;
+    if(!ll){
+      sidUsed = (AS[z.sid1] && z.sid1) || (AS[z.sid2] && z.sid2) || null;
+      if(sidUsed){ ll = [AS[sidUsed].la, AS[sidUsed].lo]; src = '參考站 ' + (AS[sidUsed].n || sidUsed) + ' 附近'; }
+    }
+    if(!ll){
+      const tw = (TOWNSHIPS || []).find(x=>x.county === z.county && x.township === z.township);
+      if(tw && tw.lat != null){ ll = [tw.lat, tw.lng]; src = '鄉鎮中心'; }
+    }
+    return {z, ll, src, sidUsed};
+  }).filter(x=>x.ll);
+
+  // 同一個參考站的多處沿小圓環錯開（約 600m），避免完全重疊
+  const bySid = {};
+  items.forEach(it=>{ if(it.sidUsed) (bySid[it.sidUsed] ||= []).push(it); });
+  Object.values(bySid).forEach(g=>{
+    if(g.length < 2) return;
+    g.forEach((it, k)=>{
+      const ang = 2 * Math.PI * k / g.length;
+      it.ll = [it.ll[0] + 0.006 * Math.sin(ang), it.ll[1] + 0.006 * Math.cos(ang)];
+    });
+  });
+
+  const cnt = {};
+  items.forEach(({z, ll, src})=>{
+    cnt[src.startsWith('參考站') ? '參考站' : src] = (cnt[src.startsWith('參考站') ? '參考站' : src] || 0) + 1;
     const st = state(z);
-    // ★ tooltip 內容與土石流／大崩圖層同一套：ETR2、警戒值、達成率、代表站
     const a = (window.DEBRIS_ALERTS || {})[z.id] || (window.LANDSLIDE_ALERTS || {})[z.id];
     const a2 = (a && typeof _withEst === 'function') ? _withEst(a) : a;
     const etr = a2 ? (a2.etr2_est ?? a2.etr2) : null;
     const den = a2 ? (a2.alert_adj ?? a2.alert) : null;
     const pct = (a2 && a2.pct != null) ? Math.round(a2.pct * 100) : null;
+    const tw = (TOWNSHIPS || []).find(x=>x.county === z.county && x.township === z.township);
+    const pk = tw ? _fcPeak(tw) : null;
+    const hit = (v, thr)=> (thr != null && v >= thr)
+      ? `<b style="color:#ff6060">${Math.round(v)}</b>` : Math.round(v);
+    let when = '';
+    if(pk && pk.at6 != null){
+      const d = new Date(Date.now() + pk.at6 * 3600e3);
+      when = `（${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}時起）`;
+    }
     const tip = `<b>${z.landmark || z.id}</b>　${st.tag}<br>`
       + `${z.county}${z.township}${z.village || ''}<br>`
       + `編號 ${z.id}　${z.type || ''}　${z.category || ''}`
-      + (etr != null && den != null
-          ? `<br>ETR2 <b>${etr}</b> / 警戒值 <b>${den}</b> mm（${pct}%）` : '')
+      + (etr != null && den != null ? `<br>ETR2 <b>${etr}</b> / 警戒值 <b>${den}</b> mm（${pct}%）` : '')
       + (a2 && a2.station ? `<br>代表站：${a2.station}` : '')
       + (z.t1h ? `<br>降雨注意值 1h ${z.t1h}／3h ${z.t3h}／6h ${z.t6h} mm` : '')
-      + ((z.station1 || z.station2)
-          ? `<br>參考站：${[z.station1, z.station2].filter(Boolean).join('、')}` : '')
-      + (()=>{
-          const tw = (TOWNSHIPS || []).find(x=>x.county === z.county && x.township === z.township);
-          const pk = tw ? _fcPeak(tw) : null;
-          if(!pk) return '';
-          const hit = (v, thr)=> (thr != null && v >= thr)
-            ? `<b style="color:#ff6060">${Math.round(v)}</b>` : Math.round(v);
-          let when = '';
-          if(pk.at6 != null){
-            const d = new Date(Date.now() + pk.at6 * 3600e3);
-            when = `（${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}時起）`;
-          }
-          return `<br>未來90h最大 1h ${hit(pk.m1, z.t1h)}／3h ${hit(pk.m3, z.t3h)}`
-            + `／6h ${hit(pk.m6, z.t6h)} mm${when}`;
-        })();
-    const g = streams[z.id];
-    if(g && Array.isArray(g.l) && g.l.length){
-      g.l.forEach(seg=>{
-        const ll = seg.map(c=>[c[1], c[0]]);
-        L.polyline(ll, {color:'#000', weight:st.w + 2, opacity:0.6,
-          interactive:false, pane:'townPane'}).addTo(disasterLayer);
-        L.polyline(ll, {color:st.col, weight:st.w, opacity:1, pane:'townPane'})
-          .bindTooltip(tip, {sticky:true}).addTo(disasterLayer);
-      });
-      nLine++;
-      return;
+      + ((z.station1 || z.station2) ? `<br>參考站：${[z.station1, z.station2].filter(Boolean).join('、')}` : '')
+      + (pk ? `<br>未來90h最大 1h ${hit(pk.m1, z.t1h)}／3h ${hit(pk.m3, z.t3h)}／6h ${hit(pk.m6, z.t6h)} mm${when}` : '')
+      + `<br>位置：${src}`;
+    // 圖標：與大崩同一種設計（實心圓＋白色符號；受影響時放大並加外圈）
+    const r = st.rank >= 2 ? 11 : (st.rank >= 1 ? 9 : 7);
+    if(st.rank > 0){
+      L.circleMarker(ll, {pane:'townPane', radius:r+4, color:st.col, weight:1, opacity:0.5,
+        fillColor:st.col, fillOpacity:0.14, interactive:false}).addTo(disasterLayer);
     }
-    const d = lsg[z.id];
-    if(d && Array.isArray(d.p) && d.p.length){
-      d.p.forEach(ring=>{
-        const ll = ring.map(c=>[c[1], c[0]]);
-        L.polygon(ll, {color:st.col, weight:st.w, fillColor:st.col,
-          fillOpacity:0.18, opacity:1, pane:'townPane'})
-          .bindTooltip(tip, {sticky:true}).addTo(disasterLayer);
-      });
-      nArea++;
-      return;
-    }
-    fallback.push(z);
+    L.circleMarker(ll, {pane:'townPane', radius:r, color:'#1a0a0a', weight:2,
+      fillColor:st.col, fillOpacity:0.95})
+      .bindTooltip(tip, {sticky:true, direction:'top'})
+      .on('click', ()=>{ try{ focusTownship(z.county, z.township); }catch(e){} })
+      .addTo(disasterLayer);
+    L.marker(ll, {icon: L.divIcon({className:'', html:
+      `<div style="font-size:10px;font-weight:900;color:#fff;text-align:center;
+        line-height:${r*2}px;width:${r*2}px;text-shadow:0 0 2px #000">!</div>`,
+      iconSize:[r*2, r*2], iconAnchor:[r, r]}), interactive:false}).addTo(disasterLayer);
   });
-
-  // ★ 對不到幾何的（SL 崩塌地等，兩份幾何檔都沒有）：
-  //   改用參考雨量站的座標定位（使用者提示的線索）。
-  //   第一參考站有座標就用它，否則用第二站；同站多處時沿小圓環錯開，
-  //   避免完全疊在一起（例如崇德站周邊就有 4 處）。
-  //   兩個站都沒有座標的，才退回描鄉鎮邊界。
-  const AS = window.ALL_STATIONS || {};
-  const byStn = {};
-  const noPos = [];
-  fallback.forEach(z=>{
-    const sid = (AS[z.sid1] && z.sid1) || (AS[z.sid2] && z.sid2) || null;
-    if(!sid){ noPos.push(z); return; }
-    (byStn[sid] ||= []).push(z);
-  });
-  let nStn = 0;
-  Object.keys(byStn).forEach(sid=>{
-    const st0 = AS[sid], grp = byStn[sid];
-    grp.forEach((z, k)=>{
-      const ang = (2 * Math.PI * k) / Math.max(1, grp.length);
-      const off = grp.length > 1 ? 0.006 : 0;           // 約 600m
-      const ll = [st0.la + off * Math.sin(ang), st0.lo + off * Math.cos(ang)];
-      const stt = state(z);
-      const tip2 = `<b>${z.landmark || z.id}</b>　${stt.tag}<br>`
-        + `${z.county}${z.township}${z.village || ''}<br>`
-        + `編號 ${z.id}　${z.type || ''}　${z.category || ''}`
-        + (z.t1h ? `<br>降雨注意值 1h ${z.t1h}／3h ${z.t3h}／6h ${z.t6h} mm` : '')
-        + `<br>位置：參考站 ${st0.n || sid} 附近`;
-      L.circleMarker(ll, {pane:'townPane', radius:7, color:'#000', weight:3,
-        opacity:0.6, fill:false, interactive:false}).addTo(disasterLayer);
-      L.circleMarker(ll, {pane:'townPane', radius:7, color:stt.col, weight:2,
-        fillColor:stt.col, fillOpacity:0.35, dashArray:'3 2'})
-        .bindTooltip(tip2, {sticky:true}).addTo(disasterLayer);
-      nStn++;
-    });
-  });
-  fallback.length = 0;
-  noPos.forEach(z=>fallback.push(z));
-  // 兩個參考站都沒有座標的：退回描鄉鎮邊界
-  if(fallback.length && TOWN_GEO){
-    const keys = new Set(fallback.map(z=>z.county + '|' + z.township));
-    const feats = (TOWN_GEO.features || []).filter(f=>{
-      const p = f.properties || {};
-      return keys.has((p.COUNTYNAME || p.county || '') + '|' + (p.TOWNNAME || p.township || ''));
-    });
-    const zByKey = {};
-    fallback.forEach(z=>{ (zByKey[z.county + '|' + z.township] ||= []).push(z); });
-    L.geoJSON({type:'FeatureCollection', features: feats}, {
-      pane: 'townPane',
-      style:()=>({color:'#00FFFF', weight:1.4, fill:false, opacity:0.8, dashArray:'4 4'}),
-      onEachFeature:(f, lyr)=>{
-        const p = f.properties || {};
-        const zs = zByKey[(p.COUNTYNAME || p.county || '') + '|' + (p.TOWNNAME || p.township || '')] || [];
-        lyr.bindTooltip(zs.map(z=>`<b>${z.landmark || z.id}</b>　編號 ${z.id}<br>`
-          + `${z.county}${z.township}${z.village || ''}　${z.category || ''}`
-          + '<br><span style="color:#8aa">（無精確幾何，以鄉鎮範圍標示）</span>').join('<hr style="margin:3px 0">'),
-          {sticky:true});
-      }
-    }).addTo(disasterLayer);
-  }
   _disasterToFront();
-  console.log(`二次災害：溪流 ${nLine} 條、崩塌地 ${nArea} 處、`
-    + `以參考站定位 ${nStn} 處、退回鄉鎮 ${fallback.length} 處（共 ${(DISASTER_ZONES||[]).length}）`);
+  console.log('二次災害：' + Object.entries(cnt).map(([k, v])=>`${k} ${v}`).join('、')
+    + `（共 ${items.length}／${(DISASTER_ZONES || []).length} 處）`);
 }
 
 let _prevDisasterSet = null;  // 上次達標站點（偵測新增）
