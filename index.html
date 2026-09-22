@@ -342,11 +342,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b model-btn on" id="mBlend" onclick="setModel('blend')"
         style="border-color:#c8a45a;color:#f0c878">FORMOSA</button>
       <button class="b model-btn" id="mFc" onclick="setModel('fc')" title="FORMOSA-customise：自選各地形採用的模式與權重" style="border-color:#8a6a3a;color:#f0c878">F-c</button><button class="b" onclick="openFcPanel()" title="編輯 F-c" style="padding:1px 5px;border-color:#8a6a3a;color:#f0c878">✎</button>
-      <button class="b model-btn"    id="mCwa"   onclick="setModel('cwa')">CWA</button>
       <button class="b model-btn" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
       <button class="b model-btn hi-btn"    id="mHi"    onclick="setModel('hi')">強降雨</button>
       <button class="b model-btn lo-btn"    id="mLo"    onclick="setModel('lo')">弱降雨</button>
       <span style="color:#4a6a8a;font-size:10px;margin:0 3px">｜傳統物理</span>
+      <button class="b model-btn"    id="mCwa"   onclick="setModel('cwa')">CWA</button>
       <button class="b model-btn"    id="mJma"   onclick="setModel('jma')">JMA</button>
       <button class="b model-btn" id="mUkmo" onclick="setModel('ukmo')">UKMO</button>
       <button class="b model-btn" id="mMf"   onclick="setModel('mf')">Météo-France</button>
@@ -2704,32 +2704,71 @@ function _fcBias(z, m){
   return (v.bias != null) ? v.bias : null;
 }
 
-function openFcPanel(){
-  _fcLoad();
+// ★ 面板結構比照情境編輯器：標題列可拖曳、點一下收合；
+//   右上角匯出／匯入，左下角重設為 FORMOSA，右下角確定套用。
+//   ★ 編輯中的改動先存在草稿（_fcDraft），按「確定套用」才寫入並重算，
+//     避免每勾一格地圖就重算一次，也能在套用前反悔。
+let _fcDraft = null, _fcFolded = false;
+function _fcEnsureBox(){
   let box = document.getElementById('fc-panel');
-  if(!box){
-    box = document.createElement('div');
-    box.id = 'fc-panel';
-    box.style.cssText = 'position:fixed;z-index:3100;left:50%;top:70px;transform:translateX(-50%);'
-      + 'background:#0a1c2e;border:1px solid #3a5070;border-radius:8px;padding:10px 12px;'
-      + 'box-shadow:0 6px 24px rgba(0,0,0,.65);max-height:78vh;overflow:auto;color:#cfe4f5;'
-      + 'font-size:11px;min-width:560px';
-    document.body.appendChild(box);
-  }
+  if(box) return box;
+  box = document.createElement('div');
+  box.id = 'fc-panel';
+  box.style.cssText = 'display:none;position:fixed;z-index:3000;top:70px;left:80px;'
+    + 'background:#0b1622;border:1px solid #6a5a3a;border-radius:6px;'
+    + 'box-shadow:0 6px 24px rgba(0,0,0,.6);flex-direction:column;max-height:82vh;'
+    + 'color:#cfe4f5;font-size:11px';
+  box.innerHTML = `
+    <div id="fc-drag" style="display:flex;align-items:center;gap:6px;padding:6px 9px;
+      background:#221a0c;border-bottom:1px solid #6a5a3a;border-radius:6px 6px 0 0;cursor:move">
+      <span id="fc-fold-ind" style="color:#9a8a6a;font-size:9px;pointer-events:none">▾</span>
+      <b style="color:#f0c878;font-size:12px;pointer-events:none">FORMOSA-customise</b>
+      <span style="flex:1"></span>
+      <button class="b" style="font-size:10px;padding:1px 6px" onclick="_fcExport()">匯出</button>
+      <label class="b" style="font-size:10px;padding:1px 6px;cursor:pointer">匯入
+        <input type="file" accept="application/json" style="display:none" onchange="_fcImport(this)"></label>
+      <button class="b" style="font-size:11px;padding:1px 7px" onclick="_fcClose()">&#10005;</button>
+    </div>
+    <div id="fc-body" style="padding:8px 10px;overflow:auto"></div>
+    <div id="fc-foot" style="display:flex;align-items:center;padding:6px 10px;
+      border-top:1px solid #3a3020">
+      <button class="b" onclick="_fcReset()">重設為 FORMOSA</button>
+      <span style="flex:1"></span>
+      <button class="b" onclick="_fcApply()"
+        style="border-color:#3a8a5a;color:#7ee8a8">確定套用</button>
+    </div>`;
+  document.body.appendChild(box);
+  return box;
+}
+function _fcToggleFold(force){
+  _fcFolded = (force === undefined) ? !_fcFolded : !!force;
+  const b = document.getElementById('fc-body'), f = document.getElementById('fc-foot');
+  const ind = document.getElementById('fc-fold-ind');
+  if(b) b.style.display = _fcFolded ? 'none' : 'block';
+  if(f) f.style.display = _fcFolded ? 'none' : 'flex';
+  if(ind) ind.textContent = _fcFolded ? '▸' : '▾';
+}
+function openFcPanel(){
+  const box = _fcEnsureBox();
+  // 已開啟 → 切換收合（與情境編輯器相同）
+  if(box.style.display === 'flex'){ _fcToggleFold(); return; }
+  _fcDraft = JSON.parse(JSON.stringify(_fcLoad()));
+  box.style.display = 'flex';
+  _fcToggleFold(false);
+  _fcRender();
+}
+function _fcRender(){
+  const body = document.getElementById('fc-body');
+  if(!body || !_fcDraft) return;
   const bcol = b => b == null ? '#5a7a95'
     : (b >= 0.8 && b < 1.25) ? '#7ee8a8' : (b >= 0.4 && b < 2.5) ? '#f0c878' : '#ff7070';
-  let h = `<div style="display:flex;align-items:center;margin-bottom:8px">
-    <b style="font-size:13px;color:#f0c878">F-c　FORMOSA-customise</b>
-    <span style="flex:1"></span>
-    <button class="b" onclick="_fcReset()" style="margin-right:4px">重設為 FORMOSA</button>
-    <button class="b" onclick="_fcClose()">✕</button></div>
-    <table style="border-collapse:collapse">
+  let h = `<table style="border-collapse:collapse">
     <tr><th style="text-align:left;padding:3px 6px">模式</th>`
     + FC_ZONES.map(z=>`<th style="padding:3px 8px">${z}</th>`).join('') + '</tr>';
   FC_MODELS.forEach(([m, lab])=>{
     h += `<tr style="border-top:1px solid #16314a"><td style="padding:3px 6px">${lab}</td>`;
     FC_ZONES.forEach(z=>{
-      const w = _fcCfg[z] && _fcCfg[z][m] != null ? _fcCfg[z][m] : 0;
+      const w = (_fcDraft[z] && _fcDraft[z][m] != null) ? _fcDraft[z][m] : 0;
       const b = _fcBias(z, m);
       h += `<td style="padding:2px 6px;white-space:nowrap">
         <input type="checkbox" ${w > 0 ? 'checked' : ''}
@@ -2742,28 +2781,94 @@ function openFcPanel(){
     });
     h += '</tr>';
   });
-  h += '</table>';
-  box.innerHTML = h;
-  box.style.display = 'block';
+  body.innerHTML = h + '</table>';
 }
+// 編輯只改草稿，不重算
 function _fcSet(z, m, w, fromCheck){
-  _fcLoad();
-  _fcCfg[z] = _fcCfg[z] || {};
-  // 勾選時沒有權重就給 1；取消勾選歸零
-  if(fromCheck) w = w ? (_fcCfg[z][m] > 0 ? _fcCfg[z][m] : 1) : 0;
-  _fcCfg[z][m] = Math.max(0, Math.min(5, w || 0));
+  if(!_fcDraft) _fcDraft = JSON.parse(JSON.stringify(_fcLoad()));
+  _fcDraft[z] = _fcDraft[z] || {};
+  if(fromCheck) w = w ? (_fcDraft[z][m] > 0 ? _fcDraft[z][m] : 1) : 0;
+  _fcDraft[z][m] = Math.max(0, Math.min(5, w || 0));
+  _fcRender();
+}
+function _fcReset(){ _fcDraft = _fcDefault(); _fcRender(); }
+// 確定套用：草稿寫入、存檔、清快取、重算地圖與面板
+function _fcApply(){
+  if(!_fcDraft) return;
+  _fcCfg = JSON.parse(JSON.stringify(_fcDraft));
   _fcSave();
   (TOWNSHIPS || []).forEach(t=>{ t._fcCache = null; });
-  if(forecastModel === 'fc'){ try{ _refreshAfterFactorChange(); }catch(e){} }
-  openFcPanel();
+  try{ _refreshAfterFactorChange(); }catch(e){}
+  _fcClose();
 }
-function _fcReset(){
-  _fcCfg = _fcDefault(); _fcSave();
-  (TOWNSHIPS || []).forEach(t=>{ t._fcCache = null; });
-  if(forecastModel === 'fc'){ try{ _refreshAfterFactorChange(); }catch(e){} }
-  openFcPanel();
+function _fcClose(){
+  const b = document.getElementById('fc-panel');
+  if(b) b.style.display = 'none';
+  _fcDraft = null;                 // 未套用的改動捨棄
 }
-function _fcClose(){ const b = document.getElementById('fc-panel'); if(b) b.style.display = 'none'; }
+function _fcExport(){
+  const data = {type: 'FORMOSA-customise', version: 1,
+                saved: new Date().toISOString(), config: _fcDraft || _fcLoad()};
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'}));
+  a.download = `FORMOSA-customise_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 3000);
+}
+function _fcImport(inp){
+  const f = inp && inp.files && inp.files[0];
+  if(!f) return;
+  const rd = new FileReader();
+  rd.onload = ()=>{
+    try{
+      const o = JSON.parse(rd.result);
+      const cfg = (o && o.config) ? o.config : o;
+      if(!cfg || typeof cfg !== 'object') throw new Error('格式不符');
+      // 只收認得的地形與模式，數值限制在 0~5
+      const clean = {};
+      FC_ZONES.forEach(z=>{
+        clean[z] = {};
+        FC_MODELS.forEach(([m])=>{
+          const v = parseFloat(((cfg[z] || {})[m]));
+          clean[z][m] = isFinite(v) ? Math.max(0, Math.min(5, v)) : 0;
+        });
+      });
+      _fcDraft = clean;
+      _fcRender();
+    }catch(e){ alert('匯入失敗：' + e.message); }
+    inp.value = '';
+  };
+  rd.readAsText(f);
+}
+// 標題列拖曳與點擊收合（位移超過 4px 視為拖曳，不收合）
+(function(){
+  let dx = 0, dy = 0, dragging = false, moved = false, downX = 0, downY = 0;
+  document.addEventListener('mousedown', e=>{
+    const bar = e.target.closest && e.target.closest('#fc-drag');
+    if(!bar || e.target.closest('button,label,input,select')) return;
+    const m = document.getElementById('fc-panel');
+    if(!m) return;
+    dragging = true; moved = false; downX = e.clientX; downY = e.clientY;
+    const r = m.getBoundingClientRect();
+    dx = e.clientX - r.left; dy = e.clientY - r.top;
+    e.preventDefault();
+  });
+  document.addEventListener('click', e=>{
+    const bar = e.target.closest && e.target.closest('#fc-drag');
+    if(!bar || e.target.closest('button,label,input,select')) return;
+    if(moved){ moved = false; return; }
+    _fcToggleFold();
+  });
+  document.addEventListener('mousemove', e=>{
+    if(!dragging) return;
+    if(Math.abs(e.clientX - downX) > 4 || Math.abs(e.clientY - downY) > 4) moved = true;
+    const m = document.getElementById('fc-panel');
+    if(!m) return;
+    m.style.left = Math.max(0, Math.min(window.innerWidth - 60, e.clientX - dx)) + 'px';
+    m.style.top  = Math.max(0, Math.min(window.innerHeight - 30, e.clientY - dy)) + 'px';
+  });
+  document.addEventListener('mouseup', ()=>{ dragging = false; });
+})();
 
 function _blendQpf(t){
   // ★ 自適應選用（後端逐地形判定）：哪些模式該納入、各給多少權重，
@@ -8621,9 +8726,9 @@ function stepWin(delta){
 //   看地圖時不必回到上方控制列即可切換，三者與上方按鈕雙向同步。
 const NAV_MODEL_LABEL = {
   // 融合校正
-  blend:'FORMOSA', fc:'F-c', cwa:'CWA', best:'CWA+ECMWF', hi:'強降雨', lo:'弱降雨',
-  // 傳統物理（依近期校驗表現排序）
-  jma:'JMA', ukmo:'UKMO', mf:'Météo-France', gfs:'GFS', ecmwf:'ECMWF',
+  blend:'FORMOSA', fc:'F-c', best:'CWA+ECMWF', hi:'強降雨', lo:'弱降雨',
+  // 傳統物理（CWA 在前，其餘依近期校驗表現排序）
+  cwa:'CWA', jma:'JMA', ukmo:'UKMO', mf:'Météo-France', gfs:'GFS', ecmwf:'ECMWF',
   gem:'GEM', icon:'ICON', kma:'KMA', bom:'BOM', cma:'CMA',
   // AI
   aifs:'EC-AIFS', gc:'GC-NCEP'};
