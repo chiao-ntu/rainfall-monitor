@@ -3060,6 +3060,12 @@ MODEL_TIERS = {
     # 其餘（偏差比 <0.40 或 >2.50）一律排除
 }
 ADAPT_MIN_N = 20          # 樣本數門檻：不足就不下判斷
+# ★ 使用者判定排除的模式（立即生效，不等資料累積）。
+#   自動的降雨型態篩選需要「有沒有下」的列聯表，那份資料部署後才開始
+#   累積；既有的 80mm 門檻表抓不到 CMA（近 7 天它沒報過 ≥80mm）。
+#   在自動篩選有足夠資料前，由使用者依觀察直接排除。
+#   日後自動篩選也判定它包牌時，這份清單可以移除，結果不變。
+ADAPT_BLOCK = ('cma',)
 # 原本就在 FORMOSA 裡的核心成員（樣本不足時仍保留）
 ADAPT_CORE = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast')
 ADAPT_MAE_CAP = 60.0      # MAE 上限（mm）：再準的偏差比也救不了離譜的誤差
@@ -3123,6 +3129,10 @@ def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
     for zone, mmap in skill_summary.items():
         picks, excluded, detail = {}, [], []
         for m, v0 in (mmap or {}).items():
+            if m in ADAPT_BLOCK:
+                excluded.append(m)
+                detail.append(f'{m}=使用者排除')
+                continue
             # ★ 以「過去 7 天」為評估單位（使用者指定）。
             #   summarize_model_skill 的結構是 {short:{…}, long:{…}}，
             #   short 即 7 天窗。先前直接讀 v.get('bias') 永遠是 None
@@ -3193,6 +3203,8 @@ def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
             import math as _m
             cand = []
             for m, v0 in (mmap or {}).items():
+                if m in ADAPT_BLOCK:
+                    continue
                 v = (v0 or {}).get('short') or {}
                 b = v.get('bias')
                 mae = v.get('mae')

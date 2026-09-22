@@ -2640,7 +2640,11 @@ function _blendQpf(t){
   //   由 adaptive_blend 決定。亂報的模式直接不列入，多報／少報降低權重。
   //   後端沒有這份資料時（尚未部署或樣本不足）才退回原本的 MAE 加權。
   const _zone = _townZone(t) || '';
-  const _ab = ((window.ADAPTIVE_BLEND || {})[_zone] || {}).models || null;
+  // ★ 前端也套用排除清單：部署 index.html 當下立即生效，
+  //   不必等後端重跑出新的 data.json（舊 data.json 可能仍含 CMA）。
+  const _ab0 = ((window.ADAPTIVE_BLEND || {})[_zone] || {}).models || null;
+  const _ab = _ab0 ? Object.fromEntries(Object.entries(_ab0)
+    .filter(([m])=>!BLEND_BLOCK.has(m))) : null;
   const arrs = {}, sk = {};
   // ★ 有自適應選用時，候選名單改用「後端選中的模式」而非固定的
   //   BLEND_MODELS —— 否則 UKMO、Météo-France 即使被選入，
@@ -4109,12 +4113,15 @@ const VF_MODELS = ['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
 //   回傳該模式在幾個地形被採用；0＝全部地形都未納入。
 //   後端尚未產生 adaptive_blend 時退回原本的核心 6 個。
 const VF_CORE = new Set(['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast']);
+// 使用者判定排除（與後端 ADAPT_BLOCK 一致）
+const BLEND_BLOCK = new Set(['cma']);
 const _VF_KEY = {gc: 'graphcast'};
 function _vfBlendZones(m){
   const ab = window.ADAPTIVE_BLEND || {};
   const zs = Object.keys(ab);
   if(!zs.length) return VF_CORE.has(m) ? -1 : 0;     // -1＝無自適應資料、沿用核心
   const k = _VF_KEY[m] || m;
+  if(BLEND_BLOCK.has(k)) return 0;
   return zs.filter(z=>((ab[z] || {}).models || {})[k] != null).length;
 }
 const VF_IN_BLEND = { has: m => _vfBlendZones(m) !== 0 };
@@ -9600,20 +9607,20 @@ function renderDebrisLayer(){
     //   官方紅黃、或系統推估達警戒級別者都展開，供發布決策參考
     if(a && (a.off_level === 'r' || a.off_level === 'y' || a.est_red_fc || a.est_yellow_now)){
       (wsheds[no]||[]).forEach(ring=>{
-        L.polygon(ring.map(c=>[c[1],c[0]]), {color:stl.color, weight:1, opacity:0.5,
+        L.polygon(ring.map(c=>[c[1],c[0]]), {pane:'townPane', color:stl.color, weight:1, opacity:0.5,
           fillColor:stl.color, fillOpacity:0.10, interactive:false}).addTo(debrisLayer);
       });
       (affect[no]||[]).forEach(ring=>{
-        L.polygon(ring.map(c=>[c[1],c[0]]), {color:stl.color, weight:1.4, opacity:0.85,
+        L.polygon(ring.map(c=>[c[1],c[0]]), {pane:'townPane', color:stl.color, weight:1.4, opacity:0.85,
           fillColor:stl.color, fillOpacity:0.30, interactive:false}).addTo(debrisLayer);
       });
     }
     // 溪流線（黑描邊＋警戒色）
     (st.l||[]).forEach(seg=>{
       const ll = seg.map(c=>[c[1],c[0]]);
-      L.polyline(ll, {color:'#000', weight:stl.w+1.4, opacity:stl.op*0.5,
+      L.polyline(ll, {pane:'townPane', color:'#000', weight:stl.w+1.4, opacity:stl.op*0.5,
         interactive:false}).addTo(debrisLayer);
-      L.polyline(ll, {color:stl.color, weight:stl.w, opacity:stl.op})
+      L.polyline(ll, {pane:'townPane', color:stl.color, weight:stl.w, opacity:stl.op})
         .bindTooltip(tip, {sticky:true}).addTo(debrisLayer);
     });
   });
@@ -9691,12 +9698,12 @@ function renderLandslideLayer(){
         ? `<br>保全戶：${info.Total_Res ?? info.Dw_count} 戶` : '');
 
     (d.p||[]).forEach(ring=>{                    // 潛勢範圍
-      L.polygon(ring.map(c=>[c[1],c[0]]), {color:col, weight:1.6, opacity:0.9,
+      L.polygon(ring.map(c=>[c[1],c[0]]), {pane:'townPane', color:col, weight:1.6, opacity:0.9,
         fillColor:col, fillOpacity:0.18, dashArray:'5,4'})
         .bindTooltip(tip, {sticky:true}).addTo(landslideLayer);
     });
     (d.a||[]).forEach(ring=>{                    // 影響範圍（保全對象）
-      L.polygon(ring.map(c=>[c[1],c[0]]), {color:col, weight:2, opacity:1,
+      L.polygon(ring.map(c=>[c[1],c[0]]), {pane:'townPane', color:col, weight:2, opacity:1,
         fillColor:col, fillOpacity:0.38})
         .bindTooltip(tip, {sticky:true}).addTo(landslideLayer);
     });
@@ -9708,10 +9715,10 @@ function renderLandslideLayer(){
       const big = st.rank >= 4, mid = st.rank > 0;
       const r = big ? 11 : (mid ? 9 : 7);
       if(mid){
-        L.circleMarker(ll, {radius:r+4, color:col, weight:1, opacity:0.5,
+        L.circleMarker(ll, {pane:'townPane', radius:r+4, color:col, weight:1, opacity:0.5,
           fillColor:col, fillOpacity:0.14, interactive:false}).addTo(landslideLayer);
       }
-      L.circleMarker(ll, {radius:r, color:'#2a1a0a', weight:2,
+      L.circleMarker(ll, {pane:'townPane', radius:r, color:'#2a1a0a', weight:2,
         fillColor:col, fillOpacity:0.95})
         .bindTooltip(tip, {sticky:true, direction:'top'})
         .on('click', ()=>{ if(cty && twn) focusTownship(cty, twn); })
@@ -11716,6 +11723,13 @@ async function _loadLsGeo(){
 //   統一做命中判斷，兩者都能互動。
 //   但鄉鎮層重繪時會蓋到上面，故每次重繪後把災害層提到最前。
 function _disasterToFront(){
+  // ★ 土石流、大崩、二次災害三層都與鄉鎮色塊共用 townPane 的畫布：
+  //   overlayPane 的畫布已關閉滑鼠事件（否則擋住鄉鎮點擊），畫在那裡
+  //   tooltip 出不來；但若打開，整張地圖又點不到（使用者回報的兩個現象
+  //   其實是同一個原因）。同一張畫布內 Leaflet 會統一做命中判斷。
+  const _grp = [typeof debrisLayer !== 'undefined' ? debrisLayer : null,
+                typeof landslideLayer !== 'undefined' ? landslideLayer : null];
+  _grp.forEach(g=>{ try{ if(g) g.eachLayer(l=>{ if(l.bringToFront) l.bringToFront(); }); }catch(e){} });
   try{
     if(disasterLayer) disasterLayer.eachLayer(l=>{
       if(l.bringToFront) l.bringToFront();
@@ -11810,7 +11824,43 @@ async function renderDisasterLayer(){
     fallback.push(z);
   });
 
-  // 對不到幾何的：退回描鄉鎮邊界（虛線，與實際位置區分）
+  // ★ 對不到幾何的（SL 崩塌地等，兩份幾何檔都沒有）：
+  //   改用參考雨量站的座標定位（使用者提示的線索）。
+  //   第一參考站有座標就用它，否則用第二站；同站多處時沿小圓環錯開，
+  //   避免完全疊在一起（例如崇德站周邊就有 4 處）。
+  //   兩個站都沒有座標的，才退回描鄉鎮邊界。
+  const AS = window.ALL_STATIONS || {};
+  const byStn = {};
+  const noPos = [];
+  fallback.forEach(z=>{
+    const sid = (AS[z.sid1] && z.sid1) || (AS[z.sid2] && z.sid2) || null;
+    if(!sid){ noPos.push(z); return; }
+    (byStn[sid] ||= []).push(z);
+  });
+  let nStn = 0;
+  Object.keys(byStn).forEach(sid=>{
+    const st0 = AS[sid], grp = byStn[sid];
+    grp.forEach((z, k)=>{
+      const ang = (2 * Math.PI * k) / Math.max(1, grp.length);
+      const off = grp.length > 1 ? 0.006 : 0;           // 約 600m
+      const ll = [st0.la + off * Math.sin(ang), st0.lo + off * Math.cos(ang)];
+      const stt = state(z);
+      const tip2 = `<b>${z.landmark || z.id}</b>　${stt.tag}<br>`
+        + `${z.county}${z.township}${z.village || ''}<br>`
+        + `編號 ${z.id}　${z.type || ''}　${z.category || ''}`
+        + (z.t1h ? `<br>降雨注意值 1h ${z.t1h}／3h ${z.t3h}／6h ${z.t6h} mm` : '')
+        + `<br>位置：參考站 ${st0.n || sid} 附近`;
+      L.circleMarker(ll, {pane:'townPane', radius:7, color:'#000', weight:3,
+        opacity:0.6, fill:false, interactive:false}).addTo(disasterLayer);
+      L.circleMarker(ll, {pane:'townPane', radius:7, color:stt.col, weight:2,
+        fillColor:stt.col, fillOpacity:0.35, dashArray:'3 2'})
+        .bindTooltip(tip2, {sticky:true}).addTo(disasterLayer);
+      nStn++;
+    });
+  });
+  fallback.length = 0;
+  noPos.forEach(z=>fallback.push(z));
+  // 兩個參考站都沒有座標的：退回描鄉鎮邊界
   if(fallback.length && TOWN_GEO){
     const keys = new Set(fallback.map(z=>z.county + '|' + z.township));
     const feats = (TOWN_GEO.features || []).filter(f=>{
@@ -11834,7 +11884,7 @@ async function renderDisasterLayer(){
   }
   _disasterToFront();
   console.log(`二次災害：溪流 ${nLine} 條、崩塌地 ${nArea} 處、`
-    + `無幾何退回鄉鎮 ${fallback.length} 處（共 ${(DISASTER_ZONES||[]).length}）`);
+    + `以參考站定位 ${nStn} 處、退回鄉鎮 ${fallback.length} 處（共 ${(DISASTER_ZONES||[]).length}）`);
 }
 
 let _prevDisasterSet = null;  // 上次達標站點（偵測新增）
