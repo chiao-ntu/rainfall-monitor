@@ -73,6 +73,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   user-select:none}
 .sec-h:hover{background:#0f2c40}
 .sec-arrow{font-size:10px;color:#4a90b8}
+/* ★ 地形暈渲加強對比（使用者反映立體感太弱，常忽略地形已開啟） */
+.terrain-relief{filter:contrast(1.9) brightness(0.92) saturate(0.9)}
 .sec-body{padding:8px 10px;box-sizing:border-box;max-width:100%;overflow-x:hidden}
 /* ★ 面板內容一律不得超出邊界（不同螢幕寬度下都成立）：
    canvas 與圖片隨容器縮放；控制列可換行；長字串斷行而非撐寬。 */
@@ -1897,8 +1899,10 @@ function _wfStart(){
       p.x = nx; p.y = ny; p.age++;
     });
     try{ _wfLegend(); }catch(e){}
-    _wfTimer = requestAnimationFrame(step);
+    // 影片錄製時改由外部逐步推進（每格固定步數），不跟真實時間跑
+    if(!window._wfManual) _wfTimer = requestAnimationFrame(step);
   };
+  window._wfStep = step;
   step();
 }
 
@@ -1923,7 +1927,7 @@ function toggleTerrainLayer(){
   }
   if(!_terrainOverlay){
     _terrainOverlay = L.imageOverlay('terrain_relief.png', TERRAIN_RELIEF.bounds, {
-      opacity: 0.9,           // 在色塊之下，不需太透明才看得清地形
+      opacity: 1,             // 在色塊之下，全不透明；立體感另由 CSS 濾鏡加強
       pane: 'terrainPane',    // 白色背景之上、鄉鎮色塊之下
       interactive: false,
       className: 'terrain-relief'
@@ -6184,7 +6188,17 @@ function _animPaint(){
     if(!a || !b){ poly.setStyle({fillColor: to}); poly._animShown = to; return; }
     _animTweens.set(poly, {a, b, to, t0: now});
   });
+  if(window._animManual) return;           // 錄影：由 _animPaintFrac 逐格推進
   if(!_animTweenRAF && _animTweens.size) _animTweenRAF = requestAnimationFrame(_animTweenStep);
+}
+// 錄影用：把所有進行中的漸層推到指定進度（0~1），到 1 即完成
+function _animPaintFrac(k){
+  const e = k < 0.5 ? 2*k*k : 1 - Math.pow(-2*k + 2, 2) / 2;
+  _animTweens.forEach((tw, poly)=>{
+    if(k >= 1){ poly.setStyle({fillColor: tw.to}); poly._animShown = tw.to; _animTweens.delete(poly); return; }
+    const hex = _rgbHex(tw.a.map((v, i)=>Math.round(v + (tw.b[i] - v) * e)));
+    poly.setStyle({fillColor: hex}); poly._animShown = hex;
+  });
 }
 function _animTweenStep(){
   _animTweenRAF = null;
@@ -6272,10 +6286,14 @@ function _tyAnimStart(){
     // 路徑底線（淡）
     L.polyline(x.tl.map(p=>[p.lat, p.lng]), {pane:'townPane', color:'#ffffff',
       weight:1.2, opacity:0.45, dashArray:'4 4', interactive:false}).addTo(layer);
+    // ★ 暴風圈用「虛線＋逐幀偏移」做出旋轉感（北半球逆時針）
     x.c15 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#f5a623', weight:2,
-      dashArray:'6 4', fillColor:'#f5a623', fillOpacity:0.08, interactive:false}).addTo(layer);
-    x.c25 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#e8453c', weight:2,
-      fillColor:'#e8453c', fillOpacity:0.10, interactive:false}).addTo(layer);
+      dashArray:'14 10', fillColor:'#f5a623', fillOpacity:0.07, interactive:false}).addTo(layer);
+    x.c25 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#e8453c', weight:2.5,
+      dashArray:'10 7', fillColor:'#e8453c', fillOpacity:0.10, interactive:false}).addTo(layer);
+    // 螺旋雲臂：四條對數螺線，繞著中心轉
+    x.arms = [0, 1, 2, 3].map(()=>L.polyline([[0, 0]], {pane:'townPane', color:'#ffffff',
+      weight:2, opacity:0.5, interactive:false}).addTo(layer));
     x.eye = L.circleMarker([0, 0], {pane:'townPane', radius:6, color:'#000', weight:2,
       fillColor:'#ff2d2d', fillOpacity:1, interactive:false}).addTo(layer);
   });
@@ -6338,11 +6356,19 @@ function _tyAnimLoop(){
   const now = performance.now();
   if(_tyA.curH != null){
     const k = Math.min(1, (now - _tyA.t0) / (_tyA.dur || 1));
-    const h = _tyA.prevH + (_tyA.curH - _tyA.prevH) * k;   // 兩幀之間平滑推進
+    _tyDrawAt(_tyA.prevH + (_tyA.curH - _tyA.prevH) * k, now);   // 兩幀之間平滑推進
+  }
+  if(!window._animManual) _tyA.raf = requestAnimationFrame(_tyAnimLoop);
+}
+// 在指定時刻（距現在 h 小時）繪製颱風與閃爍；錄影時由外部逐格呼叫
+function _tyDrawAt(h, now){
+  if(!_tyA) return;
+  {
     const ms = Date.now() + h * 3600e3;
     _tyA.list.forEach(x=>{
       const P = _tyAt(x.tl, ms);
       const on = !!P;
+      x.arms.forEach(a=>a.setStyle({opacity: on ? 0.45 : 0}));
       [x.c15, x.c25, x.eye].forEach(l=>l.setStyle({opacity: on ? 1 : 0,
         fillOpacity: on ? (l === x.eye ? 1 : (l === x.c15 ? 0.08 : 0.10)) : 0}));
       if(!P) return;
@@ -6350,6 +6376,30 @@ function _tyAnimLoop(){
       x.c15.setLatLng([P.lat, P.lng]).setRadius((P.r15 || 0) * 1000);
       x.c25.setLatLng([P.lat, P.lng]).setRadius((P.r25 || 0) * 1000);
       if(!P.r25) x.c25.setStyle({opacity: 0, fillOpacity: 0});
+      // 旋轉：虛線相位逐幀偏移（一圈約 3 秒），兩圈反向以增加層次
+      const ph = (now / 3000) % 1;
+      x.c15.setStyle({dashOffset: String(-(ph * 24).toFixed(1))});
+      x.c25.setStyle({dashOffset: String((ph * 17).toFixed(1))});
+      // 螺旋雲臂：北半球逆時針旋入，半徑由眼牆延伸到七級風邊緣
+      const r15km = P.r15 || 0;
+      if(r15km > 0){
+        const spin = (now / 4200) * 2 * Math.PI;          // 一圈約 4.2 秒
+        const kmLat = 111.32, kmLng = 111.32 * Math.cos(P.lat * Math.PI / 180) || 1;
+        x.arms.forEach((arm, ai)=>{
+          const base = spin + ai * Math.PI / 2;
+          const pts = [];
+          for(let u = 0.12; u <= 1.001; u += 0.06){
+            const rr = r15km * u;
+            const th = base + 2.1 * Math.log(u / 0.12);    // 對數螺線
+            pts.push([P.lat + rr * Math.cos(th) / kmLat,
+                      P.lng + rr * Math.sin(th) / kmLng]);
+          }
+          arm.setLatLngs(pts);
+          arm.setStyle({opacity: 0.45});
+        });
+      } else {
+        x.arms.forEach(a=>a.setStyle({opacity: 0}));
+      }
     });
     // 觸及鄉鎮閃爍（週期約 0.8 秒）
     const op = 0.25 + 0.75 * Math.abs(Math.sin(now / 800 * Math.PI));
@@ -6357,7 +6407,6 @@ function _tyAnimLoop(){
     try{ _tyA.layer.eachLayer(l=>l.bringToFront && l.bringToFront());
          _tyA.hitLayer.eachLayer(l=>l.bringToFront && l.bringToFront()); }catch(e){}
   }
-  _tyA.raf = requestAnimationFrame(_tyAnimLoop);
 }
 function _tyAnimStop(){
   if(!_tyA) return;
@@ -6438,46 +6487,71 @@ async function exportAnim(){
       return;
     }
     const fps = parseInt((document.getElementById('anim-fps') || {}).value) || 12;
-    const stream = cv.captureStream(fps);
+    // 手動送格：每畫好一張才 requestFrame，時間由 pause/resume 控制
+    const stream = cv.captureStream(0);
     const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
       ? 'video/webm;codecs=vp9' : 'video/webm';
-    const rec = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: 6e6});
+    const rec = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: 8e6});
     const chunks = [];
     rec.ondataavailable = e => { if(e.data && e.data.size) chunks.push(e.data); };
     const done = new Promise(res => { rec.onstop = res; });
+
+    // ★ 逐格決定性錄製（使用者指出影片比網頁差很多）：
+    //   原本每格截圖要 0.2~0.5 秒，而錄影機照真實時間走 ——
+    //   漸層早就播完、粒子已跑掉十幾步、截圖慢的那格在影片裡停特別久。
+    //   改法：截圖期間讓錄影機暫停（暫停時間不計入影片），
+    //   並把漸層、颱風、風場粒子都改為「由程式推到這一格該有的狀態」，
+    //   不跟真實時間跑。每一格在影片中佔用完全相同的時間。
+    window._animManual = true;              // 三種動畫改為手動推進
+    window._wfManual = true;
+    try{ if(typeof _wfTimer !== 'undefined' && _wfTimer) cancelAnimationFrame(_wfTimer); }catch(e){}
+    try{ if(_tyA && _tyA.raf) cancelAnimationFrame(_tyA.raf); }catch(e){}
+    const VF = 24;                           // 影片幀率
+    const SUB = Math.max(1, Math.round(VF / fps));   // 每個資料格切成幾張影片幀
+    const WF_STEPS = 2;                      // 每張影片幀推進幾步粒子
+    const total = _animFrames.length * SUB;
+    let vf = 0;
+    const shot = async ()=>await html2canvas(mp, {
+      backgroundColor: '#ffffff', scale: 1, useCORS: true, logging: false,
+      ignoreElements: n => n.classList && (
+        n.classList.contains('leaflet-control') ||
+        n.classList.contains('leaflet-control-attribution'))
+    });
     rec.start();
+    rec.pause();                             // 先暫停，畫好一格才放行
     for(let i = 0; i < _animFrames.length; i++){
-      setTxt(`錄製 ${i+1}/${_animFrames.length}`);
-      _animApply(i);
-      await new Promise(rs => requestAnimationFrame(()=>requestAnimationFrame(rs)));
-      const shot = await html2canvas(mp, {
-        backgroundColor: '#ffffff', scale: 1, useCORS: true, logging: false,
-        ignoreElements: n => n.classList && (
-          n.classList.contains('leaflet-control') ||
-          n.classList.contains('leaflet-control-attribution'))
-      });
-      // ★ html2canvas 會依 devicePixelRatio 回傳較大的畫布，
-      //   直接 drawImage(shot,0,0,w,h) 會把「原尺寸的左上角一塊」
-      //   塞進目標，於是影片只看得到一小塊範圍。
-      //   明確指定來源矩形為 shot 的完整尺寸。
-      ctx.clearRect(0, 0, cv.width, cv.height);
-      ctx.drawImage(shot, 0, 0, shot.width, shot.height,
-                          0, 0, cv.width, cv.height);
-      // 時間戳記（影片沒有旁邊的面板可看）
-      const h = _animFrames[i];
-      const d = new Date(Date.now() + h * 3600e3);
-      const exact = Math.abs(h - Math.round(h)) < 1e-6;
-      ctx.fillStyle = 'rgba(4,12,20,0.75)';
-      ctx.fillRect(8, 8, exact ? 150 : 210, 24);
-      ctx.fillStyle = '#cfe4f5'; ctx.font = '14px sans-serif';
-      ctx.fillText(`${d.getMonth()+1}/${d.getDate()} `
-        + `${String(d.getHours()).padStart(2,'0')}:`
-        + `${String(d.getMinutes()).padStart(2,'0')}`
-        + (exact ? '' : '　⚡ 內插顯示'), 14, 25);
-      // ★ 讓風場粒子在兩幀之間實際推進若干步，錄下來才是連續流動。
-      //   html2canvas 擷取的是當下狀態，不等粒子自己跑。
-      await new Promise(rs => setTimeout(rs, Math.max(60, 1000 / fps)));
+      _animApply(i);                         // 設定本格資料（顏色目標、颱風時刻、觸及判定）
+      const h0 = (i > 0) ? _animFrames[i-1] : _animFrames[i];
+      const h1 = _animFrames[i];
+      for(let sdx = 1; sdx <= SUB; sdx++){
+        const frac = sdx / SUB;
+        setTxt(`錄製 ${++vf}/${total}`);
+        try{ _animPaintFrac(frac); }catch(e){}                  // 顏色漸層推到本子格
+        try{ _tyDrawAt(h0 + (h1 - h0) * frac, performance.now()); }catch(e){}
+        try{ for(let k = 0; k < WF_STEPS; k++) window._wfStep && window._wfStep(); }catch(e){}
+        await new Promise(rs => requestAnimationFrame(()=>requestAnimationFrame(rs)));
+        const img = await shot();
+        ctx.clearRect(0, 0, cv.width, cv.height);
+        ctx.drawImage(img, 0, 0, img.width, img.height, 0, 0, cv.width, cv.height);
+        // 時間戳記（影片沒有旁邊的面板可看）
+        const hh = h0 + (h1 - h0) * frac;
+        const d = new Date(Date.now() + hh * 3600e3);
+        const exact = Math.abs(hh - Math.round(hh)) < 1e-6;
+        ctx.fillStyle = 'rgba(4,12,20,0.75)';
+        ctx.fillRect(8, 8, exact ? 150 : 210, 24);
+        ctx.fillStyle = '#cfe4f5'; ctx.font = '14px sans-serif';
+        ctx.fillText(`${d.getMonth()+1}/${d.getDate()} `
+          + `${String(d.getHours()).padStart(2,'0')}:`
+          + `${String(d.getMinutes()).padStart(2,'0')}`
+          + (exact ? '' : '　⚡ 內插顯示'), 14, 25);
+        // 放行這一格：恰好佔用 1/VF 秒的影片時間，然後再暫停去截下一張
+        rec.resume();
+        if(stream.getVideoTracks()[0].requestFrame) stream.getVideoTracks()[0].requestFrame();
+        await new Promise(rs => setTimeout(rs, 1000 / VF));
+        rec.pause();
+      }
     }
+    rec.resume();
     rec.stop();
     await done;
     const blob = new Blob(chunks, {type: 'video/webm'});
@@ -6491,6 +6565,10 @@ async function exportAnim(){
     alert('匯出失敗：' + (e && e.message ? e.message : e));
   }finally{
     setTxt('⬇ 影片');
+    window._animManual = false;
+    window._wfManual = false;
+    try{ if(window._wfStep) window._wfStep(); }catch(e){}   // 恢復自動迴圈
+    try{ if(_tyA && !_tyA.raf) _tyA.raf = requestAnimationFrame(_tyAnimLoop); }catch(e){}
     try{ _tyAnimStop(); }catch(e){}
     try{ _animPaintReset(); }catch(e){}
     _hourIdx = saved;
@@ -6921,7 +6999,7 @@ function _townFill(t, isSel){
         if(v!=null && (band===null || v>band)) band = v;
       }
       const col = cwaBandColor(band);
-      if(col){ fillColor=col; fillOp=isSel?1:1.0; }
+      if(col){ fillColor=col; fillOp=isSel?1:(_terrainOn ? 0.62 : 1.0); }
       else   { fillColor='#FFFFFF'; fillOp=1.0; }   // 無CWA色塊＝白
     } else {
     const acc = getAccum(t);
@@ -6930,47 +7008,47 @@ function _townFill(t, isSel){
       // 雷達1h：用雨量色階，無回波(null)＝白
       // ★ 深色海底時陸地仍須純白（不可被下方深色海透出而變灰）
     fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain);
-      fillOp    = (totalRain==null) ? 1.0 : (isSel?1:1.0);
+      fillOp    = (totalRain==null) ? (_terrainOn ? 0.30 : 1.0) : (isSel?1:(_terrainOn ? 0.62 : 1.0));
     } else if(acc.isWarn){
       // ★ 各 mode 分支必須排在「totalRain === null」之前。
       //   否則警特報未達標(0/null)、浪高內陸(null) 會先被通用的 null 分支
       //   攔成白色，永遠走不到自己的著色邏輯 —— 實測即為「警特報不顯示、
       //   浪高看起來沒有資料」的原因。
       fillColor = warnMapColor(totalRain || 0);
-      fillOp    = (totalRain||0)>0 ? (isSel?1:1.0) : 1.0;
+      fillOp    = (totalRain||0)>0 ? (isSel?1:(_terrainOn ? 0.62 : 1.0)) : (_terrainOn ? 0.30 : 1.0);
     } else if(acc.isTemp){
       // 氣溫：無資料留白（不可視為 0°C）
       fillColor = _tempColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:1.0);
+      fillOp    = (totalRain == null) ? (_terrainOn ? 0.30 : 1.0) : (isSel?1:(_terrainOn ? 0.62 : 1.0));
     } else if(acc.isWave){
       // 浪高：內陸無值 → 極淡灰（明確表示「非沿海」而非「浪高 0」）
       // ★ 內陸無浪高資料時用純白，不可用淺灰（深色海底會顯得髒）
       fillColor = _waveColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:1.0);
+      fillOp    = (totalRain == null) ? (_terrainOn ? 0.30 : 1.0) : (isSel?1:(_terrainOn ? 0.62 : 1.0));
     } else if(acc.isWind){
       // 風力預測：蒲福風級色階（<4白/4-7綠/7-10黃/10-13紅/>=13紫）
       fillColor = _bfColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:1.0);
+      fillOp    = (totalRain == null) ? (_terrainOn ? 0.30 : 1.0) : (isSel?1:(_terrainOn ? 0.62 : 1.0));
     } else if(totalRain === null || totalRain === undefined){
       // 無資料：顯示淡灰色，保留視覺邊界（不設為0.0，否則鄉鎮消失）
       fillColor='#FFFFFF'; fillOp=1.0;
     } else if(acc.isRisk){
       fillColor = riskColor(totalRain);
-      fillOp    = isSel?1:1.0;
+      fillOp    = isSel?1:(_terrainOn ? 0.62 : 1.0);
     } else if(acc.isEtrMode){
       // ETR2%模式：用 etrColor 對應現況 etr2_pct
       fillColor = totalRain===null ? '#FFFFFF' : etrColor(totalRain);
-      fillOp    = totalRain===null ? 1.0 : (isSel?1:1.0);
+      fillOp    = totalRain===null ? 1.0 : (isSel?1:(_terrainOn ? 0.62 : 1.0));
     // ★ isHourly 排在各專屬圖層之後、通用分支之前：逐時視窗下氣溫／
   //   浪高／風力／風險也會帶 isHourly，若先判斷就會被套上時雨量
   //   色階 —— 這正是「風險指標出現藍色」的原因。
   } else if(acc.isHourly){
       // ★ 逐時視窗用時雨量色階（非累積雨量色階）
       fillColor = _hourlyColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:1.0);
+      fillOp    = (totalRain == null) ? (_terrainOn ? 0.30 : 1.0) : (isSel?1:(_terrainOn ? 0.62 : 1.0));
     } else {
       fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#FFFFFF':etrColor(etrPct));
-      fillOp    = isSel?1:1.0;
+      fillOp    = isSel?1:(_terrainOn ? 0.62 : 1.0);
     }
     }
   }
@@ -9315,27 +9393,64 @@ function updateDistrictSummary(){
     const towns = TOWNSHIPS.filter(t=>counties.includes(t.county));
     let maxRain=-1, maxRainT=null, maxEtr=-1, maxEtrT=null,
         maxRisk=-1, maxRiskT=null, maxWarn=0, maxWarnT=null;
+    // ★ 分署內再分兩群（使用者指定）：
+    //   平地群＝平地＋沿海地區、山區群＝山區＋淺山區。
+    //   兩群各自取最大，摘要每個分署顯示兩行，並標出實際的地形分類。
+    const G = {plain:{rain:-1,rt:null,etr:-1,et:null,risk:-1,rkt:null,warn:0,wt:null},
+               hill: {rain:-1,rt:null,etr:-1,et:null,risk:-1,rkt:null,warn:0,wt:null}};
+    const grpOf = t =>{
+      const z = _townZone(t) || '';
+      return (z === '山區' || z === '淺山區') ? 'hill' : 'plain';
+    };
     towns.forEach(t=>{
       // 雨量一律另外用 rain 模式邏輯：直接算 QPF/觀測累積
+      const g = G[grpOf(t)];
       const rainVal = _summaryRain(t);
       if(rainVal != null && rainVal > maxRain){ maxRain=rainVal; maxRainT=t; }
+      if(rainVal != null && rainVal > g.rain){ g.rain=rainVal; g.rt=t; }
       if(t.alert_val > 0){
         const ep = _summaryEtr(t);
         if(ep != null && ep > maxEtr){ maxEtr=ep; maxEtrT=t; }
+        if(ep != null && ep > g.etr){ g.etr=ep; g.et=t; }
       }
       // 風險指標 / 警特報（常駐計算，摘要四表齊全）
       const r = calcRiskIndicator(t, Math.max(0, segTo));
       if(r && r.R > maxRisk){ maxRisk=r.R; maxRiskT=t; }
+      if(r && r.R > g.risk){ g.risk=r.R; g.rkt=t; }
       let lv=0;
       for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
         lv=Math.max(lv,_warnLevelAt(t,s)); if(lv>=4)break;
       }
       if(lv > maxWarn){ maxWarn=lv; maxWarnT=t; }
+      if(lv > g.warn){ g.warn=lv; g.wt=t; }
     });
-    return {district, maxRain, maxRainT, maxEtr, maxEtrT, maxRisk, maxRiskT, maxWarn, maxWarnT};
+    return {district, maxRain, maxRainT, maxEtr, maxEtrT, maxRisk, maxRiskT, maxWarn, maxWarnT, G};
   });
 
   const nameOf = t => t ? `${t.county}${t.township}` : '—';
+  // ★ 地形色點：直接標出該筆屬於哪一種地形（山區／淺山區／平地／沿海地區）
+  const zoneDot = t =>{
+    if(!t) return '';
+    const z = _townZone(t) || '';
+    const c = TERRAIN_COLORS[z] || '#5a7a95';
+    return `<span title="${z}" style="display:inline-block;width:6px;height:6px;`
+      + `border-radius:50%;background:${c};margin-right:4px;vertical-align:middle"></span>`;
+  };
+  // 一個分署輸出兩行：上「平地」（含沿海）、下「山區」（含淺山區）
+  const twoRows = (district, G, pick, fmt)=>{
+    const c = DISTRICT_COLOR[district] || '#aaccee';
+    return [['plain', '平地'], ['hill', '山區']].map(([k, lab], idx)=>{
+      const g = G[k], t = pick.t(g), v = pick.v(g);
+      return `<tr style="border-bottom:1px solid ${idx ? '#0d2030' : '#091722'}">
+        <td style="padding:1px 4px;color:${c};font-weight:700;font-size:9px">${
+          idx ? '' : district.replace('分署', '')}</td>
+        <td style="padding:1px 4px;color:#6a8a9a;font-size:9px">${lab}</td>
+        <td style="text-align:right;padding:1px 4px;color:#8ab8d8;font-size:9px">
+          ${zoneDot(t)}<span ${linkAttr(t)}>${nameOf(t)}</span></td>
+        <td style="text-align:right;padding:1px 4px;color:#aaccee;font-weight:700">${fmt(v, t)}</td>
+      </tr>`;
+    }).join('');
+  };
   const linkAttr = t => t ? `style="cursor:pointer;text-decoration:underline dotted" onclick="focusTownship('${t.county}','${t.township}')"` : '';
 
   const secHead = (kind, title) =>
@@ -9348,34 +9463,27 @@ function updateDistrictSummary(){
   h += `<table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:2px">
     <thead><tr style="background:#081420;color:#5a8aaa;font-size:9px">
       <th style="text-align:left;padding:2px 4px">分署</th>
+      <th style="text-align:left;padding:2px 4px">地形</th>
       <th style="text-align:right;padding:2px 4px">累積雨量最高鄉鎮市區</th>
       <th style="text-align:right;padding:2px 4px">數值</th>
     </tr></thead><tbody>`;
-  rows.forEach(({district,maxRain,maxRainT})=>{
-    const c=DISTRICT_COLOR[district]||'#aaccee';
-    const rs = maxRain<0 ? '—' : (maxRain>=10?Math.round(maxRain)+'mm':maxRain.toFixed(1)+'mm');
-    h+=`<tr style="border-bottom:1px solid #0d2030">
-      <td style="padding:2px 4px;color:${c};font-weight:700">${district.replace('分署','')}</td>
-      <td style="text-align:right;padding:2px 4px;color:#8ab8d8;font-size:9px"><span ${linkAttr(maxRainT)}>${nameOf(maxRainT)}</span></td>
-      <td style="text-align:right;padding:2px 4px;color:#aaccee;font-weight:700">${rs}</td>
-    </tr>`;
+  rows.forEach(({district, G})=>{
+    h += twoRows(district, G, {t: g=>g.rt, v: g=>g.rain},
+      v => v < 0 ? '—' : (v >= 10 ? Math.round(v) + 'mm' : v.toFixed(1) + 'mm'));
   });
   h += `</tbody></table></div>`;
   h += secHead('etr','ETR2%');
   h += `<table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:4px">
     <thead><tr style="background:#081420;color:#5a8aaa;font-size:9px">
       <th style="text-align:left;padding:2px 4px">分署</th>
+      <th style="text-align:left;padding:2px 4px">地形</th>
       <th style="text-align:right;padding:2px 4px">ETR2%最高鄉鎮市區</th>
       <th style="text-align:right;padding:2px 4px">ETR2%</th>
     </tr></thead><tbody>`;
-  rows.forEach(({district,maxEtr,maxEtrT})=>{
-    const c=DISTRICT_COLOR[district]||'#aaccee';
-    const ec=etrColor(maxEtr<0?0:maxEtr);
-    h+=`<tr style="border-bottom:1px solid #0d2030">
-      <td style="padding:2px 4px;color:${c};font-weight:700">${district.replace('分署','')}</td>
-      <td style="text-align:right;padding:2px 4px;color:#8ab8d8;font-size:9px"><span ${linkAttr(maxEtrT)}>${nameOf(maxEtrT)}</span></td>
-      <td style="text-align:right;padding:2px 4px;color:${ec};font-weight:700">${maxEtr<0?'—':maxEtr+'%'}</td>
-    </tr>`;
+  rows.forEach(({district, G})=>{
+    h += twoRows(district, G, {t: g=>g.et, v: g=>g.etr},
+      v => v < 0 ? '—'
+        : `<span style="color:${etrColor(v)}">${v}%</span>`);
   });
   h += '</tbody></table></div>';
 
@@ -9385,25 +9493,22 @@ function updateDistrictSummary(){
     h += `<table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:4px">
       <thead><tr style="background:#081420;color:#5a8aaa;font-size:9px">
         <th style="text-align:left;padding:2px 4px">分署</th>
+      <th style="text-align:left;padding:2px 4px">地形</th>
         <th style="text-align:right;padding:2px 4px">${title}最高鄉鎮市區</th>
         <th style="text-align:right;padding:2px 4px">${vh}</th>
       </tr></thead><tbody>`;
-    rows.forEach(({district,maxRisk,maxRiskT,maxWarn,maxWarnT})=>{
-      const c=DISTRICT_COLOR[district]||'#aaccee';
-      let vT, vs, vc;
-      if(kind==='risk'){
-        vT=maxRiskT; vs=maxRisk<0?'—':Math.round(maxRisk); vc=riskColor(maxRisk<0?0:maxRisk);
-        if(vc==='#FFFFFF') vc='#aaccee';
-      } else {
-        vT=maxWarnT; vs=maxWarn>0?WARN_NAMES[maxWarn]:'—';
-        vc=maxWarn>0?WARN_COLORS[maxWarn]:'#8899aa';
-      }
-      h+=`<tr style="border-bottom:1px solid #0d2030">
-        <td style="padding:2px 4px;color:${c};font-weight:700">${district.replace('分署','')}</td>
-        <td style="text-align:right;padding:2px 4px;color:#8ab8d8;font-size:9px"><span ${linkAttr(vT)}>${nameOf(vT)}</span></td>
-        <td style="text-align:right;padding:2px 4px;color:${vc};font-weight:700">${vs}</td>
-      </tr>`;
-    });
+    rows.forEach(({district, G})=>{
+      h += twoRows(district, G,
+        {t: g=>(kind === 'risk' ? g.rkt : g.wt), v: g=>(kind === 'risk' ? g.risk : g.warn)},
+        v =>{
+          if(kind === 'risk'){
+            if(v < 0) return '—';
+            let vc = riskColor(v); if(vc === '#FFFFFF') vc = '#aaccee';
+            return `<span style="color:${vc}">${Math.round(v)}</span>`;
+          }
+          return v > 0 ? `<span style="color:${WARN_COLORS[v]}">${WARN_NAMES[v]}</span>` : '—';
+        });
+        });
     h += '</tbody></table></div>';
   });
 
