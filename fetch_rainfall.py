@@ -3059,6 +3059,10 @@ MODEL_TIERS = {
     'under': {'bias': (0.40, 0.80), 'w': 0.45, 'label': '少報'},
     # 其餘（偏差比 <0.40 或 >2.50）一律排除
 }
+# ★ 衰減加權參數（融合權重用）
+DECAY_HALFLIFE = 10.0     # 半衰期（天）：約一個天氣型態的持續長度
+DECAY_MAX_DAYS = 45       # 回溯上限：再舊的不看，避免跨季節
+DECAY_EFF_DAYS = 7.0      # 有效雨量折算天數：與 7 天窗的門檻可比
 ADAPT_MIN_N = 20          # 樣本數門檻：不足就不下判斷
 # ★ 雨量體積門檻（實測補上的一道關）：
 #   偏差比是 Σ觀測 ÷ Σ模式，兩個都接近 0 時比值毫無意義。
@@ -3140,17 +3144,19 @@ def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
                 excluded.append(m)
                 detail.append(f'{m}=使用者排除')
                 continue
-            # ★ 以「過去 7 天」為評估單位（使用者指定）。
-            #   summarize_model_skill 的結構是 {short:{…}, long:{…}}，
-            #   short 即 7 天窗。先前直接讀 v.get('bias') 永遠是 None
-            #   （值在巢狀的 short/long 裡），等於所有模式都被當成
-            #   「樣本不足」—— 自適應機制從來沒有真正運作過。
-            v = (v0 or {}).get('short') or {}
+            # ★ 改用衰減加權（decay）：每日權重 = 0.5^(天數/10) × 當日雨量。
+            #   固定 7 天窗會被單一事件帶偏，也擋不住乾燥期的失真比值；
+            #   固定「0.6×7天＋0.4×30天」則不論季節都給舊資料四成，
+            #   季節轉換時舊資料仍佔太重。衰減加權讓舊資料漸退，
+            #   而雨量加權讓乾燥期自動回頭參考上一次真正下雨的時候。
+            #   沒有 decay（舊 data 或樣本太少）時退回 7 天窗。
+            v = (v0 or {}).get('decay') or (v0 or {}).get('short') or {}
             bias = v.get('bias')
             mae = v.get('mae')
             n = v.get('n') or 0
-            vol_o = v.get('obs')
-            vol_m = v.get('mod')
+            # 衰減視窗用「有效雨量」（加權後的等效總量），舊視窗用原始總量
+            vol_o = v.get('eobs', v.get('obs'))
+            vol_m = v.get('emod', v.get('mod'))
             thin = (vol_o is not None and vol_o < ADAPT_MIN_OBS) or \
                    (vol_m is not None and vol_m < ADAPT_MIN_MOD)
             if bias is None or n < ADAPT_MIN_N or thin:
@@ -3218,7 +3224,7 @@ def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
             for m, v0 in (mmap or {}).items():
                 if m in ADAPT_BLOCK:
                     continue
-                v = (v0 or {}).get('short') or {}
+                v = (v0 or {}).get('decay') or (v0 or {}).get('short') or {}
                 b = v.get('bias')
                 mae = v.get('mae')
                 if b is None or b <= 0:
@@ -3275,6 +3281,72 @@ def summarize_model_skill(skill, now_tpe):
                     'n': a['n'], 'days': a['days'],
                     # ★ 雨量體積：判斷「這段期間有沒有雨可以評」用
                     'obs': round(a['sum_obs'], 1), 'mod': round(a['sum_mod'], 1)}
+
+    # ★ 衰減加權（融合權重改用這一組，short／long 仍保留給校驗面板顯示）
+    #   每日權重 = 0.5^(天數/半衰期) × 該日該地形的觀測雨量
+    #   兩層用意：
+    #   · 指數衰減 —— 季節轉換是漸變不是開關，舊資料應漸退而非硬切。
+    #     半衰期 10 天約等於一個天氣型態的持續長度（一波鋒面、一次西南氣流）。
+    #   · 雨量加權 —— 沒下雨的日子對「大雨會不會低估」幾乎沒有資訊量，
+    #     卻和暴雨日佔一樣份量。乾燥的轉換期因此會自動回頭參考上一次
+    #     真正下雨的時候，而不是拿幾毫米去算比值（ICON 混進沿海的成因）。
+    dagg = {}
+    for d, zmap in (skill.get('days') or {}).items():
+        try:
+            age = (now_tpe.date() - datetime.strptime(d, '%Y-%m-%d').date()).days
+        except Exception:
+            continue
+        if age < 0 or age > DECAY_MAX_DAYS:
+            continue
+        decay = 0.5 ** (age / DECAY_HALFLIFE)
+        for z, mmap in zmap.items():
+            # 當日該地形的觀測量（取各模式共同的觀測總和：以最大者為準）
+            vol = max((v.get('sum_obs', 0.0) for v in mmap.values()), default=0.0)
+            w = decay * max(0.0, vol)
+            for m, v in mmap.items():
+                if not v.get('n'):
+                    continue
+                a = dagg.setdefault(z, {}).setdefault(m, {
+                    'w': 0.0, 'obs': 0.0, 'mod': 0.0, 'ae': 0.0, 'n': 0,
+                    'rawobs': 0.0, 'rawmod': 0.0, 'days': 0,
+                    # 只含衰減、不含雨量的權重：用來估「近期實際有多少雨」
+                    'dw': 0.0, 'dobs': 0.0, 'dmod': 0.0})
+                # ★ 只含衰減的累加器要涵蓋每一天（含無雨日），
+                #   否則「近期有多少雨」會被高估 —— 無雨日若整個跳過，
+                #   分母只剩下雨的那幾天，等效雨量反而比原始總量還大。
+                a['dw']   += decay
+                a['dobs'] += decay * v.get('sum_obs', 0.0)
+                a['dmod'] += decay * v.get('sum_mod', 0.0)
+                a['rawobs'] += v.get('sum_obs', 0.0)
+                a['rawmod'] += v.get('sum_mod', 0.0)
+                if w <= 0:
+                    continue          # 無雨日不參與偏差比／MAE 的加權
+                a['w']   += w
+                a['obs'] += w * v.get('sum_obs', 0.0)
+                a['mod'] += w * v.get('sum_mod', 0.0)
+                a['ae']  += w * v.get('sum_ae', 0.0)
+                a['n']   += v.get('n', 0)
+                a['days'] += 1
+    for z, mmap in dagg.items():
+        for m, a in mmap.items():
+            if a['n'] < 5 or a['mod'] <= 0 or a['w'] <= 0:
+                continue
+            out.setdefault(z, {}).setdefault(m, {})['decay'] = {
+                'bias': round(max(0.2, min(5.0, a['obs'] / a['mod'])), 3),
+                'mae': round(a['ae'] / a['w'] / max(1e-9, a['n'] / a['days']), 1)
+                       if a['days'] else None,
+                'n': a['n'], 'days': a['days'],
+                # 體積門檻仍看未加權的原始總量，語意才直觀
+                'obs': round(a['rawobs'], 1), 'mod': round(a['rawmod'], 1),
+                # ★ 有效雨量：加權後的等效總量。體積門檻要看這個，
+                #   不能看 45 天的原始總量 —— 否則一個月前的大雨會讓
+                #   現在的乾燥期「看起來有雨可評」（沿海 ICON 就是這樣
+                #   在衰減視窗下又混進來的）。
+                # 用「只含衰減」的權重估算，不能用含雨量的權重 ——
+                # 那等於用雨量加權再平均雨量，數值會被放大（實測 911→1570）。
+                'eobs': round(a['dobs'] / max(1e-9, a['dw']) * DECAY_EFF_DAYS, 1),
+                'emod': round(a['dmod'] / max(1e-9, a['dw']) * DECAY_EFF_DAYS, 1),
+                'halflife': DECAY_HALFLIFE}
     return out
 
 

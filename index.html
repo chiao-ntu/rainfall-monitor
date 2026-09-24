@@ -2709,8 +2709,13 @@ function _fcQpf(t){
 }
 
 // 近 7 天偏差比（誤差追蹤 short 窗）
+// ★ 與後端融合同一組數字：優先用衰減加權（decay），沒有才退回 7 天窗
+function _fcSkill(z, m){
+  const o = ((window.MODEL_SKILL || {})[z] || {})[_FC_SK[m] || m] || {};
+  return o.decay || o.short || {};
+}
 function _fcBias(z, m){
-  const v = (((window.MODEL_SKILL || {})[z] || {})[_FC_SK[m] || m] || {}).short || {};
+  const v = _fcSkill(z, m);
   return (v.bias != null) ? v.bias : null;
 }
 
@@ -2767,10 +2772,14 @@ function _fcToggleFold(force){
 //   手動勾選；此時給偏低的 0.2，表示「你選了，但資料不支持它」。
 function _fcAutoWeight(z, m){
   const k = _FC_SK[m] || m;
-  const v = (((window.MODEL_SKILL || {})[z] || {})[k] || {}).short || {};
+  const v = _fcSkill(z, m);
   const P = ((window.PATTERN_SKILL || {})[z] || {})[k] || {};
   const bias = v.bias, mae = v.mae, n = v.n || 0;
+  // 雨量體積不足時不下判斷（與後端同一道關）
+  const vo = (v.eobs != null) ? v.eobs : v.obs;
+  const vm = (v.emod != null) ? v.emod : v.mod;
   if(bias == null || n < 20) return 0.6;                 // 樣本不足：中等權重
+  if((vo != null && vo < 100) || (vm != null && vm < 20)) return 0.6;   // 雨量太少
   if(mae != null && mae > 60) return 0.2;
   if(P.fc >= 8 && P.far != null && P.far >= 0.75) return 0.2;   // 包牌
   if(P.ob >= 5 && P.ets != null && P.ets <= 0.05) return 0.2;   // 型態無技術
