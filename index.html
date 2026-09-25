@@ -6158,15 +6158,24 @@ let _animSavedHour = null;
 function _animBuildFrames(){
   const stepMin = parseInt((document.getElementById('anim-step') || {}).value) || 60;
   // 自訂範圍的起訖（滑桿值）；非自訂範圍時用目前視窗的前後 24h
+  // ★ 兩種滑桿的單位不同（使用者回報選的時間和跑出來的對不上）：
+  //   逐時精度 → 滑桿值就是「距現在幾小時」
+  //   6 小時精度 → 滑桿值是「段索引」（以今天 00 時為基準），
+  //     必須用 segTime() 換算成距現在幾小時，不能直接乘 6。
+  const toH = seg => (segTime(seg).getTime() - Date.now()) / 3600e3;
   let h0, h1;
   const sS = document.getElementById('slS'), sE = document.getElementById('slE');
   if(winKey === 'custom' && sS && sE){
     const a = parseInt(sS.value), b = parseInt(sE.value);
     if(_custStep === 1){ h0 = Math.min(a, b); h1 = Math.max(a, b); }
-    else { h0 = Math.min(a, b) * 6; h1 = (Math.max(a, b) + 1) * 6; }
+    else { h0 = toH(Math.min(a, b)); h1 = toH(Math.max(a, b) + 1); }
   } else {
-    h0 = 0; h1 = 24;
+    // 非自訂視窗：用目前視窗實際涵蓋的時段
+    h0 = toH(Math.max(0, segFrom));
+    h1 = toH(Math.max(0, segTo) + 1);
   }
+  h0 = Math.round(h0 * 100) / 100;
+  h1 = Math.round(h1 * 100) / 100;
   const out = [];
   for(let h = h0; h <= h1 + 1e-9; h += stepMin / 60) out.push(Math.round(h * 100) / 100);
   return out;
@@ -6197,6 +6206,25 @@ function _animRebuild(){
 //    過渡期間的中間色只存在一瞬間，停下來時一定是圖例上的顏色。
 // ══════════════════════════════════════════════════════════
 const ANIM_TWEEN_MS = 350;
+// ★ 動畫中的連續色階（使用者反映淡入淡出不明顯）：
+//   一般模式的顏色是「級距」的，值在級距內怎麼變顏色都不動，
+//   只有跨級距才跳一下 —— 所以看起來幾乎沒有漸層。
+//   播放時改成在相鄰級距的顏色之間依值連續內插，
+//   由淺到深平順變化；停止播放後回到標準級距色。
+function _rampColor(v, scale){
+  if(v == null || !isFinite(v)) return null;
+  const S = scale;
+  let i = S.findIndex(b=>v < b.max);
+  if(i < 0) i = S.length - 1;
+  const lo = (i === 0) ? 0 : S[i-1].max;
+  const hi = (S[i].max === Infinity) ? lo * 1.5 + 1 : S[i].max;
+  const f = Math.max(0, Math.min(1, (v - lo) / Math.max(1e-9, hi - lo)));
+  const a = _hexRgb(S[i].color);
+  const prev = (i === 0) ? a : _hexRgb(S[i-1].color);
+  if(!a || !prev) return S[i].color;
+  // 級距內由「前一級的顏色」漸變到「本級的顏色」，跨級時自然銜接
+  return _rgbHex(prev.map((c, k)=>Math.round(c + (a[k] - c) * f)));
+}
 const _animTweens = new Map();
 let _animTweenRAF = null;
 function _hexRgb(h){
@@ -6217,7 +6245,16 @@ function _animPaint(){
     let f;
     try{ f = _townFill(t, t === selected); }catch(e){ return; }
     if(!f || !f.fillColor) return;
-    const to = f.fillColor;
+    // 動畫中改用連續色階（僅雨量與 ETR2% 兩種有意義的連續量）
+    let to = f.fillColor;
+    if(mode === 'rain' || mode === 'etr'){
+      try{
+        const a = getAccum(t);
+        const v = a && (mode === 'etr' ? a.etrPct : a.totalRain);
+        const rc = _rampColor(v, mode === 'etr' ? ETR_SCALE : RAIN_SCALE);
+        if(rc) to = rc;
+      }catch(e){}
+    }
     if(poly._animTo === to) return;              // 顏色沒變就不動
     poly._animTo = to;
     if(f.fillOpacity != null) poly.setStyle({fillOpacity: f.fillOpacity});
@@ -6312,6 +6349,77 @@ function _kmBetween(a1, o1, a2, o2){
   const x = Math.sin(da/2)**2 + Math.cos(a1*d2r) * Math.cos(a2*d2r) * Math.sin(dO/2)**2;
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
 }
+// ★ 暴風圈內的風流粒子（使用者指定，比螺旋臂更像真實氣旋）：
+//   粒子沿切線方向繞行，角速度隨半徑遞減（內快外慢），
+//   畫在專屬畫布上以做出長拖尾 —— 拖尾長度是風場的 5 倍以上。
+//   風場每幀保留 95%（約 45 幀可見），這裡保留 99%（約 230 幀），
+//   以 10 m/s 的內圈速度估算，尾巴長度約為風場的 5 倍。
+const TY_PART_N = 420;
+const TY_TRAIL_KEEP = 0.99;
+let _tyCv = null, _tyParts = [];
+function _tyPartInit(){
+  const mp = document.getElementById('map');
+  if(!mp) return;
+  if(!_tyCv){
+    _tyCv = document.createElement('canvas');
+    _tyCv.style.cssText = 'position:absolute;inset:0;z-index:655;pointer-events:none';
+    mp.appendChild(_tyCv);
+  }
+  const r = mp.getBoundingClientRect();
+  _tyCv.width = Math.round(r.width); _tyCv.height = Math.round(r.height);
+  _tyParts = Array.from({length: TY_PART_N}, ()=>({dead: true}));
+}
+function _tyPartStep(list){
+  if(!_tyCv) return;
+  const ctx = _tyCv.getContext('2d');
+  // 長拖尾：每幀只淡掉 1%
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.fillStyle = `rgba(0,0,0,${TY_TRAIL_KEEP})`;
+  ctx.fillRect(0, 0, _tyCv.width, _tyCv.height);
+  ctx.globalCompositeOperation = 'source-over';
+  const act = list.filter(x=>x._P && x._P.r15);
+  if(!act.length) return;
+  const spawn = p =>{
+    const x = act[Math.floor(Math.random() * act.length)];
+    p.sys = x;
+    p.u = 0.15 + Math.random() * 0.85;          // 半徑比例
+    p.th = Math.random() * 2 * Math.PI;
+    p.age = Math.random() * 260;
+    p.dead = false;
+  };
+  _tyParts.forEach(p=>{
+    if(p.dead || !p.sys || !p.sys._P || p.age > 260){ spawn(p); }
+    const P = p.sys._P;
+    // 角速度：內圈快、外圈慢；同時緩慢向內收（氣旋式輻合）
+    const om = (2 * Math.PI / 3.0) * Math.pow(0.15 / p.u, 0.75);
+    p.th -= om / 60;                              // 逆時針（θ 遞減）
+    p.u  -= 0.00035;
+    p.age++;
+    if(p.u < 0.12){ p.dead = true; return; }
+    const kmLat = 111.32, kmLng = 111.32 * Math.cos(P.lat * Math.PI / 180) || 1;
+    const rr = P.r15 * p.u;
+    const ll = [P.lat + rr * Math.cos(p.th) / kmLat,
+                P.lng + rr * Math.sin(p.th) / kmLng];
+    let pt;
+    try{ pt = map.latLngToContainerPoint(ll); }catch(e){ return; }
+    if(pt.x < -50 || pt.y < -50 || pt.x > _tyCv.width + 50 || pt.y > _tyCv.height + 50) return;
+    if(p.px != null){
+      // 越靠近中心越亮、越白；外圍偏橘
+      const a = 0.25 + 0.6 * (1 - p.u);
+      ctx.strokeStyle = p.u < 0.35 ? `rgba(255,255,255,${a.toFixed(2)})`
+                      : p.u < 0.7  ? `rgba(255,220,150,${a.toFixed(2)})`
+                                   : `rgba(245,166,35,${a.toFixed(2)})`;
+      ctx.lineWidth = p.u < 0.35 ? 1.8 : 1.3;
+      ctx.beginPath(); ctx.moveTo(p.px, p.py); ctx.lineTo(pt.x, pt.y); ctx.stroke();
+    }
+    p.px = pt.x; p.py = pt.y;
+  });
+}
+function _tyPartStop(){
+  if(_tyCv){ try{ _tyCv.remove(); }catch(e){} _tyCv = null; }
+  _tyParts = [];
+}
+
 function _tyAnimStart(){
   if(_tyA || typeof showTyphoon === 'undefined' || !showTyphoon) return;
   const list = (window.TYPHOON_TRACK || []).map(ty=>({ty, tl: _tyTimeline(ty)}))
@@ -6324,14 +6432,18 @@ function _tyAnimStart(){
     // 路徑底線（淡）
     L.polyline(x.tl.map(p=>[p.lat, p.lng]), {pane:'townPane', color:'#ffffff',
       weight:1.2, opacity:0.45, dashArray:'4 4', interactive:false}).addTo(layer);
-    // ★ 暴風圈用「虛線＋逐幀偏移」做出旋轉感（北半球逆時針）
-    x.c15 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#f5a623', weight:2,
-      dashArray:'14 10', fillColor:'#f5a623', fillOpacity:0.07, interactive:false}).addTo(layer);
-    x.c25 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#e8453c', weight:2.5,
-      dashArray:'10 7', fillColor:'#e8453c', fillOpacity:0.10, interactive:false}).addTo(layer);
-    // 螺旋雲臂：四條對數螺線，繞著中心轉
-    x.arms = [0, 1, 2, 3].map(()=>L.polyline([[0, 0]], {pane:'townPane', color:'#ffffff',
-      weight:2, opacity:0.5, interactive:false}).addTo(layer));
+    // ★ 暴風圈：底色用實心圓、轉動的「虛線」改為自己畫的弧段。
+    //   Leaflet 的 Canvas 渲染器只支援 setLineDash、完全不處理 dashOffset，
+    //   所以先前用 dashOffset 做旋轉永遠不會動（使用者回報的正是這點）。
+    x.f15 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#f5a623', weight:1,
+      opacity:0.35, fillColor:'#f5a623', fillOpacity:0.07, interactive:false}).addTo(layer);
+    x.f25 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#e8453c', weight:1,
+      opacity:0.4, fillColor:'#e8453c', fillOpacity:0.10, interactive:false}).addTo(layer);
+    x.a15 = Array.from({length: 10}, ()=>L.polyline([[0,0]], {pane:'townPane',
+      color:'#f5a623', weight:2.4, opacity:0.95, interactive:false}).addTo(layer));
+    x.a25 = Array.from({length: 8}, ()=>L.polyline([[0,0]], {pane:'townPane',
+      color:'#e8453c', weight:2.8, opacity:1, interactive:false}).addTo(layer));
+    x.arms = [];      // 螺旋臂已改為暴風圈內的粒子流（見 _tyPartStep）
     x.eye = L.circleMarker([0, 0], {pane:'townPane', radius:6, color:'#000', weight:2,
       fillColor:'#ff2d2d', fillOpacity:1, interactive:false}).addTo(layer);
   });
@@ -6346,6 +6458,7 @@ function _tyAnimStart(){
     towns.push({t, poly, pts: flat.filter((_, k)=>k % step === 0),
                 key: (t.county || '') + (t.township || '')});
   });
+  _tyPartInit();
   _tyA = {list, layer, towns, hitLayer: L.layerGroup().addTo(map),
           prevH: null, curH: null, t0: 0, dur: 100, raf: null, hit: new Set(), first: {}};
   _tyA.raf = requestAnimationFrame(_tyAnimLoop);
@@ -6407,46 +6520,43 @@ function _tyDrawAt(h, now){
       const P = _tyAt(x.tl, ms);
       const on = !!P;
       x.arms.forEach(a=>a.setStyle({opacity: on ? 0.45 : 0}));
-      [x.c15, x.c25, x.eye].forEach(l=>l.setStyle({opacity: on ? 1 : 0,
-        fillOpacity: on ? (l === x.eye ? 1 : (l === x.c15 ? 0.08 : 0.10)) : 0}));
+      [...x.a15, ...x.a25].forEach(l=>l.setStyle({opacity: on ? 1 : 0}));
+      [x.f15, x.f25, x.eye].forEach(l=>l.setStyle({opacity: on ? (l === x.eye ? 1 : 0.38) : 0,
+        fillOpacity: on ? (l === x.eye ? 1 : (l === x.f15 ? 0.07 : 0.10)) : 0}));
+      x._P = P;
       if(!P) return;
       x.eye.setLatLng([P.lat, P.lng]);
-      x.c15.setLatLng([P.lat, P.lng]).setRadius((P.r15 || 0) * 1000);
-      x.c25.setLatLng([P.lat, P.lng]).setRadius((P.r25 || 0) * 1000);
-      if(!P.r25) x.c25.setStyle({opacity: 0, fillOpacity: 0});
-      // ★ 北半球颱風為逆時針旋轉（使用者指正）。
-      //   十級風（內圈）轉得快、七級風（外圈）轉得慢，
-      //   兩者同向，視覺上就是典型的氣旋式差動旋轉。
-      x.c25.setStyle({dashOffset: String(-((now / 2200 * 17) % 17).toFixed(1))});
-      x.c15.setStyle({dashOffset: String(-((now / 4800 * 24) % 24).toFixed(1))});
-      // 螺旋雲臂：北半球逆時針旋入，半徑由眼牆延伸到七級風邊緣
-      const r15km = P.r15 || 0;
-      if(r15km > 0){
-        // ★ 逆時針＋差動旋轉：角速度隨半徑遞減（內快外慢），
-        //   螺旋臂會隨時間自然捲繞，比整條臂同速轉動更像真實氣旋。
-        //   θ 以正北為 0、往東為正，所以「減少 θ」才是逆時針。
-        const U0 = 0.12;
-        const kmLat = 111.32, kmLng = 111.32 * Math.cos(P.lat * Math.PI / 180) || 1;
-        x.arms.forEach((arm, ai)=>{
-          const base = ai * Math.PI / 2;
+      x.f15.setLatLng([P.lat, P.lng]).setRadius((P.r15 || 0) * 1000);
+      x.f25.setLatLng([P.lat, P.lng]).setRadius((P.r25 || 0) * 1000);
+      if(!P.r25) x.f25.setStyle({opacity: 0, fillOpacity: 0});
+      // ★ 弧段逆時針轉動：內圈（十級風）快、外圈（七級風）慢
+      const kmLat0 = 111.32, kmLng0 = 111.32 * Math.cos(P.lat * Math.PI / 180) || 1;
+      const drawArcs = (arcs, rkm, periodSec)=>{
+        if(!rkm){ arcs.forEach(a=>a.setStyle({opacity: 0})); return; }
+        const n = arcs.length;
+        const gap = 2 * Math.PI / n;            // 每段佔的角度
+        const span = gap * 0.62;                 // 實際畫出的比例（其餘留白＝虛線感）
+        const base = -(now / 1000) * (2 * Math.PI / periodSec);   // 負號＝逆時針
+        arcs.forEach((arc, ai)=>{
+          const a0 = base + ai * gap;
           const pts = [];
-          for(let u = U0; u <= 1.001; u += 0.05){
-            const rr = r15km * u;
-            const omega = (2 * Math.PI / 2.6) * Math.pow(U0 / u, 0.75);  // 內圈約 2.6 秒一圈
-            const th = base + 2.1 * Math.log(u / U0) - omega * (now / 1000);
-            pts.push([P.lat + rr * Math.cos(th) / kmLat,
-                      P.lng + rr * Math.sin(th) / kmLng]);
+          for(let k = 0; k <= 6; k++){
+            const th = a0 + span * (k / 6);
+            pts.push([P.lat + rkm * Math.cos(th) / kmLat0,
+                      P.lng + rkm * Math.sin(th) / kmLng0]);
           }
-          arm.setLatLngs(pts);
-          arm.setStyle({opacity: 0.45});
+          arc.setLatLngs(pts);
+          arc.setStyle({opacity: arcs === x.a25 ? 1 : 0.95});
         });
-      } else {
-        x.arms.forEach(a=>a.setStyle({opacity: 0}));
-      }
+      };
+      drawArcs(x.a25, P.r25 || 0, 3.0);         // 十級風：3 秒一圈
+      drawArcs(x.a15, P.r15 || 0, 9.0);         // 七級風：9 秒一圈
+      // 暴風圈內的風流由 _tyPartStep 繪製（獨立畫布，可做長拖尾）
     });
     // 觸及鄉鎮閃爍（週期約 0.8 秒）
     const op = 0.25 + 0.75 * Math.abs(Math.sin(now / 800 * Math.PI));
     _tyA.hitLayer.eachLayer(l=>l.setStyle({opacity: op}));
+    try{ _tyPartStep(_tyA.list); }catch(e){}
     try{ _tyA.layer.eachLayer(l=>l.bringToFront && l.bringToFront());
          _tyA.hitLayer.eachLayer(l=>l.bringToFront && l.bringToFront()); }catch(e){}
   }
@@ -6462,6 +6572,7 @@ function _tyAnimStop(){
     }).join('、'));
   }
   try{ map.removeLayer(_tyA.layer); map.removeLayer(_tyA.hitLayer); }catch(e){}
+  _tyPartStop();
   _tyA = null;
   try{ renderTyphoonLayer(); }catch(e){}
 }
@@ -6494,6 +6605,44 @@ function _animApply(i){
 //   用既有的 html2canvas（已載入），不另外引入編碼函式庫 ——
 //   改以 WebM 錄製（瀏覽器原生 MediaRecorder），檔案更小、畫質更好，
 //   且不需要額外的 GIF 編碼器。若瀏覽器不支援才退回逐幀 PNG 下載。
+// ★ 背景分頁的計時器節流：瀏覽器會把隱藏分頁的 setTimeout 壓到每秒一次
+//   （閒置 5 分鐘後更降到每分鐘一次），錄製因此停住。
+//   Worker 裡的計時器不受這個限制，所以改由 Worker 發拍子給主執行緒。
+//   另外播放一段無聲音訊：瀏覽器會把「正在播放聲音」的分頁視為活躍，
+//   進一步避免被降頻。兩者都失敗時才退回一般的 setTimeout。
+let _bgTicker = null, _bgSilent = null;
+function _bgStart(){
+  try{
+    const src = 'onmessage=e=>{const t=e.data;setTimeout(()=>postMessage(1),t);}';
+    _bgTicker = new Worker(URL.createObjectURL(new Blob([src], {type:'text/javascript'})));
+  }catch(e){ _bgTicker = null; }
+  try{
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if(AC){
+      const ac = new AC();
+      const g = ac.createGain(); g.gain.value = 0.0001;
+      const o = ac.createOscillator(); o.frequency.value = 20;
+      o.connect(g); g.connect(ac.destination); o.start();
+      _bgSilent = {ac, o};
+    }
+  }catch(e){ _bgSilent = null; }
+}
+function _bgStop(){
+  try{ if(_bgTicker) _bgTicker.terminate(); }catch(e){}
+  _bgTicker = null;
+  try{ if(_bgSilent){ _bgSilent.o.stop(); _bgSilent.ac.close(); } }catch(e){}
+  _bgSilent = null;
+}
+// 不被節流的等待
+function _bgWait(ms){
+  if(!_bgTicker) return new Promise(rs => setTimeout(rs, ms));
+  return new Promise(rs =>{
+    const h = ()=>{ _bgTicker.removeEventListener('message', h); rs(); };
+    _bgTicker.addEventListener('message', h);
+    _bgTicker.postMessage(ms);
+  });
+}
+
 async function exportAnim(){
   _animRebuild();          // 依當下設定重建，不沿用上次下載的範圍
   if(!_animFrames.length){ alert('請先設定自訂時間範圍'); return; }
@@ -6521,7 +6670,8 @@ async function exportAnim(){
     map.options.zoomSnap = 0;
     map.invalidateSize({animate: false});
     map.fitBounds(L.latLngBounds(B2), {animate: false, padding: [0, 0]});
-    await new Promise(rs => setTimeout(rs, 300));
+    _bgStart();
+    await _bgWait(300);
     const cv = document.createElement('canvas');
     cv.width = SNAP_W2; cv.height = SNAP_H2;
     const ctx = cv.getContext('2d');
@@ -6579,7 +6729,7 @@ async function exportAnim(){
         try{ for(let k = 0; k < WF_STEPS; k++) window._wfStep && window._wfStep(); }catch(e){}
         // ★ 背景分頁會把 requestAnimationFrame 節流到幾乎停擺，
         //   錄製因此中斷或卡住。改用 setTimeout，切到其他分頁也能跑完。
-        await new Promise(rs => setTimeout(rs, 16));
+        await _bgWait(16);
         const img = await shot();
         ctx.clearRect(0, 0, cv.width, cv.height);
         ctx.drawImage(img, 0, 0, img.width, img.height, 0, 0, cv.width, cv.height);
@@ -6597,7 +6747,7 @@ async function exportAnim(){
         // 放行這一格：恰好佔用 1/VF 秒的影片時間，然後再暫停去截下一張
         rec.resume();
         if(stream.getVideoTracks()[0].requestFrame) stream.getVideoTracks()[0].requestFrame();
-        await new Promise(rs => setTimeout(rs, 1000 / VF));
+        await _bgWait(1000 / VF);
         rec.pause();
       }
     }
@@ -6615,6 +6765,7 @@ async function exportAnim(){
     alert('匯出失敗：' + (e && e.message ? e.message : e));
   }finally{
     setTxt('⬇ 影片');
+    _bgStop();
     window._animManual = false;
     window._wfManual = false;
     try{ if(window._wfStep) window._wfStep(); }catch(e){}   // 恢復自動迴圈
