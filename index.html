@@ -75,6 +75,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 .sec-arrow{font-size:10px;color:#4a90b8}
 /* ★ 地形暈渲加強對比（使用者反映立體感太弱，常忽略地形已開啟） */
 .terrain-relief{filter:contrast(1.9) brightness(0.92) saturate(0.9)}
+/* 上層只取明暗當陰影，去飽和避免污染色塊色相 */
+.terrain-relief-top{filter:grayscale(1) contrast(2.2) brightness(1.15)}
 .sec-body{padding:8px 10px;box-sizing:border-box;max-width:100%;overflow-x:hidden}
 /* ★ 面板內容一律不得超出邊界（不同螢幕寬度下都成立）：
    canvas 與圖片隨容器縮放；控制列可換行；長字串斷行而非撐寬。 */
@@ -1525,7 +1527,7 @@ let _stnLayerOn = false, _stnLayer = null, _stnTimer = null;
 //    海拔灰階（氣象署風格）× Hillshade（光源 315°／仰角 45°）正片疊底。
 // ══════════════════════════════════════════════════════════
 const TERRAIN_RELIEF = {"bounds":[[21.89400185866543,120.04163169146315],[25.29801742002761,122.00964772678445]],"size":[1200,2254],"azimuth":315.0,"altitude":45.0,"stops":[[100,"#F8F9FA"],[500,"#E9ECEF"],[1500,"#CED4DA"],[3000,"#ADB5BD"],[null,"#6C757D"]]};
-let _terrainOn = false, _terrainOverlay = null;
+let _terrainOn = false, _terrainOverlay = null, _terrainTop = null;
 // ══════════════════════════════════════════════════════════
 //  風場動畫（Windy 式粒子）
 //  ★ 資料：CWA F-D0047 的 WindDirection（8方位）＋ WindSpeed。
@@ -1913,6 +1915,8 @@ function toggleTerrainLayer(){
   if(!_terrainOn){
     if(_terrainOverlay){ try{ map.removeLayer(_terrainOverlay); }catch(e){}
                          _terrainOverlay = null; }
+    if(_terrainTop){ try{ map.removeLayer(_terrainTop); }catch(e){}
+                     _terrainTop = null; }
     return;
   }
   // ★ 圖層順序：本系統沒有底圖，seaPane(390) 有一張白色全域矩形當背景。
@@ -1924,6 +1928,23 @@ function toggleTerrainLayer(){
     map.createPane('terrainPane');
     map.getPane('terrainPane').style.zIndex = 392;
     map.getPane('terrainPane').style.pointerEvents = 'none';
+  }
+  // ★ 第二層暈渲（疊在色塊之上，multiply 混合）：
+  //   只靠色塊半透明讓地形「透出來」，對比仍不足；
+  //   把陰影用色彩增值壓在色塊上，山脊與河谷的明暗才明顯，
+  //   而且色塊本身的色相不會被洗淡。
+  if(!map.getPane('terrainTopPane')){
+    map.createPane('terrainTopPane');
+    const tp2 = map.getPane('terrainTopPane');
+    tp2.style.zIndex = 397;          // townPane(395) 之上、overlayPane(400) 之下
+    tp2.style.pointerEvents = 'none';
+    tp2.style.mixBlendMode = 'multiply';
+  }
+  if(!_terrainTop){
+    _terrainTop = L.imageOverlay('terrain_relief.png', TERRAIN_RELIEF.bounds, {
+      opacity: 0.55, pane: 'terrainTopPane', interactive: false,
+      className: 'terrain-relief-top'
+    }).addTo(map);
   }
   if(!_terrainOverlay){
     _terrainOverlay = L.imageOverlay('terrain_relief.png', TERRAIN_RELIEF.bounds, {
@@ -6151,6 +6172,14 @@ function _animBuildFrames(){
   return out;
 }
 
+// ★ 任何會影響時間範圍的操作都要讓幀序列失效（使用者回報下載一次後
+//   就鎖在那個時間段）：自訂範圍的滑桿、精度、視窗切換都算。
+function _animInvalidate(){
+  _animFrames = [];
+  _animIdx = 0;
+  const el = document.getElementById('anim-pos');
+  if(el) el.textContent = '';
+}
 function _animRebuild(){
   _animFrames = _animBuildFrames();
   _animIdx = 0;
@@ -6385,21 +6414,26 @@ function _tyDrawAt(h, now){
       x.c15.setLatLng([P.lat, P.lng]).setRadius((P.r15 || 0) * 1000);
       x.c25.setLatLng([P.lat, P.lng]).setRadius((P.r25 || 0) * 1000);
       if(!P.r25) x.c25.setStyle({opacity: 0, fillOpacity: 0});
-      // 旋轉：虛線相位逐幀偏移（一圈約 3 秒），兩圈反向以增加層次
-      const ph = (now / 3000) % 1;
-      x.c15.setStyle({dashOffset: String(-(ph * 24).toFixed(1))});
-      x.c25.setStyle({dashOffset: String((ph * 17).toFixed(1))});
+      // ★ 北半球颱風為逆時針旋轉（使用者指正）。
+      //   十級風（內圈）轉得快、七級風（外圈）轉得慢，
+      //   兩者同向，視覺上就是典型的氣旋式差動旋轉。
+      x.c25.setStyle({dashOffset: String(-((now / 2200 * 17) % 17).toFixed(1))});
+      x.c15.setStyle({dashOffset: String(-((now / 4800 * 24) % 24).toFixed(1))});
       // 螺旋雲臂：北半球逆時針旋入，半徑由眼牆延伸到七級風邊緣
       const r15km = P.r15 || 0;
       if(r15km > 0){
-        const spin = (now / 4200) * 2 * Math.PI;          // 一圈約 4.2 秒
+        // ★ 逆時針＋差動旋轉：角速度隨半徑遞減（內快外慢），
+        //   螺旋臂會隨時間自然捲繞，比整條臂同速轉動更像真實氣旋。
+        //   θ 以正北為 0、往東為正，所以「減少 θ」才是逆時針。
+        const U0 = 0.12;
         const kmLat = 111.32, kmLng = 111.32 * Math.cos(P.lat * Math.PI / 180) || 1;
         x.arms.forEach((arm, ai)=>{
-          const base = spin + ai * Math.PI / 2;
+          const base = ai * Math.PI / 2;
           const pts = [];
-          for(let u = 0.12; u <= 1.001; u += 0.06){
+          for(let u = U0; u <= 1.001; u += 0.05){
             const rr = r15km * u;
-            const th = base + 2.1 * Math.log(u / 0.12);    // 對數螺線
+            const omega = (2 * Math.PI / 2.6) * Math.pow(U0 / u, 0.75);  // 內圈約 2.6 秒一圈
+            const th = base + 2.1 * Math.log(u / U0) - omega * (now / 1000);
             pts.push([P.lat + rr * Math.cos(th) / kmLat,
                       P.lng + rr * Math.sin(th) / kmLng]);
           }
@@ -6461,7 +6495,7 @@ function _animApply(i){
 //   改以 WebM 錄製（瀏覽器原生 MediaRecorder），檔案更小、畫質更好，
 //   且不需要額外的 GIF 編碼器。若瀏覽器不支援才退回逐幀 PNG 下載。
 async function exportAnim(){
-  if(!_animFrames.length) _animRebuild();
+  _animRebuild();          // 依當下設定重建，不沿用上次下載的範圍
   if(!_animFrames.length){ alert('請先設定自訂時間範圍'); return; }
   const mp = document.getElementById('map');
   if(!mp) return;
@@ -6535,10 +6569,17 @@ async function exportAnim(){
       for(let sdx = 1; sdx <= SUB; sdx++){
         const frac = sdx / SUB;
         setTxt(`錄製 ${++vf}/${total}`);
-        try{ _animPaintFrac(frac); }catch(e){}                  // 顏色漸層推到本子格
+        try{ _animPaintFrac(frac); }catch(e){}
+        try{ map.getPane('townPane').querySelectorAll('canvas')
+               .forEach(()=>{}); if(townLayer && townLayer.eachLayer){
+          const r0 = (townLayer.getLayers()[0] || {})._renderer;
+          if(r0 && r0._redraw) r0._redraw();   // 立即重畫，不等 rAF
+        } }catch(e){}                  // 顏色漸層推到本子格
         try{ _tyDrawAt(h0 + (h1 - h0) * frac, performance.now()); }catch(e){}
         try{ for(let k = 0; k < WF_STEPS; k++) window._wfStep && window._wfStep(); }catch(e){}
-        await new Promise(rs => requestAnimationFrame(()=>requestAnimationFrame(rs)));
+        // ★ 背景分頁會把 requestAnimationFrame 節流到幾乎停擺，
+        //   錄製因此中斷或卡住。改用 setTimeout，切到其他分頁也能跑完。
+        await new Promise(rs => setTimeout(rs, 16));
         const img = await shot();
         ctx.clearRect(0, 0, cv.width, cv.height);
         ctx.drawImage(img, 0, 0, img.width, img.height, 0, 0, cv.width, cv.height);
@@ -6610,7 +6651,7 @@ function toggleAnim(){
     return;
   }
   _animSavedHour = _hourIdx;
-  if(!_animFrames.length) _animRebuild();
+  _animRebuild();          // 每次播放都依當下設定重建
   const fps = parseInt((document.getElementById('anim-fps') || {}).value) || 12;
   const tick = ()=>{
     if(!_animOn) return;
@@ -7008,7 +7049,7 @@ function _townFill(t, isSel){
         if(v!=null && (band===null || v>band)) band = v;
       }
       const col = cwaBandColor(band);
-      if(col){ fillColor=col; fillOp=isSel?1:(_terrainOn ? 0.62 : 1.0); }
+      if(col){ fillColor=col; fillOp=isSel?1:(_terrainOn ? 0.80 : 1.0); }
       else   { fillColor='#FFFFFF'; fillOp=1.0; }   // 無CWA色塊＝白
     } else {
     const acc = getAccum(t);
@@ -7017,47 +7058,47 @@ function _townFill(t, isSel){
       // 雷達1h：用雨量色階，無回波(null)＝白
       // ★ 深色海底時陸地仍須純白（不可被下方深色海透出而變灰）
     fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain);
-      fillOp    = (totalRain==null) ? (_terrainOn ? 0.30 : 1.0) : (isSel?1:(_terrainOn ? 0.62 : 1.0));
+      fillOp    = (totalRain==null) ? (_terrainOn ? 0.45 : 1.0) : (isSel?1:(_terrainOn ? 0.80 : 1.0));
     } else if(acc.isWarn){
       // ★ 各 mode 分支必須排在「totalRain === null」之前。
       //   否則警特報未達標(0/null)、浪高內陸(null) 會先被通用的 null 分支
       //   攔成白色，永遠走不到自己的著色邏輯 —— 實測即為「警特報不顯示、
       //   浪高看起來沒有資料」的原因。
       fillColor = warnMapColor(totalRain || 0);
-      fillOp    = (totalRain||0)>0 ? (isSel?1:(_terrainOn ? 0.62 : 1.0)) : (_terrainOn ? 0.30 : 1.0);
+      fillOp    = (totalRain||0)>0 ? (isSel?1:(_terrainOn ? 0.80 : 1.0)) : (_terrainOn ? 0.45 : 1.0);
     } else if(acc.isTemp){
       // 氣溫：無資料留白（不可視為 0°C）
       fillColor = _tempColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? (_terrainOn ? 0.30 : 1.0) : (isSel?1:(_terrainOn ? 0.62 : 1.0));
+      fillOp    = (totalRain == null) ? (_terrainOn ? 0.45 : 1.0) : (isSel?1:(_terrainOn ? 0.80 : 1.0));
     } else if(acc.isWave){
       // 浪高：內陸無值 → 極淡灰（明確表示「非沿海」而非「浪高 0」）
       // ★ 內陸無浪高資料時用純白，不可用淺灰（深色海底會顯得髒）
       fillColor = _waveColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? (_terrainOn ? 0.30 : 1.0) : (isSel?1:(_terrainOn ? 0.62 : 1.0));
+      fillOp    = (totalRain == null) ? (_terrainOn ? 0.45 : 1.0) : (isSel?1:(_terrainOn ? 0.80 : 1.0));
     } else if(acc.isWind){
       // 風力預測：蒲福風級色階（<4白/4-7綠/7-10黃/10-13紅/>=13紫）
       fillColor = _bfColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? (_terrainOn ? 0.30 : 1.0) : (isSel?1:(_terrainOn ? 0.62 : 1.0));
+      fillOp    = (totalRain == null) ? (_terrainOn ? 0.45 : 1.0) : (isSel?1:(_terrainOn ? 0.80 : 1.0));
     } else if(totalRain === null || totalRain === undefined){
       // 無資料：顯示淡灰色，保留視覺邊界（不設為0.0，否則鄉鎮消失）
       fillColor='#FFFFFF'; fillOp=1.0;
     } else if(acc.isRisk){
       fillColor = riskColor(totalRain);
-      fillOp    = isSel?1:(_terrainOn ? 0.62 : 1.0);
+      fillOp    = isSel?1:(_terrainOn ? 0.80 : 1.0);
     } else if(acc.isEtrMode){
       // ETR2%模式：用 etrColor 對應現況 etr2_pct
       fillColor = totalRain===null ? '#FFFFFF' : etrColor(totalRain);
-      fillOp    = totalRain===null ? 1.0 : (isSel?1:(_terrainOn ? 0.62 : 1.0));
+      fillOp    = totalRain===null ? 1.0 : (isSel?1:(_terrainOn ? 0.80 : 1.0));
     // ★ isHourly 排在各專屬圖層之後、通用分支之前：逐時視窗下氣溫／
   //   浪高／風力／風險也會帶 isHourly，若先判斷就會被套上時雨量
   //   色階 —— 這正是「風險指標出現藍色」的原因。
   } else if(acc.isHourly){
       // ★ 逐時視窗用時雨量色階（非累積雨量色階）
       fillColor = _hourlyColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? (_terrainOn ? 0.30 : 1.0) : (isSel?1:(_terrainOn ? 0.62 : 1.0));
+      fillOp    = (totalRain == null) ? (_terrainOn ? 0.45 : 1.0) : (isSel?1:(_terrainOn ? 0.80 : 1.0));
     } else {
       fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#FFFFFF':etrColor(etrPct));
-      fillOp    = isSel?1:(_terrainOn ? 0.62 : 1.0);
+      fillOp    = isSel?1:(_terrainOn ? 0.80 : 1.0);
     }
     }
   }
@@ -8753,6 +8794,7 @@ function setWin(key){
   //   直接沿用 _refreshAfterFactorChange（它已涵蓋全部面板與圖層，且有 _safeCall
   //   逐一報錯），避免這裡再維護一份會漏掉的清單。
   hideNoData();
+  try{ _animInvalidate(); }catch(e){}   // 換視窗 → 幀序列重來
   _refreshAfterFactorChange();
   // ★ 風場隨時間視窗更新（風向會變，粒子場必須重建）
   try{ if(_windFieldOn) _wfStart(); }catch(e){}
@@ -8791,6 +8833,7 @@ function setCustStep(v){
 }
 
 function onSlider(){
+  try{ _animInvalidate(); }catch(e){}   // 自訂範圍一動，動畫幀序列重來
   buildSliderTicks();
   let s=parseInt(document.getElementById('slS').value);
   let e=parseInt(document.getElementById('slE').value);
@@ -9069,6 +9112,7 @@ function stepWin(delta){
       el.value = Math.max(parseInt(el.min), Math.min(parseInt(el.max), v));
     });
     if(typeof onSlider === 'function') onSlider();
+    try{ _animInvalidate(); }catch(e){}
     return;
   }
   const m6 = winKey.match(/^fut6_(\d+)$/);

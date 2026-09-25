@@ -2852,7 +2852,7 @@ def _fcst_max_hourly_yday(t, model):
     return max(vals) if vals else None
 
 
-def update_verify(out_towns, zones, now_tpe, hourly_ser=None):
+def update_verify(out_towns, zones, now_tpe, hourly_ser=None, prev_weights=None):
     """逐日校驗：以 1mm 有效降水為門檻，比對昨日各模式與實際觀測。
 
     ★ 與既有誤差追蹤（model_skill）互補：
@@ -2874,7 +2874,8 @@ def update_verify(out_towns, zones, now_tpe, hourly_ser=None):
 
     # ★ 校驗涵蓋所有模式（含僅校驗者）；融合加權另在 update_model_skill 處理
     MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
-              'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom')
+              'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom',
+              'blend')          # ★ 融合結果本身也要被校驗          # ★ 融合結果本身也要被校驗
     day = {}
     n_used = 0
     for t in out_towns:
@@ -2890,7 +2891,8 @@ def update_verify(out_towns, zones, now_tpe, hourly_ser=None):
                       if isinstance(st, dict) and st.get('name')]
         _obs_mh = _obs_max_hourly_yday(hourly_ser, _stn_names, now_tpe)
         for m in MODELS:
-            mv = (t.get('model_yday') or {}).get(m)
+            mv = (_blend_yday(t, zone, prev_weights) if m == 'blend'
+                  else (t.get('model_yday') or {}).get(m))
             if mv is None:
                 continue
             cls = _verify_class(float(obs), float(mv))
@@ -2954,18 +2956,53 @@ def update_verify(out_towns, zones, now_tpe, hourly_ser=None):
             s_ = sc[m]
             _h40 = s_.get('SEDI_H40')
             _e80 = s_.get('ETS80')
-            print(f"    {m:10s} POD {s_['POD']}　FAR {s_['FAR']}　"
+            _mk = '★' if m == 'blend' else ' '
+            print(f"  {_mk} {m:10s} POD {s_['POD']}　FAR {s_['FAR']}　"
                   f"CSI {s_['CSI']}　ETS {s_['ETS']}　偏差比 {s_['BIAS']}"
                   + (f"　ETS@80mm {_e80}" if _e80 is not None else "")
                   + (f"　SEDI@40mm/h {_h40}" if _h40 is not None else ""))
         if best_m:
             print(f"    昨日 CSI 最佳：{best_m}")
+        # ★ 融合是否贏過單一最好的模式 —— 這是判斷加權方式好壞的唯一依據
+        try:
+            _bl = sc.get('blend') or {}
+            _singles = {k: v for k, v in sc.items() if k != 'blend'}
+            _bs = max(_singles.items(), key=lambda kv: (kv[1].get('CSI') or -1))
+            _bc, _sc2 = _bl.get('CSI'), (_bs[1].get('CSI') or 0)
+            if _bc is not None:
+                _verdict = ('融合勝出' if _bc > _sc2 else
+                            '融合落後' if _bc < _sc2 else '持平')
+                print(f"    ★ FORMOSA 自我校驗：融合 CSI {_bc}　"
+                      f"最佳單模式 {_bs[0]} {_sc2}　→ {_verdict}")
+        except Exception as _e:
+            pass
     except Exception as e:
         print(f"  校驗寫入失敗：{e}")
     return vf
 
 
-def update_model_skill(out_towns, zones, now_tpe):
+# ★ FORMOSA 自我校驗（使用者指定）：
+#   先前 13 個模式都有校驗，唯獨融合結果沒有 —— 等於無法回答
+#   「融合到底有沒有贏過單一最好的模式」。
+#   做法：用昨日各模式的回算值，依「昨日採用的權重」合成融合值，
+#   再和其他模式一起進校驗。權重取自上一輪 data.json 的 adaptive_blend，
+#   沒有就退回等權重；這樣評的才是當時真正播出去的那組權重。
+def _blend_yday(t, zone, weights):
+    mv = t.get('model_yday') or {}
+    if not mv:
+        return None
+    w = (weights or {}).get(zone) or {}
+    use = {m: w.get(m, 0) for m in mv if w.get(m, 0) > 0 and mv.get(m) is not None}
+    if not use:
+        use = {m: 1.0 for m in mv if mv.get(m) is not None}
+    if not use:
+        return None
+    sm = sum(mv[m] * ww for m, ww in use.items())
+    sw = sum(use.values())
+    return round(sm / sw, 2) if sw > 0 else None
+
+
+def update_model_skill(out_towns, zones, now_tpe, prev_weights=None):
     """把「昨日各模式預測 vs 實際觀測」記入誤差追蹤表。
 
     結構：{"days": {"2026-09-01": {"山區": {"ecmwf": {"n":31,"sum_obs":..,
@@ -2992,7 +3029,8 @@ def update_model_skill(out_towns, zones, now_tpe):
     #   其餘模式永遠沒有偏差比與 MAE，自適應機制根本看不到它們。
     #   是否真的納入融合，由 build_adaptive_blend 依 7 天表現決定。
     MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
-              'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom')
+              'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom',
+              'blend')          # ★ 融合結果本身也要被校驗
     day = {}
     n_used = 0
     for t in out_towns:
@@ -3005,7 +3043,8 @@ def update_model_skill(out_towns, zones, now_tpe):
         if t.get('obs_src') in ('neighbor', 'qpesums'):
             continue
         for m in MODELS:
-            mv = (t.get('model_yday') or {}).get(m)
+            mv = (_blend_yday(t, zone, prev_weights) if m == 'blend'
+                  else (t.get('model_yday') or {}).get(m))
             if mv is None:
                 continue
             # ★ 無雨日加回來（使用者指定）：先前兩邊都 <10mm 就跳過，
@@ -3060,6 +3099,8 @@ MODEL_TIERS = {
     # 其餘（偏差比 <0.40 或 >2.50）一律排除
 }
 # ★ 衰減加權參數（融合權重用）
+HEAVY_MM = 50.0           # 大雨事件門檻（mm/日）：致災尺度的表現另外統計
+HEAVY_MIN_N = 15          # 大雨樣本數門檻：不足就不單獨下判斷
 DECAY_HALFLIFE = 10.0     # 半衰期（天）：約一個天氣型態的持續長度
 DECAY_MAX_DAYS = 45       # 回溯上限：再舊的不看，避免跨季節
 DECAY_EFF_DAYS = 7.0      # 有效雨量折算天數：與 7 天窗的門檻可比
@@ -3255,7 +3296,9 @@ def summarize_model_skill(skill, now_tpe):
       單用 7 天會被單一事件帶偏，故最終權重取 0.6×短期 + 0.4×長期。
     """
     out = {}
-    for span, days in (('short', 7), ('long', 30)):
+    # ★ 多視窗（使用者指定）：短期反應當前天氣型態，長期抓系統性偏差。
+    #   7／14／30／60 天並存，融合用衰減加權，面板可對照四個視窗。
+    for span, days in (('short', 7), ('w14', 14), ('long', 30), ('w60', 60)):
         cut = (now_tpe - timedelta(days=days)).strftime('%Y-%m-%d')
         agg = {}
         for d, zmap in (skill.get('days') or {}).items():
@@ -3310,7 +3353,9 @@ def summarize_model_skill(skill, now_tpe):
                     'w': 0.0, 'obs': 0.0, 'mod': 0.0, 'ae': 0.0, 'n': 0,
                     'rawobs': 0.0, 'rawmod': 0.0, 'days': 0,
                     # 只含衰減、不含雨量的權重：用來估「近期實際有多少雨」
-                    'dw': 0.0, 'dobs': 0.0, 'dmod': 0.0})
+                    'dw': 0.0, 'dobs': 0.0, 'dmod': 0.0,
+                    # 大雨事件（≥50mm/日）的衰減加權統計
+                    'hw': 0.0, 'hobs': 0.0, 'hmod': 0.0, 'hae': 0.0, 'hn': 0})
                 # ★ 只含衰減的累加器要涵蓋每一天（含無雨日），
                 #   否則「近期有多少雨」會被高估 —— 無雨日若整個跳過，
                 #   分母只剩下雨的那幾天，等效雨量反而比原始總量還大。
@@ -3321,6 +3366,12 @@ def summarize_model_skill(skill, now_tpe):
                 a['rawmod'] += v.get('sum_mod', 0.0)
                 if w <= 0:
                     continue          # 無雨日不參與偏差比／MAE 的加權
+                if v.get('hn'):
+                    a['hw']   += decay
+                    a['hobs'] += decay * v.get('hobs', 0.0)
+                    a['hmod'] += decay * v.get('hmod', 0.0)
+                    a['hae']  += decay * v.get('hae', 0.0)
+                    a['hn']   += v.get('hn', 0)
                 a['w']   += w
                 a['obs'] += w * v.get('sum_obs', 0.0)
                 a['mod'] += w * v.get('sum_mod', 0.0)
@@ -3346,7 +3397,13 @@ def summarize_model_skill(skill, now_tpe):
                 # 那等於用雨量加權再平均雨量，數值會被放大（實測 911→1570）。
                 'eobs': round(a['dobs'] / max(1e-9, a['dw']) * DECAY_EFF_DAYS, 1),
                 'emod': round(a['dmod'] / max(1e-9, a['dw']) * DECAY_EFF_DAYS, 1),
-                'halflife': DECAY_HALFLIFE}
+                'halflife': DECAY_HALFLIFE,
+                # 大雨事件的偏差比與 MAE（樣本足夠時才給）
+                'hbias': (round(max(0.2, min(5.0, a['hobs'] / a['hmod'])), 3)
+                          if a['hmod'] > 0 and a['hn'] >= HEAVY_MIN_N else None),
+                'hmae': (round(a['hae'] / max(1e-9, a['hw']) / max(1, a['hn'] / max(1, a['days'])), 1)
+                         if a['hw'] > 0 and a['hn'] >= HEAVY_MIN_N else None),
+                'hn': a['hn']}
     return out
 
 
@@ -5124,9 +5181,18 @@ def main():
             with open(TERRAIN_FILE, encoding='utf-8') as _f:
                 _tz = json.load(_f)
             _zones = _tz.get('zones', _tz) if isinstance(_tz, dict) else {}
-        _skill = update_model_skill(out_towns, _zones, now_tpe)
+        # 昨日採用的權重：取自上一輪 data.json，評的才是當時真正播出的那組
+        _prev_w = {}
+        try:
+            if os.path.exists('data.json'):
+                with open('data.json', encoding='utf-8') as _f:
+                    _pw = json.load(_f).get('adaptive_blend') or {}
+                _prev_w = {z: (v.get('models') or {}) for z, v in _pw.items()}
+        except Exception:
+            _prev_w = {}
+        _skill = update_model_skill(out_towns, _zones, now_tpe, _prev_w)
         # 校驗（POD/FAR/CSI）：與誤差追蹤共用同一批樣本
-        _verify = update_verify(out_towns, _zones, now_tpe, hourly_ser)
+        _verify = update_verify(out_towns, _zones, now_tpe, hourly_ser, _prev_w)
         _verify_recent = _verify_summary(_verify)
         output['model_skill'] = summarize_model_skill(_skill, now_tpe)
         # ★ 自適應選用：逐地形決定「用哪些模式、各給多少權重」
