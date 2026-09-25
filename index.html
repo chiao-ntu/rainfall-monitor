@@ -6205,7 +6205,7 @@ function _animRebuild(){
 //  ★ 級距改變時做 350ms 的顏色漸層（使用者指定「從淺到深」）：
 //    過渡期間的中間色只存在一瞬間，停下來時一定是圖例上的顏色。
 // ══════════════════════════════════════════════════════════
-const ANIM_TWEEN_MS = 350;
+const ANIM_TWEEN_MS = 600;   // 過渡拉長，跨級距時的淡入淡出較明顯
 // ★ 動畫中的連續色階（使用者反映淡入淡出不明顯）：
 //   一般模式的顏色是「級距」的，值在級距內怎麼變顏色都不動，
 //   只有跨級距才跳一下 —— 所以看起來幾乎沒有漸層。
@@ -6216,14 +6216,17 @@ function _rampColor(v, scale){
   const S = scale;
   let i = S.findIndex(b=>v < b.max);
   if(i < 0) i = S.length - 1;
+  const base = _hexRgb(S[i].color);
+  if(!base) return S[i].color;
   const lo = (i === 0) ? 0 : S[i-1].max;
   const hi = (S[i].max === Infinity) ? lo * 1.5 + 1 : S[i].max;
   const f = Math.max(0, Math.min(1, (v - lo) / Math.max(1e-9, hi - lo)));
-  const a = _hexRgb(S[i].color);
-  const prev = (i === 0) ? a : _hexRgb(S[i-1].color);
-  if(!a || !prev) return S[i].color;
-  // 級距內由「前一級的顏色」漸變到「本級的顏色」，跨級時自然銜接
-  return _rgbHex(prev.map((c, k)=>Math.round(c + (a[k] - c) * f)));
+  // ★ 以「本級距的顏色」為基準，只在級距內做 ±10% 的明暗微調。
+  //   先前是從「前一級的顏色」漸變過來，等於整張圖都偏向上一級，
+  //   顏色明顯偏淡、判讀時容易誤判量級（使用者回報的問題）。
+  //   現在同一級距看起來仍是該級距的顏色，只是由略淺漸深。
+  const k = 1.10 - 0.20 * f;
+  return _rgbHex(base.map(c=>Math.round(Math.max(0, Math.min(255, c * k)))));
 }
 const _animTweens = new Map();
 let _animTweenRAF = null;
@@ -6354,8 +6357,11 @@ function _kmBetween(a1, o1, a2, o2){
 //   畫在專屬畫布上以做出長拖尾 —— 拖尾長度是風場的 5 倍以上。
 //   風場每幀保留 95%（約 45 幀可見），這裡保留 99%（約 230 幀），
 //   以 10 m/s 的內圈速度估算，尾巴長度約為風場的 5 倍。
-const TY_PART_N = 420;
-const TY_TRAIL_KEEP = 0.99;
+// ★ 拖尾由 0.99 降到 0.955：0.99 約 230 幀不散，整個畫面都是殘影，
+//   會蓋掉底下的雨量判讀（使用者回報）。0.955 約 50 幀，
+//   仍比風場（45 幀）略長，看得出漩渦但不糊。
+const TY_PART_N = 300;
+const TY_TRAIL_KEEP = 0.955;
 let _tyCv = null, _tyParts = [];
 function _tyPartInit(){
   const mp = document.getElementById('map');
@@ -6384,24 +6390,33 @@ function _tyPartStep(list){
     p.sys = x;
     p.u = 0.15 + Math.random() * 0.85;          // 半徑比例
     p.th = Math.random() * 2 * Math.PI;
-    p.age = Math.random() * 260;
+    p.age = Math.random() * 90;
     p.dead = false;
   };
   _tyParts.forEach(p=>{
-    if(p.dead || !p.sys || !p.sys._P || p.age > 260){ spawn(p); }
+    if(p.dead || !p.sys || !p.sys._P || p.age > 90){ spawn(p); }
     const P = p.sys._P;
     // 角速度：內圈快、外圈慢；同時緩慢向內收（氣旋式輻合）
     const om = (2 * Math.PI / 3.0) * Math.pow(0.15 / p.u, 0.75);
+    const kmLat = 111.32, kmLng = 111.32 * Math.cos(P.lat * Math.PI / 180) || 1;
+    // ★ 一幀之內再分 4 小步畫成弧線：先前一幀畫一條直線，
+    //   內圈角速度大時就變成明顯的折線（稜角感的來源）。
+    const SUB = 4;
+    const pts = [];
+    for(let k = 1; k <= SUB; k++){
+      const th = p.th - (om / 60) * (k / SUB);
+      const uu = p.u - 0.00035 * (k / SUB);
+      const rr = P.r15 * uu;
+      try{
+        pts.push(map.latLngToContainerPoint(
+          [P.lat + rr * Math.cos(th) / kmLat, P.lng + rr * Math.sin(th) / kmLng]));
+      }catch(e){ return; }
+    }
     p.th -= om / 60;                              // 逆時針（θ 遞減）
     p.u  -= 0.00035;
     p.age++;
     if(p.u < 0.12){ p.dead = true; return; }
-    const kmLat = 111.32, kmLng = 111.32 * Math.cos(P.lat * Math.PI / 180) || 1;
-    const rr = P.r15 * p.u;
-    const ll = [P.lat + rr * Math.cos(p.th) / kmLat,
-                P.lng + rr * Math.sin(p.th) / kmLng];
-    let pt;
-    try{ pt = map.latLngToContainerPoint(ll); }catch(e){ return; }
+    const pt = pts[pts.length - 1];
     if(pt.x < -50 || pt.y < -50 || pt.x > _tyCv.width + 50 || pt.y > _tyCv.height + 50) return;
     if(p.px != null){
       // 越靠近中心越亮、越白；外圍偏橘
@@ -6410,7 +6425,10 @@ function _tyPartStep(list){
                       : p.u < 0.7  ? `rgba(255,220,150,${a.toFixed(2)})`
                                    : `rgba(245,166,35,${a.toFixed(2)})`;
       ctx.lineWidth = p.u < 0.35 ? 1.8 : 1.3;
-      ctx.beginPath(); ctx.moveTo(p.px, p.py); ctx.lineTo(pt.x, pt.y); ctx.stroke();
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath(); ctx.moveTo(p.px, p.py);
+      pts.forEach(q2=>ctx.lineTo(q2.x, q2.y));    // 弧線，不是單一直線
+      ctx.stroke();
     }
     p.px = pt.x; p.py = pt.y;
   });
@@ -6539,9 +6557,12 @@ function _tyDrawAt(h, now){
         const base = -(now / 1000) * (2 * Math.PI / periodSec);   // 負號＝逆時針
         arcs.forEach((arc, ai)=>{
           const a0 = base + ai * gap;
+          // ★ 取樣密度：每段 ≤0.02 弧度（整圈約 314 點），
+          //   先前每段只取 6 點，整圈等於 60 邊形，肉眼看得出稜角。
+          const nseg = Math.max(6, Math.ceil(span / 0.02));
           const pts = [];
-          for(let k = 0; k <= 6; k++){
-            const th = a0 + span * (k / 6);
+          for(let k = 0; k <= nseg; k++){
+            const th = a0 + span * (k / nseg);
             pts.push([P.lat + rkm * Math.cos(th) / kmLat0,
                       P.lng + rkm * Math.sin(th) / kmLng0]);
           }
@@ -6719,6 +6740,9 @@ async function exportAnim(){
       for(let sdx = 1; sdx <= SUB; sdx++){
         const frac = sdx / SUB;
         setTxt(`錄製 ${++vf}/${total}`);
+        // ★ 背景錄製診斷：記錄每一步的實際耗時，切到別的分頁後
+        //   從 console 就能看出是哪一段被瀏覽器擋住（拍子／截圖／送格）。
+        const _t0 = performance.now();
         try{ _animPaintFrac(frac); }catch(e){}
         try{ map.getPane('townPane').querySelectorAll('canvas')
                .forEach(()=>{}); if(townLayer && townLayer.eachLayer){
@@ -6745,10 +6769,19 @@ async function exportAnim(){
           + `${String(d.getMinutes()).padStart(2,'0')}`
           + (exact ? '' : '　⚡ 內插顯示'), 14, 25);
         // 放行這一格：恰好佔用 1/VF 秒的影片時間，然後再暫停去截下一張
+        const _t1 = performance.now();
         rec.resume();
-        if(stream.getVideoTracks()[0].requestFrame) stream.getVideoTracks()[0].requestFrame();
+        const _vt = stream.getVideoTracks()[0];
+        if(_vt.requestFrame) _vt.requestFrame();
+        else if(_vt.requestFrame === undefined && cv.captureStream) { /* 舊版瀏覽器：靠 fps 自動取樣 */ }
         await _bgWait(1000 / VF);
         rec.pause();
+        if(vf <= 3 || vf % 25 === 0){
+          console.log(`錄製第 ${vf} 格：截圖 ${(_t1-_t0).toFixed(0)}ms、`
+            + `送格 ${(performance.now()-_t1).toFixed(0)}ms（目標 ${(1000/VF).toFixed(0)}ms）、`
+            + `分頁${document.hidden ? '在背景' : '在前景'}、`
+            + `已收到 ${chunks.length} 段資料`);
+        }
       }
     }
     rec.resume();
