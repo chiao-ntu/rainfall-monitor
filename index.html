@@ -1554,7 +1554,10 @@ let _darkSea = false;
 //   預設用紅外線（B13），夜間也看得到雲系；水氣頻道另備。
 //   ★ 時間必須對齊到 10 分鐘整點，且官方資料約落後 20 分鐘。
 const HIMAWARI_BASE = 'https://www.jma.go.jp/bosai/himawari/data/satimg';
-let _himaOn = false, _himaLayer = null, _himaBand = 'B13/TBB';
+// ★ 頻道：紅外線（看雲頂）、水氣（看中高層水氣）、色調強化（看對流強度）
+const HIMA_BANDS = [['B13/TBB', '紅外線'], ['B08/TBB', '水氣'],
+                    ['REP/ETC', '色調強化'], ['B03/ALBD', '可見光']];
+let _himaOn = false, _himaLayer = null, _himaBandIdx = 0;
 function _himaTime(){
   const d = new Date(Date.now() - 20 * 60e3);        // 發布延遲
   d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10, 0, 0);
@@ -1562,7 +1565,17 @@ function _himaTime(){
   return `${d.getUTCFullYear()}${p(d.getUTCMonth()+1)}${p(d.getUTCDate())}`
        + `${p(d.getUTCHours())}${p(d.getUTCMinutes())}00`;
 }
+// 開啟狀態下再按 → 切換頻道（紅外線 → 水氣 → 色調強化 → 可見光 → 關閉）
 function toggleHimawari(){
+  if(_himaOn && _himaBandIdx < HIMA_BANDS.length - 1){
+    _himaBandIdx++;
+    const b0 = document.getElementById('bHimawari');
+    if(b0) b0.classList.add('on');
+    if(_himaLayer){ try{ map.removeLayer(_himaLayer); }catch(e){} _himaLayer = null; }
+    _himaOn = false;      // 下面會再打開，走同一條建立流程
+  } else if(_himaOn){
+    _himaBandIdx = 0;     // 走完一輪 → 關閉
+  }
   _himaOn = !_himaOn;
   const b = document.getElementById('bHimawari');
   if(b) b.classList.toggle('on', _himaOn);
@@ -1576,16 +1589,21 @@ function toggleHimawari(){
     hp.style.opacity = 0.75;
   }
   const t = _himaTime();
+  const band = HIMA_BANDS[_himaBandIdx][0];
   _himaLayer = L.tileLayer(
-    `${HIMAWARI_BASE}/${t}/fd/${t}/${_himaBand}/{z}/{x}/{y}.jpg`,
-    // ★ 恆顯示：不設 minZoom／maxZoom，超出原生層級由瀏覽器放大
-    {pane: 'himaPane', maxNativeZoom: 6,
+    `${HIMAWARI_BASE}/${t}/fd/${t}/${band}/{z}/{x}/{y}.jpg`,
+    // ★ 恆顯示：官方只提供 z3~z6 的圖磚，縮太小（z<3）時沒有對應層級 ——
+    //   這就是「縮放尺度小就看不到」的原因，不是我們的設定問題。
+    //   設 minNativeZoom 讓 Leaflet 拿 z3 的圖磚縮放使用，任何比例都有圖。
+    {pane: 'himaPane', minNativeZoom: 3, maxNativeZoom: 6,
      attribution: 'Himawari-9 / 氣象廳', crossOrigin: true})
     .addTo(map);
   _himaLayer.on('tileerror', ()=>{
     console.warn('Himawari 圖磚載入失敗（時間可能尚未發布）：', t);
   });
-  console.log('Himawari-9 雲圖：', t, '（UTC，每 10 分鐘更新）');
+  const bl = document.getElementById('bHimawari');
+  if(bl) bl.textContent = '🛰 ' + HIMA_BANDS[_himaBandIdx][1];
+  console.log('Himawari-9 雲圖：', t, HIMA_BANDS[_himaBandIdx][1], '（UTC，每 10 分鐘更新）');
 }
 
 function toggleDarkSea(){
@@ -6571,11 +6589,11 @@ function _kmBetween(a1, o1, a2, o2){
 // ★ 參考 Windy：粒子多、單段短、拖尾短，靠密度表現流場，
 //   而不是靠長線條。長線在曲率大的地方必定失真。
 // 拖尾拉長（0.90≈22 幀 → 0.965≈65 幀），流場感才出得來
-const TY_SPEED_SCALE = 0.35;   // 整體轉速再放慢（使用者反映太快）
+const TY_SPEED_SCALE = 0.12;   // 整體轉速再放慢（使用者反映太快）
 const TY_SPIRAL_RATIO = 8;     // 切向：徑向，數字越大螺旋越平緩
 const TY_ADVECT = 0.85;        // 隨颱風移動的平流比例（做出後方尾流）
 const TY_PART_N = 700;
-const TY_TRAIL_KEEP = 0.982;   // 約 127 幀，流場感更連續
+const TY_TRAIL_KEEP = 0.94;    // 約 37 幀：夠長成流線，又不會糊住圖面
 let _tyCv = null, _tyParts = [];
 // 蒲福風級 → 風速（m/s）：取各級的代表值，與 _wsToBf 互為反函式
 function _bfToWs(bf){
@@ -11510,7 +11528,8 @@ function renderTyphoonLegend(){
     <div style="font-weight:700;margin-bottom:2px">關鍵時間點（編號對應地圖徽章）</div>`;
   rows.forEach(([c,ic,txt])=>{
     h += `<div style="display:flex;align-items:center;gap:5px;line-height:1.6">
-      <span style="width:13px;height:13px;border-radius:50%;background:${c};
+      <span style="display:inline-block;flex:0 0 13px;width:13px;height:13px;
+        border-radius:50%;background:${c};
         border:1.5px solid #fff;box-sizing:border-box;box-shadow:0 0 0 1px #99a"></span>
       <span>${txt}</span></div>`;
   });
@@ -14867,10 +14886,10 @@ const INTERP_BOUNDS = [[21.7, 119.2], [25.45, 122.05]];  // 本島+澎湖
 const _mercY = lat => Math.log(Math.tan(Math.PI/4 + lat*Math.PI/360));
 
 // 共用：把網格塗成色帶並疊到地圖（Barnes 與 Voronoi 兩條路徑共用）
-function _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1){
+function _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1, supp){
   // ★ my0/my1 原本在 renderInterpolated 內計算，抽出共用函式時漏了帶過來，
   //   導致陸地遮罩的座標全錯、整張圖被遮掉（開啟渲染後地圖一片空白）。
-  const my0 = _mercY(lat0), my1 = _mercY(lat1);
+  const my0 = _mercY(lat0), my1 = _mercY(lat1, supp);
   // 雙線性上採樣 + 離散色階著色
   const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
   const ctx=cv.getContext('2d');
@@ -14887,7 +14906,17 @@ function _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1){
       let bi=0; while(bi<bands.length-1 && v>=bands[bi].max) bi++;
       const c=bands[bi].rgb;
       const i=(y*W+x)*4;
-      d[i]=c[0]; d[i+1]=c[1]; d[i+2]=c[2]; d[i+3]=255;
+      // ★ 依「離最近資料點的距離」決定透明度：遠離資料的海上不畫，
+      //   避免整個矩形範圍被填滿而出現一條直的硬邊。
+      let al = 255;
+      if(supp){
+        const s00=supp[y0*NX+x0], s01=supp[y0*NX+Math.min(x0+1,NX-1)],
+              s10=supp[Math.min(y0+1,NY-1)*NX+x0],
+              s11=supp[Math.min(y0+1,NY-1)*NX+Math.min(x0+1,NX-1)];
+        const sv=(s00*(1-tx)+s01*tx)*(1-ty)+(s10*(1-tx)+s11*tx)*ty;
+        al = Math.round(255 * Math.max(0, Math.min(1, sv)));
+      }
+      d[i]=c[0]; d[i+1]=c[1]; d[i+2]=c[2]; d[i+3]=al;
     }
   }
   ctx.putImageData(img,0,0);
@@ -14976,7 +15005,7 @@ function renderInterpolated(){
         grid[gy*NX+gx] = bv;
       }
     }
-    _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1);
+    _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1, supp);
     return;
   }
 
@@ -15008,17 +15037,33 @@ function renderInterpolated(){
   for(let k=0;k<nP;k++) resid[k]=pts[k][2]-F1s[k];
 
   // 網格：第一遍 + 第二遍殘差修正
+  // ★ 支撐度遮罩（使用者截圖裡「地圖被切開」的真正成因）：
+  //   渲染層是一個矩形範圍，先前連離資料點很遠的海上也照樣填色，
+  //   邊界就是一條又直又硬的線。改為記錄每一格到最近資料點的距離，
+  //   太遠的格子直接不畫，中間帶漸進淡出。
   const grid=new Float32Array(NX*NY);
+  const supp=new Float32Array(NX*NY);
+  const SUP_FULL = 0.55, SUP_FADE = 1.30;      // 網格單位（約 0.4 度／格）
   for(let gy=0; gy<NY; gy++){
     for(let gx=0; gx<NX; gx++){
       const px=gx+0.5, py=gy+0.5;
       const f1=barnesPass(px, py, KAPPA, CUT1, false, null);
       const f2=barnesPass(px, py, KAPPA*GAMMA, CUT2, true, resid);
       grid[gy*NX+gx]=Math.max(0, f1+f2);   // 雨量不為負
+      let nd2=1e9;
+      for(let k=0;k<nP;k++){
+        const dx=pts[k][0]-px, dy=pts[k][1]-py;
+        const d2=dx*dx+dy*dy;
+        if(d2<nd2) nd2=d2;
+      }
+      const d=Math.sqrt(nd2);
+      supp[gy*NX+gx] = d<=SUP_FULL ? 1
+        : d>=SUP_FADE ? 0
+        : 1-(d-SUP_FULL)/(SUP_FADE-SUP_FULL);
     }
   }
 
-  _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1);
+  _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1, supp);
 
 }
 
