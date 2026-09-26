@@ -191,12 +191,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bWind"  onclick="setMode('wind')" style="border-color:#3a8a5a;color:#7ee8a8">風力預測</button>
       <button class="b"    id="bWave"  onclick="setMode('wave')" style="border-color:#3a8a5a;color:#7ee8a8">浪高</button>
       <button class="b"    id="bTemp"  onclick="setMode('temp')" style="border-color:#3a8a5a;color:#7ee8a8">氣溫</button>
+<button class="b"    id="bHimawari" onclick="toggleHimawari()"
+        style="border-color:#5a4a7a;color:#c0a8e8">🛰 Himawari</button>
       <button class="b"    id="bTerrain" onclick="toggleTerrainLayer()"
         style="border-color:#6a5a3a;color:#d8c090">⛰ 地形</button>
       <button class="b"    id="bWindField" onclick="toggleWindField()"
         style="border-color:#3a7a8a;color:#7ad8e8">🌀 風場</button>
-      <button class="b"    id="bHimawari" onclick="toggleHimawari()"
-        style="border-color:#5a4a7a;color:#c0a8e8">🛰 Himawari</button>
       <button class="b"    id="bDarkSea" onclick="toggleDarkSea()"
         style="border-color:#3a4a6a;color:#8aa8d8">🌊 深色海</button>
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
@@ -1578,7 +1578,8 @@ function toggleHimawari(){
   const t = _himaTime();
   _himaLayer = L.tileLayer(
     `${HIMAWARI_BASE}/${t}/fd/${t}/${_himaBand}/{z}/{x}/{y}.jpg`,
-    {pane: 'himaPane', minZoom: 3, maxZoom: 8, maxNativeZoom: 6,
+    // ★ 恆顯示：不設 minZoom／maxZoom，超出原生層級由瀏覽器放大
+    {pane: 'himaPane', maxNativeZoom: 6,
      attribution: 'Himawari-9 / 氣象廳', crossOrigin: true})
     .addTo(map);
   _himaLayer.on('tileerror', ()=>{
@@ -2444,6 +2445,24 @@ function _forceFullRedraw(){
 }
 // 平移、縮放、改變大小後都整張重畫，避免殘留半張舊畫面
 try{ map.on('moveend zoomend resize', ()=>{ try{ _forceFullRedraw(); }catch(e){} }); }catch(e){}
+// ★ 地圖底部被切：容器大小改變（視窗縮放、面板展開收合）時，
+//   Leaflet 不會自動重算畫布尺寸，底部就留下一條空白。
+//   用 ResizeObserver 盯住容器，一變動就 invalidateSize + 整張重畫。
+try{
+  const _mpEl = document.getElementById('map');
+  if(_mpEl && window.ResizeObserver){
+    let _rzT = null;
+    new ResizeObserver(()=>{
+      clearTimeout(_rzT);
+      _rzT = setTimeout(()=>{
+        try{ map.invalidateSize({animate: false}); _forceFullRedraw(); }catch(e){}
+      }, 60);
+    }).observe(_mpEl);
+  }
+  window.addEventListener('resize', ()=>{
+    try{ map.invalidateSize({animate: false}); _forceFullRedraw(); }catch(e){}
+  });
+}catch(e){}
 
 function _fixCanvasPointerEvents(){
   // ★ 改為全面掃描：地圖內所有畫布一律不接滑鼠，只有 townPane 的那張接。
@@ -2481,6 +2500,21 @@ function _whyNoClick(){
 }
 map.on('layeradd zoomend moveend', ()=>{ try{ _fixCanvasPointerEvents(); }catch(e){} });
 
+
+// ★ 預設開啟的圖層（使用者指定）：Himawari、地形、風場、深色海、渲染。
+//   等資料與圖層都就緒後再開，否則會在初始化途中被覆寫。
+function _openDefaultLayers(){
+  const on = (flagName, fn)=>{
+    try{ if(!window[flagName] && typeof fn === 'function') fn(); }catch(e){}
+  };
+  try{ if(!_darkSea) toggleDarkSea(); }catch(e){}
+  try{ if(!_terrainOn) toggleTerrainLayer(); }catch(e){}
+  try{ if(!_himaOn) toggleHimawari(); }catch(e){}
+  try{ if(!_blurOn) toggleBlurRender(); }catch(e){}
+  try{ if(!_windFieldOn) toggleWindField(); }catch(e){}
+  void on;
+  try{ _fixCanvasPointerEvents(); _forceFullRedraw(); }catch(e){}
+}
 const seaLayer = L.rectangle([[-90,-180],[90,180]], {
   pane:'seaPane', color:'none', fillColor:'#ffffff', fillOpacity:1.0, interactive:false
 }).addTo(map);
@@ -4599,7 +4633,10 @@ const VF_MODELS = ['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
 //   後端尚未產生 adaptive_blend 時退回原本的核心 6 個。
 const VF_CORE = new Set(['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast']);
 // 使用者判定排除（與後端 ADAPT_BLOCK 一致）
-const BLEND_BLOCK = new Set(['cma']);
+// ★ 使用者判定排除（前端即時生效，不必等後端重跑）。
+//   ICON：跨地形總檢已判定整體亂報，這裡同步排除以求立即見效；
+//   等後端的自動判定累積穩定後可以移除，結果不變。
+const BLEND_BLOCK = new Set(['cma', 'icon']);
 const _VF_KEY = {gc: 'graphcast'};
 function _vfBlendZones(m){
   const ab = window.ADAPTIVE_BLEND || {};
@@ -6534,7 +6571,9 @@ function _kmBetween(a1, o1, a2, o2){
 // ★ 參考 Windy：粒子多、單段短、拖尾短，靠密度表現流場，
 //   而不是靠長線條。長線在曲率大的地方必定失真。
 // 拖尾拉長（0.90≈22 幀 → 0.965≈65 幀），流場感才出得來
-const TY_SPIN_BOOST = 60;    // 颱風旋轉的額外倍率
+const TY_SPEED_SCALE = 0.35;   // 整體轉速再放慢（使用者反映太快）
+const TY_SPIRAL_RATIO = 8;     // 切向：徑向，數字越大螺旋越平緩
+const TY_ADVECT = 0.85;        // 隨颱風移動的平流比例（做出後方尾流）
 const TY_PART_N = 700;
 const TY_TRAIL_KEEP = 0.982;   // 約 127 幀，流場感更連續
 let _tyCv = null, _tyParts = [];
@@ -6567,112 +6606,79 @@ function _tyPartStep(list){
   ctx.globalCompositeOperation = 'source-over';
   const act = list.filter(x=>x._P && x._P.r15);
   if(!act.length) return;
-  // ★ 每個系統只投影一次：先前每顆粒子、每個子步都呼叫
-  //   map.latLngToContainerPoint（700 顆 × 4 步 = 2800 次／幀），
-  //   那是風場一幀一幀卡頓的主因。改為算出中心的像素位置與
-  //   「每公里幾像素」，其餘用平面幾何推算。
+  // 每個系統只投影一次（中心像素位置、每公里像素、中心位移）
   act.forEach(x=>{
     const P = x._P;
     try{
       const c0 = map.latLngToContainerPoint([P.lat, P.lng]);
       const c1 = map.latLngToContainerPoint([P.lat + 0.1, P.lng]);
-      // ★ 中心或縮放一變，所有粒子的像素位置整體位移，
-      //   照連就會出現從中心放射出去的長線（使用者截圖裡那些）。
-      //   尺度或中心位移過大時，全部斷線重畫。
-      const moved = (x._cx == null) ? 0 : Math.hypot(c0.x - x._cx, c0.y - x._cy);
-      const ppkNew = Math.abs(c1.y - c0.y) / 11.132;
-      if(moved > 8 || (x._ppk && Math.abs(ppkNew - x._ppk) / x._ppk > 0.02)){
-        _tyParts.forEach(p=>{ if(p.sys === x){ p.px = null; p.py = null; } });
-      }
+      x._dcx = (x._cx == null) ? 0 : (c0.x - x._cx);
+      x._dcy = (x._cy == null) ? 0 : (c0.y - x._cy);
       x._cx = c0.x; x._cy = c0.y;
-      x._ppk = ppkNew;                              // 每公里像素
-      // 眼牆內無風：暴風眼半徑約十級風半徑的 0.3
-      // ★ 暴風眼要留洞（使用者指正）：眼半徑取十級風半徑的 0.45，
-      //   眼內不生成、不繪製任何粒子。
+      x._ppk = Math.abs(c1.y - c0.y) / 11.132;
       x._uEye = Math.max(0.10, ((P.r25 || P.r15 * 0.33) / P.r15) * 0.45);
     }catch(e){ x._ppk = null; }
   });
-  const spawn = p =>{
-    const x = act[Math.floor(Math.random() * act.length)];
-    p.sys = x;
-    // ★ 依面積均勻分布（sqrt），否則粒子全擠在內圈 —— 使用者看到的
-    //   「只有十級風附近有風場」就是這個原因（外擴太慢、壽命又短）。
-    const uMin = x._uEye || 0.12;
-    p.u = Math.sqrt(uMin * uMin + Math.random() * (1 - uMin * uMin));
-    p.th = Math.random() * 2 * Math.PI;
+  const spawn = (p, x)=>{
+    p.sys = x || act[Math.floor(Math.random() * act.length)];
+    const sx = p.sys;
+    const uMin = sx._uEye || 0.12;
+    const u = Math.sqrt(uMin * uMin + Math.random() * (1 - uMin * uMin));
+    const th = Math.random() * 2 * Math.PI;
+    const r = (sx._P.r15 * u) * (sx._ppk || 1);
+    // ★ 粒子存的是「畫面上的絕對位置」，不是相對颱風中心的極座標。
+    //   先前存極座標，颱風一移動全部粒子跟著瞬移，只好每幀斷線重畫 ——
+    //   那正是「點狀」而非流線的原因。
+    p.x = sx._cx + r * Math.sin(th);
+    p.y = sx._cy - r * Math.cos(th);
     p.age = Math.random() * 220;
     p.dead = false;
     p.px = null; p.py = null;
   };
   _tyParts.forEach(p=>{
-    if(p.dead || !p.sys || !p.sys._P || p.age > 220){ spawn(p); }
+    if(p.dead || !p.sys || !p.sys._P || p.age > 220 || p.x == null){ spawn(p); }
     const x = p.sys, P = x._P;
     if(!P || x._ppk == null) return;
+    // 由畫面位置反推相對颱風中心的半徑與方位
+    const dx = p.x - x._cx, dy = p.y - x._cy;
+    const rpx = Math.hypot(dx, dy);
+    const r15px = P.r15 * x._ppk;
+    const u = rpx / Math.max(1e-6, r15px);
     const uEye = x._uEye || 0.12;
-    if(p.u < uEye){ p.dead = true; return; }        // 進入暴風眼 → 消失
-    // ★ 切向速度改用與風場同一套標準：由該半徑的風級換算真實風速，
-    //   再乘上風場的時間壓縮倍率，換成每幀的角度變化。
-    //   這樣颱風風場與一般風場的「快慢感」一致（使用者指定）。
-    const uu25s = (P.r25 && P.r15) ? (P.r25 / P.r15) : 0.33;
-    const bfCoreS = (P.ws != null) ? Math.max(10, _wsToBf(P.ws)) : 11;
-    const bfHere = (p.u <= uu25s)
-      ? bfCoreS + 2 * (1 - p.u / Math.max(1e-6, uu25s))
-      : bfCoreS - (bfCoreS - 7) * ((p.u - uu25s) / Math.max(1e-6, 1 - uu25s));
-    const wsHere = Math.max(2, _bfToWs(bfHere));            // m/s
-    const rKm = Math.max(1, P.r15 * p.u);
-    // 角速度 = 切線速度 ÷ 半徑，再套用風場的時間壓縮倍率
-    // ★ 粒子的「線速度」與一般風場同一套標準（使用者指正：對齊的是
-    //   粒子速度，不是暴風圈轉速）：每幀位移 = 基礎量 + 風速 × 縮放係數，
-    //   與 _wfPxPerMs() 用的是同一個時間壓縮倍率。
-    const vpx = 0.05 + wsHere * _wfPxPerMs();          // 像素／幀
-    const rpx = Math.max(4, rKm * (x._ppk || 1));      // 該粒子的半徑（像素）
-    const om = vpx / rpx;                               // 角速度（弧度／幀）
-    // ★ 螺旋而非直線外放（使用者指正）：固定「切向 : 徑向」的比例，
-    //   軌跡就是對數螺線。先前徑向位移是獨立常數，在外圈遠大於切向位移，
-    //   看起來就成了從中心直直射出去的線。
-    const SPIRAL_RATIO = 6;                             // 切向是徑向的 6 倍
-    const dU = om * p.u / SPIRAL_RATIO;
-    const SUB = 3;
-    const pts = [];
-    for(let k = 1; k <= SUB; k++){
-      const th = p.th - (om / 60) * (k / SUB);
-      const uu = p.u + dU * (k / SUB);
-      const rr = P.r15 * uu * x._ppk;
-      pts.push({x: x._cx + rr * Math.sin(th), y: x._cy - rr * Math.cos(th)});
-    }
-    p.th -= om / 60;
-    p.u  += dU;
+    if(u < uEye || u > 1.45){ p.dead = true; return; }
+    const th = Math.atan2(dx, -dy);                  // 以正北為 0、往東為正
+    // 該半徑的風級 → 風速（與風場圖層同一套色階與速度標準）
+    const uu25 = (P.r25 && P.r15) ? (P.r25 / P.r15) : 0.33;
+    const bfCore = (P.ws != null) ? Math.max(10, _wsToBf(P.ws)) : 11;
+    const bf = (u <= uu25)
+      ? bfCore + 0.5 * (1 - u / Math.max(1e-6, uu25))
+      : bfCore - (bfCore - 7) * Math.pow((u - uu25) / Math.max(1e-6, 1 - uu25), 0.7);
+    const ws = Math.max(2, _bfToWs(bf));
+    const vpx = (0.05 + ws * _wfPxPerMs()) * TY_SPEED_SCALE;
+    // 速度分量：切向（逆時針）＋ 微幅向外（螺旋）＋ 隨颱風移動的平流
+    const tanX =  Math.cos(th), tanY = Math.sin(th);      // 逆時針的切線方向
+    const radX =  Math.sin(th), radY = -Math.cos(th);     // 由中心往外
+    const inflow = 1 / TY_SPIRAL_RATIO;
+    const k = 1 / Math.hypot(1, inflow);
+    // ★ 平流：颱風前進時把風場往後帶，所以後方的尾流會拉得比前方長
+    //   （使用者指出往北走時南側範圍應較大）。
+    const ax = (x._dcx || 0) * TY_ADVECT, ay = (x._dcy || 0) * TY_ADVECT;
+    const nx = p.x + (tanX + radX * inflow) * vpx * k + ax;
+    const ny = p.y + (tanY + radY * inflow) * vpx * k + ay;
     p.age++;
-    if(p.u > 1.35){ p.dead = true; return; }   // 可穿出七級風圈一段距離
-    const pt = pts[pts.length - 1];
-    if(pt.x < -60 || pt.y < -60 || pt.x > _tyCv.width + 60 || pt.y > _tyCv.height + 60){
-      p.px = null; return;
+    if(nx < -80 || ny < -80 || nx > _tyCv.width + 80 || ny > _tyCv.height + 80){
+      p.dead = true; return;
     }
-    if(p.px != null && Math.hypot(pt.x - p.px, pt.y - p.py) > 14){
-      p.px = pt.x; p.py = pt.y; return;
-    }
-    if(p.px != null){
-      // ★ 風級沿半徑分布（使用者指定）：
-      //   十級風半徑處＝實際強度對應的風級（可到 13 級以上＝紫色），
-      //   由此往外遞減到七級風半徑處的 7 級，中間是紅→黃的漸層。
-      const uu25 = (P.r25 && P.r15) ? (P.r25 / P.r15) : 0.33;
-      const bfCore = (P.ws != null) ? Math.max(10, _wsToBf(P.ws)) : 11;
-      let bf;
-      // 紅色帶變薄：核心加成由 2 級收到 1 級，紅色只集中在十級風附近
-      // 紅色帶再收薄：核心加成 0.5 級，紅色只在十級風圈極近處
-      if(p.u <= uu25) bf = bfCore + 0.5 * (1 - p.u / Math.max(1e-6, uu25));
-      // 往外用 0.7 次方衰減：紅→黃的過渡帶更靠近核心，外圈大片是黃色
-      else bf = bfCore - (bfCore - 7) * Math.pow((p.u - uu25) / Math.max(1e-6, 1 - uu25), 0.7);
+    if(p.px != null && Math.hypot(nx - p.px, ny - p.py) < 40){
       const bd = BF_BANDS.find(b=>bf < b.max) || BF_BANDS[BF_BANDS.length - 1];
-      const a = 0.35 + 0.45 * (1 - p.u);
+      const a = 0.35 + 0.45 * (1 - u);
       ctx.strokeStyle = _hexA(bd.color, a);
-      ctx.lineWidth = p.u < 0.35 ? 1.4 : 1.0;
+      ctx.lineWidth = u < 0.35 ? 1.4 : 1.0;
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      ctx.beginPath(); ctx.moveTo(p.px, p.py);
-      pts.forEach(q2=>ctx.lineTo(q2.x, q2.y));
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(p.px, p.py); ctx.lineTo(nx, ny); ctx.stroke();
     }
-    p.px = pt.x; p.py = pt.y;
+    p.px = nx; p.py = ny;
+    p.x = nx; p.y = ny;
   });
 }
 
@@ -9023,6 +9029,9 @@ async function tryLoadLive(){
       try{ if(typeof renderVerify === 'function') renderVerify(); }catch(e){}
       try{ renderLayer(); }catch(e){}
       try{ updateInfo(selected || null); }catch(e){}
+      // 預設圖層只在首次載入時開啟（之後的自動更新不覆寫使用者的選擇）
+      if(!window._defaultsDone){ window._defaultsDone = true;
+        try{ _openDefaultLayers(); }catch(e){} }
       // ★ 雷達發布時間由並行區塊中的 radar.json 設定，必須等它到齊才顯示，
       //   否則會固定顯示「本次無資料」。
       try{

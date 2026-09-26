@@ -3117,7 +3117,7 @@ ADAPT_MIN_MOD = 20.0      # 模式的預報總量（mm）：幾乎沒報雨也�
 #   累積；既有的 80mm 門檻表抓不到 CMA（近 7 天它沒報過 ≥80mm）。
 #   在自動篩選有足夠資料前，由使用者依觀察直接排除。
 #   日後自動篩選也判定它包牌時，這份清單可以移除，結果不變。
-ADAPT_BLOCK = ('cma',)
+ADAPT_BLOCK = ('cma', 'icon')
 # 原本就在 FORMOSA 裡的核心成員（樣本不足時仍保留）
 ADAPT_CORE = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast')
 ADAPT_MAE_CAP = 60.0      # MAE 上限（mm）：再準的偏差比也救不了離譜的誤差
