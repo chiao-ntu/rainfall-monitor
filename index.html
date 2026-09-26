@@ -1528,6 +1528,8 @@ let _stnLayerOn = false, _stnLayer = null, _stnTimer = null;
 // ══════════════════════════════════════════════════════════
 const TERRAIN_RELIEF = {"bounds":[[21.89400185866543,120.04163169146315],[25.29801742002761,122.00964772678445]],"size":[1200,2254],"azimuth":315.0,"altitude":45.0,"stops":[[100,"#F8F9FA"],[500,"#E9ECEF"],[1500,"#CED4DA"],[3000,"#ADB5BD"],[null,"#6C757D"]]};
 let _terrainOn = false, _terrainOverlay = null, _terrainTop = null;
+// 錄製時自行合成陰影用的原圖（與圖層同一個檔）
+let _terrainImg = null;
 // ══════════════════════════════════════════════════════════
 //  風場動畫（Windy 式粒子）
 //  ★ 資料：CWA F-D0047 的 WindDirection（8方位）＋ WindSpeed。
@@ -1939,6 +1941,10 @@ function toggleTerrainLayer(){
     tp2.style.zIndex = 397;          // townPane(395) 之上、overlayPane(400) 之下
     tp2.style.pointerEvents = 'none';
     tp2.style.mixBlendMode = 'multiply';
+  }
+  if(!_terrainImg){
+    _terrainImg = new Image();
+    _terrainImg.src = 'terrain_relief.png';
   }
   if(!_terrainTop){
     _terrainTop = L.imageOverlay('terrain_relief.png', TERRAIN_RELIEF.bounds, {
@@ -3018,6 +3024,24 @@ function _fcImport(inp){
   document.addEventListener('mouseup', ()=>{ dragging = false; });
 })();
 
+// ★ 觀測佐證：雷達回波與實測雨量。用來判斷「模式報大雨但現實沒有」。
+function _radarHasEcho(t){
+  const r = (t.radar_1h != null) ? t.radar_1h : (t.radar != null ? t.radar : null);
+  return (r != null && r >= 1);
+}
+function _noRainEvidence(t){
+  // 雷達有回波 → 不算「沒有雨的證據」
+  if(_radarHasEcho(t)) return false;
+  // 近 1~3 小時的實測（rain_hourly 聚合）
+  let obs = 0;
+  for(let h = -3; h <= -1; h++){
+    const v = (typeof _obsHourlyAt === 'function') ? _obsHourlyAt(t, h) : null;
+    if(v != null) obs += v;
+  }
+  const today = (t.daily_rain || [])[0];
+  return obs < 1 && (today == null || today < 2);
+}
+
 function _blendQpf(t){
   // ★ 自適應選用（後端逐地形判定）：哪些模式該納入、各給多少權重，
   //   由 adaptive_blend 決定。亂報的模式直接不列入，多報／少報降低權重。
@@ -3047,6 +3071,7 @@ function _blendQpf(t){
 
   // ② 動態加權：MAE 越小權重越高（w = 1/(MAE+ε)）；無樣本者退回等權重
   const W = {};
+  let anyW = false;
   // 後端已給權重就直接用
   if(_ab){
     let ok = false;
@@ -3056,29 +3081,22 @@ function _blendQpf(t){
       if(w0 != null){ W[m] = w0; ok = true; }
     });
     if(ok){
+      // ★ 後端已給權重時，只補齊缺漏的預設值，不在這裡直接回傳 ——
+      //   先前這條路徑是單純加權平均並 return，完全繞過下方的
+      //   離群剔除、佐證原則與 CWA 仲裁（ICON 報 120mm 照樣被平均進去）。
       avail.forEach(m=>{ if(W[m] == null) W[m] = 0.3; });
-      const wS = avail.reduce((a, m)=>a + W[m], 0) || 1;
-      const out = [];
-      const len = Math.max(...avail.map(m=>arrs[m].length));
-      for(let i = 0; i < len; i++){
-        let s2 = 0, w2 = 0;
-        avail.forEach(m=>{
-          const v = arrs[m][i];
-          if(v == null || !isFinite(v)) return;
-          s2 += v * W[m]; w2 += W[m];
-        });
-        out.push(w2 > 0 ? Math.round(s2 / w2 * 10) / 10 : null);
-      }
-      return out;
+      anyW = true;
     }
   }
   let anySkill = false;
-  avail.forEach(m=>{
+  if(!anyW) avail.forEach(m=>{
     const s = sk[m];
     if(s && s.mae != null && s.n >= 10){ W[m] = 1 / (s.mae + 5); anySkill = true; }
     else W[m] = null;
   });
-  if(anySkill){
+  if(anyW){
+    // 後端權重已就緒，不再覆寫
+  } else if(anySkill){
     // 有樣本者用實測權重，其餘給平均權重（不因缺樣本而完全排除）
     const vals = avail.map(m=>W[m]).filter(x=>x != null);
     const avg = vals.reduce((a,b)=>a+b, 0) / vals.length;
@@ -3099,7 +3117,51 @@ function _blendQpf(t){
       out.push(ov != null ? ov : (arrs[avail[0]] || [])[i]);
       continue;
     }
+    // ★ 離群剔除 + 佐證原則（使用者指定）：
+    //   ① 先算各模式校正後的值與中位數。
+    //   ② 明顯不符現實者剔除：雷達與實測都沒有雨，模式卻報大雨。
+    //      判準用「觀測」而不是「跟別人不一樣」，才不會把真正的極端事件誤殺。
+    //   ③ 極端值要有佐證：某模式遠高於中位數時，需有第二個模式也報高
+    //      （或雷達已有回波）才採計全額，否則降權但不歸零。
+    //   ④ 剩下的模式若仍嚴重分歧，且 CWA 有官方值，改以 CWA 為準。
+    const cand = [];
+    avail.forEach(m=>{
+      const v0 = arrs[m][i];
+      if(v0 == null) return;
+      const s0 = sk[m];
+      const cap0 = AI_MODELS.has(m) ? 3.0 : 2.0;
+      const cv = (s0 && s0.bias && s0.n >= 10)
+        ? v0 * Math.max(0.5, Math.min(cap0, s0.bias)) : v0;
+      cand.push({m, v: cv, w: W[m]});
+    });
+    if(!cand.length){ out.push(null); continue; }
+    const sorted = cand.map(c=>c.v).sort((a, b)=>a - b);
+    const med = sorted[Math.floor(sorted.length / 2)];
+    // 近程（前 2 段＝約 12 小時內）才有觀測可以對照
+    const near = (i <= _nowSeg() + 1);
+    const noObs = near && _noRainEvidence(t);
+    const keep = cand.filter(c=>{
+      if(noObs && c.v >= 30 && med < 10) return false;   // ② 雷達與實測都沒雨，卻報大雨
+      return true;
+    });
+    const use = keep.length ? keep : cand;
+    // ③ 佐證：高於中位數 3 倍且 >50mm 者，需有第二個模式也超過中位數 2 倍
+    const highs = use.filter(c=>c.v > Math.max(50, med * 3));
+    use.forEach(c=>{
+      if(highs.length === 1 && c === highs[0] && !_radarHasEcho(t)) c.w *= 0.35;
+    });
+    // ④ 分歧過大且有官方值 → 以 CWA 為準
+    const lo = Math.min(...use.map(c=>c.v)), hi = Math.max(...use.map(c=>c.v));
+    const cwaV = (t.qpf_cwa || [])[i];
+    if(cwaV != null && hi > 30 && hi > lo * 6){
+      out.push(Math.round(cwaV * 10) / 10);
+      continue;
+    }
     let acc = 0, wa = 0;
+    use.forEach(c=>{ acc += c.v * c.w; wa += c.w; });
+    out.push(wa > 0 ? Math.round(acc / wa * 10) / 10 : null);
+    continue;
+    // eslint-disable-next-line no-unreachable
     avail.forEach(m=>{
       const v = arrs[m][i];
       if(v == null) return;
@@ -6431,9 +6493,19 @@ function _kmBetween(a1, o1, a2, o2){
 //   仍比風場（45 幀）略長，看得出漩渦但不糊。
 // ★ 參考 Windy：粒子多、單段短、拖尾短，靠密度表現流場，
 //   而不是靠長線條。長線在曲率大的地方必定失真。
+// 拖尾拉長（0.90≈22 幀 → 0.965≈65 幀），流場感才出得來
+const TY_SPIN_BOOST = 60;    // 颱風旋轉的額外倍率
 const TY_PART_N = 700;
-const TY_TRAIL_KEEP = 0.90;
+const TY_TRAIL_KEEP = 0.965;
 let _tyCv = null, _tyParts = [];
+// 蒲福風級 → 風速（m/s）：取各級的代表值，與 _wsToBf 互為反函式
+function _bfToWs(bf){
+  const T = [0.2, 0.9, 2.5, 4.4, 6.7, 9.4, 12.3, 15.5, 19.0, 22.6, 26.5, 30.6, 34.9,
+             39.5, 44.3, 49.4, 54.7];
+  const i = Math.max(0, Math.min(T.length - 2, Math.floor(bf)));
+  return T[i] + (T[i+1] - T[i]) * (bf - i);
+}
+
 function _tyPartInit(){
   const mp = document.getElementById('map');
   if(!mp) return;
@@ -6488,18 +6560,33 @@ function _tyPartStep(list){
     const uMin = x._uEye || 0.12;
     p.u = Math.sqrt(uMin * uMin + Math.random() * (1 - uMin * uMin));
     p.th = Math.random() * 2 * Math.PI;
-    p.age = Math.random() * 55;
+    p.age = Math.random() * 120;
     p.dead = false;
     p.px = null; p.py = null;
   };
   _tyParts.forEach(p=>{
-    if(p.dead || !p.sys || !p.sys._P || p.age > 55){ spawn(p); }
+    if(p.dead || !p.sys || !p.sys._P || p.age > 120){ spawn(p); }
     const x = p.sys, P = x._P;
     if(!P || x._ppk == null) return;
     const uEye = x._uEye || 0.12;
     if(p.u < uEye){ p.dead = true; return; }        // 進入暴風眼 → 消失
-    const om = (2 * Math.PI / 3.0) * Math.pow(uEye / p.u, 0.75);
-    const dU = 0.0012;                               // 由內往外擴散
+    // ★ 切向速度改用與風場同一套標準：由該半徑的風級換算真實風速，
+    //   再乘上風場的時間壓縮倍率，換成每幀的角度變化。
+    //   這樣颱風風場與一般風場的「快慢感」一致（使用者指定）。
+    const uu25s = (P.r25 && P.r15) ? (P.r25 / P.r15) : 0.33;
+    const bfCoreS = (P.ws != null) ? Math.max(10, _wsToBf(P.ws)) : 11;
+    const bfHere = (p.u <= uu25s)
+      ? bfCoreS + 2 * (1 - p.u / Math.max(1e-6, uu25s))
+      : bfCoreS - (bfCoreS - 7) * ((p.u - uu25s) / Math.max(1e-6, 1 - uu25s));
+    const wsHere = Math.max(2, _bfToWs(bfHere));            // m/s
+    const rKm = Math.max(1, P.r15 * p.u);
+    // 角速度 = 切線速度 ÷ 半徑，再套用風場的時間壓縮倍率
+    // ★ 颱風的迴轉半徑比風場的位移尺度大得多：照風場倍率算，
+    //   外圈一圈要 58 分鐘，根本看不出在轉。再乘上 TY_SPIN_BOOST，
+    //   讓「內快外慢」的相對關係維持不變，整體加快到看得見的程度。
+    const om = (wsHere / 1000 * WF_TIMELAPSE * TY_SPIN_BOOST / 3600) / rKm / 60 * 2 * Math.PI;
+    // ★ 向外加速：離心的甩出感，越外圈甩得越快
+    const dU = 0.0006 + 0.0022 * p.u;
     const SUB = 3;
     const pts = [];
     for(let k = 1; k <= SUB; k++){
@@ -6511,7 +6598,7 @@ function _tyPartStep(list){
     p.th -= om / 60;
     p.u  += dU;
     p.age++;
-    if(p.u > 1.02){ p.dead = true; return; }
+    if(p.u > 1.35){ p.dead = true; return; }   // 可穿出七級風圈一段距離
     const pt = pts[pts.length - 1];
     if(pt.x < -60 || pt.y < -60 || pt.x > _tyCv.width + 60 || pt.y > _tyCv.height + 60){
       p.px = null; return;
@@ -6526,7 +6613,8 @@ function _tyPartStep(list){
       const uu25 = (P.r25 && P.r15) ? (P.r25 / P.r15) : 0.33;
       const bfCore = (P.ws != null) ? Math.max(10, _wsToBf(P.ws)) : 11;
       let bf;
-      if(p.u <= uu25) bf = bfCore + 2 * (1 - p.u / Math.max(1e-6, uu25));
+      // 紅色帶變薄：核心加成由 2 級收到 1 級，紅色只集中在十級風附近
+      if(p.u <= uu25) bf = bfCore + 1 * (1 - p.u / Math.max(1e-6, uu25));
       else bf = bfCore - (bfCore - 7) * ((p.u - uu25) / Math.max(1e-6, 1 - uu25));
       const bd = BF_BANDS.find(b=>bf < b.max) || BF_BANDS[BF_BANDS.length - 1];
       const a = 0.35 + 0.45 * (1 - p.u);
@@ -6874,6 +6962,21 @@ async function exportAnim(){
         const img = await shot();
         ctx.clearRect(0, 0, cv.width, cv.height);
         ctx.drawImage(img, 0, 0, img.width, img.height, 0, 0, cv.width, cv.height);
+        // ★ 自行合成地形陰影（使用者反映動畫的地形是舊版的）：
+        //   html2canvas 不支援 mix-blend-mode，所以先排除那一層，
+        //   再由我們用 multiply 畫上去 —— 與網頁看到的完全一致。
+        if(_terrainOn && _terrainImg && _terrainImg.complete){
+          try{
+            const bb = TERRAIN_RELIEF.bounds;
+            const p1 = map.latLngToContainerPoint([bb[1][0], bb[0][1]]);   // 左上
+            const p2 = map.latLngToContainerPoint([bb[0][0], bb[1][1]]);   // 右下
+            ctx.save();
+            ctx.globalCompositeOperation = 'multiply';
+            ctx.globalAlpha = 0.55;
+            ctx.drawImage(_terrainImg, p1.x, p1.y, p2.x - p1.x, p2.y - p1.y);
+            ctx.restore();
+          }catch(e){}
+        }
         // 時間戳記（影片沒有旁邊的面板可看）
         const hh = h0 + (h1 - h0) * frac;
         const d = new Date(Date.now() + hh * 3600e3);
