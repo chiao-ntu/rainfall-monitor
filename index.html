@@ -2387,6 +2387,11 @@ function _forceFullRedraw(){
         const r = l._renderer;
         if(!r || seen.has(r)) return;
         seen.add(r);
+        // ★ 先 _update() 讓畫布尺寸跟上地圖大小，再清掉重畫範圍整張重繪。
+        //   只呼叫 _redraw() 的話，地圖被改尺寸（例如錄製時固定成 627×900）
+        //   畫布仍是舊尺寸，多出來的區域永遠是空白 —— 影片裡地圖整片不見、
+        //   截圖下半部全白，都是這個原因。
+        try{ if(r._update) r._update(); }catch(e){}
         try{ r._redrawBounds = null; r._redraw(); }catch(e){}
       });
     });
@@ -6459,10 +6464,20 @@ function _tyPartStep(list){
     try{
       const c0 = map.latLngToContainerPoint([P.lat, P.lng]);
       const c1 = map.latLngToContainerPoint([P.lat + 0.1, P.lng]);
+      // ★ 中心或縮放一變，所有粒子的像素位置整體位移，
+      //   照連就會出現從中心放射出去的長線（使用者截圖裡那些）。
+      //   尺度或中心位移過大時，全部斷線重畫。
+      const moved = (x._cx == null) ? 0 : Math.hypot(c0.x - x._cx, c0.y - x._cy);
+      const ppkNew = Math.abs(c1.y - c0.y) / 11.132;
+      if(moved > 8 || (x._ppk && Math.abs(ppkNew - x._ppk) / x._ppk > 0.02)){
+        _tyParts.forEach(p=>{ if(p.sys === x){ p.px = null; p.py = null; } });
+      }
       x._cx = c0.x; x._cy = c0.y;
-      x._ppk = Math.abs(c1.y - c0.y) / 11.132;     // 每公里像素
+      x._ppk = ppkNew;                              // 每公里像素
       // 眼牆內無風：暴風眼半徑約十級風半徑的 0.3
-      x._uEye = Math.max(0.06, ((P.r25 || P.r15 * 0.33) / P.r15) * 0.3);
+      // ★ 暴風眼要留洞（使用者指正）：眼半徑取十級風半徑的 0.45，
+      //   眼內不生成、不繪製任何粒子。
+      x._uEye = Math.max(0.10, ((P.r25 || P.r15 * 0.33) / P.r15) * 0.45);
     }catch(e){ x._ppk = null; }
   });
   const spawn = p =>{
@@ -6549,7 +6564,7 @@ function _tyAnimStart(){
     x.f15 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#f5a623', weight:1,
       opacity:0.35, fillColor:'#f5a623', fillOpacity:0.07, interactive:false}).addTo(layer);
     x.f25 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#e8453c', weight:1,
-      opacity:0.4, fillColor:'#e8453c', fillOpacity:0.10, interactive:false}).addTo(layer);
+      opacity:0.4, fill:false, interactive:false}).addTo(layer);
     x.a15 = Array.from({length: 10}, ()=>L.polyline([[0,0]], {pane:'townPane',
       color:'#f5a623', weight:2.4, opacity:0.95, interactive:false}).addTo(layer));
     x.a25 = Array.from({length: 8}, ()=>L.polyline([[0,0]], {pane:'townPane',
@@ -6633,7 +6648,7 @@ function _tyDrawAt(h, now){
       x.arms.forEach(a=>a.setStyle({opacity: on ? 0.45 : 0}));
       [...x.a15, ...x.a25].forEach(l=>l.setStyle({opacity: on ? 1 : 0}));
       [x.f15, x.f25, x.eye].forEach(l=>l.setStyle({opacity: on ? (l === x.eye ? 1 : 0.38) : 0,
-        fillOpacity: on ? (l === x.eye ? 1 : (l === x.f15 ? 0.07 : 0.10)) : 0}));
+        fillOpacity: on ? (l === x.eye ? 1 : (l === x.f15 ? 0.07 : 0)) : 0}));
       x._P = P;
       if(!P) return;
       x.eye.setLatLng([P.lat, P.lng]);
@@ -6832,10 +6847,11 @@ async function exportAnim(){
         n.classList.contains('terrain-relief-top') ||
         (n.style && n.style.mixBlendMode === 'multiply'))
     });
-    // 色塊在開啟地形時是半透明的，錄影時恢復不透明，避免顏色再被稀釋
-    _savedTerrain = _terrainOn;
-    _terrainOn = false;
-    try{ _animPaintReset(); renderLayer(); }catch(e){}
+    // ★ 只收起「色彩增值」的陰影層（html2canvas 不支援混合模式，會洗淡畫面），
+    //   底下那層地形保留 —— 先前整個關掉 _terrainOn，動畫裡就完全沒有地形了。
+    _savedTerrain = _terrainTop;
+    try{ if(_terrainTop){ map.removeLayer(_terrainTop); } }catch(e){}
+    try{ _animPaintReset(); renderLayer(); _forceFullRedraw(); }catch(e){}
     rec.start();
     rec.pause();                             // 先暫停，畫好一格才放行
     for(let i = 0; i < _animFrames.length; i++){
@@ -6899,7 +6915,7 @@ async function exportAnim(){
     alert('匯出失敗：' + (e && e.message ? e.message : e));
   }finally{
     setTxt('⬇ 影片');
-    try{ if(_savedTerrain !== null) _terrainOn = _savedTerrain; }catch(e){}
+    try{ if(_savedTerrain && _terrainOn){ _savedTerrain.addTo(map); _terrainTop = _savedTerrain; } }catch(e){}
     _bgStop();
     window._animManual = false;
     window._wfManual = false;
@@ -6915,6 +6931,7 @@ async function exportAnim(){
       map.options.zoomSnap = prevView.snap;
       map.invalidateSize({animate: false});
       map.setView(prevView.center, prevView.zoom, {animate: false});
+      _forceFullRedraw();
     }catch(e){}
     try{ renderLayer(); _syncTimeBar(); }catch(e){}
   }
@@ -8471,6 +8488,16 @@ function drawSegs(t){
   }).join('');
 }
 
+// ★ 漸層式圖例（使用者提議）：地圖在動畫時用的是級距內由淺到深的連續色，
+//   圖例若只給單一色塊，兩者就對不起來。改成每一格畫出該級距內的漸層，
+//   與 _rampColor 用的是同一條公式（1.14 → 0.86 的明暗係數）。
+function _legendSwatch(scale, i){
+  const c = _hexRgb(scale[i].color);
+  if(!c) return scale[i].color;
+  const shade = k => _rgbHex(c.map(v=>Math.round(Math.max(0, Math.min(255, v * k)))));
+  return `linear-gradient(to right, ${shade(1.14)}, ${shade(0.86)})`;
+}
+
 function renderLegend(){
   const isFuture6h = false;  // fut6 已改回累積雨量色階
   // 風力預測：以蒲福風級色階呈現（與 BF_BANDS 同一組定義，避免兩處分歧）
@@ -8537,7 +8564,7 @@ function renderLegend(){
     cbTitle.textContent = titleText;
     cbItems.innerHTML = sc.map((s,i)=>`
       <div style="display:flex;align-items:center;gap:5px;margin:2px 0">
-        <div style="width:14px;height:10px;border-radius:1px;background:${s.color};
+        <div style="width:14px;height:10px;border-radius:1px;background:${_legendSwatch(sc,i)};
           border:1px solid rgba(0,0,0,.25);flex-shrink:0"></div>
         <span style="color:#111;font-size:10px;font-weight:600">${rangeLabel(sc,i)}</span>
       </div>`).join('');
@@ -11305,6 +11332,8 @@ function renderTyphoonLegend(){
   const el   = document.getElementById('typhoon-legend');
   const wrap = document.getElementById('typhoon-legend-wrap');
   if(!el || !wrap) return;
+  // ★ 動畫期間靜態颱風圖層被收起，但圖例內容仍應保留（使用者回報消失）
+  if(typeof _tyA !== 'undefined' && _tyA){ wrap.style.display = ''; return; }
   if(!showTyphoon){ wrap.style.display = 'none'; return; }
   const rows = [
     ['#1e6fd9', '▼', '暴風圈觸及100km海域'],
