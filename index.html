@@ -2360,6 +2360,40 @@ map.getPane('townPane').style.zIndex = 395;
 //   的所有點擊 —— 不像 SVG 只在實際畫到的幾何上捕捉事件。
 //   若不處理，位於上層 pane 的 canvas（海域、縣市界）會蓋住鄉鎮色塊，
 //   造成「地圖點不到」。故：只有鄉鎮層需要互動，其餘 pane 一律關閉指標事件。
+// ★ 強制整張重畫（地圖被切割的根治）：
+//   Leaflet 的 Canvas 渲染器只重畫 _redrawBounds 涵蓋的那一塊，
+//   區域外保留舊畫面。平移、縮放或我們手動觸發重畫時，若邊界計算
+//   與實際不符，沒被涵蓋的部分就維持上一幀 —— 畫面看起來像被切掉一塊。
+//   把 _redrawBounds 清成 null，_clear() 就會清整張畫布再重畫。
+function _forceFullRedraw(){
+  if(!map) return;
+  ['townPane', 'seaPane', 'overlayPane', 'terrainPane'].forEach(pn=>{
+    let p2;
+    try{ p2 = map.getPane(pn); }catch(e){ return; }
+    if(!p2) return;
+    p2.querySelectorAll('canvas').forEach(c=>{
+      const r = c._leaflet_renderer || (c.__proto__ && null);
+      void r;
+    });
+  });
+  // 由圖層反查渲染器（Leaflet 沒有公開由畫布取得渲染器的方法）
+  const seen = new Set();
+  [townLayer, countyLayer, typeof disasterLayer !== 'undefined' ? disasterLayer : null,
+   typeof debrisLayer !== 'undefined' ? debrisLayer : null,
+   typeof landslideLayer !== 'undefined' ? landslideLayer : null]
+    .forEach(g=>{
+      if(!g || !g.eachLayer) return;
+      g.eachLayer(l=>{
+        const r = l._renderer;
+        if(!r || seen.has(r)) return;
+        seen.add(r);
+        try{ r._redrawBounds = null; r._redraw(); }catch(e){}
+      });
+    });
+}
+// 平移、縮放、改變大小後都整張重畫，避免殘留半張舊畫面
+try{ map.on('moveend zoomend resize', ()=>{ try{ _forceFullRedraw(); }catch(e){} }); }catch(e){}
+
 function _fixCanvasPointerEvents(){
   // ★ 改為全面掃描：地圖內所有畫布一律不接滑鼠，只有 townPane 的那張接。
   //   先前只列舉三個 pane，之後新增的圖層（地形上層、風場、颱風粒子…）
@@ -6193,11 +6227,12 @@ function _animBuildFrames(){
   if(winKey === 'custom' && sS && sE){
     const a = parseInt(sS.value), b = parseInt(sE.value);
     if(_custStep === 1){ h0 = Math.min(a, b); h1 = Math.max(a, b); }
-    else { h0 = toH(Math.min(a, b)); h1 = toH(Math.max(a, b) + 1); }
+    // ★ 迄點滑桿指的就是結束時刻，先前多加一段（＝多 6 小時）
+    else { h0 = toH(Math.min(a, b)); h1 = toH(Math.max(a, b)); }
   } else {
     // 非自訂視窗：用目前視窗實際涵蓋的時段
     h0 = toH(Math.max(0, segFrom));
-    h1 = toH(Math.max(0, segTo) + 1);
+    h1 = toH(Math.max(0, segTo));
   }
   h0 = Math.round(h0 * 100) / 100;
   h1 = Math.round(h1 * 100) / 100;
@@ -6340,7 +6375,8 @@ function _tyTimeline(ty){
   const add = (ms, p)=>{
     if(!isFinite(ms) || p.lat == null || p.lng == null) return;
     pts.push({ms, lat: +p.lat, lng: +p.lng,
-              r15: (p.r15 != null ? +p.r15 : null), r25: (p.r25 != null ? +p.r25 : null)});
+              r15: (p.r15 != null ? +p.r15 : null), r25: (p.r25 != null ? +p.r25 : null),
+              ws: (p.ws != null ? +p.ws : null)});      // 近中心最大風速：粒子取色用
   };
   (ty.past || []).forEach(p=>add(Date.parse(p.t), p));
   if(ty.current) add(Date.parse(ty.current.t || ''), ty.current);
@@ -6353,7 +6389,7 @@ function _tyTimeline(ty){
   pts.forEach(p=>{ if(!out.length || p.ms - out[out.length-1].ms > 60e3) out.push(p);
                    else Object.assign(out[out.length-1], p); });
   // 缺半徑的點沿用相鄰值，避免暴風圈忽然消失
-  for(const k of ['r15', 'r25']){
+  for(const k of ['r15', 'r25', 'ws']){
     let last = null;
     out.forEach(p=>{ if(p[k] == null) p[k] = last; else last = p[k]; });
     last = null;
@@ -6371,7 +6407,8 @@ function _tyAt(tl, ms){
   const lin = (a, b)=> (a == null || b == null) ? (a ?? b) : a + (b - a) * f;
   return {lat: _catmull(p0.lat, p1.lat, p2.lat, p3.lat, f),
           lng: _catmull(p0.lng, p1.lng, p2.lng, p3.lng, f),
-          r15: lin(p1.r15, p2.r15), r25: lin(p1.r25, p2.r25)};
+          r15: lin(p1.r15, p2.r15), r25: lin(p1.r25, p2.r25),
+          ws: lin(p1.ws, p2.ws)};
 }
 function _kmBetween(a1, o1, a2, o2){
   const R = 6371, d2r = Math.PI / 180;
@@ -6407,78 +6444,88 @@ function _tyPartInit(){
 function _tyPartStep(list){
   if(!_tyCv) return;
   const ctx = _tyCv.getContext('2d');
-  // 長拖尾：每幀只淡掉 1%
   ctx.globalCompositeOperation = 'destination-in';
   ctx.fillStyle = `rgba(0,0,0,${TY_TRAIL_KEEP})`;
   ctx.fillRect(0, 0, _tyCv.width, _tyCv.height);
   ctx.globalCompositeOperation = 'source-over';
   const act = list.filter(x=>x._P && x._P.r15);
   if(!act.length) return;
+  // ★ 每個系統只投影一次：先前每顆粒子、每個子步都呼叫
+  //   map.latLngToContainerPoint（700 顆 × 4 步 = 2800 次／幀），
+  //   那是風場一幀一幀卡頓的主因。改為算出中心的像素位置與
+  //   「每公里幾像素」，其餘用平面幾何推算。
+  act.forEach(x=>{
+    const P = x._P;
+    try{
+      const c0 = map.latLngToContainerPoint([P.lat, P.lng]);
+      const c1 = map.latLngToContainerPoint([P.lat + 0.1, P.lng]);
+      x._cx = c0.x; x._cy = c0.y;
+      x._ppk = Math.abs(c1.y - c0.y) / 11.132;     // 每公里像素
+      // 眼牆內無風：暴風眼半徑約十級風半徑的 0.3
+      x._uEye = Math.max(0.06, ((P.r25 || P.r15 * 0.33) / P.r15) * 0.3);
+    }catch(e){ x._ppk = null; }
+  });
   const spawn = p =>{
     const x = act[Math.floor(Math.random() * act.length)];
     p.sys = x;
-    p.u = 0.12 + Math.random() * 0.35;          // 由內圈生成，往外擴散
+    // ★ 依面積均勻分布（sqrt），否則粒子全擠在內圈 —— 使用者看到的
+    //   「只有十級風附近有風場」就是這個原因（外擴太慢、壽命又短）。
+    const uMin = x._uEye || 0.12;
+    p.u = Math.sqrt(uMin * uMin + Math.random() * (1 - uMin * uMin));
     p.th = Math.random() * 2 * Math.PI;
     p.age = Math.random() * 55;
     p.dead = false;
-    p.px = null; p.py = null;     // ★ 重生必須斷線，否則會從舊位置拉一條直線過來
+    p.px = null; p.py = null;
   };
   _tyParts.forEach(p=>{
     if(p.dead || !p.sys || !p.sys._P || p.age > 55){ spawn(p); }
-    const P = p.sys._P;
-    // 角速度：內圈快、外圈慢；同時緩慢向內收（氣旋式輻合）
-    const om = (2 * Math.PI / 3.0) * Math.pow(0.15 / p.u, 0.75);
-    // ★ 由內往外的螺旋（使用者指定）：颱風低層輻合、高層輻散，
-    //   視覺上以「向外擴散」呈現更接近 Windy 的雲系外流。
-    const dU = 0.0012;
-    const kmLat = 111.32, kmLng = 111.32 * Math.cos(P.lat * Math.PI / 180) || 1;
-    // ★ 一幀之內再分 4 小步畫成弧線：先前一幀畫一條直線，
-    //   內圈角速度大時就變成明顯的折線（稜角感的來源）。
-    const SUB = 4;
+    const x = p.sys, P = x._P;
+    if(!P || x._ppk == null) return;
+    const uEye = x._uEye || 0.12;
+    if(p.u < uEye){ p.dead = true; return; }        // 進入暴風眼 → 消失
+    const om = (2 * Math.PI / 3.0) * Math.pow(uEye / p.u, 0.75);
+    const dU = 0.0012;                               // 由內往外擴散
+    const SUB = 3;
     const pts = [];
     for(let k = 1; k <= SUB; k++){
       const th = p.th - (om / 60) * (k / SUB);
       const uu = p.u + dU * (k / SUB);
-      const rr = P.r15 * uu;
-      try{
-        pts.push(map.latLngToContainerPoint(
-          [P.lat + rr * Math.cos(th) / kmLat, P.lng + rr * Math.sin(th) / kmLng]));
-      }catch(e){ return; }
+      const rr = P.r15 * uu * x._ppk;
+      pts.push({x: x._cx + rr * Math.sin(th), y: x._cy - rr * Math.cos(th)});
     }
-    p.th -= om / 60;                              // 逆時針（θ 遞減）
+    p.th -= om / 60;
     p.u  += dU;
     p.age++;
     if(p.u > 1.02){ p.dead = true; return; }
     const pt = pts[pts.length - 1];
-    if(pt.x < -50 || pt.y < -50 || pt.x > _tyCv.width + 50 || pt.y > _tyCv.height + 50) return;
-    // ★ 颱風中心每幀都在移動，粒子座標是相對中心的極座標，
-    //   中心一動全部粒子跟著平移，若照連會拉出滿畫面的長直線
-    //   （使用者截圖裡往左延伸的那些）。位移過大就斷開重畫。
-    const MAXSEG = 14;
-    if(p.px != null && Math.hypot(pt.x - p.px, pt.y - p.py) > MAXSEG){
+    if(pt.x < -60 || pt.y < -60 || pt.x > _tyCv.width + 60 || pt.y > _tyCv.height + 60){
+      p.px = null; return;
+    }
+    if(p.px != null && Math.hypot(pt.x - p.px, pt.y - p.py) > 14){
       p.px = pt.x; p.py = pt.y; return;
     }
     if(p.px != null){
-      // 越靠近中心越亮、越白；外圍偏橘
-      // ★ 顏色比照風力預測圖層的蒲福風級色階（使用者指定）：
-      //   以「十級風半徑＝10 級、七級風半徑＝7 級」為錨點，
-      //   沿半徑內插出該處的風級再取色，兩個圖層的顏色語意一致。
-      const a = 0.30 + 0.5 * (1 - p.u);
+      // ★ 風級沿半徑分布（使用者指定）：
+      //   十級風半徑處＝實際強度對應的風級（可到 13 級以上＝紫色），
+      //   由此往外遞減到七級風半徑處的 7 級，中間是紅→黃的漸層。
       const uu25 = (P.r25 && P.r15) ? (P.r25 / P.r15) : 0.33;
+      const bfCore = (P.ws != null) ? Math.max(10, _wsToBf(P.ws)) : 11;
       let bf;
-      if(p.u <= uu25) bf = 10 + 4 * (1 - p.u / Math.max(1e-6, uu25));   // 眼牆更強
-      else bf = 10 - 3 * ((p.u - uu25) / Math.max(1e-6, 1 - uu25));     // 外緣降到 7 級
-      const bd = BF_BANDS.find(b=>bf < b.max) || BF_BANDS[BF_BANDS.length-1];
+      if(p.u <= uu25) bf = bfCore + 2 * (1 - p.u / Math.max(1e-6, uu25));
+      else bf = bfCore - (bfCore - 7) * ((p.u - uu25) / Math.max(1e-6, 1 - uu25));
+      const bd = BF_BANDS.find(b=>bf < b.max) || BF_BANDS[BF_BANDS.length - 1];
+      const a = 0.35 + 0.45 * (1 - p.u);
       ctx.strokeStyle = _hexA(bd.color, a);
       ctx.lineWidth = p.u < 0.35 ? 1.4 : 1.0;
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.beginPath(); ctx.moveTo(p.px, p.py);
-      pts.forEach(q2=>ctx.lineTo(q2.x, q2.y));    // 弧線，不是單一直線
+      pts.forEach(q2=>ctx.lineTo(q2.x, q2.y));
       ctx.stroke();
     }
     p.px = pt.x; p.py = pt.y;
   });
 }
+
 function _tyPartStop(){
   if(_tyCv){ try{ _tyCv.remove(); }catch(e){} _tyCv = null; }
   _tyParts = [];
@@ -6802,11 +6849,7 @@ async function exportAnim(){
         //   從 console 就能看出是哪一段被瀏覽器擋住（拍子／截圖／送格）。
         const _t0 = performance.now();
         try{ _animPaintFrac(frac); }catch(e){}
-        try{ map.getPane('townPane').querySelectorAll('canvas')
-               .forEach(()=>{}); if(townLayer && townLayer.eachLayer){
-          const r0 = (townLayer.getLayers()[0] || {})._renderer;
-          if(r0 && r0._redraw) r0._redraw();   // 立即重畫，不等 rAF
-        } }catch(e){}                  // 顏色漸層推到本子格
+        try{ _forceFullRedraw(); }catch(e){}   // 立即整張重畫，不等 rAF                  // 顏色漸層推到本子格
         try{ _tyDrawAt(h0 + (h1 - h0) * frac, performance.now()); }catch(e){}
         try{ for(let k = 0; k < WF_STEPS; k++) window._wfStep && window._wfStep(); }catch(e){}
         // ★ 背景分頁會把 requestAnimationFrame 節流到幾乎停擺，
