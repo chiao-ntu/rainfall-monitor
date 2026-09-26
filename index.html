@@ -220,8 +220,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <span class="cl" style="color:#7ee8a8">逐時</span>
     <div class="bg" id="future1h-btns" style="flex:1;min-width:0;
       display:flex;align-items:center;gap:5px;flex-wrap:nowrap">
-      <button class="b" id="bRadar" onclick="setWin('radar')">未來1h雷達QPF</button>
-      <span id="radar-time" style="font-size:9px;color:#7a98aa"></span>
+      
+      
       <select id="h1-day" onchange="onH1DayChange()"
         style="font-size:10px;padding:2px 4px;background:#061220;color:#cfe4f5;
         border:1px solid #1a4060;border-radius:3px"></select>
@@ -345,7 +345,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <span style="color:#4a6a8a;font-size:10px;margin:0 3px 0 0">融合校正</span>
       <button class="b model-btn on" id="mBlend" onclick="setModel('blend')"
         style="border-color:#c8a45a;color:#f0c878">FORMOSA</button>
-      <button class="b model-btn" id="mFc" onclick="setModel('fc')" title="FORMOSA-customise：自選各地形採用的模式與權重" style="border-color:#8a6a3a;color:#f0c878">F-c</button><button class="b" onclick="openFcPanel()" title="編輯 F-c" style="padding:1px 5px;border-color:#8a6a3a;color:#f0c878">✎</button>
+      <button class="b model-btn" id="mFc" onclick="setModel('fc')" style="border-color:#8a6a3a;color:#f0c878">F-c</button><button class="b" onclick="openFcPanel()" style="padding:1px 5px;border-color:#8a6a3a;color:#f0c878">✎</button>
       <button class="b model-btn" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
       <button class="b model-btn hi-btn"    id="mHi"    onclick="setModel('hi')">強降雨</button>
       <button class="b model-btn lo-btn"    id="mLo"    onclick="setModel('lo')">弱降雨</button>
@@ -2361,13 +2361,38 @@ map.getPane('townPane').style.zIndex = 395;
 //   若不處理，位於上層 pane 的 canvas（海域、縣市界）會蓋住鄉鎮色塊，
 //   造成「地圖點不到」。故：只有鄉鎮層需要互動，其餘 pane 一律關閉指標事件。
 function _fixCanvasPointerEvents(){
-  ['seaPane', 'terrainPane', 'overlayPane'].forEach(pn=>{
-    const p2 = map.getPane(pn);
-    if(!p2) return;
-    p2.querySelectorAll('canvas').forEach(c=>{ c.style.pointerEvents = 'none'; });
-  });
+  // ★ 改為全面掃描：地圖內所有畫布一律不接滑鼠，只有 townPane 的那張接。
+  //   先前只列舉三個 pane，之後新增的圖層（地形上層、風場、颱風粒子…）
+  //   只要忘了設定就會整片蓋住地圖，變成「地圖點不到」。
+  const mp = document.getElementById('map');
+  if(!mp || !map) return;
   const tp = map.getPane('townPane');
-  if(tp) tp.querySelectorAll('canvas').forEach(c=>{ c.style.pointerEvents = 'auto'; });
+  mp.querySelectorAll('canvas').forEach(c=>{
+    c.style.pointerEvents = (tp && tp.contains(c)) ? 'auto' : 'none';
+  });
+  // 疊在 townPane 之上的 pane，除非本來就要互動，否則一律放行滑鼠穿透
+  ['terrainPane', 'terrainTopPane', 'seaPane'].forEach(pn=>{
+    const p2 = map.getPane(pn);
+    if(p2) p2.style.pointerEvents = 'none';
+  });
+}
+// ★ 診斷：地圖點不到時在 console 執行 _whyNoClick()，
+//   會回報「滑鼠實際打到哪個元素」，一眼看出是誰蓋住的。
+function _whyNoClick(){
+  const mp = document.getElementById('map');
+  if(!mp) return '找不到地圖';
+  const r = mp.getBoundingClientRect();
+  const out = [];
+  [[0.5, 0.5], [0.3, 0.4], [0.7, 0.6]].forEach(([fx, fy])=>{
+    const e = document.elementFromPoint(r.left + r.width * fx, r.top + r.height * fy);
+    if(!e){ out.push('(無元素)'); return; }
+    const cls = (e.className && e.className.baseVal !== undefined)
+      ? e.className.baseVal : (e.className || '');
+    out.push(`${e.tagName}#${e.id || '-'}.${String(cls).slice(0, 40)}`
+      + ` z=${getComputedStyle(e).zIndex} pe=${getComputedStyle(e).pointerEvents}`);
+  });
+  console.log('地圖上三個取樣點打到的元素：\n  ' + out.join('\n  '));
+  return out;
 }
 map.on('layeradd zoomend moveend', ()=>{ try{ _fixCanvasPointerEvents(); }catch(e){} });
 
@@ -6225,7 +6250,7 @@ function _rampColor(v, scale){
   //   先前是從「前一級的顏色」漸變過來，等於整張圖都偏向上一級，
   //   顏色明顯偏淡、判讀時容易誤判量級（使用者回報的問題）。
   //   現在同一級距看起來仍是該級距的顏色，只是由略淺漸深。
-  const k = 1.10 - 0.20 * f;
+  const k = 1.14 - 0.28 * f;   // 級距內的明暗差加大，逐格變化才看得出來
   return _rgbHex(base.map(c=>Math.round(Math.max(0, Math.min(255, c * k)))));
 }
 const _animTweens = new Map();
@@ -6258,7 +6283,9 @@ function _animPaint(){
         if(rc) to = rc;
       }catch(e){}
     }
-    if(poly._animTo === to) return;              // 顏色沒變就不動
+    // ★ 顏色相同且已無進行中的過渡才略過。先前只比顏色，
+    //   等於仍是「跨級距才啟動一次」，看起來就是瞬間切換。
+    if(poly._animTo === to && !_animTweens.has(poly)) return;
     poly._animTo = to;
     if(f.fillOpacity != null) poly.setStyle({fillOpacity: f.fillOpacity});
     const from = poly._animShown || poly.options.fillColor || to;
@@ -6390,7 +6417,7 @@ function _tyPartStep(list){
   const spawn = p =>{
     const x = act[Math.floor(Math.random() * act.length)];
     p.sys = x;
-    p.u = 0.15 + Math.random() * 0.85;          // 半徑比例
+    p.u = 0.12 + Math.random() * 0.35;          // 由內圈生成，往外擴散
     p.th = Math.random() * 2 * Math.PI;
     p.age = Math.random() * 55;
     p.dead = false;
@@ -6401,6 +6428,9 @@ function _tyPartStep(list){
     const P = p.sys._P;
     // 角速度：內圈快、外圈慢；同時緩慢向內收（氣旋式輻合）
     const om = (2 * Math.PI / 3.0) * Math.pow(0.15 / p.u, 0.75);
+    // ★ 由內往外的螺旋（使用者指定）：颱風低層輻合、高層輻散，
+    //   視覺上以「向外擴散」呈現更接近 Windy 的雲系外流。
+    const dU = 0.0012;
     const kmLat = 111.32, kmLng = 111.32 * Math.cos(P.lat * Math.PI / 180) || 1;
     // ★ 一幀之內再分 4 小步畫成弧線：先前一幀畫一條直線，
     //   內圈角速度大時就變成明顯的折線（稜角感的來源）。
@@ -6408,7 +6438,7 @@ function _tyPartStep(list){
     const pts = [];
     for(let k = 1; k <= SUB; k++){
       const th = p.th - (om / 60) * (k / SUB);
-      const uu = p.u - 0.00035 * (k / SUB);
+      const uu = p.u + dU * (k / SUB);
       const rr = P.r15 * uu;
       try{
         pts.push(map.latLngToContainerPoint(
@@ -6416,9 +6446,9 @@ function _tyPartStep(list){
       }catch(e){ return; }
     }
     p.th -= om / 60;                              // 逆時針（θ 遞減）
-    p.u  -= 0.00035;
+    p.u  += dU;
     p.age++;
-    if(p.u < 0.12){ p.dead = true; return; }
+    if(p.u > 1.02){ p.dead = true; return; }
     const pt = pts[pts.length - 1];
     if(pt.x < -50 || pt.y < -50 || pt.x > _tyCv.width + 50 || pt.y > _tyCv.height + 50) return;
     // ★ 颱風中心每幀都在移動，粒子座標是相對中心的極座標，
@@ -6430,10 +6460,16 @@ function _tyPartStep(list){
     }
     if(p.px != null){
       // 越靠近中心越亮、越白；外圍偏橘
+      // ★ 顏色比照風力預測圖層的蒲福風級色階（使用者指定）：
+      //   以「十級風半徑＝10 級、七級風半徑＝7 級」為錨點，
+      //   沿半徑內插出該處的風級再取色，兩個圖層的顏色語意一致。
       const a = 0.30 + 0.5 * (1 - p.u);
-      ctx.strokeStyle = p.u < 0.35 ? `rgba(255,255,255,${a.toFixed(2)})`
-                      : p.u < 0.7  ? `rgba(255,220,150,${a.toFixed(2)})`
-                                   : `rgba(245,166,35,${a.toFixed(2)})`;
+      const uu25 = (P.r25 && P.r15) ? (P.r25 / P.r15) : 0.33;
+      let bf;
+      if(p.u <= uu25) bf = 10 + 4 * (1 - p.u / Math.max(1e-6, uu25));   // 眼牆更強
+      else bf = 10 - 3 * ((p.u - uu25) / Math.max(1e-6, 1 - uu25));     // 外緣降到 7 級
+      const bd = BF_BANDS.find(b=>bf < b.max) || BF_BANDS[BF_BANDS.length-1];
+      ctx.strokeStyle = _hexA(bd.color, a);
       ctx.lineWidth = p.u < 0.35 ? 1.4 : 1.0;
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.beginPath(); ctx.moveTo(p.px, p.py);
@@ -6569,7 +6605,7 @@ function _tyDrawAt(h, now){
           const a0 = base + ai * gap;
           // ★ 取樣密度：每段 ≤0.02 弧度（整圈約 314 點），
           //   先前每段只取 6 點，整圈等於 60 邊形，肉眼看得出稜角。
-          const nseg = Math.max(10, Math.ceil(span / 0.008));   // 整圈約 800 點
+          const nseg = Math.max(12, Math.ceil(span / (2 * Math.PI / 1080)));   // 整圈 1080 邊
           const pts = [];
           for(let k = 0; k <= nseg; k++){
             const th = a0 + span * (k / nseg);
@@ -11077,6 +11113,9 @@ function toggleTyphoonLayer(){
   const btn = document.getElementById('bTyphoon');
   if(btn) btn.classList.toggle('on', showTyphoon);
   renderTyphoonLayer();
+  // ★ 圖例跟著按鈕一起開關（使用者指定）：先前只有在重繪圖例時才會檢查
+  //   showTyphoon，切換按鈕不會重畫圖例，於是關掉圖層圖例還留在地圖上。
+  try{ renderTyphoonLegend(); }catch(e){}
   try{ updateTyphoonPanel(); }catch(e){}
 }
 function _tyIntensity(ws){
