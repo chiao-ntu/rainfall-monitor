@@ -195,6 +195,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#6a5a3a;color:#d8c090">⛰ 地形</button>
       <button class="b"    id="bWindField" onclick="toggleWindField()"
         style="border-color:#3a7a8a;color:#7ad8e8">🌀 風場</button>
+      <button class="b"    id="bHimawari" onclick="toggleHimawari()"
+        style="border-color:#5a4a7a;color:#c0a8e8">🛰 Himawari</button>
       <button class="b"    id="bDarkSea" onclick="toggleDarkSea()"
         style="border-color:#3a4a6a;color:#8aa8d8">🌊 深色海</button>
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
@@ -1547,6 +1549,44 @@ const WF_LIFE = 150;   // 配合拖尾拉長（90 → 150 幀）            // �
 //   （使用者指定）—— 色階是判讀依據，不能因為換配色就改變。
 //   海面上的疊圖（颱風路徑、警戒區框線）另改為亮色以維持對比。
 let _darkSea = false;
+// ★ Himawari-9 衛星雲圖（CWA 的雲圖同樣來自這顆衛星，不另外分）：
+//   氣象廳提供現成的 XYZ 圖磚，直接當底圖層疊上即可。
+//   預設用紅外線（B13），夜間也看得到雲系；水氣頻道另備。
+//   ★ 時間必須對齊到 10 分鐘整點，且官方資料約落後 20 分鐘。
+const HIMAWARI_BASE = 'https://www.jma.go.jp/bosai/himawari/data/satimg';
+let _himaOn = false, _himaLayer = null, _himaBand = 'B13/TBB';
+function _himaTime(){
+  const d = new Date(Date.now() - 20 * 60e3);        // 發布延遲
+  d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10, 0, 0);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}${p(d.getUTCMonth()+1)}${p(d.getUTCDate())}`
+       + `${p(d.getUTCHours())}${p(d.getUTCMinutes())}00`;
+}
+function toggleHimawari(){
+  _himaOn = !_himaOn;
+  const b = document.getElementById('bHimawari');
+  if(b) b.classList.toggle('on', _himaOn);
+  if(_himaLayer){ try{ map.removeLayer(_himaLayer); }catch(e){} _himaLayer = null; }
+  if(!_himaOn) return;
+  if(!map.getPane('himaPane')){
+    map.createPane('himaPane');
+    const hp = map.getPane('himaPane');
+    hp.style.zIndex = 393;          // 地形之上、鄉鎮色塊之下
+    hp.style.pointerEvents = 'none';
+    hp.style.opacity = 0.75;
+  }
+  const t = _himaTime();
+  _himaLayer = L.tileLayer(
+    `${HIMAWARI_BASE}/${t}/fd/${t}/${_himaBand}/{z}/{x}/{y}.jpg`,
+    {pane: 'himaPane', minZoom: 3, maxZoom: 8, maxNativeZoom: 6,
+     attribution: 'Himawari-9 / 氣象廳', crossOrigin: true})
+    .addTo(map);
+  _himaLayer.on('tileerror', ()=>{
+    console.warn('Himawari 圖磚載入失敗（時間可能尚未發布）：', t);
+  });
+  console.log('Himawari-9 雲圖：', t, '（UTC，每 10 分鐘更新）');
+}
+
 function toggleDarkSea(){
   _darkSea = !_darkSea;
   const b = document.getElementById('bDarkSea');
@@ -6496,7 +6536,7 @@ function _kmBetween(a1, o1, a2, o2){
 // 拖尾拉長（0.90≈22 幀 → 0.965≈65 幀），流場感才出得來
 const TY_SPIN_BOOST = 60;    // 颱風旋轉的額外倍率
 const TY_PART_N = 700;
-const TY_TRAIL_KEEP = 0.965;
+const TY_TRAIL_KEEP = 0.982;   // 約 127 幀，流場感更連續
 let _tyCv = null, _tyParts = [];
 // 蒲福風級 → 風速（m/s）：取各級的代表值，與 _wsToBf 互為反函式
 function _bfToWs(bf){
@@ -6560,12 +6600,12 @@ function _tyPartStep(list){
     const uMin = x._uEye || 0.12;
     p.u = Math.sqrt(uMin * uMin + Math.random() * (1 - uMin * uMin));
     p.th = Math.random() * 2 * Math.PI;
-    p.age = Math.random() * 120;
+    p.age = Math.random() * 220;
     p.dead = false;
     p.px = null; p.py = null;
   };
   _tyParts.forEach(p=>{
-    if(p.dead || !p.sys || !p.sys._P || p.age > 120){ spawn(p); }
+    if(p.dead || !p.sys || !p.sys._P || p.age > 220){ spawn(p); }
     const x = p.sys, P = x._P;
     if(!P || x._ppk == null) return;
     const uEye = x._uEye || 0.12;
@@ -6581,12 +6621,17 @@ function _tyPartStep(list){
     const wsHere = Math.max(2, _bfToWs(bfHere));            // m/s
     const rKm = Math.max(1, P.r15 * p.u);
     // 角速度 = 切線速度 ÷ 半徑，再套用風場的時間壓縮倍率
-    // ★ 颱風的迴轉半徑比風場的位移尺度大得多：照風場倍率算，
-    //   外圈一圈要 58 分鐘，根本看不出在轉。再乘上 TY_SPIN_BOOST，
-    //   讓「內快外慢」的相對關係維持不變，整體加快到看得見的程度。
-    const om = (wsHere / 1000 * WF_TIMELAPSE * TY_SPIN_BOOST / 3600) / rKm / 60 * 2 * Math.PI;
-    // ★ 向外加速：離心的甩出感，越外圈甩得越快
-    const dU = 0.0006 + 0.0022 * p.u;
+    // ★ 粒子的「線速度」與一般風場同一套標準（使用者指正：對齊的是
+    //   粒子速度，不是暴風圈轉速）：每幀位移 = 基礎量 + 風速 × 縮放係數，
+    //   與 _wfPxPerMs() 用的是同一個時間壓縮倍率。
+    const vpx = 0.05 + wsHere * _wfPxPerMs();          // 像素／幀
+    const rpx = Math.max(4, rKm * (x._ppk || 1));      // 該粒子的半徑（像素）
+    const om = vpx / rpx;                               // 角速度（弧度／幀）
+    // ★ 螺旋而非直線外放（使用者指正）：固定「切向 : 徑向」的比例，
+    //   軌跡就是對數螺線。先前徑向位移是獨立常數，在外圈遠大於切向位移，
+    //   看起來就成了從中心直直射出去的線。
+    const SPIRAL_RATIO = 6;                             // 切向是徑向的 6 倍
+    const dU = om * p.u / SPIRAL_RATIO;
     const SUB = 3;
     const pts = [];
     for(let k = 1; k <= SUB; k++){
@@ -6614,8 +6659,10 @@ function _tyPartStep(list){
       const bfCore = (P.ws != null) ? Math.max(10, _wsToBf(P.ws)) : 11;
       let bf;
       // 紅色帶變薄：核心加成由 2 級收到 1 級，紅色只集中在十級風附近
-      if(p.u <= uu25) bf = bfCore + 1 * (1 - p.u / Math.max(1e-6, uu25));
-      else bf = bfCore - (bfCore - 7) * ((p.u - uu25) / Math.max(1e-6, 1 - uu25));
+      // 紅色帶再收薄：核心加成 0.5 級，紅色只在十級風圈極近處
+      if(p.u <= uu25) bf = bfCore + 0.5 * (1 - p.u / Math.max(1e-6, uu25));
+      // 往外用 0.7 次方衰減：紅→黃的過渡帶更靠近核心，外圈大片是黃色
+      else bf = bfCore - (bfCore - 7) * Math.pow((p.u - uu25) / Math.max(1e-6, 1 - uu25), 0.7);
       const bd = BF_BANDS.find(b=>bf < b.max) || BF_BANDS[BF_BANDS.length - 1];
       const a = 0.35 + 0.45 * (1 - p.u);
       ctx.strokeStyle = _hexA(bd.color, a);

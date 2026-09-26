@@ -3178,12 +3178,39 @@ def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
     out = {}
     if not skill_summary:
         return out
+    # ★ 跨地形總檢（使用者指出的 ICON 情況）：
+    #   某模式在多數地形被判定為離譜／包牌，代表它「整體在亂報」，
+    #   只是剛好在某個地形的數字湊巧接近 —— 那不是準，是巧合。
+    #   先統計各模式在幾個地形不及格，超過半數就全面排除。
+    _bad = {}
+    _zn = 0
+    for _z, _mm in (skill_summary or {}).items():
+        _zn += 1
+        for _m, _v0 in (_mm or {}).items():
+            _v = (_v0 or {}).get('decay') or (_v0 or {}).get('short') or {}
+            _b, _mae = _v.get('bias'), _v.get('mae')
+            _P0 = ((pattern or {}).get(_z) or {}).get(_m) or {}
+            bad = False
+            if _b is not None and (_b < 0.40 or _b >= 2.50):
+                bad = True
+            if _mae is not None and _mae > ADAPT_MAE_CAP:
+                bad = True
+            if _P0.get('fc', 0) >= PATTERN_MIN_FC and (_P0.get('far') or 0) >= PATTERN_FAR_MAX:
+                bad = True
+            if bad:
+                _bad[_m] = _bad.get(_m, 0) + 1
+    _global_bad = {m for m, c in _bad.items() if _zn and c > _zn / 2}
+
     for zone, mmap in skill_summary.items():
         picks, excluded, detail = {}, [], []
         for m, v0 in (mmap or {}).items():
             if m in ADAPT_BLOCK:
                 excluded.append(m)
                 detail.append(f'{m}=使用者排除')
+                continue
+            if m in _global_bad:
+                excluded.append(m)
+                detail.append(f'{m}=整體亂報（{_bad[m]}/{_zn} 地形不及格）')
                 continue
             # ★ 改用衰減加權（decay）：每日權重 = 0.5^(天數/10) × 當日雨量。
             #   固定 7 天窗會被單一事件帶偏，也擋不住乾燥期的失真比值；
