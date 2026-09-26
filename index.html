@@ -191,8 +191,16 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bWind"  onclick="setMode('wind')" style="border-color:#3a8a5a;color:#7ee8a8">風力預測</button>
       <button class="b"    id="bWave"  onclick="setMode('wave')" style="border-color:#3a8a5a;color:#7ee8a8">浪高</button>
       <button class="b"    id="bTemp"  onclick="setMode('temp')" style="border-color:#3a8a5a;color:#7ee8a8">氣溫</button>
-<button class="b"    id="bHimawari" onclick="toggleHimawari()"
+      <button class="b"    id="bHimawari" onclick="toggleHimawari()"
         style="border-color:#5a4a7a;color:#c0a8e8">🛰 Himawari</button>
+      <select id="himaBand" onchange="_himaSetBand(this.value)"
+        style="font-size:10px;padding:1px 3px;background:#061220;color:#c0a8e8;
+        border:1px solid #5a4a7a;border-radius:3px">
+        <option value="B13/TBB">紅外線</option>
+        <option value="B08/TBB">水氣</option>
+        <option value="REP/ETC">色調強化</option>
+        <option value="B03/ALBD">可見光</option>
+      </select>
       <button class="b"    id="bTerrain" onclick="toggleTerrainLayer()"
         style="border-color:#6a5a3a;color:#d8c090">⛰ 地形</button>
       <button class="b"    id="bWindField" onclick="toggleWindField()"
@@ -1555,9 +1563,15 @@ let _darkSea = false;
 //   ★ 時間必須對齊到 10 分鐘整點，且官方資料約落後 20 分鐘。
 const HIMAWARI_BASE = 'https://www.jma.go.jp/bosai/himawari/data/satimg';
 // ★ 頻道：紅外線（看雲頂）、水氣（看中高層水氣）、色調強化（看對流強度）
-const HIMA_BANDS = [['B13/TBB', '紅外線'], ['B08/TBB', '水氣'],
-                    ['REP/ETC', '色調強化'], ['B03/ALBD', '可見光']];
-let _himaOn = false, _himaLayer = null, _himaBandIdx = 0;
+let _himaOn = false, _himaLayer = null, _himaBand = 'B13/TBB', _himaTimes = null;
+// ★ 時間必須取自官方的可用清單：自行推算常常抓到尚未發布的時刻，
+//   圖磚就整片空白（使用者看到的「晚上看不到」有一部分是這個）。
+async function _himaLoadTimes(){
+  try{
+    const r = await fetch(`${HIMAWARI_BASE}/targetTimes_fd.json`, {cache: 'no-store'});
+    if(r.ok) _himaTimes = await r.json();
+  }catch(e){ _himaTimes = null; }
+}
 function _himaTime(){
   const d = new Date(Date.now() - 20 * 60e3);        // 發布延遲
   d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10, 0, 0);
@@ -1565,22 +1579,18 @@ function _himaTime(){
   return `${d.getUTCFullYear()}${p(d.getUTCMonth()+1)}${p(d.getUTCDate())}`
        + `${p(d.getUTCHours())}${p(d.getUTCMinutes())}00`;
 }
-// 開啟狀態下再按 → 切換頻道（紅外線 → 水氣 → 色調強化 → 可見光 → 關閉）
+// 直接在下拉選頻道（使用者反映輪流切換很麻煩）
+function _himaSetBand(b){
+  _himaBand = b;
+  if(_himaOn){ _himaOn = false; toggleHimawari(); }
+}
 function toggleHimawari(){
-  if(_himaOn && _himaBandIdx < HIMA_BANDS.length - 1){
-    _himaBandIdx++;
-    const b0 = document.getElementById('bHimawari');
-    if(b0) b0.classList.add('on');
-    if(_himaLayer){ try{ map.removeLayer(_himaLayer); }catch(e){} _himaLayer = null; }
-    _himaOn = false;      // 下面會再打開，走同一條建立流程
-  } else if(_himaOn){
-    _himaBandIdx = 0;     // 走完一輪 → 關閉
-  }
   _himaOn = !_himaOn;
   const b = document.getElementById('bHimawari');
   if(b) b.classList.toggle('on', _himaOn);
   if(_himaLayer){ try{ map.removeLayer(_himaLayer); }catch(e){} _himaLayer = null; }
   if(!_himaOn) return;
+  if(!_himaTimes) _himaLoadTimes().then(()=>{ if(_himaOn){ _himaOn = false; toggleHimawari(); } });
   if(!map.getPane('himaPane')){
     map.createPane('himaPane');
     const hp = map.getPane('himaPane');
@@ -1588,8 +1598,10 @@ function toggleHimawari(){
     hp.style.pointerEvents = 'none';
     hp.style.opacity = 0.75;
   }
-  const t = _himaTime();
-  const band = HIMA_BANDS[_himaBandIdx][0];
+  // 優先用官方清單的最新時刻，取不到才退回自行推算
+  const t = (Array.isArray(_himaTimes) && _himaTimes.length)
+    ? _himaTimes[_himaTimes.length - 1].basetime : _himaTime();
+  const band = _himaBand;
   _himaLayer = L.tileLayer(
     `${HIMAWARI_BASE}/${t}/fd/${t}/${band}/{z}/{x}/{y}.jpg`,
     // ★ 恆顯示：官方只提供 z3~z6 的圖磚，縮太小（z<3）時沒有對應層級 ——
@@ -1601,9 +1613,10 @@ function toggleHimawari(){
   _himaLayer.on('tileerror', ()=>{
     console.warn('Himawari 圖磚載入失敗（時間可能尚未發布）：', t);
   });
-  const bl = document.getElementById('bHimawari');
-  if(bl) bl.textContent = '🛰 ' + HIMA_BANDS[_himaBandIdx][1];
-  console.log('Himawari-9 雲圖：', t, HIMA_BANDS[_himaBandIdx][1], '（UTC，每 10 分鐘更新）');
+  const _sel = document.getElementById('himaBand');
+  const _nm = _sel ? _sel.options[_sel.selectedIndex].text : band;
+  console.log('Himawari-9 雲圖：', t, _nm,
+    (band === 'B03/ALBD' ? '（可見光頻道夜間為全黑，屬正常）' : ''));
 }
 
 function toggleDarkSea(){
@@ -6674,7 +6687,9 @@ function _tyPartStep(list){
     const ws = Math.max(2, _bfToWs(bf));
     const vpx = (0.05 + ws * _wfPxPerMs()) * TY_SPEED_SCALE;
     // 速度分量：切向（逆時針）＋ 微幅向外（螺旋）＋ 隨颱風移動的平流
-    const tanX =  Math.cos(th), tanY = Math.sin(th);      // 逆時針的切線方向
+    // ★ 逆時針（北半球）：方位角 θ 自正北往東為正，逆時針＝θ 遞減，
+    //   速度方向因此是 (-cosθ, -sinθ)。先前用 (cosθ, sinθ) 是順時針。
+    const tanX = -Math.cos(th), tanY = -Math.sin(th);
     const radX =  Math.sin(th), radY = -Math.cos(th);     // 由中心往外
     const inflow = 1 / TY_SPIRAL_RATIO;
     const k = 1 / Math.hypot(1, inflow);
@@ -11509,9 +11524,12 @@ function renderTyphoonLegend(){
   const el   = document.getElementById('typhoon-legend');
   const wrap = document.getElementById('typhoon-legend-wrap');
   if(!el || !wrap) return;
-  // ★ 動畫期間靜態颱風圖層被收起，但圖例內容仍應保留（使用者回報消失）
-  if(typeof _tyA !== 'undefined' && _tyA){ wrap.style.display = ''; return; }
-  if(!showTyphoon){ wrap.style.display = 'none'; return; }
+  // ★ 動畫期間靜態颱風圖層被收起，但圖例仍要完整重畫。
+  //   先前在這裡直接 return，圖例就停在「圖層被收起當下」的殘缺內容
+  //   —— 五個顏色點消失正是這個原因，不是樣式問題。
+  const _anim = (typeof _tyA !== 'undefined' && _tyA);
+  if(!showTyphoon && !_anim){ wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
   const rows = [
     ['#1e6fd9', '▼', '暴風圈觸及100km海域'],
     ['#d92020', '▼', '暴風圈觸及陸地'],
@@ -15043,13 +15061,18 @@ function renderInterpolated(){
   //   太遠的格子直接不畫，中間帶漸進淡出。
   const grid=new Float32Array(NX*NY);
   const supp=new Float32Array(NX*NY);
-  const SUP_FULL = 0.55, SUP_FADE = 1.30;      // 網格單位（約 0.4 度／格）
+  const SUP_FULL = 3.0, SUP_FADE = 6.0;        // 網格單位：只削遠洋，不影響陸地
   for(let gy=0; gy<NY; gy++){
     for(let gx=0; gx<NX; gx++){
       const px=gx+0.5, py=gy+0.5;
       const f1=barnesPass(px, py, KAPPA, CUT1, false, null);
       const f2=barnesPass(px, py, KAPPA*GAMMA, CUT2, true, resid);
       grid[gy*NX+gx]=Math.max(0, f1+f2);   // 雨量不為負
+      // ★ 只在「整片資料都很遠」時才淡出，不能逐點算距離 ——
+      //   逐點算會在每個鄉鎮質心周圍形成圓形光暈，畫面上就是一顆顆
+      //   粉紅色塊（我上一輪造成的問題）。
+      //   改為距離門檻放寬到 3 格以上才開始淡出，等於只削掉
+      //   遠離臺灣的外海，陸地與近海完全不受影響。
       let nd2=1e9;
       for(let k=0;k<nP;k++){
         const dx=pts[k][0]-px, dy=pts[k][1]-py;
