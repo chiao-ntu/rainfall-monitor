@@ -6360,8 +6360,10 @@ function _kmBetween(a1, o1, a2, o2){
 // ★ 拖尾由 0.99 降到 0.955：0.99 約 230 幀不散，整個畫面都是殘影，
 //   會蓋掉底下的雨量判讀（使用者回報）。0.955 約 50 幀，
 //   仍比風場（45 幀）略長，看得出漩渦但不糊。
-const TY_PART_N = 300;
-const TY_TRAIL_KEEP = 0.955;
+// ★ 參考 Windy：粒子多、單段短、拖尾短，靠密度表現流場，
+//   而不是靠長線條。長線在曲率大的地方必定失真。
+const TY_PART_N = 700;
+const TY_TRAIL_KEEP = 0.90;
 let _tyCv = null, _tyParts = [];
 function _tyPartInit(){
   const mp = document.getElementById('map');
@@ -6390,11 +6392,12 @@ function _tyPartStep(list){
     p.sys = x;
     p.u = 0.15 + Math.random() * 0.85;          // 半徑比例
     p.th = Math.random() * 2 * Math.PI;
-    p.age = Math.random() * 90;
+    p.age = Math.random() * 55;
     p.dead = false;
+    p.px = null; p.py = null;     // ★ 重生必須斷線，否則會從舊位置拉一條直線過來
   };
   _tyParts.forEach(p=>{
-    if(p.dead || !p.sys || !p.sys._P || p.age > 90){ spawn(p); }
+    if(p.dead || !p.sys || !p.sys._P || p.age > 55){ spawn(p); }
     const P = p.sys._P;
     // 角速度：內圈快、外圈慢；同時緩慢向內收（氣旋式輻合）
     const om = (2 * Math.PI / 3.0) * Math.pow(0.15 / p.u, 0.75);
@@ -6418,13 +6421,20 @@ function _tyPartStep(list){
     if(p.u < 0.12){ p.dead = true; return; }
     const pt = pts[pts.length - 1];
     if(pt.x < -50 || pt.y < -50 || pt.x > _tyCv.width + 50 || pt.y > _tyCv.height + 50) return;
+    // ★ 颱風中心每幀都在移動，粒子座標是相對中心的極座標，
+    //   中心一動全部粒子跟著平移，若照連會拉出滿畫面的長直線
+    //   （使用者截圖裡往左延伸的那些）。位移過大就斷開重畫。
+    const MAXSEG = 14;
+    if(p.px != null && Math.hypot(pt.x - p.px, pt.y - p.py) > MAXSEG){
+      p.px = pt.x; p.py = pt.y; return;
+    }
     if(p.px != null){
       // 越靠近中心越亮、越白；外圍偏橘
-      const a = 0.25 + 0.6 * (1 - p.u);
+      const a = 0.30 + 0.5 * (1 - p.u);
       ctx.strokeStyle = p.u < 0.35 ? `rgba(255,255,255,${a.toFixed(2)})`
                       : p.u < 0.7  ? `rgba(255,220,150,${a.toFixed(2)})`
                                    : `rgba(245,166,35,${a.toFixed(2)})`;
-      ctx.lineWidth = p.u < 0.35 ? 1.8 : 1.3;
+      ctx.lineWidth = p.u < 0.35 ? 1.4 : 1.0;
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.beginPath(); ctx.moveTo(p.px, p.py);
       pts.forEach(q2=>ctx.lineTo(q2.x, q2.y));    // 弧線，不是單一直線
@@ -6559,7 +6569,7 @@ function _tyDrawAt(h, now){
           const a0 = base + ai * gap;
           // ★ 取樣密度：每段 ≤0.02 弧度（整圈約 314 點），
           //   先前每段只取 6 點，整圈等於 60 邊形，肉眼看得出稜角。
-          const nseg = Math.max(6, Math.ceil(span / 0.02));
+          const nseg = Math.max(10, Math.ceil(span / 0.008));   // 整圈約 800 點
           const pts = [];
           for(let k = 0; k <= nseg; k++){
             const th = a0 + span * (k / nseg);
@@ -6672,6 +6682,7 @@ async function exportAnim(){
   const btn = document.getElementById('bAnimExport');
   const setTxt = t => { if(btn) btn.textContent = t; };
   const saved = _hourIdx;
+  let _savedTerrain = null;      // finally 要還原，必須宣告在 try 之外
   // ★ 固定取景（與截圖同一套）：臺灣置中、外延到海警線附近。
   //   先前直接錄螢幕上的地圖，尺寸隨視窗變動，也會錄到使用者當下的
   //   縮放與平移，每次結果都不一樣。
@@ -6725,12 +6736,23 @@ async function exportAnim(){
     const WF_STEPS = 2;                      // 每張影片幀推進幾步粒子
     const total = _animFrames.length * SUB;
     let vf = 0;
+    // ★ html2canvas 不支援 mix-blend-mode：地形的陰影層（色彩增值）
+    //   會被當成一般疊圖直接蓋上去，整張圖被洗淡 ——
+    //   這就是「網頁顏色正常、下載的影片偏淡」的原因。
+    //   錄製期間把它排除，色塊顏色才與網頁一致；
+    //   底下那層地形（在色塊之下）不受影響，立體感仍在。
     const shot = async ()=>await html2canvas(mp, {
       backgroundColor: '#ffffff', scale: 1, useCORS: true, logging: false,
       ignoreElements: n => n.classList && (
         n.classList.contains('leaflet-control') ||
-        n.classList.contains('leaflet-control-attribution'))
+        n.classList.contains('leaflet-control-attribution') ||
+        n.classList.contains('terrain-relief-top') ||
+        (n.style && n.style.mixBlendMode === 'multiply'))
     });
+    // 色塊在開啟地形時是半透明的，錄影時恢復不透明，避免顏色再被稀釋
+    _savedTerrain = _terrainOn;
+    _terrainOn = false;
+    try{ _animPaintReset(); renderLayer(); }catch(e){}
     rec.start();
     rec.pause();                             // 先暫停，畫好一格才放行
     for(let i = 0; i < _animFrames.length; i++){
@@ -6798,6 +6820,7 @@ async function exportAnim(){
     alert('匯出失敗：' + (e && e.message ? e.message : e));
   }finally{
     setTxt('⬇ 影片');
+    try{ if(_savedTerrain !== null) _terrainOn = _savedTerrain; }catch(e){}
     _bgStop();
     window._animManual = false;
     window._wfManual = false;
