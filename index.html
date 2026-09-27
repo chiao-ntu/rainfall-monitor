@@ -4792,7 +4792,11 @@ function drawCountyTowns(canvasId){
 // ══════════════════════════════════════════════════════════
 // ★ 校驗涵蓋所有模式，含「僅校驗、不進融合」者 —— 讓新模式先累積
 //   POD/FAR/CSI，確認表現再決定是否納入 FORMOSA。
-const VF_MODELS = ['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
+// ★ 'blend' ＝ FORMOSA 融合結果本身。後端（fetch_rainfall.py 的 MODELS）
+//   早就把它一起校驗並寫進 verify.json 了，是這裡的清單漏列，
+//   所以面板上一直看不到 —— 融合準不準沒有答案，加權調整也就無從檢討。
+const VF_MODELS = ['blend',
+                   'best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
                    'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom'];
 // 哪些已是融合成員（表格中標示，便於分辨）
 // ★ 融合狀態改為讀後端的自適應選用結果（逐地形），不再寫死 6 個模式。
@@ -4806,6 +4810,7 @@ const VF_CORE = new Set(['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast']);
 const BLEND_BLOCK = new Set(['cma', 'icon']);
 const _VF_KEY = {gc: 'graphcast'};
 function _vfBlendZones(m){
+  if(m === 'blend') return 0;          // 融合本身不是成員，不掛 ◆
   const ab = window.ADAPTIVE_BLEND || {};
   const zs = Object.keys(ab);
   if(!zs.length) return VF_CORE.has(m) ? -1 : 0;     // -1＝無自適應資料、沿用核心
@@ -4824,6 +4829,7 @@ function _vfSortBy(k){
 const VF_NAME = {icon:'ICON', kma:'KMA 韓國', gem:'GEM 加拿大',
                  ukmo:'UK Met Office', mf:'Météo-France',
                  cma:'CMA GRAPES', bom:'BOM ACCESS',
+                 blend:'FORMOSA 融合',
                  best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
                  jma:'JMA', aifs:'EC-AIFS', graphcast:'GC-NCEP'};
 // ★ ETS：扣除隨機命中後的 CSI（乾季不虛高，跨季節可比）
@@ -4915,6 +4921,9 @@ function renderVerify(){
     }
     return {m, s: sc, c: agg[m]};
   }).sort((a, b)=>{
+    // ★ FORMOSA 是比較的基準，不隨排序跑掉，一律釘在第一列
+    if(a.m === 'blend') return -1;
+    if(b.m === 'blend') return 1;
     // ★ 依點選的欄位排序（使用者指定）；空值一律排最後
     const K = _vfSortKey;
     if(K === 'name'){
@@ -4953,8 +4962,10 @@ function renderVerify(){
                  : metric.replace(/(\d+)/, ' ≥$1mm'), 'right')
             + TH('BIAS', '偏差比', 'right') + TH('n', '樣本', 'right');
         })()}</tr>
-      ${rows.map(r=>`<tr style="border-top:1px solid #12283c">
-        <td style="padding:2px 3px;color:#cfe4f5">${VF_NAME[r.m] || r.m}${
+      ${rows.map(r=>`<tr style="border-top:1px solid #12283c;${
+          r.m === 'blend' ? 'background:#10202e' : ''}">
+        <td style="padding:2px 3px;color:${r.m === 'blend' ? '#7ee8a8;font-weight:700' : '#cfe4f5'}">${
+          r.m === 'blend' ? '★ ' : ''}${VF_NAME[r.m] || r.m}${
           (()=>{ const n = _vfBlendZones(r.m);
             if(n === 0) return '';
             const nz = Object.keys(window.ADAPTIVE_BLEND || {}).length;
@@ -4967,12 +4978,30 @@ function renderVerify(){
         <td style="text-align:right;color:#9fc8e8">${fmt(r.s.BIAS)}</td>
         <td style="text-align:right;color:#5a7a95">${r.s.mainN ?? r.s.n}</td></tr>`).join('')}
     </table>
+    ${(()=>{
+      // ★ FORMOSA 自我校驗的唯一有意義的問題：融合有沒有贏過最好的那個單模式？
+      //   贏了才代表加權在做事；輸了就該檢討權重，而不是繼續疊模式。
+      const bl = rows.find(r=>r.m === 'blend');
+      const sg = rows.filter(r=>r.m !== 'blend' && r.s.main != null);
+      if(!bl || bl.s.main == null || !sg.length) return '';
+      const bs = sg.reduce((x, y)=> (y.s.main > x.s.main ? y : x));
+      const d = bl.s.main - bs.s.main;
+      const c = d > 0.005 ? '#40d060' : d < -0.005 ? '#FF6644' : '#f0c878';
+      const w = d > 0.005 ? '融合勝出' : d < -0.005 ? '融合落後' : '持平';
+      return `<div style="margin-top:4px;padding:3px 5px;border:1px solid #1e3c52;
+          border-radius:3px;background:#0b1a26;font-size:9px;color:#9fc8e8">
+          ★ FORMOSA 自我校驗：融合 <b style="color:#7ee8a8">${fmt(bl.s.main)}</b>
+          ｜最佳單模式 ${VF_NAME[bs.m] || bs.m} <b>${fmt(bs.s.main)}</b>
+          → <b style="color:${c}">${w}${d ? `（${d > 0 ? '+' : ''}${d.toFixed(3)}）` : ''}</b>
+        </div>`;
+    })()}
     <div style="color:#5a7a95;font-size:9px;margin-top:3px">
       ${metric === 'SEDIH40' ? '時雨量強度：只有 CWA+ECMWF／ECMWF／GFS 有最大時雨量資料'
         : metric.startsWith('ETS') ? 'ETS 扣除隨機命中後的綜合指標，0＝與亂猜無異'
         : metric.startsWith('SEDI') ? 'SEDI 罕見事件專用，極端門檻下仍有鑑別力'
         : 'CSI 綜合指標，不納入正確無雨'}　偏差比 &gt;1 報太多<br>
-      ◆ 已納入 FORMOSA 融合（◆2＝僅 2 個地形採用）；無標記者目前未納入</div>`;
+      ◆ 已納入 FORMOSA 融合（◆2＝僅 2 個地形採用）；無標記者目前未納入<br>
+      ★ FORMOSA 融合為本系統的輸出結果，與各單模式用同一套判準校驗，固定列於首行</div>`;
   try{ drawVerifyChart(); }catch(e){ console.warn('校驗圖失敗', e); }
 }
 // 時間序列圖：各模式的 CSI 隨日期變化
@@ -5009,14 +5038,17 @@ function drawVerifyChart(canvasId){
     ctx.fillText(d.date.slice(5), X(i), CH - pB + fs + 2);
   });
   // 各模式一條線（用融合明細同一組色）
-  const COL = {best:'#6bc8e8', ecmwf:'#40d060', gfs:'#FFFF00', icon:'#FF8C00',
+  const COL = {blend:'#7ee8a8',
+               best:'#6bc8e8', ecmwf:'#40d060', gfs:'#FFFF00', icon:'#FF8C00',
                jma:'#FF66CC', aifs:'#c8a8e8', graphcast:'#a0d8ff'};
-  VF_MODELS.forEach(m=>{
+  // ★ FORMOSA 最後畫、線最粗：它是基準線，要壓在其他模式之上看得清楚
+  const _order = VF_MODELS.filter(m=>m !== 'blend').concat(['blend']);
+  _order.forEach(m=>{
     const pts = ser.map((d, i)=>({i, v: d.scores[m] && d.scores[m].CSI}))
                    .filter(p=>p.v != null);
     if(pts.length < 2) return;
     ctx.strokeStyle = COL[m] || '#9fc8e8';
-    ctx.lineWidth = isZoom ? 3 : 1.6;
+    ctx.lineWidth = (m === 'blend') ? (isZoom ? 5 : 2.8) : (isZoom ? 3 : 1.6);
     ctx.beginPath();
     pts.forEach((p, k)=> k ? ctx.lineTo(X(p.i), Y(p.v)) : ctx.moveTo(X(p.i), Y(p.v)));
     ctx.stroke();
@@ -7792,7 +7824,8 @@ function getObsEtr(t){
 //   色塊一律不透明，立體感全部交給上方那層色彩增值，並把它調強一點。
 // ★ 全系統界線寬度基準（使用者指定 0.8px）：縣市界與颱風暴風圈共用，
 //   改一處即可，不會再出現「改了縣市界忘了暴風圈」的情況。
-const BORDER_W = 0.8;
+//   1.0 → 0.8 → 0.6（使用者兩次指定）。
+const BORDER_W = 0.6;
 const TERR_FILL_OP   = 1.0;   // 有資料的色塊：不再被灰階底稀釋
 const TERR_NODATA_OP = 1.0;   // 無資料（含 <5mm 的白）：純白，起伏由上層陰影表現
 const TERR_TOP_OP    = 0.86;  // 上方色彩增值陰影（原 0.55）。實測掃描 0.55~0.95：
@@ -8047,7 +8080,7 @@ function renderLayer(){
     // ★ 深色海底時縣市界改金黃並加粗，否則深底上的黑線看不見
     const _ds = (typeof _darkSea !== 'undefined' && _darkSea);
     const opts={color: _ds ? '#f0c040' : '#000000',
-                // ★ 統一 0.8px（使用者指定，原 1.0）：白底與深色底一致
+                // ★ 統一 BORDER_W（使用者指定）：白底與深色底一致
                 weight: BORDER_W, fill:false,
                 opacity: _ds ? 0.95 : 0.7, interactive:false};
     const _c = llOf(feat);                 // 座標快取（同鄉鎮層）
