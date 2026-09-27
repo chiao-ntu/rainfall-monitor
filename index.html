@@ -147,7 +147,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 <div id="ctrl">
     <!-- 外援連結 -->
   <div class="ctrl-row" style="flex-wrap:wrap;gap:3px;padding:3px 0">
-    <div id="ext-links" style="display:flex;flex-wrap:wrap;gap:3px">
+    <!-- ★ 兩行固定分組（使用者指定）：第一行 CWA/JMA/NCDR 官方來源，
+         第二行 FEMA 起的其他外援。用 column 包兩個 wrap 列，
+         不靠自動換行，視窗寬度變化時分組不會跑掉。 -->
+    <div id="ext-links" style="display:flex;flex-direction:column;gap:3px;width:100%">
+     <div id="ext-links-r1" style="display:flex;flex-wrap:wrap;gap:3px">
       <a href="dashboard.html" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">整合監控</a>
       <a href="https://www.cwa.gov.tw/V8/C/P/Warning/FIFOWS.html" target="_blank" class="ext-btn">警特報</a>
       <a href="https://www.cwa.gov.tw/V8/C/W/OBS_Sat.html?Area=2" target="_blank" class="ext-btn">紅外線雲圖</a>
@@ -165,6 +169,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <a href="https://watch.ncdr.nat.gov.tw/watch_tracks_pro" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">颱風路徑</a>
       <a href="https://watch.ncdr.nat.gov.tw/watch_smart_map" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">SMART</a>
       <a href="https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">WISSDOM</a>
+     </div>
+     <div id="ext-links-r2" style="display:flex;flex-wrap:wrap;gap:3px">
       <a href="https://fema.ardswc.gov.tw/Portal/Layout" target="_blank" class="ext-btn">FEMA</a>
       <a href="https://www.tropicaltidbits.com/analysis/models/?model=ecmwf&region=ea&pkg=mslp_pcpn" target="_blank" class="ext-btn">Tropical Tidbits</a>
       <a href="https://www.weathernerds.org/models/fnv3.html?&inittype=zoom&initfield=SST_Anomaly_Surface&initcycle=determine&initfhour=240&initimdimx=1050&initimdimy=750&initrange=57.000000000000:95.000000000000:0:190.000000000000&initcx1=0&initcy1=0&initcx2=0&initcy2=0&initcross=False&initsound=False&initsoundx=1&initsoundy=1&initloop=False&initoverlay=False&initlstart=000&initlend=360&initlint=6&initol1=SST_Anomaly_Surface&initol2=null&initol3=null&initol4=null&initol5=null&initcities=Off&inithgwys=Off&inittracks=On&initlows=Off&initlatlon=Off" target="_blank" class="ext-btn">Google FNV3</a>
@@ -172,11 +178,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <a href="https://www.easterlywave.com/typhoon/ensemble/" target="_blank" class="ext-btn">EasterlyWave</a>
       <a href="https://www.windy.com/?21.487,120.674,5" target="_blank" class="ext-btn">Windy</a>
       <a href="https://zoom.earth/maps/precipitation/#view=23.4,121.68,5z/model=gfs" target="_blank" class="ext-btn">Google Earth</a>
+     </div>
     </div>
   </div>
 <div class="ctrl-row">
     <span class="cl" style="color:#7ee8a8">圖層</span>
-    <div class="bg">
+    <!-- ★ 兩行固定分組（使用者指定）：第一行資料圖層與警戒圖層，
+         第二行底圖／襯底類（Himawari、地形、風場、深色海、行政區名）。 -->
+    <div id="layer-rows" style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+     <div class="bg" id="layer-row1">
       <select id="countyPick" onchange="pickCounty(this.value); _syncCountyPickers(this.value)"
       style="font-size:10px;padding:2px 5px;background:#061220;color:#cfe4f5;
       border:1px solid #1a4060;border-radius:3px;max-width:130px">
@@ -191,24 +201,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bWind"  onclick="setMode('wind')" style="border-color:#3a8a5a;color:#7ee8a8">風力預測</button>
       <button class="b"    id="bWave"  onclick="setMode('wave')" style="border-color:#3a8a5a;color:#7ee8a8">浪高</button>
       <button class="b"    id="bTemp"  onclick="setMode('temp')" style="border-color:#3a8a5a;color:#7ee8a8">氣溫</button>
-      <button class="b"    id="bHimawari" onclick="toggleHimawari()"
-        style="border-color:#5a4a7a;color:#c0a8e8">🛰 Himawari</button>
-      <select id="himaBand" onchange="_himaSetBand(this.value)"
-        style="font-size:10px;padding:1px 3px;background:#061220;color:#c0a8e8;
-        border:1px solid #5a4a7a;border-radius:3px">
-        <option value="B13/TBB">紅外線</option>
-        <option value="B08/TBB">水氣</option>
-        <option value="REP/ETC">色調強化</option>
-        <option value="B03/ALBD">可見光</option>
-      </select>
-      <button class="b"    id="bTerrain" onclick="toggleTerrainLayer()"
-        style="border-color:#6a5a3a;color:#d8c090">⛰ 地形</button>
-      <button class="b"    id="bWindField" onclick="toggleWindField()"
-        style="border-color:#3a7a8a;color:#7ad8e8">🌀 風場</button>
-      <button class="b"    id="bDarkSea" onclick="toggleDarkSea()"
-        style="border-color:#3a4a6a;color:#8aa8d8">🌊 深色海</button>
-      <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
-        style="border-color:#1a4060;color:#8ac8e8">🏷 行政區名</button>
       <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
         style="border-color:#8a6a3a;color:#e8c87a">📍 雨量測站</button>
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
@@ -219,6 +211,30 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#b06010;color:#ffa050">⛰ 土石流警戒</button>
       <button class="b"    id="bLandslide" onclick="toggleLandslideLayer()"
         style="border-color:#7a4a2a;color:#d09060">▲ 大規模崩塌</button>
+     </div>
+     <div class="bg" id="layer-row2">
+      <button class="b"    id="bHimawari" onclick="toggleHimawari()"
+        style="border-color:#5a4a7a;color:#c0a8e8">🛰 Himawari</button>
+      <select id="himaBand" onchange="_himaSetBand(this.value)"
+        style="font-size:10px;padding:1px 3px;background:#061220;color:#c0a8e8;
+        border:1px solid #5a4a7a;border-radius:3px">
+        <option value="SND/ETC">對流強度</option>
+        <option value="B13/TBB" selected>紅外線</option>
+        <option value="B08/TBB">水氣</option>
+        <option value="REP/ETC">真彩色(日)</option>
+        <option value="B03/ALBD">可見光(日)</option>
+      </select>
+      <button class="b" id="bHimaTop" onclick="toggleHimaTop()"
+        style="border-color:#5a4a7a;color:#c0a8e8" title="">⬆ 雲圖置頂</button>
+      <button class="b"    id="bTerrain" onclick="toggleTerrainLayer()"
+        style="border-color:#6a5a3a;color:#d8c090">⛰ 地形</button>
+      <button class="b"    id="bWindField" onclick="toggleWindField()"
+        style="border-color:#3a7a8a;color:#7ad8e8">🌀 風場</button>
+      <button class="b"    id="bDarkSea" onclick="toggleDarkSea()"
+        style="border-color:#3a4a6a;color:#8aa8d8">🌊 深色海</button>
+      <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
+        style="border-color:#1a4060;color:#8ac8e8">🏷 行政區名</button>
+     </div>
     </div>
   </div>
   <div class="ctrl-row">
@@ -228,7 +244,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <!-- 逐時：雷達1h ＋ 日期下拉 ＋ 拖曳滾輪（－/＋ 可逐格切換） -->
   <div class="ctrl-row">
     <span class="cl" style="color:#7ee8a8">逐時</span>
-    <div class="bg" id="future1h-btns" style="flex:1;min-width:0;
+    <!-- ★ flex:0 0 auto：讓「未來6h段」接在更新時間右邊，逐時這組不再撐滿整列 -->
+    <div class="bg" id="future1h-btns" style="flex:0 0 auto;min-width:0;
       display:flex;align-items:center;gap:5px;flex-wrap:nowrap">
       
       
@@ -243,8 +260,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <span id="h1-label" style="font-size:10px;color:#9fc8e8;min-width:82px;
         text-align:right"></span>
     </div>
-  </div>
-  <div class="ctrl-row">
     <span class="cl" style="color:#7ee8a8">未來6h段</span>
     <div class="bg" id="future6h-btns" style="flex:1;min-width:0"></div>
   </div>
@@ -1518,7 +1533,7 @@ function _applyFullLayout(){
   if(bc){ bc.textContent = _ctlFull ? '⛷' : '⛶'; bc.classList.toggle('on', _ctlFull); }
   setTimeout(()=>{ try{ if(selected) updateInfo(selected); }catch(e){} }, 260);
   if(!_sbFull && !_ctlFull){
-    setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 280);
+    setTimeout(()=>{ try{ _afterMapResize(); }catch(e){} }, 280);
   }
 }
 // 地圖上標示單一測站的位置（點選測站清單時使用）
@@ -1563,7 +1578,7 @@ let _darkSea = false;
 //   ★ 時間必須對齊到 10 分鐘整點，且官方資料約落後 20 分鐘。
 const HIMAWARI_BASE = 'https://www.jma.go.jp/bosai/himawari/data/satimg';
 // ★ 頻道：紅外線（看雲頂）、水氣（看中高層水氣）、色調強化（看對流強度）
-let _himaOn = false, _himaLayer = null, _himaBand = 'B13/TBB', _himaTimes = null;
+let _himaOn = false, _himaLayer = null, _himaLayerJp = null, _himaBand = 'B13/TBB', _himaTimes = null;
 // ★ 時間必須取自官方的可用清單：自行推算常常抓到尚未發布的時刻，
 //   圖磚就整片空白（使用者看到的「晚上看不到」有一部分是這個）。
 async function _himaLoadTimes(){
@@ -1584,39 +1599,75 @@ function _himaSetBand(b){
   _himaBand = b;
   if(_himaOn){ _himaOn = false; toggleHimawari(); }
 }
+// ★ 雲圖置頂：himaPane 預設在鄉鎮色塊之下（zIndex 393），而陸地色塊
+//   已改為完全不透明 —— 所以雲圖實際只在海上看得到，陸地上被整片蓋住，
+//   這就是「幾張圖除了像蓋上一層霧以外沒什麼差別」的來源。
+//   置頂後移到 396（鄉鎮色塊之上、縣市界 400 之下）並降透明度，
+//   陸地上的雲系才看得見。做成開關而不改預設，避免動到既有配色。
+let _himaTop = false;
+function _himaApplyPane(){
+  const hp = map.getPane('himaPane');
+  if(!hp) return;
+  hp.style.zIndex  = _himaTop ? 396 : 393;
+  hp.style.opacity = _himaTop ? 0.58 : 0.92;
+  // 對流強度／紅外線頻道本身對比偏低，補一點對比與飽和度
+  hp.style.filter  = (_himaBand === 'SND/ETC' || _himaBand === 'B13/TBB'
+                      || _himaBand === 'B08/TBB')
+                     ? 'contrast(1.18) saturate(1.25)' : 'contrast(1.06)';
+}
+function toggleHimaTop(){
+  _himaTop = !_himaTop;
+  const b = document.getElementById('bHimaTop');
+  if(b) b.classList.toggle('on', _himaTop);
+  _himaApplyPane();
+}
 function toggleHimawari(){
   _himaOn = !_himaOn;
   const b = document.getElementById('bHimawari');
   if(b) b.classList.toggle('on', _himaOn);
-  if(_himaLayer){ try{ map.removeLayer(_himaLayer); }catch(e){} _himaLayer = null; }
+  [_himaLayer, _himaLayerJp].forEach(L0=>{
+    if(L0){ try{ map.removeLayer(L0); }catch(e){} }
+  });
+  _himaLayer = _himaLayerJp = null;
   if(!_himaOn) return;
   if(!_himaTimes) _himaLoadTimes().then(()=>{ if(_himaOn){ _himaOn = false; toggleHimawari(); } });
   if(!map.getPane('himaPane')){
     map.createPane('himaPane');
-    const hp = map.getPane('himaPane');
-    hp.style.zIndex = 393;          // 地形之上、鄉鎮色塊之下
-    hp.style.pointerEvents = 'none';
-    hp.style.opacity = 0.75;
+    map.getPane('himaPane').style.pointerEvents = 'none';
   }
   // 優先用官方清單的最新時刻，取不到才退回自行推算
   const t = (Array.isArray(_himaTimes) && _himaTimes.length)
     ? _himaTimes[_himaTimes.length - 1].basetime : _himaTime();
   const band = _himaBand;
-  _himaLayer = L.tileLayer(
-    `${HIMAWARI_BASE}/${t}/fd/${t}/${band}/{z}/{x}/{y}.jpg`,
-    // ★ 恆顯示：官方只提供 z3~z6 的圖磚，縮太小（z<3）時沒有對應層級 ——
-    //   這就是「縮放尺度小就看不到」的原因，不是我們的設定問題。
-    //   設 minNativeZoom 讓 Leaflet 拿 z3 的圖磚縮放使用，任何比例都有圖。
-    {pane: 'himaPane', minNativeZoom: 3, maxNativeZoom: 6,
-     attribution: 'Himawari-9 / 氣象廳', crossOrigin: true})
-    .addTo(map);
+  // ★★ 「要放大到一定比例才出現」的真正原因：
+  //   氣象廳的全球面（fd）只做到 z5，先前卻寫 maxNativeZoom: 6 ——
+  //   地圖縮放一過 5，Leaflet 就去要根本不存在的 z6 圖磚，全部 404，
+  //   整層空白。z6 只有日本域（jp）有，而 jp 的範圍剛好含臺灣（實測
+  //   jp/6/53/27 存在、fd/6/53/27 為 404）。
+  //   故改為兩層疊加：
+  //     下層 fd  z3~z5   —— 任何比例都一定有圖（超出就放大使用）
+  //     上層 jp  z6      —— 只在放大時出現，較清晰；範圍外的破洞
+  //                         由下層 fd 補滿，不會出現空白
+  const _mk = (area, opt) => L.tileLayer(
+    `${HIMAWARI_BASE}/${t}/${area}/${t}/${band}/{z}/{x}/{y}.jpg`,
+    Object.assign({pane: 'himaPane', attribution: 'Himawari-9 / 氣象廳',
+                   crossOrigin: true,
+                   // 透明 1×1：取不到的圖磚留白讓下層透出，不顯示破圖
+                   errorTileUrl: 'data:image/png;base64,'
+                     + 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4'
+                     + 'nGMAAQAABQABDQottAAAAABJRU5ErkJggg=='}, opt));
+  _himaLayer   = _mk('fd', {minNativeZoom: 3, maxNativeZoom: 5, zIndex: 1}).addTo(map);
+  _himaLayerJp = _mk('jp', {minZoom: 6, minNativeZoom: 6, maxNativeZoom: 6,
+                            zIndex: 2}).addTo(map);
+  _himaApplyPane();
   _himaLayer.on('tileerror', ()=>{
     console.warn('Himawari 圖磚載入失敗（時間可能尚未發布）：', t);
   });
   const _sel = document.getElementById('himaBand');
   const _nm = _sel ? _sel.options[_sel.selectedIndex].text : band;
-  console.log('Himawari-9 雲圖：', t, _nm,
-    (band === 'B03/ALBD' ? '（可見光頻道夜間為全黑，屬正常）' : ''));
+  console.log('Himawari-9 雲圖：', t, _nm, '｜fd z3-5 + jp z6',
+    (band === 'B03/ALBD' || band === 'REP/ETC'
+      ? '（可見光／真彩色頻道夜間為全黑，屬正常；夜間請用對流強度或紅外線）' : ''));
 }
 
 function toggleDarkSea(){
@@ -2186,7 +2237,7 @@ function toggleSidebar(){
     sb.style.overflow = 'hidden';
     if(btn) btn.textContent = '▶';
   }
-  setTimeout(()=> map.invalidateSize(), 280);
+  setTimeout(()=>{ try{ _afterMapResize(); }catch(e){} }, 280);
 }
 
 // 地圖資訊面板（指北針/圖例/比例尺）一次收合，含動畫
@@ -2221,7 +2272,10 @@ function toggleCtrl(){
   const btn  = document.getElementById('ctrl-toggle');
   if(ctrl) ctrl.classList.toggle('collapsed', !ctrlOpen);
   if(btn)  btn.textContent = ctrlOpen ? '▲' : '▼';
-  setTimeout(()=> map.invalidateSize(), 260);
+  // ★ #ctrl 的 max-height 過渡是 0.4s，先前 260ms 就量尺寸，量到的是
+  //   動畫中途的高度 —— 收合後地圖多出來的那一條沒有人重畫。
+  //   過渡途中與結束後各走一次單一入口（ResizeObserver 也會跟著補）。
+  [120, 260, 460].forEach(ms=> setTimeout(()=>{ try{ _afterMapResize(); }catch(e){} }, ms));
 }
 
 const TMAP = {};
@@ -2354,6 +2408,9 @@ function snapMap(){
         map.options.zoomSnap = prev.snap;
         map.invalidateSize({animate:false});
         map.setView(prev.center, prev.zoom, {animate:false});
+        // ★ 截圖期間容器被改成固定尺寸，自製畫布（風場、颱風粒子）
+        //   留在那個尺寸；還原後要一併同步，否則畫面下半截空白。
+        try{ _afterMapResize(); }catch(e){}
       });
       // ★ Canvas 渲染下向量層是同步繪製，只需讓 fitBounds 生效即可；
       //   先前等 1.2 秒（加上 html2canvas 本身）就是「按下要等 5 秒」的來源。
@@ -2474,8 +2531,55 @@ function _forceFullRedraw(){
       });
     });
 }
+// ★ 貼在 #map 上的自製畫布（風場、颱風粒子…）只在「建立時」量過一次容器大小。
+//   上方狀態列收合、視窗縮放、錄製改尺寸之後容器變高，這些畫布仍是舊尺寸，
+//   多出來的那一條就永遠空白 —— 使用者回報「狀態列收合之後很多地圖資訊
+//   沒辦法正常顯示」正是這個原因（Leaflet 自家的 pane 有 _update() 會跟上，
+//   自製畫布沒有人管）。
+//   這裡不逐一列舉畫布 id：凡是直接掛在 #map 底下、position:absolute 的
+//   <canvas> 一律同步，日後新增圖層不必再改這裡。
+function _syncOverlayCanvases(){
+  const mp = document.getElementById('map');
+  if(!mp) return false;
+  const r = mp.getBoundingClientRect();
+  const W = Math.round(r.width), H = Math.round(r.height);
+  if(W < 2 || H < 2) return false;
+  let changed = false;
+  Array.prototype.forEach.call(mp.children, el=>{
+    if(!el || el.tagName !== 'CANVAS') return;
+    if(el.width === W && el.height === H) return;
+    // 改 width/height 會清空畫布內容，粒子下一幀自然重畫，不需另外處理
+    el.width = W; el.height = H; changed = true;
+  });
+  return changed;
+}
+
+// ★ 單一入口：容器大小一改，全部該跟上的東西都在這裡跟上。
+//   先前各處各自呼叫 invalidateSize + _forceFullRedraw，
+//   但漏了自製畫布與內插渲染層，所以每次都只修好一半。
+let _armT = null;
+function _afterMapResize(){
+  if(!map) return;
+  try{ map.invalidateSize({animate: false}); }catch(e){}
+  try{ _syncOverlayCanvases(); }catch(e){}
+  try{ _fixCanvasPointerEvents(); }catch(e){}
+  try{ _forceFullRedraw(); }catch(e){}
+  // 內插渲染層是固定經緯範圍的 imageOverlay，Leaflet 會自己重新定位，
+  //   但鄉鎮著色（_townFill）與色階要重算才會跟上新視野，故補一次 renderLayer。
+  //   動畫播放中不插手，避免打斷逐格節奏。
+  clearTimeout(_armT);
+  _armT = setTimeout(()=>{
+    const playing = (typeof _animOn !== 'undefined' && _animOn);
+    if(playing) return;
+    try{ if(typeof renderLayer === 'function') renderLayer(); }catch(e){}
+    try{ _forceFullRedraw(); }catch(e){}
+  }, 120);
+}
 // 平移、縮放、改變大小後都整張重畫，避免殘留半張舊畫面
-try{ map.on('moveend zoomend resize', ()=>{ try{ _forceFullRedraw(); }catch(e){} }); }catch(e){}
+try{ map.on('moveend zoomend resize', ()=>{
+  try{ _syncOverlayCanvases(); }catch(e){}
+  try{ _forceFullRedraw(); }catch(e){}
+}); }catch(e){}
 // ★ 地圖底部被切：容器大小改變（視窗縮放、面板展開收合）時，
 //   Leaflet 不會自動重算畫布尺寸，底部就留下一條空白。
 //   用 ResizeObserver 盯住容器，一變動就 invalidateSize + 整張重畫。
@@ -2485,14 +2589,10 @@ try{
     let _rzT = null;
     new ResizeObserver(()=>{
       clearTimeout(_rzT);
-      _rzT = setTimeout(()=>{
-        try{ map.invalidateSize({animate: false}); _forceFullRedraw(); }catch(e){}
-      }, 60);
+      _rzT = setTimeout(()=>{ try{ _afterMapResize(); }catch(e){} }, 60);
     }).observe(_mpEl);
   }
-  window.addEventListener('resize', ()=>{
-    try{ map.invalidateSize({animate: false}); _forceFullRedraw(); }catch(e){}
-  });
+  window.addEventListener('resize', ()=>{ try{ _afterMapResize(); }catch(e){} });
 }catch(e){}
 
 function _fixCanvasPointerEvents(){
@@ -6604,9 +6704,17 @@ function _kmBetween(a1, o1, a2, o2){
 // 拖尾拉長（0.90≈22 幀 → 0.965≈65 幀），流場感才出得來
 const TY_SPEED_SCALE = 0.12;   // 整體轉速再放慢（使用者反映太快）
 const TY_SPIRAL_RATIO = 8;     // 切向：徑向，數字越大螺旋越平緩
-const TY_ADVECT = 0.85;        // 隨颱風移動的平流比例（做出後方尾流）
+// ★ 平流必須跟切向風同尺度縮放。先前把轉速乘 0.12 放慢，卻讓平流
+//   維持原尺度（0.85 × 中心每幀位移），平流就比切向風大了七倍 ——
+//   整片粒子往同一個方向平移、看起來像一條均勻的流，而不是漩渦，
+//   這正是「風場尾流不合理」的來源。乘上同一個 TY_SPEED_SCALE 後，
+//   移動速度／切向風速的比值回到真實值（約 5.5 / 40 ≈ 0.14）。
+const TY_ADVECT = 0.85 * TY_SPEED_SCALE;
 const TY_PART_N = 700;
-const TY_TRAIL_KEEP = 0.94;    // 約 37 幀：夠長成流線，又不會糊住圖面
+// ★ 尾巴長度 ≈ 每幀步長 × 可見幀數，可見幀數 = ln(0.1)/ln(KEEP)。
+//   0.94 只有 37 幀，配上放慢八倍的步長就短得像點狀；
+//   0.975 約 91 幀（2.5 倍），靠 alpha 漸層拉長而非加粗，不會糊住圖面。
+const TY_TRAIL_KEEP = 0.975;
 let _tyCv = null, _tyParts = [];
 // 蒲福風級 → 風速（m/s）：取各級的代表值，與 _wsToBf 互為反函式
 function _bfToWs(bf){
@@ -6676,14 +6784,24 @@ function _tyPartStep(list){
     const r15px = P.r15 * x._ppk;
     const u = rpx / Math.max(1e-6, r15px);
     const uEye = x._uEye || 0.12;
-    if(u < uEye || u > 1.45){ p.dead = true; return; }
+    if(u < uEye){ p.dead = true; return; }
     const th = Math.atan2(dx, -dy);                  // 以正北為 0、往東為正
+    // ★ 尾流不對稱：颱風往前走，原本繞著它轉的空氣會留在後方，
+    //   所以尾流應該往後拖長，前緣則被壓縮。先前前後都用同一個
+    //   u > 1.45 當死亡半徑 —— 不管颱風往哪走，範圍都是正圓，
+    //   這就是「尾流對稱、不合理」。改為沿行進方向判斷：
+    //   後方放寬到 1.85、前方收到 1.30。
+    const mv = Math.hypot(x._dcx || 0, x._dcy || 0);
+    const along = (mv > 1e-6 && rpx > 1e-6)
+      ? ((dx * (x._dcx || 0) + dy * (x._dcy || 0)) / (mv * rpx)) : 0;
+    const uMax = 1.30 + 0.55 * Math.max(0, -along);   // along<0 ＝ 在颱風後方
     // 該半徑的風級 → 風速（與風場圖層同一套色階與速度標準）
     const uu25 = (P.r25 && P.r15) ? (P.r25 / P.r15) : 0.33;
     const bfCore = (P.ws != null) ? Math.max(10, _wsToBf(P.ws)) : 11;
     const bf = (u <= uu25)
       ? bfCore + 0.5 * (1 - u / Math.max(1e-6, uu25))
       : bfCore - (bfCore - 7) * Math.pow((u - uu25) / Math.max(1e-6, 1 - uu25), 0.7);
+    if(u > uMax){ p.dead = true; return; }
     const ws = Math.max(2, _bfToWs(bf));
     const vpx = (0.05 + ws * _wfPxPerMs()) * TY_SPEED_SCALE;
     // 速度分量：切向（逆時針）＋ 微幅向外（螺旋）＋ 隨颱風移動的平流
@@ -6696,15 +6814,25 @@ function _tyPartStep(list){
     // ★ 平流：颱風前進時把風場往後帶，所以後方的尾流會拉得比前方長
     //   （使用者指出往北走時南側範圍應較大）。
     const ax = (x._dcx || 0) * TY_ADVECT, ay = (x._dcy || 0) * TY_ADVECT;
-    const nx = p.x + (tanX + radX * inflow) * vpx * k + ax;
-    const ny = p.y + (tanY + radY * inflow) * vpx * k + ay;
+    // ★ 地面相對風 ＝ 風暴相對切向風 ＋ 風暴移動速度。
+    //   顏色與線寬先前只看半徑，完全軸對稱 —— 北半球颱風行進方向
+    //   右手邊風速應該較強（切向與移動同向相加），左手邊較弱，
+    //   這個最基本的不對稱先前完全沒表現出來。
+    const vxS = (tanX + radX * inflow) * vpx * k;
+    const vyS = (tanY + radY * inflow) * vpx * k;
+    const vx = vxS + ax, vy = vyS + ay;
+    const nx = p.x + vx, ny = p.y + vy;
+    // 由地面相對的像素速度反推風級（與風場圖層同一套換算）
+    const _u2px = Math.max(1e-6, _wfPxPerMs() * TY_SPEED_SCALE);
+    const bfG = _wsToBf(Math.max(2, Math.hypot(vx, vy) / _u2px));
     p.age++;
     if(nx < -80 || ny < -80 || nx > _tyCv.width + 80 || ny > _tyCv.height + 80){
       p.dead = true; return;
     }
     if(p.px != null && Math.hypot(nx - p.px, ny - p.py) < 40){
-      const bd = BF_BANDS.find(b=>bf < b.max) || BF_BANDS[BF_BANDS.length - 1];
-      const a = 0.35 + 0.45 * (1 - u);
+      const bd = BF_BANDS.find(b=>bfG < b.max) || BF_BANDS[BF_BANDS.length - 1];
+      // 拖尾拉長到 2.5 倍，單段透明度相應調低，疊起來的濃度才與先前相當
+      const a = 0.22 + 0.30 * (1 - Math.min(1, u));
       ctx.strokeStyle = _hexA(bd.color, a);
       ctx.lineWidth = u < 0.35 ? 1.4 : 1.0;
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -7121,6 +7249,7 @@ async function exportAnim(){
       map.invalidateSize({animate: false});
       map.setView(prevView.center, prevView.zoom, {animate: false});
       _forceFullRedraw();
+      try{ _afterMapResize(); }catch(e){}
     }catch(e){}
     try{ renderLayer(); _syncTimeBar(); }catch(e){}
   }
@@ -11499,11 +11628,17 @@ function renderTyphoonLayer(){
         weight:1.2, opacity:0.5, dashArray:'6,6', fill:false, interactive:false}).addTo(typhoonLayer);
       if(pt.r25) L.circle([pt.lat,pt.lng], {radius: pt.r25*1000, color: st.color,
         weight:1.2, opacity:0.7, dashArray:'2,4', fill:false, interactive:false}).addTo(typhoonLayer);
+      // ★ 與左下圖例同一個理由改用 SVG：圖例的色點在匯出的動畫裡
+      //   全部變灰（CSS border-radius + background 在 html2canvas 下失色，
+      //   同一張圖裡的 SVG 卻正常），這裡的編號徽章是完全相同的寫法，
+      //   一併改掉，免得影片裡的徽章也失去顏色。
       L.marker([pt.lat,pt.lng], {icon: L.divIcon({className:'', html:
-        `<div style="width:18px;height:18px;border-radius:50%;background:${st.color};
-          border:2px solid #fff;box-sizing:border-box;color:#fff;font-size:11px;
-          font-weight:700;line-height:14px;text-align:center;font-family:system-ui,sans-serif;
-          box-shadow:0 1px 3px rgba(0,0,0,.6)">${n}</div>`,
+        `<svg width="18" height="18" style="display:block;overflow:visible">
+          <circle cx="9" cy="9" r="8" fill="${st.color}" stroke="#fff" stroke-width="2"/>
+          <text x="9" y="9" fill="#fff" font-size="10" font-weight="700"
+            text-anchor="middle" dominant-baseline="central"
+            font-family="system-ui,sans-serif">${n}</text>
+        </svg>`,
         iconSize:[18,18], iconAnchor:[9,9]})})
         .bindTooltip(tip, {sticky:true, direction:'top'}).addTo(typhoonLayer);
     });
@@ -11545,10 +11680,14 @@ function renderTyphoonLegend(){
     </div>
     <div style="font-weight:700;margin-bottom:2px">關鍵時間點（編號對應地圖徽章）</div>`;
   rows.forEach(([c,ic,txt])=>{
+    // ★ 用 SVG 圓而非 CSS 圓形背景：動畫匯出時 html2canvas 對
+    //   border-radius + background 的組合支援不完整，五個點會全部變灰
+    //   （同一張圖裡以 SVG 畫的虛線卻正常，這是判斷依據）。
     h += `<div style="display:flex;align-items:center;gap:5px;line-height:1.6">
-      <span style="display:inline-block;flex:0 0 13px;width:13px;height:13px;
-        border-radius:50%;background:${c};
-        border:1.5px solid #fff;box-sizing:border-box;box-shadow:0 0 0 1px #99a"></span>
+      <svg width="14" height="14" style="flex:0 0 14px;display:block">
+        <circle cx="7" cy="7" r="5.6" fill="${c}" stroke="#fff" stroke-width="1.5"/>
+        <circle cx="7" cy="7" r="6.4" fill="none" stroke="#99a" stroke-width="1"/>
+      </svg>
       <span>${txt}</span></div>`;
   });
   h += `<div style="margin-top:5px;padding-top:4px;border-top:1px solid #ccd">
@@ -14512,7 +14651,7 @@ function toggleLsb(){
   const btn = document.getElementById('lsb-toggle');
   if(lsb) lsb.style.width = lsbOpen ? '230px' : '0px';
   if(btn) btn.textContent = lsbOpen ? '◀' : '▶';
-  setTimeout(()=> map.invalidateSize(), 280);
+  setTimeout(()=>{ try{ _afterMapResize(); }catch(e){} }, 280);
 }
 
 // ════════════════════════════════════════════════
@@ -14904,10 +15043,10 @@ const INTERP_BOUNDS = [[21.7, 119.2], [25.45, 122.05]];  // 本島+澎湖
 const _mercY = lat => Math.log(Math.tan(Math.PI/4 + lat*Math.PI/360));
 
 // 共用：把網格塗成色帶並疊到地圖（Barnes 與 Voronoi 兩條路徑共用）
-function _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1, supp){
+function _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1){
   // ★ my0/my1 原本在 renderInterpolated 內計算，抽出共用函式時漏了帶過來，
   //   導致陸地遮罩的座標全錯、整張圖被遮掉（開啟渲染後地圖一片空白）。
-  const my0 = _mercY(lat0), my1 = _mercY(lat1, supp);
+  const my0 = _mercY(lat0), my1 = _mercY(lat1);
   // 雙線性上採樣 + 離散色階著色
   const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
   const ctx=cv.getContext('2d');
@@ -14924,17 +15063,7 @@ function _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1, supp){
       let bi=0; while(bi<bands.length-1 && v>=bands[bi].max) bi++;
       const c=bands[bi].rgb;
       const i=(y*W+x)*4;
-      // ★ 依「離最近資料點的距離」決定透明度：遠離資料的海上不畫，
-      //   避免整個矩形範圍被填滿而出現一條直的硬邊。
-      let al = 255;
-      if(supp){
-        const s00=supp[y0*NX+x0], s01=supp[y0*NX+Math.min(x0+1,NX-1)],
-              s10=supp[Math.min(y0+1,NY-1)*NX+x0],
-              s11=supp[Math.min(y0+1,NY-1)*NX+Math.min(x0+1,NX-1)];
-        const sv=(s00*(1-tx)+s01*tx)*(1-ty)+(s10*(1-tx)+s11*tx)*ty;
-        al = Math.round(255 * Math.max(0, Math.min(1, sv)));
-      }
-      d[i]=c[0]; d[i+1]=c[1]; d[i+2]=c[2]; d[i+3]=al;
+      d[i]=c[0]; d[i+1]=c[1]; d[i+2]=c[2]; d[i+3]=255;
     }
   }
   ctx.putImageData(img,0,0);
@@ -15023,7 +15152,7 @@ function renderInterpolated(){
         grid[gy*NX+gx] = bv;
       }
     }
-    _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1, supp);
+    _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1);
     return;
   }
 
@@ -15055,38 +15184,17 @@ function renderInterpolated(){
   for(let k=0;k<nP;k++) resid[k]=pts[k][2]-F1s[k];
 
   // 網格：第一遍 + 第二遍殘差修正
-  // ★ 支撐度遮罩（使用者截圖裡「地圖被切開」的真正成因）：
-  //   渲染層是一個矩形範圍，先前連離資料點很遠的海上也照樣填色，
-  //   邊界就是一條又直又硬的線。改為記錄每一格到最近資料點的距離，
-  //   太遠的格子直接不畫，中間帶漸進淡出。
   const grid=new Float32Array(NX*NY);
-  const supp=new Float32Array(NX*NY);
-  const SUP_FULL = 3.0, SUP_FADE = 6.0;        // 網格單位：只削遠洋，不影響陸地
   for(let gy=0; gy<NY; gy++){
     for(let gx=0; gx<NX; gx++){
       const px=gx+0.5, py=gy+0.5;
       const f1=barnesPass(px, py, KAPPA, CUT1, false, null);
       const f2=barnesPass(px, py, KAPPA*GAMMA, CUT2, true, resid);
       grid[gy*NX+gx]=Math.max(0, f1+f2);   // 雨量不為負
-      // ★ 只在「整片資料都很遠」時才淡出，不能逐點算距離 ——
-      //   逐點算會在每個鄉鎮質心周圍形成圓形光暈，畫面上就是一顆顆
-      //   粉紅色塊（我上一輪造成的問題）。
-      //   改為距離門檻放寬到 3 格以上才開始淡出，等於只削掉
-      //   遠離臺灣的外海，陸地與近海完全不受影響。
-      let nd2=1e9;
-      for(let k=0;k<nP;k++){
-        const dx=pts[k][0]-px, dy=pts[k][1]-py;
-        const d2=dx*dx+dy*dy;
-        if(d2<nd2) nd2=d2;
-      }
-      const d=Math.sqrt(nd2);
-      supp[gy*NX+gx] = d<=SUP_FULL ? 1
-        : d>=SUP_FADE ? 0
-        : 1-(d-SUP_FULL)/(SUP_FADE-SUP_FULL);
     }
   }
 
-  _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1, supp);
+  _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1);
 
 }
 
