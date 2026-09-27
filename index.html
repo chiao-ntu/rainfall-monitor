@@ -218,14 +218,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <select id="himaBand" onchange="_himaSetBand(this.value)"
         style="font-size:10px;padding:1px 3px;background:#061220;color:#c0a8e8;
         border:1px solid #5a4a7a;border-radius:3px">
-        <option value="SND/ETC">對流強度</option>
-        <option value="B13/TBB" selected>紅外線</option>
+        <option value="SND/ETC" selected>對流強度</option>
+        <option value="B13/TBB">紅外線</option>
         <option value="B08/TBB">水氣</option>
         <option value="REP/ETC">真彩色(日)</option>
         <option value="B03/ALBD">可見光(日)</option>
       </select>
-      <button class="b" id="bHimaTop" onclick="toggleHimaTop()"
-        style="border-color:#5a4a7a;color:#c0a8e8" title="">⬆ 雲圖置頂</button>
       <button class="b"    id="bTerrain" onclick="toggleTerrainLayer()"
         style="border-color:#6a5a3a;color:#d8c090">⛰ 地形</button>
       <button class="b"    id="bWindField" onclick="toggleWindField()"
@@ -1568,6 +1566,7 @@ let _windFieldOn = false, _wfCanvas = null, _wfTimer = null, _wfParticles = [];
 //   線條糊成一片反而看不出流向（使用者回報「很密很可怕」）。
 const WF_N = 210;   // 使用者指定再減半（420 → 210）
 const WF_LIFE = 150;   // 配合拖尾拉長（90 → 150 幀）            // 每顆粒子的壽命（幀）
+const WF_INERTIA = 0.12;   // 速度鬆弛係數：約 8 幀跟上當地風（做出流體慣性）
 // ★ 海洋深色底：只換海域與地圖底色，陸地上各圖層的色階完全不動
 //   （使用者指定）—— 色階是判讀依據，不能因為換配色就改變。
 //   海面上的疊圖（颱風路徑、警戒區框線）另改為亮色以維持對比。
@@ -1578,7 +1577,7 @@ let _darkSea = false;
 //   ★ 時間必須對齊到 10 分鐘整點，且官方資料約落後 20 分鐘。
 const HIMAWARI_BASE = 'https://www.jma.go.jp/bosai/himawari/data/satimg';
 // ★ 頻道：紅外線（看雲頂）、水氣（看中高層水氣）、色調強化（看對流強度）
-let _himaOn = false, _himaLayer = null, _himaLayerJp = null, _himaBand = 'B13/TBB', _himaTimes = null;
+let _himaOn = false, _himaLayer = null, _himaBand = 'SND/ETC', _himaTimes = null;
 // ★ 時間必須取自官方的可用清單：自行推算常常抓到尚未發布的時刻，
 //   圖磚就整片空白（使用者看到的「晚上看不到」有一部分是這個）。
 async function _himaLoadTimes(){
@@ -1602,12 +1601,9 @@ function _himaSetBand(b){
   _himaBackoff = 1;               // 各頻道發布進度不同，換頻道時重新試
   if(_himaOn){ _himaOn = false; toggleHimawari(); }
 }
-// ★ 雲圖置頂：himaPane 預設在鄉鎮色塊之下（zIndex 393），而陸地色塊
-//   已改為完全不透明 —— 所以雲圖實際只在海上看得到，陸地上被整片蓋住，
-//   這就是「幾張圖除了像蓋上一層霧以外沒什麼差別」的來源。
-//   置頂後移到 396（鄉鎮色塊之上、縣市界 400 之下）並降透明度，
-//   陸地上的雲系才看得見。做成開關而不改預設，避免動到既有配色。
-let _himaTop = false;
+// ★ 曾經做過「雲圖置頂」（把 himaPane 移到色塊之上）。使用者實測後
+//   指出那只是在整張圖上蓋一層白霧、沒有判讀價值，已移除。
+//   雲圖固定在陸地色塊之下，看海上的雲系；陸地由地形與色塊負責。
 // ★ 退檔：0 ＝ 官方清單最新的一刻。預設從 1 起跳（往前一檔），
 //   因為最新那一刻常常只發布了一部分圖磚。
 const HIMA_MAX_BACKOFF = 4;
@@ -1622,6 +1618,7 @@ function _himaBaseTime(){
 function _himaApplyPane(){
   const hp = map.getPane('himaPane');
   if(!hp) return;
+  const _himaTop = false;   // 置頂功能已移除，保留變數讓下方判斷式維持可讀
   // ★★ 預設層級 391：seaPane(390) 之上、terrainPane(392) 之下。
   //   先前放 393（地形之上）又把不透明度拉到 0.92，造成兩個災情：
   //     (1) 地形暈渲被雲圖整片蓋住 ——「地形高低起伏不明顯」
@@ -1637,20 +1634,13 @@ function _himaApplyPane(){
                       || _himaBand === 'B08/TBB')
                      ? 'contrast(1.18) saturate(1.25)' : 'contrast(1.06)';
 }
-function toggleHimaTop(){
-  _himaTop = !_himaTop;
-  const b = document.getElementById('bHimaTop');
-  if(b) b.classList.toggle('on', _himaTop);
-  _himaApplyPane();
-}
+
 function toggleHimawari(){
   _himaOn = !_himaOn;
   const b = document.getElementById('bHimawari');
   if(b) b.classList.toggle('on', _himaOn);
-  [_himaLayer, _himaLayerJp].forEach(L0=>{
-    if(L0){ try{ map.removeLayer(L0); }catch(e){} }
-  });
-  _himaLayer = _himaLayerJp = null;
+  if(_himaLayer){ try{ map.removeLayer(_himaLayer); }catch(e){} }
+  _himaLayer = null;
   if(!_himaOn) return;
   if(!_himaTimes) _himaLoadTimes().then(()=>{ if(_himaOn){ _himaOn = false; toggleHimawari(); } });
   if(!map.getPane('himaPane')){
@@ -1664,18 +1654,16 @@ function toggleHimawari(){
   //   對策有兩層：
   //     (1) 預設就不取最新的那一刻（_himaBackoff 起始 1）
   //     (2) 全球面圖磚連續取不到時自動再往前退，最多退 4 檔（40 分鐘）
-  //   日本域（jp）在涵蓋範圍外本來就會 404，不列入退檔判斷。
   const t = _himaBaseTime();
   const band = _himaBand;
-  // ★★ 「要放大到一定比例才出現」的真正原因：
-  //   氣象廳的全球面（fd）只做到 z5，先前卻寫 maxNativeZoom: 6 ——
-  //   地圖縮放一過 5，Leaflet 就去要根本不存在的 z6 圖磚，全部 404，
-  //   整層空白。z6 只有日本域（jp）有，而 jp 的範圍剛好含臺灣（實測
-  //   jp/6/53/27 存在、fd/6/53/27 為 404）。
-  //   故改為兩層疊加：
-  //     下層 fd  z3~z5   —— 任何比例都一定有圖（超出就放大使用）
-  //     上層 jp  z6      —— 只在放大時出現，較清晰；範圍外的破洞
-  //                         由下層 fd 補滿，不會出現空白
+  // ★★ 「特定比例只出現一個矩形」—— 那個矩形就是日本域（jp）產品的範圍。
+  //   我一度用 jp 的 z6 疊在 fd 之上換取放大時的清晰度，因為 jp 的
+  //   涵蓋範圍含臺灣（jp/6/53/27 有圖）。但實測 jp/6/50/27（臺灣以西的
+  //   中國大陸）是 404 —— jp 是個有邊界的方框，畫面上就出現一塊矩形雲圖、
+  //   旁邊空白，而且邊界固定，所以「特定比例」下必定重現。
+  //   結論：不值得為那點清晰度換來一個會露餡的方框。只保留全球面（fd），
+  //   z3~z5 原生、超過就放大使用 —— 任何比例、任何位置都是完整一張圖。
+  //   （fd 沒有 z6：fd/6/53/27 為 404，所以 maxNativeZoom 必須是 5。）
   const _mk = (area, opt) => L.tileLayer(
     `${HIMAWARI_BASE}/${t}/${area}/${t}/${band}/{z}/{x}/{y}.jpg`,
     Object.assign({pane: 'himaPane', attribution: 'Himawari-9 / 氣象廳',
@@ -1684,9 +1672,7 @@ function toggleHimawari(){
                    errorTileUrl: 'data:image/png;base64,'
                      + 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4'
                      + 'nGMAAQAABQABDQottAAAAABJRU5ErkJggg=='}, opt));
-  _himaLayer   = _mk('fd', {minNativeZoom: 3, maxNativeZoom: 5, zIndex: 1}).addTo(map);
-  _himaLayerJp = _mk('jp', {minZoom: 6, minNativeZoom: 6, maxNativeZoom: 6,
-                            zIndex: 2}).addTo(map);
+  _himaLayer = _mk('fd', {minNativeZoom: 3, maxNativeZoom: 5}).addTo(map);
   _himaApplyPane();
   let _miss = 0, _missT = null;
   _himaLayer.on('tileerror', ()=>{
@@ -1700,7 +1686,6 @@ function toggleHimawari(){
         _miss = 0;
         try{
           _himaLayer.setUrl(`${HIMAWARI_BASE}/${t2}/fd/${t2}/${band}/{z}/{x}/{y}.jpg`);
-          _himaLayerJp.setUrl(`${HIMAWARI_BASE}/${t2}/jp/${t2}/${band}/{z}/{x}/{y}.jpg`);
         }catch(e){}
       }
       _miss = 0;
@@ -1708,7 +1693,7 @@ function toggleHimawari(){
   });
   const _sel = document.getElementById('himaBand');
   const _nm = _sel ? _sel.options[_sel.selectedIndex].text : band;
-  console.log('Himawari-9 雲圖：', t, _nm, '｜fd z3-5 + jp z6',
+  console.log('Himawari-9 雲圖：', t, _nm, '｜全球面 fd z3-5（放大後為放大使用）',
     (band === 'B03/ALBD' || band === 'REP/ETC'
       ? '（可見光／真彩色頻道夜間為全黑，屬正常；夜間請用對流強度或紅外線）' : ''));
 }
@@ -2028,7 +2013,7 @@ function _wfStart(){
 
   const ctx = cv.getContext('2d');
   const spawn = ()=>({x: Math.random() * cv.width, y: Math.random() * cv.height,
-                      age: Math.random() * WF_LIFE, node: null});
+                      age: Math.random() * WF_LIFE, node: null, vx: null, vy: null});
   for(let i = 0; i < WF_N; i++) _wfParticles.push(spawn());
 
   const step = ()=>{
@@ -2049,9 +2034,17 @@ function _wfStart(){
          p.x < 0 || p.y < 0 || p.x > cv.width || p.y > cv.height){
         Object.assign(p, spawn()); p.age = 0;
         p.node = pickNode(p.x, p.y);
+        p.vx = null; p.vy = null;
         return;
       }
-      const nx = p.x + uv[0], ny = p.y + uv[1];
+      // ★ 慣性：氣塊有動量，不會每一幀瞬間換成當地的風。
+      //   先前直接用當地向量當位移，測站之間一換就是一個折角 ——
+      //   線條看起來是一段段折線而不是流線（使用者：沒有流體的感覺）。
+      //   朝當地風鬆弛，轉折就變成平滑的彎。
+      if(p.vx == null){ p.vx = uv[0]; p.vy = uv[1]; }
+      p.vx += (uv[0] - p.vx) * WF_INERTIA;
+      p.vy += (uv[1] - p.vy) * WF_INERTIA;
+      const nx = p.x + p.vx, ny = p.y + p.vy;
       // ★ 依「真實風速（m/s）」著色，不是像素位移 ——
       //   位移已含基礎量，用它判斷會讓弱風也變紅。
       //   分界比照蒲福風級：<5.5 輕、5.5~10.8 中、≥10.8 強（6級以上）。
@@ -6760,11 +6753,24 @@ const TY_SPIRAL_RATIO = 8;     // 切向：徑向，數字越大螺旋越平緩
 //   移動速度／切向風速的比值回到真實值（約 5.5 / 40 ≈ 0.14）。
 const TY_ADVECT = 0.85 * TY_SPEED_SCALE;
 const TY_PART_N = 380;         // 密度降低（使用者指定：不需要這麼密）
+const TY_LIFE     = 260;       // 粒子壽命（幀）
+const TY_BETA_IN  = 22;        // 邊界層內流角（度），十級圈附近最大
+const TY_BETA_OUT = 32;        // 出七級圈後的外流角上限（度）
+const TY_RELAX    = 0.14;      // 圈內速度鬆弛係數（約 7 幀跟上當地風場）
+const TY_RELEASE  = 0.32;      // 出圈後鬆弛係數的衰減長度（愈小＝愈快放手）
+const TY_U_FRONT  = 1.45;      // 前緣消散半徑（r15 的倍數）
+const TY_U_BACK   = 2.10;      // 後方尾流消散半徑
+const TY_LINE_A   = 0.40;      // 單段線條透明度（大致均勻，強弱交給色階）
+const TY_VPX_CAP  = 8.0;       // 每幀像素步長上限（見 _tyPartStep 內的說明）
 // ★ 尾巴長度 ≈ 每幀步長 × 可見幀數，可見幀數 = ln(0.1)/ln(KEEP)。
 //   長度要靠「步長」拿，不能靠「保留幀數」硬撐 —— 0.975 是 91 幀，
 //   粒子走得又慢，結果就是殘影賴在畫面上不走（使用者回報殘留太久）。
 //   改回 0.95（45 幀，與風場層一致），長度改由上面的步長提供。
 const TY_TRAIL_KEEP = 0.95;
+// 拖尾可見幀數 = ln(0.1)/ln(TY_TRAIL_KEEP)，供密度正規化用。
+// ★ 必須宣告在 TY_TRAIL_KEEP 之後：const 有暫時性死區，放前面會在
+//   載入時就丟 ReferenceError，整段 script 停擺（實測過一次）。
+const TY_TRAIL_FRAMES = Math.log(0.1) / Math.log(TY_TRAIL_KEEP);
 let _tyCv = null, _tyParts = [];
 // 蒲福風級 → 風速（m/s）：取各級的代表值，與 _wsToBf 互為反函式
 function _bfToWs(bf){
@@ -6812,7 +6818,9 @@ function _tyPartStep(list){
     p.sys = x || act[Math.floor(Math.random() * act.length)];
     const sx = p.sys;
     const uMin = sx._uEye || 0.12;
-    const u = Math.sqrt(uMin * uMin + Math.random() * (1 - uMin * uMin));
+    // 面積加權（指數 0.5）：圓盤上單位面積的粒子數一致，外圈才不會比內圈稀疏。
+    //   （指數大於 0.5 會把密度往內推，核心反而更糊 —— 試過 0.8，是反效果。）
+    const u = uMin + (1.15 - uMin) * Math.pow(Math.random(), 0.50);
     const th = Math.random() * 2 * Math.PI;
     const r = (sx._P.r15 * u) * (sx._ppk || 1);
     // ★ 粒子存的是「畫面上的絕對位置」，不是相對颱風中心的極座標。
@@ -6820,12 +6828,14 @@ function _tyPartStep(list){
     //   那正是「點狀」而非流線的原因。
     p.x = sx._cx + r * Math.sin(th);
     p.y = sx._cy - r * Math.cos(th);
-    p.age = Math.random() * 220;
+    p.age = Math.random() * TY_LIFE;
     p.dead = false;
     p.px = null; p.py = null;
+    p.vx = null; p.vy = null;       // 首次由目標速度帶入，避免起步抽動
   };
+  const _u2px = Math.max(1e-6, _wfPxPerMs() * TY_SPEED_SCALE);
   _tyParts.forEach(p=>{
-    if(p.dead || !p.sys || !p.sys._P || p.age > 220 || p.x == null){ spawn(p); }
+    if(p.dead || !p.sys || !p.sys._P || p.age > TY_LIFE || p.x == null){ spawn(p); }
     const x = p.sys, P = x._P;
     if(!P || x._ppk == null) return;
     // 由畫面位置反推相對颱風中心的半徑與方位
@@ -6834,63 +6844,132 @@ function _tyPartStep(list){
     const r15px = P.r15 * x._ppk;
     const u = rpx / Math.max(1e-6, r15px);
     const uEye = x._uEye || 0.12;
-    if(u < uEye){ p.dead = true; return; }
+    if(u < uEye * 0.75){ p.dead = true; return; }
     const th = Math.atan2(dx, -dy);                  // 以正北為 0、往東為正
     // ★ 尾流不對稱：颱風往前走，原本繞著它轉的空氣會留在後方，
-    //   所以尾流應該往後拖長，前緣則被壓縮。先前前後都用同一個
-    //   u > 1.45 當死亡半徑 —— 不管颱風往哪走，範圍都是正圓，
-    //   這就是「尾流對稱、不合理」。改為沿行進方向判斷：
-    //   後方放寬到 1.85、前方收到 1.30。
+    //   所以尾流應該往後拖長，前緣則被壓縮。
     const mv = Math.hypot(x._dcx || 0, x._dcy || 0);
     const along = (mv > 1e-6 && rpx > 1e-6)
       ? ((dx * (x._dcx || 0) + dy * (x._dcy || 0)) / (mv * rpx)) : 0;
-    const uMax = 1.30 + 0.55 * Math.max(0, -along);   // along<0 ＝ 在颱風後方
-    // 該半徑的風級 → 風速（與風場圖層同一套色階與速度標準）
-    const uu25 = (P.r25 && P.r15) ? (P.r25 / P.r15) : 0.33;
-    const bfCore = (P.ws != null) ? Math.max(10, _wsToBf(P.ws)) : 11;
-    const bf = (u <= uu25)
-      ? bfCore + 0.5 * (1 - u / Math.max(1e-6, uu25))
-      : bfCore - (bfCore - 7) * Math.pow((u - uu25) / Math.max(1e-6, 1 - uu25), 0.7);
+    const uMax = TY_U_FRONT + (TY_U_BACK - TY_U_FRONT) * Math.max(0, -along);
     if(u > uMax){ p.dead = true; return; }
-    const ws = Math.max(2, _bfToWs(bf));
-    const vpx = (0.05 + ws * _wfPxPerMs()) * TY_SPEED_SCALE;
-    // 速度分量：切向（逆時針）＋ 微幅向外（螺旋）＋ 隨颱風移動的平流
-    // ★ 逆時針（北半球）：方位角 θ 自正北往東為正，逆時針＝θ 遞減，
-    //   速度方向因此是 (-cosθ, -sinθ)。先前用 (cosθ, sinθ) 是順時針。
-    const tanX = -Math.cos(th), tanY = -Math.sin(th);
-    const radX =  Math.sin(th), radY = -Math.cos(th);     // 由中心往外
-    const inflow = 1 / TY_SPIRAL_RATIO;
-    const k = 1 / Math.hypot(1, inflow);
-    // ★ 平流：颱風前進時把風場往後帶，所以後方的尾流會拉得比前方長
-    //   （使用者指出往北走時南側範圍應較大）。
+
+    // ── (1) 切向風速剖面：修正 Rankine，用回報的 r25 / r15 直接錨定 ──
+    //   先前是在「蒲福風級」的數字上做線性內插，蒲福本身已經是冪次刻度，
+    //   等於在對數尺度上拉直線 —— 剖面既不是真實颱風的形狀，
+    //   也不通過 r25＝25m/s、r15＝15m/s 這兩個回報值，
+    //   這就是「不線性、跟現實差距很大」的來源。
+    //   現在改成分段冪次，並「解」出指數讓曲線必定通過那兩個半徑：
+    //     r ≤ RMW      ：vθ = vmax·(r/RMW)          固體旋轉核心
+    //     RMW < r ≤ r25：vθ = vmax·(RMW/r)^α1       α1 由 (RMW,vmax)→(r25,25) 解出
+    //     r > r25      ：vθ = 25·(r25/r)^α2         α2 由 (r25,25)→(r15,15) 解出
+    const ws = _tyVt(x, u);
+
+    // ── (2) 內流角：隨半徑改變，脫離七級圈後由內流轉為外流 ──
+    //   邊界層內是向內的螺旋（內流角約 22°），到七級圈附近轉為純切向；
+    //   出了七級圈，氣壓梯度已不足以提供維持圓周運動所需的向心力，
+    //   氣塊就順著切線往外離開（使用者指出的正是這一點）。
+    const beta = _tyBeta(x, u);                  // 正＝向內，負＝向外
+    const tanX = -Math.cos(th), tanY = -Math.sin(th);   // 逆時針（北半球）
+    const radX =  Math.sin(th), radY = -Math.cos(th);   // 由中心往外
+    const vr = -Math.tan(beta);                  // 相對切向風的徑向比例
+    const norm = 1 / Math.hypot(1, vr);
+    // ★ 每幀像素步長設上限：這是「畫得出來」的需要，不是物理主張。
+    //   眼牆風速 45 m/s，在常用比例尺下一幀要走 22px，45 幀的拖尾
+    //   繞得完眼牆八圈 —— 疊出來就是一塊紅色實心圓餅，什麼結構都看不到。
+    //   七級風（15 m/s）約 7.4px/幀，低於上限不受影響，
+    //   所以外圈流線的長度完全保留，只把核心壓到畫得出來的範圍。
+    const vpx = Math.min(TY_VPX_CAP, (0.05 + ws * _wfPxPerMs()) * TY_SPEED_SCALE);
     const ax = (x._dcx || 0) * TY_ADVECT, ay = (x._dcy || 0) * TY_ADVECT;
-    // ★ 地面相對風 ＝ 風暴相對切向風 ＋ 風暴移動速度。
-    //   顏色與線寬先前只看半徑，完全軸對稱 —— 北半球颱風行進方向
-    //   右手邊風速應該較強（切向與移動同向相加），左手邊較弱，
-    //   這個最基本的不對稱先前完全沒表現出來。
-    const vxS = (tanX + radX * inflow) * vpx * k;
-    const vyS = (tanY + radY * inflow) * vpx * k;
-    const vx = vxS + ax, vy = vyS + ay;
-    const nx = p.x + vx, ny = p.y + vy;
-    // 由地面相對的像素速度反推風級（與風場圖層同一套換算）
-    const _u2px = Math.max(1e-6, _wfPxPerMs() * TY_SPEED_SCALE);
-    const bfG = _wsToBf(Math.max(2, Math.hypot(vx, vy) / _u2px));
+    // 地面相對風 ＝ 風暴相對風 ＋ 風暴移動（右半圈相加、左半圈相減）
+    const tgx = (tanX + radX * vr) * vpx * norm + ax;
+    const tgy = (tanY + radY * vr) * vpx * norm + ay;
+
+    // ── (3) 慣性：氣塊有動量，不會每一幀瞬間換成當地的場 ──
+    //   先前每幀都由位置重算速度、直接套用，等於粒子完全沒有質量 ——
+    //   軌跡因此是一段段折線而不是流線，這是「沒有流體感」的主因。
+    //   改為朝目標速度鬆弛：圈內跟得緊（場的約束強），
+    //   出了七級圈鬆弛係數指數衰減 → 向心約束逐漸消失，
+    //   氣塊靠慣性沿著切線直直飛出去，正是要的行為。
+    if(p.vx == null){ p.vx = tgx; p.vy = tgy; }
+    const kRel = (u <= 1) ? TY_RELAX
+                          : TY_RELAX * Math.exp(-(u - 1) / TY_RELEASE);
+    p.vx += (tgx - p.vx) * kRel;
+    p.vy += (tgy - p.vy) * kRel;
+    const nx = p.x + p.vx, ny = p.y + p.vy;
+
+    // ★ 色階用「物理風速」而不是畫面速度：上面的 TY_VPX_CAP 是為了畫得出來
+    //   而設的顯示上限，若拿受限後的像素速度回推風級，眼牆就會被壓到
+    //   十級上下、不再是全圖最強的顏色 —— 判讀會直接出錯。
+    //   這裡獨立算一次未受限的地面相對風速（m/s）。
+    const mxMs = ax / _u2px, myMs = ay / _u2px;
+    const wsG = Math.hypot((tanX + radX * vr) * norm * ws + mxMs,
+                           (tanY + radY * vr) * norm * ws + myMs);
+    const bfG = _wsToBf(Math.max(2, wsG));
     p.age++;
     if(nx < -80 || ny < -80 || nx > _tyCv.width + 80 || ny > _tyCv.height + 80){
       p.dead = true; return;
     }
     if(p.px != null && Math.hypot(nx - p.px, ny - p.py) < 40){
       const bd = BF_BANDS.find(b=>bfG < b.max) || BF_BANDS[BF_BANDS.length - 1];
-      // 幀數回到 45，單段透明度隨之調回，整體濃度與風場層相當
-      const a = 0.32 + 0.38 * (1 - Math.min(1, u));
+      // 出圈之後逐漸淡出，銜接周邊風場，不要有一圈突然消失的硬邊
+      const fade = (u <= 1) ? 1 : Math.max(0, 1 - (u - 1) / (uMax - 1));
+      // ★ 透明度先前是「愈靠核心愈濃」（0.32+0.38×(1-u)），方向剛好相反 ——
+      //   核心本來就重疊得最凶，再加濃就變成一塊實心色。改為大致均勻，
+      //   強弱交給色階（蒲福風級）表現，這也是 Windy 好讀的原因：
+      //   線條本身不搶戲，強度看顏色。
+      // ★ 密度正規化：拖尾長度固定（約 45 幀），但核心的周長很短、風速又快 ——
+      //   一顆粒子的拖尾可以繞眼牆八圈，疊起來就是一塊實心色（先前的紅色圓餅）。
+      //   算出「這條拖尾會繞幾圈」，用它把透明度除回去，
+      //   視覺密度在各半徑就一致了，核心也才看得出結構而不是一坨。
+      const wrap = (TY_TRAIL_FRAMES * Math.hypot(p.vx, p.vy))
+                 / Math.max(1e-6, 2 * Math.PI * rpx);
+      const a = TY_LINE_A * fade * Math.max(0.08, Math.min(1, 0.9 / Math.max(1e-6, wrap)));
       ctx.strokeStyle = _hexA(bd.color, a);
-      ctx.lineWidth = u < 0.35 ? 1.4 : 1.0;
+      // 核心反而畫細一點（先前核心 1.4 最粗，等於再加一層濃）
+      ctx.lineWidth = u < 0.35 ? 0.9 : 1.15;
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.beginPath(); ctx.moveTo(p.px, p.py); ctx.lineTo(nx, ny); ctx.stroke();
     }
     p.px = nx; p.py = ny;
     p.x = nx; p.y = ny;
   });
+}
+
+// ★ 每個系統只算一次剖面參數（指數由回報半徑解出，隨颱風強度變化）
+function _tyProf(x){
+  const P = x._P;
+  if(x._prof && x._profWs === P.ws && x._profR15 === P.r15 && x._profR25 === P.r25)
+    return x._prof;
+  const r15 = P.r15;
+  const r25 = (P.r25 && P.r25 > 0 && P.r25 < r15) ? P.r25 : r15 * 0.33;
+  const vmax = Math.max(26, P.ws || 35);          // 至少比十級風大才有核心
+  const rmw  = Math.max(r25 * 0.55, r15 * 0.05);  // 最大風速半徑在十級圈之內
+  const cl = (v, lo, hi)=>Math.max(lo, Math.min(hi, v));
+  // 解指數：vmax·(rmw/r25)^a1 = 25 → a1 = ln(vmax/25) / ln(r25/rmw)
+  const a1 = cl(Math.log(vmax / 25) / Math.log(Math.max(1.05, r25 / rmw)), 0.25, 1.40);
+  const a2 = cl(Math.log(25 / 15)   / Math.log(Math.max(1.05, r15 / r25)), 0.25, 1.40);
+  x._profWs = P.ws; x._profR15 = P.r15; x._profR25 = P.r25;
+  return (x._prof = {r15, r25, vmax, rmw, a1, a2,
+                     u25: r25 / r15, uRmw: rmw / r15});
+}
+// 切向風速（m/s），u = r / r15
+function _tyVt(x, u){
+  const q = _tyProf(x);
+  if(u <= q.uRmw) return Math.max(2, q.vmax * (u / Math.max(1e-6, q.uRmw)));
+  if(u <= q.u25)  return Math.max(2, q.vmax * Math.pow(q.uRmw / u, q.a1));
+  return Math.max(2, 25 * Math.pow(q.u25 / u, q.a2));
+}
+// 內流角（弧度，正＝向內）：核心外圍最強，七級圈歸零，之後轉為外流
+function _tyBeta(x, u){
+  const q = _tyProf(x);
+  const D = Math.PI / 180;
+  if(u <= q.u25) return TY_BETA_IN * D * (u / Math.max(1e-6, q.u25));
+  if(u <= 1){
+    const w = (u - q.u25) / Math.max(1e-6, 1 - q.u25);
+    return TY_BETA_IN * D * (1 - w);              // 到七級圈收斂為純切向
+  }
+  return -Math.min(TY_BETA_OUT, TY_BETA_OUT * (u - 1) / 0.30) * D;
 }
 
 function _tyPartStop(){
@@ -6913,14 +6992,16 @@ function _tyAnimStart(){
     // ★ 暴風圈：底色用實心圓、轉動的「虛線」改為自己畫的弧段。
     //   Leaflet 的 Canvas 渲染器只支援 setLineDash、完全不處理 dashOffset，
     //   所以先前用 dashOffset 做旋轉永遠不會動（使用者回報的正是這點）。
-    x.f15 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#f5a623', weight:1,
+    x.f15 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#f5a623', weight:BORDER_W,
       opacity:0.35, fillColor:'#f5a623', fillOpacity:0.07, interactive:false}).addTo(layer);
-    x.f25 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#e8453c', weight:1,
+    x.f25 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#e8453c', weight:BORDER_W,
       opacity:0.4, fill:false, interactive:false}).addTo(layer);
+    // ★ 轉動的暴風圈弧段也跟著收細（原 2.4/2.8），與縣市界同一個基準；
+    //   略加粗一點點是因為它在轉、要看得出來，但不再是畫面最粗的線。
     x.a15 = Array.from({length: 10}, ()=>L.polyline([[0,0]], {pane:'townPane',
-      color:'#f5a623', weight:2.4, opacity:0.95, interactive:false}).addTo(layer));
+      color:'#f5a623', weight:BORDER_W*1.5, opacity:0.95, interactive:false}).addTo(layer));
     x.a25 = Array.from({length: 8}, ()=>L.polyline([[0,0]], {pane:'townPane',
-      color:'#e8453c', weight:2.8, opacity:1, interactive:false}).addTo(layer));
+      color:'#e8453c', weight:BORDER_W*1.75, opacity:1, interactive:false}).addTo(layer));
     x.arms = [];      // 螺旋臂已改為暴風圈內的粒子流（見 _tyPartStep）
     x.eye = L.circleMarker([0, 0], {pane:'townPane', radius:6, color:'#000', weight:2,
       fillColor:'#ff2d2d', fillOpacity:1, interactive:false}).addTo(layer);
@@ -7709,6 +7790,9 @@ function getObsEtr(t){
 //   而山脊谷地的明暗被上下兩層互相抵銷 → 起伏反而更不明顯。
 //   正解就是程式碼自己的註解寫的那句「色塊本身的色相不會被洗淡」：
 //   色塊一律不透明，立體感全部交給上方那層色彩增值，並把它調強一點。
+// ★ 全系統界線寬度基準（使用者指定 0.8px）：縣市界與颱風暴風圈共用，
+//   改一處即可，不會再出現「改了縣市界忘了暴風圈」的情況。
+const BORDER_W = 0.8;
 const TERR_FILL_OP   = 1.0;   // 有資料的色塊：不再被灰階底稀釋
 const TERR_NODATA_OP = 1.0;   // 無資料（含 <5mm 的白）：純白，起伏由上層陰影表現
 const TERR_TOP_OP    = 0.86;  // 上方色彩增值陰影（原 0.55）。實測掃描 0.55~0.95：
@@ -7832,7 +7916,9 @@ function renderLayer(){
       // 深灰但不過重：#2a2a2a 太黑會蓋過色塊，改中灰並降低不透明度
       // ★ 鄉鎮界在深色海底時與白底地圖完全一致（使用者指定）——
     //   先前改成純黑又加粗，深色底上反而過於搶眼、地圖變糊。
-    color: isSel ? '#ffff44' : (_terrainOn ? '#3a3a3a' : '#5a5a5a'),
+    // ★ 顏色再調淺（使用者指定）：#3a3a3a/#5a5a5a → #8e8e8e/#a2a2a2，
+    //   界線仍分得出鄉鎮，但不再與縣市界搶視覺重量
+    color: isSel ? '#ffff44' : (_terrainOn ? '#8e8e8e' : '#a2a2a2'),
       // ★ 渲染模式下仍畫鄉鎮界（先前 weight 0 等於整個消失）；
       //   界線是判讀行政責任範圍的依據，不該因為換呈現方式就不見。
       weight: isSel ? 1.6
@@ -7843,7 +7929,9 @@ function renderLayer(){
       // 地形疊圖開啟時降低填色不透明度，讓下層暈渲透出來
       // ★ 地形疊圖時的可讀性：只降低不透明度會讓色塊被灰階地形沖淡、
       //   顏色難以辨識。改為「小幅降低 + 加深邊框」，保留色相與飽和度。
-      fillOpacity: _hideFill ? 0.02 : (_terrainOn ? fillOp * 0.82 : fillOp),
+      // ★ 這裡還有一個 0.82：上一輪把 TERR_FILL_OP 調回 1.0，卻漏了這個
+      //   乘數，色塊實際仍只有 0.82 —— 陸地偏灰的最後一塊拼圖。
+      fillOpacity: _hideFill ? 0.02 : fillOp,
       smoothFactor: 0  // 停用Leaflet的路徑平滑，避免縮放時端點偏移
     };
     // 使用快取的座標（見 llOf 說明）
@@ -7959,7 +8047,8 @@ function renderLayer(){
     // ★ 深色海底時縣市界改金黃並加粗，否則深底上的黑線看不見
     const _ds = (typeof _darkSea !== 'undefined' && _darkSea);
     const opts={color: _ds ? '#f0c040' : '#000000',
-                weight: 1, fill:false,   // ★ 統一 1.0px（使用者指定）
+                // ★ 統一 0.8px（使用者指定，原 1.0）：白底與深色底一致
+                weight: BORDER_W, fill:false,
                 opacity: _ds ? 0.95 : 0.7, interactive:false};
     const _c = llOf(feat);                 // 座標快取（同鄉鎮層）
     if(_c.type === 'Polygon'){
@@ -11642,10 +11731,10 @@ function renderTyphoonLayer(){
     // (5) 現在位置：暴風圈 + 颱風符號
     if(cur){
       if(cur.r15) L.circle([cur.lat,cur.lng], {radius:cur.r15*1000, color:'#f5a623',
-        weight:1.5, opacity:0.8, fillColor:'#f5a623', fillOpacity:0.10,
+        weight:BORDER_W, opacity:0.8, fillColor:'#f5a623', fillOpacity:0.10,
         interactive:false}).addTo(typhoonLayer);   // 七級風(15m/s)
       if(cur.r25) L.circle([cur.lat,cur.lng], {radius:cur.r25*1000, color:'#e8453c',
-        weight:1.5, opacity:0.9, fillColor:'#e8453c', fillOpacity:0.16,
+        weight:BORDER_W, opacity:0.9, fillColor:'#e8453c', fillOpacity:0.16,
         interactive:false}).addTo(typhoonLayer);   // 十級風(25m/s)
       const it = _tyIntensity(cur.ws);
       L.marker([cur.lat,cur.lng], {icon: L.divIcon({className:'', html:
@@ -11689,9 +11778,9 @@ function renderTyphoonLayer(){
         `十級風半徑 ${pt.r25==null?'—':Math.round(pt.r25)} km<br>${reach}</div>`;
 
       if(pt.r15) L.circle([pt.lat,pt.lng], {radius: pt.r15*1000, color: st.color,
-        weight:1.2, opacity:0.5, dashArray:'6,6', fill:false, interactive:false}).addTo(typhoonLayer);
+        weight:BORDER_W, opacity:0.5, dashArray:'6,6', fill:false, interactive:false}).addTo(typhoonLayer);
       if(pt.r25) L.circle([pt.lat,pt.lng], {radius: pt.r25*1000, color: st.color,
-        weight:1.2, opacity:0.7, dashArray:'2,4', fill:false, interactive:false}).addTo(typhoonLayer);
+        weight:BORDER_W, opacity:0.7, dashArray:'2,4', fill:false, interactive:false}).addTo(typhoonLayer);
       // ★ 與左下圖例同一個理由改用 SVG：圖例的色點在匯出的動畫裡
       //   全部變灰（CSS border-radius + background 在 html2canvas 下失色，
       //   同一張圖裡的 SVG 卻正常），這裡的編號徽章是完全相同的寫法，
