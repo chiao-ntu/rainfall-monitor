@@ -2696,7 +2696,10 @@ def _verify_class(obs, mod):
 #   輔助 —— 時雨量 × 40mm 門檻 SEDI。短延時強降雨是土石流啟動因子，
 #     且 40mm/h 以上屬罕見事件，CSI/ETS 會退化到 0，只有 SEDI 不會。
 #   參考 —— 既有的日累積相對誤差 30%，保留當基線以銜接先前記錄。
-DAILY_THRESHOLDS  = [80, 200, 350]     # mm／日，比照特報與警戒帶
+# ★ 加上 10／50：頻率偏差的型態要能逐門檻看 —— 融合在低門檻必然偏高
+#   （任一成員報雨，平均就容易越過 1mm），在高門檻則因平滑而偏低。
+#   只看 ≥1mm 的偏差比會誤判成「融合最不準」。
+DAILY_THRESHOLDS  = [10, 50, 80, 200, 350]     # mm／日，比照特報與警戒帶
 HOURLY_THRESHOLD  = 40                 # mm／時，短延時強降雨
 
 
@@ -2852,7 +2855,8 @@ def _fcst_max_hourly_yday(t, model):
     return max(vals) if vals else None
 
 
-def update_verify(out_towns, zones, now_tpe, hourly_ser=None, prev_weights=None):
+def update_verify(out_towns, zones, now_tpe, hourly_ser=None, prev_weights=None,
+                  prev_skill=None):
     """逐日校驗：以 1mm 有效降水為門檻，比對昨日各模式與實際觀測。
 
     ★ 與既有誤差追蹤（model_skill）互補：
@@ -2891,7 +2895,7 @@ def update_verify(out_towns, zones, now_tpe, hourly_ser=None, prev_weights=None)
                       if isinstance(st, dict) and st.get('name')]
         _obs_mh = _obs_max_hourly_yday(hourly_ser, _stn_names, now_tpe)
         for m in MODELS:
-            mv = (_blend_yday(t, zone, prev_weights) if m == 'blend'
+            mv = (_blend_yday(t, zone, prev_weights, prev_skill) if m == 'blend'
                   else (t.get('model_yday') or {}).get(m))
             if mv is None:
                 continue
@@ -2901,6 +2905,19 @@ def update_verify(out_towns, zones, now_tpe, hourly_ser=None, prev_weights=None)
                 d = day.setdefault(scope, {}).setdefault(m, {
                     'hit': 0, 'miss': 0, 'false': 0, 'correct_neg': 0})
                 d[cls] += 1
+                # ★ 量的指標（使用者要的「最貼近觀測值」只能用這個講）：
+                #   列聯表只看「有沒有越過門檻」，完全不管差幾毫米。
+                #   這裡累計絕對誤差、平方誤差與帶號誤差，
+                #   前端即可算出 MAE／RMSE／平均偏差(mm)。
+                am = d.setdefault('amt', {'n': 0, 'ae': 0.0, 'se': 0.0,
+                                          'err': 0.0, 'obs': 0.0, 'mod': 0.0})
+                _e = float(mv) - float(obs)
+                am['n'] += 1
+                am['ae'] += abs(_e)
+                am['se'] += _e * _e
+                am['err'] += _e
+                am['obs'] += float(obs)
+                am['mod'] += float(mv)
                 # ★ 降雨發生與否（10mm，不看量差）：專門抓包牌式亂報。
                 #   全臺都報大雨、實際只有局部下 → 大量「誤報」，
                 #   誤報率與 ETS 會直接反映出來，總量比卻可能剛好湊成 1。
@@ -2987,22 +3004,72 @@ def update_verify(out_towns, zones, now_tpe, hourly_ser=None, prev_weights=None)
 #   做法：用昨日各模式的回算值，依「昨日採用的權重」合成融合值，
 #   再和其他模式一起進校驗。權重取自上一輪 data.json 的 adaptive_blend，
 #   沒有就退回等權重；這樣評的才是當時真正播出去的那組權重。
-def _blend_yday(t, zone, weights):
+AI_YDAY_TAGS = ('aifs', 'graphcast')
+
+
+def _blend_yday(t, zone, weights, prev_skill=None):
+    """昨日的 FORMOSA 融合值 —— 必須與實際播出的那一套邏輯一致。
+
+    ★ 先前這裡是「把 model_yday 全部等權平均」，與前端 _blendQpf 完全是
+      兩回事：沒有排除清單、沒有偏差校正、沒有佐證原則。等於我們在校驗
+      一個從來沒有播出過的、比實際粗糙得多的版本 —— 融合的偏差比因此
+      被高估，也讓「FORMOSA 最貼近觀測」這句話拿不出證據。
+      更糟的是取不到權重時會退回「13 個模式等權」，把已判定亂報而排除的
+      ICON 與 CMA 也算進去。
+
+    這裡逐項對齊前端 _blendQpf：
+      ① 排除清單 ADAPT_BLOCK（cma / icon）
+      ② 自適應權重；取不到時只在「未被排除」的模式間等權
+      ③ 逐地形偏差校正 v×clamp(bias, 0.5, cap)，AI 模式 cap 3.0、物理 2.0
+      ④ 佐證原則：唯一一個遠高於中位數者降權至 0.35
+
+    ★ 刻意不移植的兩項，理由是校驗的誠信：
+      ‧ 觀測佐證剔除（_noRainEvidence）用的是「發布當下的雷達與實測」。
+        在事後校驗裡最接近的替代品就是被比對的那個觀測值本身 ——
+        拿答案去篩選預報，分數會憑空變好，那不是校驗是作弊。
+      ‧ CWA 仲裁需要 CWA 的昨日官方值，model_yday 裡沒有這個欄位。
+      兩項都會讓實際播出的版本「比這裡算出來的更好」，所以目前的
+      校驗結果是 FORMOSA 的保守下限，對外引用不會高估。
+    """
     mv = t.get('model_yday') or {}
     if not mv:
         return None
-    w = (weights or {}).get(zone) or {}
-    use = {m: w.get(m, 0) for m in mv if w.get(m, 0) > 0 and mv.get(m) is not None}
-    if not use:
-        use = {m: 1.0 for m in mv if mv.get(m) is not None}
-    if not use:
+    # ① 排除清單（與實際播出一致）
+    cand = {m: v for m, v in mv.items() if m not in ADAPT_BLOCK and v is not None}
+    if not cand:
         return None
-    sm = sum(mv[m] * ww for m, ww in use.items())
-    sw = sum(use.values())
-    return round(sm / sw, 2) if sw > 0 else None
+    # ② 權重：取不到自適應權重時，只在未被排除者之間等權
+    w = (weights or {}).get(zone) or {}
+    wt = {m: w[m] for m in cand if (w.get(m) or 0) > 0}
+    if not wt:
+        wt = {m: 1.0 for m in cand}
+    # ③ 逐地形偏差校正（用上一輪的誤差表，也就是發布當下所用的那一組）
+    zs = ((prev_skill or {}).get(zone) or {})
+    vals = {}
+    for m in wt:
+        v = float(cand[m])
+        sv = (zs.get(m) or {})
+        sv = sv.get('decay') or sv.get('short') or {}
+        b, n = sv.get('bias'), sv.get('n')
+        if b and n and n >= 10:
+            cap = 3.0 if m in AI_YDAY_TAGS else 2.0
+            v *= max(0.5, min(cap, b))
+        vals[m] = v
+    if not vals:
+        return None
+    # ④ 佐證原則：只有一個模式遠高於中位數 → 降權但不歸零
+    ss = sorted(vals.values())
+    med = ss[len(ss) // 2]
+    highs = [m for m, v in vals.items() if v > max(50.0, med * 3)]
+    if len(highs) == 1:
+        wt[highs[0]] *= 0.35
+    sw = sum(wt[m] for m in vals)
+    if sw <= 0:
+        return None
+    return round(sum(vals[m] * wt[m] for m in vals) / sw, 2)
 
 
-def update_model_skill(out_towns, zones, now_tpe, prev_weights=None):
+def update_model_skill(out_towns, zones, now_tpe, prev_weights=None, prev_skill=None):
     """把「昨日各模式預測 vs 實際觀測」記入誤差追蹤表。
 
     結構：{"days": {"2026-09-01": {"山區": {"ecmwf": {"n":31,"sum_obs":..,
@@ -3043,7 +3110,7 @@ def update_model_skill(out_towns, zones, now_tpe, prev_weights=None):
         if t.get('obs_src') in ('neighbor', 'qpesums'):
             continue
         for m in MODELS:
-            mv = (_blend_yday(t, zone, prev_weights) if m == 'blend'
+            mv = (_blend_yday(t, zone, prev_weights, prev_skill) if m == 'blend'
                   else (t.get('model_yday') or {}).get(m))
             if mv is None:
                 continue
@@ -5217,9 +5284,18 @@ def main():
                 _prev_w = {z: (v.get('models') or {}) for z, v in _pw.items()}
         except Exception:
             _prev_w = {}
-        _skill = update_model_skill(out_towns, _zones, now_tpe, _prev_w)
+        # 上一輪的逐地形誤差表：偏差校正要用「發布當下」的那一組，
+        #   用今天剛算出來的會是事後諸葛，分數會虛高。
+        _prev_sk = {}
+        try:
+            if os.path.exists('data.json'):
+                with open('data.json', encoding='utf-8') as _f:
+                    _prev_sk = json.load(_f).get('model_skill') or {}
+        except Exception:
+            _prev_sk = {}
+        _skill = update_model_skill(out_towns, _zones, now_tpe, _prev_w, _prev_sk)
         # 校驗（POD/FAR/CSI）：與誤差追蹤共用同一批樣本
-        _verify = update_verify(out_towns, _zones, now_tpe, hourly_ser, _prev_w)
+        _verify = update_verify(out_towns, _zones, now_tpe, hourly_ser, _prev_w, _prev_sk)
         _verify_recent = _verify_summary(_verify)
         output['model_skill'] = summarize_model_skill(_skill, now_tpe)
         # ★ 自適應選用：逐地形決定「用哪些模式、各給多少權重」

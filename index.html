@@ -1015,10 +1015,14 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
             border:1px solid #1a4060;border-radius:3px">
             <option value="ETS80">ETS ≥80mm（主）</option>
+            <option value="ETS10">ETS ≥10mm</option>
+            <option value="ETS50">ETS ≥50mm</option>
             <option value="ETS200">ETS ≥200mm</option>
             <option value="ETS350">ETS ≥350mm</option>
             <option value="SEDI80">SEDI ≥80mm</option>
             <option value="SEDIH40">SEDI 時雨量 ≥40mm/h</option>
+            <option value="MAE">雨量誤差 MAE（越小越好）</option>
+            <option value="RMSE">雨量誤差 RMSE（越小越好）</option>
             <option value="basic">相對誤差 30%（基線）</option>
           </select>
           <select id="vf-days" onchange="renderVerify()"
@@ -4820,7 +4824,7 @@ function _vfBlendZones(m){
 }
 const VF_IN_BLEND = { has: m => _vfBlendZones(m) !== 0 };
 // 預報校驗表的排序狀態（點欄位標題切換）
-let _vfSortKey = 'main', _vfSortDesc = true;
+let _vfSortKey = 'main', _vfSortDesc = true, _vfSortFlip = false;
 function _vfSortBy(k){
   if(_vfSortKey === k) _vfSortDesc = !_vfSortDesc;
   else { _vfSortKey = k; _vfSortDesc = (k !== 'FAR'); }   // FAR 越低越好，預設升冪
@@ -4894,6 +4898,11 @@ function renderVerify(){
       if(!c) return;
       const a = agg[m] || (agg[m] = {hit:0, miss:0, 'false':0, correct_neg:0});
       ['hit','miss','false','correct_neg'].forEach(k=> a[k] += (c[k] || 0));
+      // ★ 雨量誤差累計（後端 amt 欄位）：欄位名與列聯表不同，另外加總
+      if(c.amt){
+        const am = a.amt || (a.amt = {n:0, ae:0, se:0, err:0, obs:0, mod:0});
+        ['n','ae','se','err','obs','mod'].forEach(k=> am[k] += (c.amt[k] || 0));
+      }
       // 門檻列聯表一併加總（ETS/SEDI 用）
       Object.keys(c).filter(k=>k.startsWith('thr') || k === 'hourly40').forEach(tk=>{
         const ta = a[tk] || (a[tk] = {hit:0, miss:0, 'false':0, correct_neg:0});
@@ -4904,9 +4913,36 @@ function renderVerify(){
   // ★ 指標切換（依討論後採用）：主指標為多門檻 ETS，
   //   罕見門檻用 SEDI，相對誤差保留當基線。
   const metric = (document.getElementById('vf-metric') || {}).value || 'ETS80';
+  // 雨量誤差（mm）：MAE／RMSE／平均偏差。沒有 amt 的舊資料回 null。
+  const _amt = m =>{
+    const a = (agg[m] || {}).amt;
+    if(!a || !a.n) return null;
+    return {n: a.n, mae: a.ae / a.n, rmse: Math.sqrt(a.se / a.n),
+            me: a.err / a.n,
+            ratio: a.obs > 0 ? a.mod / a.obs : null};   // 總量比（量的偏差）
+  };
+  // 分門檻頻率偏差：(命中+誤報)/(命中+漏報)
+  const _biasAt = (m, thr)=>{
+    const td = (agg[m] || {})['thr' + thr];
+    if(!td) return null;
+    const d = (td.hit || 0) + (td.miss || 0);
+    return d ? ((td.hit || 0) + (td['false'] || 0)) / d : null;
+  };
+  const _metricThr = metric === 'basic' ? null
+    : metric === 'SEDIH40' ? null
+    : /^(ETS|SEDI)(\d+)$/.test(metric) ? metric.replace(/^(ETS|SEDI)/, '') : null;
   const rows = Object.keys(agg).map(m=>{
     const sc = _vfScores(agg[m]);
-    if(metric === 'SEDIH40'){
+    sc.amt = _amt(m);
+    // ★ 偏差比跟著主指標的門檻走：只看 ≥1mm 會把融合說成最不準
+    sc.biasAt = _metricThr ? _biasAt(m, _metricThr) : sc.BIAS;
+    sc.biasLbl = _metricThr ? `≥${_metricThr}mm` : '≥1mm';
+    if(metric === 'MAE' || metric === 'RMSE'){
+      const a = sc.amt;
+      sc.main = a ? (metric === 'MAE' ? a.mae : a.rmse) : null;
+      sc.mainN = a ? a.n : 0;
+      sc.lowerBetter = true;
+    } else if(metric === 'SEDIH40'){
       // ★ 時雨量強度（僅 best/ecmwf/gfs 有 maxh，其餘模式沒有樣本）
       const hd = (agg[m] || {}).hourly40;
       sc.main = hd ? _vfSedi(hd) : null;
@@ -4921,6 +4957,12 @@ function renderVerify(){
     }
     return {m, s: sc, c: agg[m]};
   }).sort((a, b)=>{
+    // ★ MAE／RMSE 是越小越好，預設改成升冪，否則最準的會排最後
+    if((metric === 'MAE' || metric === 'RMSE') && _vfSortKey === 'main'
+       && !_vfSortFlip){ _vfSortFlip = true; _vfSortDesc = false; }
+    if(metric !== 'MAE' && metric !== 'RMSE' && _vfSortFlip){
+      _vfSortFlip = false; _vfSortDesc = true;
+    }
     // ★ FORMOSA 是比較的基準，不隨排序跑掉，一律釘在第一列
     if(a.m === 'blend') return -1;
     if(b.m === 'blend') return 1;
@@ -4931,7 +4973,9 @@ function renderVerify(){
       return _vfSortDesc ? y.localeCompare(x) : x.localeCompare(y);
     }
     const g = r => K === 'n' ? (r.s.mainN ?? r.s.n)
-                 : K === 'main' ? r.s.main : r.s[K];
+                 : K === 'main' ? r.s.main
+                 : K === 'MAE'  ? (r.s.amt && r.s.amt.mae)
+                 : K === 'BIAS' ? r.s.biasAt : r.s[K];
     const x = g(a), y = g(b);
     if(x == null && y == null) return 0;
     if(x == null) return 1;
@@ -4941,6 +4985,20 @@ function renderVerify(){
   const col = v => v == null ? '#7a94ac'
     : v >= 0.7 ? '#40d060' : v >= 0.5 ? '#FFFF00' : v >= 0.3 ? '#FF8C00' : '#FF4444';
   const fmt = v => v == null ? '—' : v.toFixed(2);
+  const lowBetter = (metric === 'MAE' || metric === 'RMSE');
+  // ★ MAE／RMSE 是 mm、越小越好：用「相對全體最佳」上色，不能套 0~1 色階
+  const _mains = rows.map(r=>r.s.main).filter(v=>v != null);
+  const _mBest = _mains.length ? Math.min(..._mains) : null;
+  const colMain = v => v == null ? '#7a94ac'
+    : !lowBetter ? col(v)
+    : (_mBest == null || v <= _mBest * 1.05) ? '#40d060'
+    : v <= _mBest * 1.25 ? '#FFFF00'
+    : v <= _mBest * 1.60 ? '#FF8C00' : '#FF4444';
+  // 偏差比：離 1 越遠越差（兩側對稱）
+  const colBias = v => v == null ? '#7a94ac'
+    : (v >= 0.9 && v <= 1.15) ? '#40d060'
+    : (v >= 0.75 && v <= 1.35) ? '#FFFF00'
+    : (v >= 0.6 && v <= 1.8) ? '#FF8C00' : '#FF4444';
   const period = ser.length === 1 ? ser[0].date
     : `${ser[0].date} ~ ${ser[ser.length-1].date}（${ser.length} 日）`;
   el.innerHTML = `<div style="color:#5a7a95;font-size:9px;margin-bottom:3px">
@@ -4956,11 +5014,16 @@ function renderVerify(){
               + `cursor:pointer;user-select:none;${on ? 'color:#f0c878' : ''}">`
               + label + (on ? (_vfSortDesc ? ' ▼' : ' ▲') : '') + '</th>';
           };
-          return TH('name', '模式', 'left') + TH('POD', 'POD', 'right') + TH('FAR', 'FAR', 'right')
-            + TH('main', metric === 'basic' ? 'CSI'
+          const mainLbl = metric === 'basic' ? 'CSI'
                  : metric === 'SEDIH40' ? 'SEDI ≥40mm/h'
-                 : metric.replace(/(\d+)/, ' ≥$1mm'), 'right')
-            + TH('BIAS', '偏差比', 'right') + TH('n', '樣本', 'right');
+                 : metric === 'MAE' ? 'MAE mm'
+                 : metric === 'RMSE' ? 'RMSE mm'
+                 : metric.replace(/(\d+)/, ' ≥$1mm');
+          return TH('name', '模式', 'left') + TH('POD', 'POD', 'right') + TH('FAR', 'FAR', 'right')
+            + TH('main', mainLbl, 'right')
+            + TH('BIAS', '偏差比' + (rows[0] ? rows[0].s.biasLbl : ''), 'right')
+            + TH('MAE', 'MAE', 'right')
+            + TH('n', '樣本', 'right');
         })()}</tr>
       ${rows.map(r=>`<tr style="border-top:1px solid #12283c;${
           r.m === 'blend' ? 'background:#10202e' : ''}">
@@ -4974,25 +5037,70 @@ function renderVerify(){
         }</td>
         <td style="text-align:right;color:${col(r.s.POD)}">${fmt(r.s.POD)}</td>
         <td style="text-align:right;color:${col(r.s.FAR == null ? null : 1 - r.s.FAR)}">${fmt(r.s.FAR)}</td>
-        <td style="text-align:right;color:${col(r.s.main)};font-weight:700">${fmt(r.s.main)}</td>
-        <td style="text-align:right;color:#9fc8e8">${fmt(r.s.BIAS)}</td>
+        <td style="text-align:right;color:${colMain(r.s.main)};font-weight:700">${
+          r.s.main == null ? '—' : r.s.main.toFixed(lowBetter ? 1 : 2)}</td>
+        <td style="text-align:right;color:${colBias(r.s.biasAt)}">${fmt(r.s.biasAt)}</td>
+        <td style="text-align:right;color:#9fc8e8">${
+          r.s.amt ? r.s.amt.mae.toFixed(1) : '—'}</td>
         <td style="text-align:right;color:#5a7a95">${r.s.mainN ?? r.s.n}</td></tr>`).join('')}
     </table>
     ${(()=>{
-      // ★ FORMOSA 自我校驗的唯一有意義的問題：融合有沒有贏過最好的那個單模式？
-      //   贏了才代表加權在做事；輸了就該檢討權重，而不是繼續疊模式。
+      // ★ 這一段是 FORMOSA 對外的準確度佐證，要能獨立回答三個問題：
+      //   ① 技術得分有沒有贏過最好的單一模式（ETS／SEDI，扣除隨機命中）
+      //   ② 雨量上是不是真的最貼近觀測（MAE，這才是「貼近觀測值」）
+      //   ③ 偏差比的型態長什麼樣（分門檻攤開，不迴避）
       const bl = rows.find(r=>r.m === 'blend');
-      const sg = rows.filter(r=>r.m !== 'blend' && r.s.main != null);
-      if(!bl || bl.s.main == null || !sg.length) return '';
-      const bs = sg.reduce((x, y)=> (y.s.main > x.s.main ? y : x));
-      const d = bl.s.main - bs.s.main;
-      const c = d > 0.005 ? '#40d060' : d < -0.005 ? '#FF6644' : '#f0c878';
-      const w = d > 0.005 ? '融合勝出' : d < -0.005 ? '融合落後' : '持平';
-      return `<div style="margin-top:4px;padding:3px 5px;border:1px solid #1e3c52;
+      const sg = rows.filter(r=>r.m !== 'blend');
+      if(!bl || !sg.length) return '';
+      const L = [];
+      const cmp = (label, get, lower, dp)=>{
+        const bv = get(bl); if(bv == null) return;
+        const pool = sg.filter(r=>get(r) != null);
+        if(!pool.length) return;
+        const best = pool.reduce((x, y)=>
+          (lower ? (get(y) < get(x)) : (get(y) > get(x))) ? y : x);
+        const d = get(bl) - get(best);
+        const win = lower ? d < -0.0005 : d > 0.0005;
+        const tie = Math.abs(d) <= 0.0005;
+        const c = win ? '#40d060' : tie ? '#f0c878' : '#FF6644';
+        const w = win ? '融合勝出' : tie ? '持平' : '融合落後';
+        const rel = (lower && get(best) > 0)
+          ? `，誤差少 ${((1 - get(bl) / get(best)) * 100).toFixed(0)}%` : '';
+        L.push(`<div style="margin:1px 0">${label}
+          <b style="color:#7ee8a8">${bv.toFixed(dp)}</b>
+          ｜最佳單模式 ${VF_NAME[best.m] || best.m}
+          <b>${get(best).toFixed(dp)}</b>
+          → <b style="color:${c}">${w}${win && rel ? rel : ''}</b></div>`);
+      };
+      const mainLbl = metric === 'basic' ? 'CSI'
+        : metric === 'SEDIH40' ? 'SEDI ≥40mm/h'
+        : metric === 'MAE' ? 'MAE'
+        : metric === 'RMSE' ? 'RMSE'
+        : metric.replace(/(\d+)/, ' ≥$1mm');
+      cmp(`技術得分 ${mainLbl}`, r=>r.s.main, lowBetter, lowBetter ? 1 : 3);
+      if(!lowBetter)
+        cmp('雨量誤差 MAE(mm)', r=>r.s.amt && r.s.amt.mae, true, 1);
+      // 偏差比剖面：分門檻攤開，讓「小雨報得寬、大雨不虛胖」自己說話
+      const prof = [['1', bl.s.BIAS]].concat(
+        [10, 50, 80].map(t=>[String(t), _biasAt('blend', t)]))
+        .filter(([, v])=>v != null)
+        .map(([t, v])=>`≥${t}mm <b style="color:${colBias(v)}">${v.toFixed(2)}</b>`)
+        .join('　');
+      const amt = bl.s.amt;
+      return `<div style="margin-top:4px;padding:4px 5px;border:1px solid #1e3c52;
           border-radius:3px;background:#0b1a26;font-size:9px;color:#9fc8e8">
-          ★ FORMOSA 自我校驗：融合 <b style="color:#7ee8a8">${fmt(bl.s.main)}</b>
-          ｜最佳單模式 ${VF_NAME[bs.m] || bs.m} <b>${fmt(bs.s.main)}</b>
-          → <b style="color:${c}">${w}${d ? `（${d > 0 ? '+' : ''}${d.toFixed(3)}）` : ''}</b>
+          <div style="color:#7ee8a8;font-weight:700;margin-bottom:2px">
+            ★ FORMOSA 自我校驗</div>
+          ${L.join('')}
+          ${prof ? `<div style="margin:2px 0">事件頻率偏差比　${prof}</div>` : ''}
+          ${amt ? `<div style="margin:1px 0">總量比（模式÷觀測）
+            <b>${amt.ratio == null ? '—' : amt.ratio.toFixed(2)}</b>
+            ｜平均偏差 <b>${amt.me >= 0 ? '+' : ''}${amt.me.toFixed(1)}mm</b>
+            ｜樣本 ${amt.n}</div>` : ''}
+          <div style="color:#5a7a95;margin-top:2px;line-height:1.45">
+            偏差比是「報出有雨的地點數 ÷ 實際有雨的地點數」，量的是報得寬不寬，
+            不是準不準。融合在低門檻必然偏高（任一成員報雨，平均就容易越過門檻），
+            要論準確度請看 ETS／SEDI 與 MAE。</div>
         </div>`;
     })()}
     <div style="color:#5a7a95;font-size:9px;margin-top:3px">
@@ -5001,7 +5109,8 @@ function renderVerify(){
         : metric.startsWith('SEDI') ? 'SEDI 罕見事件專用，極端門檻下仍有鑑別力'
         : 'CSI 綜合指標，不納入正確無雨'}　偏差比 &gt;1 報太多<br>
       ◆ 已納入 FORMOSA 融合（◆2＝僅 2 個地形採用）；無標記者目前未納入<br>
-      ★ FORMOSA 融合為本系統的輸出結果，與各單模式用同一套判準校驗，固定列於首行</div>`;
+      ★ FORMOSA 融合為本系統的輸出結果，與各單模式用同一套判準校驗，固定列於首行<br>
+      MAE＝平均絕對誤差（mm），越小代表雨量越貼近觀測；偏差比隨主指標的門檻變動</div>`;
   try{ drawVerifyChart(); }catch(e){ console.warn('校驗圖失敗', e); }
 }
 // 時間序列圖：各模式的 CSI 隨日期變化
