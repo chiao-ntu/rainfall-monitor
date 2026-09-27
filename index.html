@@ -1587,8 +1587,10 @@ async function _himaLoadTimes(){
     if(r.ok) _himaTimes = await r.json();
   }catch(e){ _himaTimes = null; }
 }
-function _himaTime(){
-  const d = new Date(Date.now() - 20 * 60e3);        // 發布延遲
+function _himaTime(back){
+  // ★ 發布延遲由 20 分鐘放寬到 30：實測最新的一個時刻常常只發布了
+  //   一部分圖磚，取太新就會只出現一塊。back 為往前再退幾個 10 分鐘。
+  const d = new Date(Date.now() - (30 + 10 * (back || 0)) * 60e3);
   d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10, 0, 0);
   const p = n => String(n).padStart(2, '0');
   return `${d.getUTCFullYear()}${p(d.getUTCMonth()+1)}${p(d.getUTCDate())}`
@@ -1597,6 +1599,7 @@ function _himaTime(){
 // 直接在下拉選頻道（使用者反映輪流切換很麻煩）
 function _himaSetBand(b){
   _himaBand = b;
+  _himaBackoff = 1;               // 各頻道發布進度不同，換頻道時重新試
   if(_himaOn){ _himaOn = false; toggleHimawari(); }
 }
 // ★ 雲圖置頂：himaPane 預設在鄉鎮色塊之下（zIndex 393），而陸地色塊
@@ -1605,11 +1608,30 @@ function _himaSetBand(b){
 //   置頂後移到 396（鄉鎮色塊之上、縣市界 400 之下）並降透明度，
 //   陸地上的雲系才看得見。做成開關而不改預設，避免動到既有配色。
 let _himaTop = false;
+// ★ 退檔：0 ＝ 官方清單最新的一刻。預設從 1 起跳（往前一檔），
+//   因為最新那一刻常常只發布了一部分圖磚。
+const HIMA_MAX_BACKOFF = 4;
+let _himaBackoff = 1;
+function _himaBaseTime(){
+  if(Array.isArray(_himaTimes) && _himaTimes.length){
+    const i = Math.max(0, _himaTimes.length - 1 - _himaBackoff);
+    return _himaTimes[i].basetime;
+  }
+  return _himaTime(_himaBackoff);
+}
 function _himaApplyPane(){
   const hp = map.getPane('himaPane');
   if(!hp) return;
-  hp.style.zIndex  = _himaTop ? 396 : 393;
-  hp.style.opacity = _himaTop ? 0.58 : 0.92;
+  // ★★ 預設層級 391：seaPane(390) 之上、terrainPane(392) 之下。
+  //   先前放 393（地形之上）又把不透明度拉到 0.92，造成兩個災情：
+  //     (1) 地形暈渲被雲圖整片蓋住 ——「地形高低起伏不明顯」
+  //     (2) 開地形時鄉鎮色塊只有 0.80、內插層只有 0.72，底下那片
+  //         近乎不透明的黑色夜間紅外線圖就透上來 ——「整個陸地偏灰、
+  //         級距色階顏色跑掉」
+  //   移到 391 之後，陸地由地形層蓋住雲圖，海上仍然看得到雲系，
+  //   要看陸地上的雲再按「雲圖置頂」。
+  hp.style.zIndex  = _himaTop ? 396 : 391;
+  hp.style.opacity = _himaTop ? 0.55 : 0.85;
   // 對流強度／紅外線頻道本身對比偏低，補一點對比與飽和度
   hp.style.filter  = (_himaBand === 'SND/ETC' || _himaBand === 'B13/TBB'
                       || _himaBand === 'B08/TBB')
@@ -1635,9 +1657,15 @@ function toggleHimawari(){
     map.createPane('himaPane');
     map.getPane('himaPane').style.pointerEvents = 'none';
   }
-  // 優先用官方清單的最新時刻，取不到才退回自行推算
-  const t = (Array.isArray(_himaTimes) && _himaTimes.length)
-    ? _himaTimes[_himaTimes.length - 1].basetime : _himaTime();
+  // ★★ 「特定比例只出現一塊」的原因：氣象廳是「逐塊發布」的，
+  //   最新的那個時刻常常只發布了一部分圖磚，其餘還沒上線 ——
+  //   畫面上就是一個矩形的雲圖、旁邊全白。換個縮放比例會改抓不同
+  //   層級的圖磚，剛好抓到已發布完整的那一層就「正常了」。
+  //   對策有兩層：
+  //     (1) 預設就不取最新的那一刻（_himaBackoff 起始 1）
+  //     (2) 全球面圖磚連續取不到時自動再往前退，最多退 4 檔（40 分鐘）
+  //   日本域（jp）在涵蓋範圍外本來就會 404，不列入退檔判斷。
+  const t = _himaBaseTime();
   const band = _himaBand;
   // ★★ 「要放大到一定比例才出現」的真正原因：
   //   氣象廳的全球面（fd）只做到 z5，先前卻寫 maxNativeZoom: 6 ——
@@ -1660,8 +1688,23 @@ function toggleHimawari(){
   _himaLayerJp = _mk('jp', {minZoom: 6, minNativeZoom: 6, maxNativeZoom: 6,
                             zIndex: 2}).addTo(map);
   _himaApplyPane();
+  let _miss = 0, _missT = null;
   _himaLayer.on('tileerror', ()=>{
-    console.warn('Himawari 圖磚載入失敗（時間可能尚未發布）：', t);
+    _miss++;
+    clearTimeout(_missT);
+    _missT = setTimeout(()=>{
+      if(_miss >= 2 && _himaBackoff < HIMA_MAX_BACKOFF && _himaOn){
+        _himaBackoff++;
+        const t2 = _himaBaseTime();
+        console.warn(`Himawari：${t} 的圖磚缺 ${_miss} 塊，改用 ${t2}`);
+        _miss = 0;
+        try{
+          _himaLayer.setUrl(`${HIMAWARI_BASE}/${t2}/fd/${t2}/${band}/{z}/{x}/{y}.jpg`);
+          _himaLayerJp.setUrl(`${HIMAWARI_BASE}/${t2}/jp/${t2}/${band}/{z}/{x}/{y}.jpg`);
+        }catch(e){}
+      }
+      _miss = 0;
+    }, 1500);
   });
   const _sel = document.getElementById('himaBand');
   const _nm = _sel ? _sel.options[_sel.selectedIndex].text : band;
@@ -2071,7 +2114,7 @@ function toggleTerrainLayer(){
   }
   if(!_terrainTop){
     _terrainTop = L.imageOverlay('terrain_relief.png', TERRAIN_RELIEF.bounds, {
-      opacity: 0.55, pane: 'terrainTopPane', interactive: false,
+      opacity: TERR_TOP_OP, pane: 'terrainTopPane', interactive: false,
       className: 'terrain-relief-top'
     }).addTo(map);
   }
@@ -6702,7 +6745,13 @@ function _kmBetween(a1, o1, a2, o2){
 // ★ 參考 Windy：粒子多、單段短、拖尾短，靠密度表現流場，
 //   而不是靠長線條。長線在曲率大的地方必定失真。
 // 拖尾拉長（0.90≈22 幀 → 0.965≈65 幀），流場感才出得來
-const TY_SPEED_SCALE = 0.12;   // 整體轉速再放慢（使用者反映太快）
+// ★★ 颱風流線比臺灣周邊風場還短的原因：兩者用同一個 _wfPxPerMs()，
+//   但風場的每幀步長是 (0.05 + ws×pxPerMs)，颱風卻再乘一個 0.12 ——
+//   同樣風速下颱風粒子走得慢八倍，而颱風風速明明大得多，流線卻最短。
+//   之前為了「轉太快」把它壓到 0.12，壓過頭了。改成 0.55：
+//   以周邊風場 8 m/s、颱風七級風環 25 m/s 估算，颱風流線約為
+//   周邊風場的 1.7 倍長，符合「要再長很多」。
+const TY_SPEED_SCALE = 0.55;
 const TY_SPIRAL_RATIO = 8;     // 切向：徑向，數字越大螺旋越平緩
 // ★ 平流必須跟切向風同尺度縮放。先前把轉速乘 0.12 放慢，卻讓平流
 //   維持原尺度（0.85 × 中心每幀位移），平流就比切向風大了七倍 ——
@@ -6710,11 +6759,12 @@ const TY_SPIRAL_RATIO = 8;     // 切向：徑向，數字越大螺旋越平緩
 //   這正是「風場尾流不合理」的來源。乘上同一個 TY_SPEED_SCALE 後，
 //   移動速度／切向風速的比值回到真實值（約 5.5 / 40 ≈ 0.14）。
 const TY_ADVECT = 0.85 * TY_SPEED_SCALE;
-const TY_PART_N = 700;
+const TY_PART_N = 380;         // 密度降低（使用者指定：不需要這麼密）
 // ★ 尾巴長度 ≈ 每幀步長 × 可見幀數，可見幀數 = ln(0.1)/ln(KEEP)。
-//   0.94 只有 37 幀，配上放慢八倍的步長就短得像點狀；
-//   0.975 約 91 幀（2.5 倍），靠 alpha 漸層拉長而非加粗，不會糊住圖面。
-const TY_TRAIL_KEEP = 0.975;
+//   長度要靠「步長」拿，不能靠「保留幀數」硬撐 —— 0.975 是 91 幀，
+//   粒子走得又慢，結果就是殘影賴在畫面上不走（使用者回報殘留太久）。
+//   改回 0.95（45 幀，與風場層一致），長度改由上面的步長提供。
+const TY_TRAIL_KEEP = 0.95;
 let _tyCv = null, _tyParts = [];
 // 蒲福風級 → 風速（m/s）：取各級的代表值，與 _wsToBf 互為反函式
 function _bfToWs(bf){
@@ -6831,8 +6881,8 @@ function _tyPartStep(list){
     }
     if(p.px != null && Math.hypot(nx - p.px, ny - p.py) < 40){
       const bd = BF_BANDS.find(b=>bfG < b.max) || BF_BANDS[BF_BANDS.length - 1];
-      // 拖尾拉長到 2.5 倍，單段透明度相應調低，疊起來的濃度才與先前相當
-      const a = 0.22 + 0.30 * (1 - Math.min(1, u));
+      // 幀數回到 45，單段透明度隨之調回，整體濃度與風場層相當
+      const a = 0.32 + 0.38 * (1 - Math.min(1, u));
       ctx.strokeStyle = _hexA(bd.color, a);
       ctx.lineWidth = u < 0.35 ? 1.4 : 1.0;
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -7651,6 +7701,20 @@ function getObsEtr(t){
 // ★ 陸地一律不透明（使用者指定）：各圖層先前用 0.78／0.25／0.12／0.05，
 //   深色海底會透上來，陸地看起來深淺不一、發灰發黃。
 //   無資料時用純白 1.0，有值時 0.96（留一點讓地形隱約可見）。
+// ★★ 陸地偏灰、地形起伏不明顯、色階與圖例對不上 —— 三個現象同一個成因：
+//   立體感被「算了兩次」。開啟地形時，色塊被降到 0.80、無資料區降到 0.45、
+//   內插渲染層降到 0.72，好讓底下（terrainPane 392）的灰階暈渲透上來；
+//   但色塊之上（terrainTopPane 397）本來就還有一層色彩增值的陰影。
+//   結果是：顏色被灰色底稀釋 → 整片偏灰、色階與圖例對不上；
+//   而山脊谷地的明暗被上下兩層互相抵銷 → 起伏反而更不明顯。
+//   正解就是程式碼自己的註解寫的那句「色塊本身的色相不會被洗淡」：
+//   色塊一律不透明，立體感全部交給上方那層色彩增值，並把它調強一點。
+const TERR_FILL_OP   = 1.0;   // 有資料的色塊：不再被灰階底稀釋
+const TERR_NODATA_OP = 1.0;   // 無資料（含 <5mm 的白）：純白，起伏由上層陰影表現
+const TERR_TOP_OP    = 0.86;  // 上方色彩增值陰影（原 0.55）。實測掃描 0.55~0.95：
+//   0.86 時本島的起伏對比（亮度標準差）30.7 > 修正前的 29.1，
+//   同時平均亮度 233.9 > 226.9、純白區 56.8% > 42.5% ——
+//   也就是「更不灰、更亮、起伏還更清楚」三者同時成立。
 function _townFill(t, isSel){
   // 渲染模式下本島由內插色帶層顯示，polygon 僅留 hover 熱區；
   // 金馬在內插範圍外，維持原色塊。
@@ -7670,7 +7734,7 @@ function _townFill(t, isSel){
         if(v!=null && (band===null || v>band)) band = v;
       }
       const col = cwaBandColor(band);
-      if(col){ fillColor=col; fillOp=isSel?1:(_terrainOn ? 0.80 : 1.0); }
+      if(col){ fillColor=col; fillOp=isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0); }
       else   { fillColor='#FFFFFF'; fillOp=1.0; }   // 無CWA色塊＝白
     } else {
     const acc = getAccum(t);
@@ -7679,47 +7743,47 @@ function _townFill(t, isSel){
       // 雷達1h：用雨量色階，無回波(null)＝白
       // ★ 深色海底時陸地仍須純白（不可被下方深色海透出而變灰）
     fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain);
-      fillOp    = (totalRain==null) ? (_terrainOn ? 0.45 : 1.0) : (isSel?1:(_terrainOn ? 0.80 : 1.0));
+      fillOp    = (totalRain==null) ? (_terrainOn ? TERR_NODATA_OP : 1.0) : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     } else if(acc.isWarn){
       // ★ 各 mode 分支必須排在「totalRain === null」之前。
       //   否則警特報未達標(0/null)、浪高內陸(null) 會先被通用的 null 分支
       //   攔成白色，永遠走不到自己的著色邏輯 —— 實測即為「警特報不顯示、
       //   浪高看起來沒有資料」的原因。
       fillColor = warnMapColor(totalRain || 0);
-      fillOp    = (totalRain||0)>0 ? (isSel?1:(_terrainOn ? 0.80 : 1.0)) : (_terrainOn ? 0.45 : 1.0);
+      fillOp    = (totalRain||0)>0 ? (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0)) : (_terrainOn ? TERR_NODATA_OP : 1.0);
     } else if(acc.isTemp){
       // 氣溫：無資料留白（不可視為 0°C）
       fillColor = _tempColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? (_terrainOn ? 0.45 : 1.0) : (isSel?1:(_terrainOn ? 0.80 : 1.0));
+      fillOp    = (totalRain == null) ? (_terrainOn ? TERR_NODATA_OP : 1.0) : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     } else if(acc.isWave){
       // 浪高：內陸無值 → 極淡灰（明確表示「非沿海」而非「浪高 0」）
       // ★ 內陸無浪高資料時用純白，不可用淺灰（深色海底會顯得髒）
       fillColor = _waveColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? (_terrainOn ? 0.45 : 1.0) : (isSel?1:(_terrainOn ? 0.80 : 1.0));
+      fillOp    = (totalRain == null) ? (_terrainOn ? TERR_NODATA_OP : 1.0) : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     } else if(acc.isWind){
       // 風力預測：蒲福風級色階（<4白/4-7綠/7-10黃/10-13紅/>=13紫）
       fillColor = _bfColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? (_terrainOn ? 0.45 : 1.0) : (isSel?1:(_terrainOn ? 0.80 : 1.0));
+      fillOp    = (totalRain == null) ? (_terrainOn ? TERR_NODATA_OP : 1.0) : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     } else if(totalRain === null || totalRain === undefined){
       // 無資料：顯示淡灰色，保留視覺邊界（不設為0.0，否則鄉鎮消失）
       fillColor='#FFFFFF'; fillOp=1.0;
     } else if(acc.isRisk){
       fillColor = riskColor(totalRain);
-      fillOp    = isSel?1:(_terrainOn ? 0.80 : 1.0);
+      fillOp    = isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0);
     } else if(acc.isEtrMode){
       // ETR2%模式：用 etrColor 對應現況 etr2_pct
       fillColor = totalRain===null ? '#FFFFFF' : etrColor(totalRain);
-      fillOp    = totalRain===null ? 1.0 : (isSel?1:(_terrainOn ? 0.80 : 1.0));
+      fillOp    = totalRain===null ? 1.0 : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     // ★ isHourly 排在各專屬圖層之後、通用分支之前：逐時視窗下氣溫／
   //   浪高／風力／風險也會帶 isHourly，若先判斷就會被套上時雨量
   //   色階 —— 這正是「風險指標出現藍色」的原因。
   } else if(acc.isHourly){
       // ★ 逐時視窗用時雨量色階（非累積雨量色階）
       fillColor = _hourlyColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? (_terrainOn ? 0.45 : 1.0) : (isSel?1:(_terrainOn ? 0.80 : 1.0));
+      fillOp    = (totalRain == null) ? (_terrainOn ? TERR_NODATA_OP : 1.0) : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     } else {
       fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#FFFFFF':etrColor(etrPct));
-      fillOp    = isSel?1:(_terrainOn ? 0.80 : 1.0);
+      fillOp    = isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0);
     }
     }
   }
@@ -15098,7 +15162,7 @@ function _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1){
   const _tp=map.getPane('townPane');
   if(_tp) _tp.style.filter='';  // 防禦：確保無殘留模糊濾鏡
   // ★ 地形疊圖開啟時降低不透明度，讓下層暈渲透出來（先前 1.0 全蓋住）
-  const _op = (typeof _terrainOn !== 'undefined' && _terrainOn) ? 0.72 : 1.0;
+  const _op = 1.0;   // ★ 同上：不再靠半透明透出地形，改由上方色彩增值層表現
   if(_interpOverlay){ _interpOverlay.setUrl(url); _interpOverlay.setOpacity(_op); }
   else{
     _interpOverlay=L.imageOverlay(url, INTERP_BOUNDS,
