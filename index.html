@@ -1823,7 +1823,7 @@ function _wfStart(){
   _wfCanvas = cv;
   const fit = ()=>{
     const r = mp.getBoundingClientRect();
-    cv.width = Math.round(r.width); cv.height = Math.round(r.height);
+    _fitOverlayCanvas(cv, Math.round(r.width), Math.round(r.height));
   };
   fit();
   // ★ 移動／縮放後只需重設畫布並把粒子散到新視野，
@@ -1832,8 +1832,8 @@ function _wfStart(){
   const reseed = ()=>{
     fit();
     for(const p of _wfParticles){
-      p.x = Math.random() * cv.width;
-      p.y = Math.random() * cv.height;
+      p.x = Math.random() * cv._cw;
+      p.y = Math.random() * cv._ch;
       p.age = Math.random() * WF_LIFE;
       p.node = null;                    // 視野變了，重抽所屬測站
     }
@@ -1900,10 +1900,15 @@ function _wfStart(){
     const ctx2 = cv.getContext('2d');
     // ★ 圖例用蒲福風級，與風力預測圖層同一套
     const items = BF_BANDS.map(b=>[b.color, b.name]);
-    let lx = 10, ly = cv.height - 10;
+    let lx = 10, ly = cv._ch - 10;
     ctx2.font = '11px sans-serif'; ctx2.textAlign = 'left';
-    ctx2.fillStyle = 'rgba(4,12,20,0.8)';
-    ctx2.fillRect(4, ly - 16, 300, 20);
+    ctx2.textBaseline = 'alphabetic';
+    // ★ 底色寬度改為量出來的，不再寫死 300px：字多時不會溢出底色、
+    //   字少時也不會拖一條多餘的深色長條。
+    const _w = 10 + 26 + items.reduce((a2, [, t3])=>
+      a2 + 15 + ctx2.measureText(t3).width + 8, 0);
+    ctx2.fillStyle = 'rgba(4,12,20,0.82)';
+    ctx2.fillRect(4, ly - 15, Math.min(_w, cv._cw - 8), 21);
     ctx2.fillStyle = '#7a94ac';
     ctx2.fillText('風級', lx, ly);
     lx += 26;
@@ -2016,7 +2021,7 @@ function _wfStart(){
 
 
   const ctx = cv.getContext('2d');
-  const spawn = ()=>({x: Math.random() * cv.width, y: Math.random() * cv.height,
+  const spawn = ()=>({x: Math.random() * cv._cw, y: Math.random() * cv._ch,
                       age: Math.random() * WF_LIFE, node: null, vx: null, vy: null});
   for(let i = 0; i < WF_N; i++) _wfParticles.push(spawn());
 
@@ -2027,7 +2032,7 @@ function _wfStart(){
     // ★ 拖尾拉長（使用者指定）：每幀保留 90% → 95%。
     //   殘影衰減到 10% 所需幀數由 22 幀增為 45 幀，線條約長一倍。
     ctx.fillStyle = 'rgba(0,0,0,0.95)';
-    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillRect(0, 0, cv._cw, cv._ch);
     ctx.globalCompositeOperation = 'source-over';
     ctx.lineWidth = 1.2;
     _wfParticles.forEach(p=>{
@@ -2035,7 +2040,7 @@ function _wfStart(){
       if(!p.node) p.node = pickNode(p.x, p.y);
       const uv = uvOf(p.node, p.x, p.y);
       if(!uv || p.age > WF_LIFE ||
-         p.x < 0 || p.y < 0 || p.x > cv.width || p.y > cv.height){
+         p.x < 0 || p.y < 0 || p.x > cv._cw || p.y > cv._ch){
         Object.assign(p, spawn()); p.age = 0;
         p.node = pickNode(p.x, p.y);
         p.vx = null; p.vy = null;
@@ -2578,6 +2583,25 @@ function _forceFullRedraw(){
 //   自製畫布沒有人管）。
 //   這裡不逐一列舉畫布 id：凡是直接掛在 #map 底下、position:absolute 的
 //   <canvas> 一律同步，日後新增圖層不必再改這裡。
+// ★ 貼在地圖上的自製畫布（風場、颱風粒子）先前只設 CSS 尺寸、
+//   沒有乘 devicePixelRatio —— 在 HiDPI 螢幕上畫布是 1×、顯示是 2×，
+//   上面畫的東西全部被放大一倍，線條還看得下去，11px 的風速圖例文字
+//   就明顯糊掉。其他圖表都走 _fitCanvas 有處理，只有這兩張漏了。
+//   設好 transform 後，繪圖端一律沿用 CSS 座標，改動只在建立與改尺寸處。
+function _fitOverlayCanvas(cv, w, h){
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  cv.width  = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  // ★ 一定要同時給 CSS 尺寸：<canvas> 沒有 CSS 寬高時，版面上的大小
+  //   就是 width/height 屬性值。只設了放大後的 backing store 而忘了這行，
+  //   畫布會以 2 倍大小撐出地圖外（實測 594px 的地圖被撐成 1188px）。
+  cv.style.width  = w + 'px';
+  cv.style.height = h + 'px';
+  cv._cw = w; cv._ch = h;          // CSS 尺寸：繪圖與邊界判斷都用這組
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return ctx;
+}
 function _syncOverlayCanvases(){
   const mp = document.getElementById('map');
   if(!mp) return false;
@@ -2587,9 +2611,10 @@ function _syncOverlayCanvases(){
   let changed = false;
   Array.prototype.forEach.call(mp.children, el=>{
     if(!el || el.tagName !== 'CANVAS') return;
-    if(el.width === W && el.height === H) return;
-    // 改 width/height 會清空畫布內容，粒子下一幀自然重畫，不需另外處理
-    el.width = W; el.height = H; changed = true;
+    if(el._cw === W && el._ch === H) return;
+    // 改 width/height 會清空畫布並重設 transform，
+    //   所以一律經由 _fitOverlayCanvas 重設，不可直接指定 width/height。
+    _fitOverlayCanvas(el, W, H); changed = true;
   });
   return changed;
 }
@@ -6930,7 +6955,7 @@ function _tyPartInit(){
     mp.appendChild(_tyCv);
   }
   const r = mp.getBoundingClientRect();
-  _tyCv.width = Math.round(r.width); _tyCv.height = Math.round(r.height);
+  _fitOverlayCanvas(_tyCv, Math.round(r.width), Math.round(r.height));
   _tyParts = Array.from({length: TY_PART_N}, ()=>({dead: true}));
 }
 function _tyPartStep(list){
@@ -6938,7 +6963,7 @@ function _tyPartStep(list){
   const ctx = _tyCv.getContext('2d');
   ctx.globalCompositeOperation = 'destination-in';
   ctx.fillStyle = `rgba(0,0,0,${TY_TRAIL_KEEP})`;
-  ctx.fillRect(0, 0, _tyCv.width, _tyCv.height);
+  ctx.fillRect(0, 0, _tyCv._cw, _tyCv._ch);
   ctx.globalCompositeOperation = 'source-over';
   const act = list.filter(x=>x._P && x._P.r15);
   if(!act.length) return;
@@ -7048,7 +7073,7 @@ function _tyPartStep(list){
                            (tanY + radY * vr) * norm * ws + myMs);
     const bfG = _wsToBf(Math.max(2, wsG));
     p.age++;
-    if(nx < -80 || ny < -80 || nx > _tyCv.width + 80 || ny > _tyCv.height + 80){
+    if(nx < -80 || ny < -80 || nx > _tyCv._cw + 80 || ny > _tyCv._ch + 80){
       p.dead = true; return;
     }
     if(p.px != null && Math.hypot(nx - p.px, ny - p.py) < 40){

@@ -73,6 +73,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   user-select:none}
 .sec-h:hover{background:#0f2c40}
 .sec-arrow{font-size:10px;color:#4a90b8}
+/* ★ 地形暈渲加強對比（使用者反映立體感太弱，常忽略地形已開啟） */
+.terrain-relief{filter:contrast(1.9) brightness(0.92) saturate(0.9)}
+/* 上層只取明暗當陰影，去飽和避免污染色塊色相 */
+.terrain-relief-top{filter:grayscale(1) contrast(2.2) brightness(1.15)}
 .sec-body{padding:8px 10px;box-sizing:border-box;max-width:100%;overflow-x:hidden}
 /* ★ 面板內容一律不得超出邊界（不同螢幕寬度下都成立）：
    canvas 與圖片隨容器縮放；控制列可換行；長字串斷行而非撐寬。 */
@@ -143,7 +147,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 <div id="ctrl">
     <!-- 外援連結 -->
   <div class="ctrl-row" style="flex-wrap:wrap;gap:3px;padding:3px 0">
-    <div id="ext-links" style="display:flex;flex-wrap:wrap;gap:3px">
+    <!-- ★ 兩行固定分組（使用者指定）：第一行 CWA/JMA/NCDR 官方來源，
+         第二行 FEMA 起的其他外援。用 column 包兩個 wrap 列，
+         不靠自動換行，視窗寬度變化時分組不會跑掉。 -->
+    <div id="ext-links" style="display:flex;flex-direction:column;gap:3px;width:100%">
+     <div id="ext-links-r1" style="display:flex;flex-wrap:wrap;gap:3px">
       <a href="dashboard.html" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">整合監控</a>
       <a href="https://www.cwa.gov.tw/V8/C/P/Warning/FIFOWS.html" target="_blank" class="ext-btn">警特報</a>
       <a href="https://www.cwa.gov.tw/V8/C/W/OBS_Sat.html?Area=2" target="_blank" class="ext-btn">紅外線雲圖</a>
@@ -161,6 +169,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <a href="https://watch.ncdr.nat.gov.tw/watch_tracks_pro" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">颱風路徑</a>
       <a href="https://watch.ncdr.nat.gov.tw/watch_smart_map" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">SMART</a>
       <a href="https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">WISSDOM</a>
+     </div>
+     <div id="ext-links-r2" style="display:flex;flex-wrap:wrap;gap:3px">
       <a href="https://fema.ardswc.gov.tw/Portal/Layout" target="_blank" class="ext-btn">FEMA</a>
       <a href="https://www.tropicaltidbits.com/analysis/models/?model=ecmwf&region=ea&pkg=mslp_pcpn" target="_blank" class="ext-btn">Tropical Tidbits</a>
       <a href="https://www.weathernerds.org/models/fnv3.html?&inittype=zoom&initfield=SST_Anomaly_Surface&initcycle=determine&initfhour=240&initimdimx=1050&initimdimy=750&initrange=57.000000000000:95.000000000000:0:190.000000000000&initcx1=0&initcy1=0&initcx2=0&initcy2=0&initcross=False&initsound=False&initsoundx=1&initsoundy=1&initloop=False&initoverlay=False&initlstart=000&initlend=360&initlint=6&initol1=SST_Anomaly_Surface&initol2=null&initol3=null&initol4=null&initol5=null&initcities=Off&inithgwys=Off&inittracks=On&initlows=Off&initlatlon=Off" target="_blank" class="ext-btn">Google FNV3</a>
@@ -168,11 +178,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <a href="https://www.easterlywave.com/typhoon/ensemble/" target="_blank" class="ext-btn">EasterlyWave</a>
       <a href="https://www.windy.com/?21.487,120.674,5" target="_blank" class="ext-btn">Windy</a>
       <a href="https://zoom.earth/maps/precipitation/#view=23.4,121.68,5z/model=gfs" target="_blank" class="ext-btn">Google Earth</a>
+     </div>
     </div>
   </div>
 <div class="ctrl-row">
     <span class="cl" style="color:#7ee8a8">圖層</span>
-    <div class="bg">
+    <!-- ★ 兩行固定分組（使用者指定）：第一行資料圖層與警戒圖層，
+         第二行底圖／襯底類（Himawari、地形、風場、深色海、行政區名）。 -->
+    <div id="layer-rows" style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
+     <div class="bg" id="layer-row1">
       <select id="countyPick" onchange="pickCounty(this.value); _syncCountyPickers(this.value)"
       style="font-size:10px;padding:2px 5px;background:#061220;color:#cfe4f5;
       border:1px solid #1a4060;border-radius:3px;max-width:130px">
@@ -187,14 +201,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bWind"  onclick="setMode('wind')" style="border-color:#3a8a5a;color:#7ee8a8">風力預測</button>
       <button class="b"    id="bWave"  onclick="setMode('wave')" style="border-color:#3a8a5a;color:#7ee8a8">浪高</button>
       <button class="b"    id="bTemp"  onclick="setMode('temp')" style="border-color:#3a8a5a;color:#7ee8a8">氣溫</button>
-      <button class="b"    id="bTerrain" onclick="toggleTerrainLayer()"
-        style="border-color:#6a5a3a;color:#d8c090">⛰ 地形</button>
-      <button class="b"    id="bWindField" onclick="toggleWindField()"
-        style="border-color:#3a7a8a;color:#7ad8e8">🌀 風場</button>
-      <button class="b"    id="bDarkSea" onclick="toggleDarkSea()"
-        style="border-color:#3a4a6a;color:#8aa8d8">🌊 深色海</button>
-      <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
-        style="border-color:#1a4060;color:#8ac8e8">🏷 行政區名</button>
       <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
         style="border-color:#8a6a3a;color:#e8c87a">📍 雨量測站</button>
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
@@ -205,6 +211,28 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#b06010;color:#ffa050">⛰ 土石流警戒</button>
       <button class="b"    id="bLandslide" onclick="toggleLandslideLayer()"
         style="border-color:#7a4a2a;color:#d09060">▲ 大規模崩塌</button>
+     </div>
+     <div class="bg" id="layer-row2">
+      <button class="b"    id="bHimawari" onclick="toggleHimawari()"
+        style="border-color:#5a4a7a;color:#c0a8e8">🛰 Himawari</button>
+      <select id="himaBand" onchange="_himaSetBand(this.value)"
+        style="font-size:10px;padding:1px 3px;background:#061220;color:#c0a8e8;
+        border:1px solid #5a4a7a;border-radius:3px">
+        <option value="SND/ETC" selected>對流強度</option>
+        <option value="B13/TBB">紅外線</option>
+        <option value="B08/TBB">水氣</option>
+        <option value="REP/ETC">真彩色(日)</option>
+        <option value="B03/ALBD">可見光(日)</option>
+      </select>
+      <button class="b"    id="bTerrain" onclick="toggleTerrainLayer()"
+        style="border-color:#6a5a3a;color:#d8c090">⛰ 地形</button>
+      <button class="b"    id="bWindField" onclick="toggleWindField()"
+        style="border-color:#3a7a8a;color:#7ad8e8">🌀 風場</button>
+      <button class="b"    id="bDarkSea" onclick="toggleDarkSea()"
+        style="border-color:#3a4a6a;color:#8aa8d8">🌊 深色海</button>
+      <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
+        style="border-color:#1a4060;color:#8ac8e8">🏷 行政區名</button>
+     </div>
     </div>
   </div>
   <div class="ctrl-row">
@@ -214,10 +242,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <!-- 逐時：雷達1h ＋ 日期下拉 ＋ 拖曳滾輪（－/＋ 可逐格切換） -->
   <div class="ctrl-row">
     <span class="cl" style="color:#7ee8a8">逐時</span>
-    <div class="bg" id="future1h-btns" style="flex:1;min-width:0;
+    <!-- ★ flex:0 0 auto：讓「未來6h段」接在更新時間右邊，逐時這組不再撐滿整列 -->
+    <div class="bg" id="future1h-btns" style="flex:0 0 auto;min-width:0;
       display:flex;align-items:center;gap:5px;flex-wrap:nowrap">
-      <button class="b" id="bRadar" onclick="setWin('radar')">未來1h雷達QPF</button>
-      <span id="radar-time" style="font-size:9px;color:#7a98aa"></span>
+      
+      
       <select id="h1-day" onchange="onH1DayChange()"
         style="font-size:10px;padding:2px 4px;background:#061220;color:#cfe4f5;
         border:1px solid #1a4060;border-radius:3px"></select>
@@ -229,8 +258,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <span id="h1-label" style="font-size:10px;color:#9fc8e8;min-width:82px;
         text-align:right"></span>
     </div>
-  </div>
-  <div class="ctrl-row">
     <span class="cl" style="color:#7ee8a8">未來6h段</span>
     <div class="bg" id="future6h-btns" style="flex:1;min-width:0"></div>
   </div>
@@ -341,7 +368,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <span style="color:#4a6a8a;font-size:10px;margin:0 3px 0 0">融合校正</span>
       <button class="b model-btn on" id="mBlend" onclick="setModel('blend')"
         style="border-color:#c8a45a;color:#f0c878">FORMOSA</button>
-      <button class="b model-btn" id="mFc" onclick="setModel('fc')" title="FORMOSA-customise：自選各地形採用的模式與權重" style="border-color:#8a6a3a;color:#f0c878">F-c</button><button class="b" onclick="openFcPanel()" title="編輯 F-c" style="padding:1px 5px;border-color:#8a6a3a;color:#f0c878">✎</button>
+      <button class="b model-btn" id="mFc" onclick="setModel('fc')" style="border-color:#8a6a3a;color:#f0c878">F-c</button><button class="b" onclick="openFcPanel()" style="padding:1px 5px;border-color:#8a6a3a;color:#f0c878">✎</button>
       <button class="b model-btn" id="mBest"  onclick="setModel('best')">CWA+ECMWF</button>
       <button class="b model-btn hi-btn"    id="mHi"    onclick="setModel('hi')">強降雨</button>
       <button class="b model-btn lo-btn"    id="mLo"    onclick="setModel('lo')">弱降雨</button>
@@ -988,10 +1015,14 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             style="flex:1;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
             border:1px solid #1a4060;border-radius:3px">
             <option value="ETS80">ETS ≥80mm（主）</option>
+            <option value="ETS10">ETS ≥10mm</option>
+            <option value="ETS50">ETS ≥50mm</option>
             <option value="ETS200">ETS ≥200mm</option>
             <option value="ETS350">ETS ≥350mm</option>
             <option value="SEDI80">SEDI ≥80mm</option>
             <option value="SEDIH40">SEDI 時雨量 ≥40mm/h</option>
+            <option value="MAE">雨量誤差 MAE（越小越好）</option>
+            <option value="RMSE">雨量誤差 RMSE（越小越好）</option>
             <option value="basic">相對誤差 30%（基線）</option>
           </select>
           <select id="vf-days" onchange="renderVerify()"
@@ -1504,7 +1535,7 @@ function _applyFullLayout(){
   if(bc){ bc.textContent = _ctlFull ? '⛷' : '⛶'; bc.classList.toggle('on', _ctlFull); }
   setTimeout(()=>{ try{ if(selected) updateInfo(selected); }catch(e){} }, 260);
   if(!_sbFull && !_ctlFull){
-    setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 280);
+    setTimeout(()=>{ try{ _afterMapResize(); }catch(e){} }, 280);
   }
 }
 // 地圖上標示單一測站的位置（點選測站清單時使用）
@@ -1523,7 +1554,9 @@ let _stnLayerOn = false, _stnLayer = null, _stnTimer = null;
 //    海拔灰階（氣象署風格）× Hillshade（光源 315°／仰角 45°）正片疊底。
 // ══════════════════════════════════════════════════════════
 const TERRAIN_RELIEF = {"bounds":[[21.89400185866543,120.04163169146315],[25.29801742002761,122.00964772678445]],"size":[1200,2254],"azimuth":315.0,"altitude":45.0,"stops":[[100,"#F8F9FA"],[500,"#E9ECEF"],[1500,"#CED4DA"],[3000,"#ADB5BD"],[null,"#6C757D"]]};
-let _terrainOn = false, _terrainOverlay = null;
+let _terrainOn = false, _terrainOverlay = null, _terrainTop = null;
+// 錄製時自行合成陰影用的原圖（與圖層同一個檔）
+let _terrainImg = null;
 // ══════════════════════════════════════════════════════════
 //  風場動畫（Windy 式粒子）
 //  ★ 資料：CWA F-D0047 的 WindDirection（8方位）＋ WindSpeed。
@@ -1537,10 +1570,138 @@ let _windFieldOn = false, _wfCanvas = null, _wfTimer = null, _wfParticles = [];
 //   線條糊成一片反而看不出流向（使用者回報「很密很可怕」）。
 const WF_N = 210;   // 使用者指定再減半（420 → 210）
 const WF_LIFE = 150;   // 配合拖尾拉長（90 → 150 幀）            // 每顆粒子的壽命（幀）
+const WF_INERTIA = 0.12;   // 速度鬆弛係數：約 8 幀跟上當地風（做出流體慣性）
 // ★ 海洋深色底：只換海域與地圖底色，陸地上各圖層的色階完全不動
 //   （使用者指定）—— 色階是判讀依據，不能因為換配色就改變。
 //   海面上的疊圖（颱風路徑、警戒區框線）另改為亮色以維持對比。
 let _darkSea = false;
+// ★ Himawari-9 衛星雲圖（CWA 的雲圖同樣來自這顆衛星，不另外分）：
+//   氣象廳提供現成的 XYZ 圖磚，直接當底圖層疊上即可。
+//   預設用紅外線（B13），夜間也看得到雲系；水氣頻道另備。
+//   ★ 時間必須對齊到 10 分鐘整點，且官方資料約落後 20 分鐘。
+const HIMAWARI_BASE = 'https://www.jma.go.jp/bosai/himawari/data/satimg';
+// ★ 頻道：紅外線（看雲頂）、水氣（看中高層水氣）、色調強化（看對流強度）
+let _himaOn = false, _himaLayer = null, _himaBand = 'SND/ETC', _himaTimes = null;
+// ★ 時間必須取自官方的可用清單：自行推算常常抓到尚未發布的時刻，
+//   圖磚就整片空白（使用者看到的「晚上看不到」有一部分是這個）。
+async function _himaLoadTimes(){
+  try{
+    const r = await fetch(`${HIMAWARI_BASE}/targetTimes_fd.json`, {cache: 'no-store'});
+    if(r.ok) _himaTimes = await r.json();
+  }catch(e){ _himaTimes = null; }
+}
+function _himaTime(back){
+  // ★ 發布延遲由 20 分鐘放寬到 30：實測最新的一個時刻常常只發布了
+  //   一部分圖磚，取太新就會只出現一塊。back 為往前再退幾個 10 分鐘。
+  const d = new Date(Date.now() - (30 + 10 * (back || 0)) * 60e3);
+  d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10, 0, 0);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}${p(d.getUTCMonth()+1)}${p(d.getUTCDate())}`
+       + `${p(d.getUTCHours())}${p(d.getUTCMinutes())}00`;
+}
+// 直接在下拉選頻道（使用者反映輪流切換很麻煩）
+function _himaSetBand(b){
+  _himaBand = b;
+  _himaBackoff = 1;               // 各頻道發布進度不同，換頻道時重新試
+  if(_himaOn){ _himaOn = false; toggleHimawari(); }
+}
+// ★ 曾經做過「雲圖置頂」（把 himaPane 移到色塊之上）。使用者實測後
+//   指出那只是在整張圖上蓋一層白霧、沒有判讀價值，已移除。
+//   雲圖固定在陸地色塊之下，看海上的雲系；陸地由地形與色塊負責。
+// ★ 退檔：0 ＝ 官方清單最新的一刻。預設從 1 起跳（往前一檔），
+//   因為最新那一刻常常只發布了一部分圖磚。
+const HIMA_MAX_BACKOFF = 4;
+let _himaBackoff = 1;
+function _himaBaseTime(){
+  if(Array.isArray(_himaTimes) && _himaTimes.length){
+    const i = Math.max(0, _himaTimes.length - 1 - _himaBackoff);
+    return _himaTimes[i].basetime;
+  }
+  return _himaTime(_himaBackoff);
+}
+function _himaApplyPane(){
+  const hp = map.getPane('himaPane');
+  if(!hp) return;
+  const _himaTop = false;   // 置頂功能已移除，保留變數讓下方判斷式維持可讀
+  // ★★ 預設層級 391：seaPane(390) 之上、terrainPane(392) 之下。
+  //   先前放 393（地形之上）又把不透明度拉到 0.92，造成兩個災情：
+  //     (1) 地形暈渲被雲圖整片蓋住 ——「地形高低起伏不明顯」
+  //     (2) 開地形時鄉鎮色塊只有 0.80、內插層只有 0.72，底下那片
+  //         近乎不透明的黑色夜間紅外線圖就透上來 ——「整個陸地偏灰、
+  //         級距色階顏色跑掉」
+  //   移到 391 之後，陸地由地形層蓋住雲圖，海上仍然看得到雲系，
+  //   要看陸地上的雲再按「雲圖置頂」。
+  hp.style.zIndex  = _himaTop ? 396 : 391;
+  hp.style.opacity = _himaTop ? 0.55 : 0.85;
+  // 對流強度／紅外線頻道本身對比偏低，補一點對比與飽和度
+  hp.style.filter  = (_himaBand === 'SND/ETC' || _himaBand === 'B13/TBB'
+                      || _himaBand === 'B08/TBB')
+                     ? 'contrast(1.18) saturate(1.25)' : 'contrast(1.06)';
+}
+
+function toggleHimawari(){
+  _himaOn = !_himaOn;
+  const b = document.getElementById('bHimawari');
+  if(b) b.classList.toggle('on', _himaOn);
+  if(_himaLayer){ try{ map.removeLayer(_himaLayer); }catch(e){} }
+  _himaLayer = null;
+  if(!_himaOn) return;
+  if(!_himaTimes) _himaLoadTimes().then(()=>{ if(_himaOn){ _himaOn = false; toggleHimawari(); } });
+  if(!map.getPane('himaPane')){
+    map.createPane('himaPane');
+    map.getPane('himaPane').style.pointerEvents = 'none';
+  }
+  // ★★ 「特定比例只出現一塊」的原因：氣象廳是「逐塊發布」的，
+  //   最新的那個時刻常常只發布了一部分圖磚，其餘還沒上線 ——
+  //   畫面上就是一個矩形的雲圖、旁邊全白。換個縮放比例會改抓不同
+  //   層級的圖磚，剛好抓到已發布完整的那一層就「正常了」。
+  //   對策有兩層：
+  //     (1) 預設就不取最新的那一刻（_himaBackoff 起始 1）
+  //     (2) 全球面圖磚連續取不到時自動再往前退，最多退 4 檔（40 分鐘）
+  const t = _himaBaseTime();
+  const band = _himaBand;
+  // ★★ 「特定比例只出現一個矩形」—— 那個矩形就是日本域（jp）產品的範圍。
+  //   我一度用 jp 的 z6 疊在 fd 之上換取放大時的清晰度，因為 jp 的
+  //   涵蓋範圍含臺灣（jp/6/53/27 有圖）。但實測 jp/6/50/27（臺灣以西的
+  //   中國大陸）是 404 —— jp 是個有邊界的方框，畫面上就出現一塊矩形雲圖、
+  //   旁邊空白，而且邊界固定，所以「特定比例」下必定重現。
+  //   結論：不值得為那點清晰度換來一個會露餡的方框。只保留全球面（fd），
+  //   z3~z5 原生、超過就放大使用 —— 任何比例、任何位置都是完整一張圖。
+  //   （fd 沒有 z6：fd/6/53/27 為 404，所以 maxNativeZoom 必須是 5。）
+  const _mk = (area, opt) => L.tileLayer(
+    `${HIMAWARI_BASE}/${t}/${area}/${t}/${band}/{z}/{x}/{y}.jpg`,
+    Object.assign({pane: 'himaPane', attribution: 'Himawari-9 / 氣象廳',
+                   crossOrigin: true,
+                   // 透明 1×1：取不到的圖磚留白讓下層透出，不顯示破圖
+                   errorTileUrl: 'data:image/png;base64,'
+                     + 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4'
+                     + 'nGMAAQAABQABDQottAAAAABJRU5ErkJggg=='}, opt));
+  _himaLayer = _mk('fd', {minNativeZoom: 3, maxNativeZoom: 5}).addTo(map);
+  _himaApplyPane();
+  let _miss = 0, _missT = null;
+  _himaLayer.on('tileerror', ()=>{
+    _miss++;
+    clearTimeout(_missT);
+    _missT = setTimeout(()=>{
+      if(_miss >= 2 && _himaBackoff < HIMA_MAX_BACKOFF && _himaOn){
+        _himaBackoff++;
+        const t2 = _himaBaseTime();
+        console.warn(`Himawari：${t} 的圖磚缺 ${_miss} 塊，改用 ${t2}`);
+        _miss = 0;
+        try{
+          _himaLayer.setUrl(`${HIMAWARI_BASE}/${t2}/fd/${t2}/${band}/{z}/{x}/{y}.jpg`);
+        }catch(e){}
+      }
+      _miss = 0;
+    }, 1500);
+  });
+  const _sel = document.getElementById('himaBand');
+  const _nm = _sel ? _sel.options[_sel.selectedIndex].text : band;
+  console.log('Himawari-9 雲圖：', t, _nm, '｜全球面 fd z3-5（放大後為放大使用）',
+    (band === 'B03/ALBD' || band === 'REP/ETC'
+      ? '（可見光／真彩色頻道夜間為全黑，屬正常；夜間請用對流強度或紅外線）' : ''));
+}
+
 function toggleDarkSea(){
   _darkSea = !_darkSea;
   const b = document.getElementById('bDarkSea');
@@ -1582,31 +1743,36 @@ function _restyleSeaOverlays(){
 // ★ 只更新風場節點（風向／風速），不動粒子 ——
 //   動畫每幀呼叫，粒子因此能連續流動而非每幀重置。
 function _wfRefreshNodes(){
+  // ★ 原地更新節點（不重建陣列、不清空粒子的所屬測站）：
+  //   先前每幀 nodes.length=0 重建、並把每顆粒子的 p.node 清掉重抽，
+  //   粒子每一幀都換跟隨對象，方向亂跳 —— 風場「卡卡的」另一個原因。
+  //   ★ 風向風速依時間連續內插（風向走圓周短弧），流場隨時間平滑轉向，
+  //     不會在預報時刻瞬間轉彎。
   const nodes = window._wfNodes;
   if(!Array.isArray(nodes)) return;
-  nodes.length = 0;
+  if(!nodes._byKey){
+    nodes._byKey = {};
+    nodes.forEach(n=>{ if(n.key) nodes._byKey[n.key] = n; });
+  }
+  const tgt = _windAtMs();
   (TOWNSHIPS || []).forEach(t=>{
     if(t.lat == null || t.lng == null) return;
-    const w = _windOf(t);
-    if(!w || w.ws == null) return;
     const ser = _windSeries(t);
-    let wd = null;
-    if(Array.isArray(ser) && ser.length){
-      const tgt = _windAtMs();
-      const pts = ser.filter(p=>p && p.ms != null && p.wd != null)
-                     .sort((a, b)=>a.ms - b.ms);
-      let best = pts.length ? pts[0] : null;
-      for(const p of pts){ if(p.ms <= tgt) best = p; else break; }
-      if(best) wd = best.wd;
+    if(!Array.isArray(ser) || !ser.length) return;
+    const pts = ser.filter(p=>p && p.ms != null && p.wd != null && p.ws != null);
+    if(!pts.length) return;
+    const r = _interpAt(pts, tgt, ['ws'], ['wd']);
+    if(!r || r.ws == null || r.wd == null) return;
+    const key = (t.county || '') + (t.township || '');
+    const n = nodes._byKey[key];
+    if(n){ n.ws = r.ws; n.wd = r.wd; }
+    else {
+      const n2 = {lat: t.lat, lng: t.lng, ws: r.ws, wd: r.wd, key};
+      nodes.push(n2); nodes._byKey[key] = n2;
     }
-    if(wd == null) return;
-    nodes.push({lat: t.lat, lng: t.lng, ws: w.ws, wd});
   });
-  // 節點換了，粒子重抽所屬測站（但位置與軌跡保留）
-  (_wfParticles || []).forEach(p=>{ p.node = null; });
 }
 
-// 把 #RRGGBB 轉成帶透明度的 rgba（風場依支撐度淡出用）
 function _hexA(hex, a){
   const h = String(hex || '#FFFFFF').replace('#', '');
   const n = parseInt(h.length === 3
@@ -1677,6 +1843,7 @@ function _wfStart(){
   // ★ 存成模組層變數，動畫時只更新內容、不重建粒子
   const nodes = (window._wfNodes = window._wfNodes || []);
   nodes.length = 0;
+  nodes._byKey = null;
   (TOWNSHIPS || []).forEach(t=>{
     if(t.lat == null || t.lng == null) return;
     const w = _windOf(t);
@@ -1694,7 +1861,7 @@ function _wfStart(){
       if(best) wd = best.wd;
     }
     if(wd == null) return;
-    nodes.push({lat: t.lat, lng: t.lng, ws: w.ws, wd});
+    nodes.push({lat: t.lat, lng: t.lng, ws: w.ws, wd, key: (t.county || '') + (t.township || '')});
   });
   // ★ 診斷：分別統計「有風速」與「有風向」的鄉鎮數。
   //   風速 368 個有值但風場是空的 → 表示 wd 欄位沒進來（後端未抓或格式不符）。
@@ -1850,7 +2017,7 @@ function _wfStart(){
 
   const ctx = cv.getContext('2d');
   const spawn = ()=>({x: Math.random() * cv.width, y: Math.random() * cv.height,
-                      age: Math.random() * WF_LIFE, node: null});
+                      age: Math.random() * WF_LIFE, node: null, vx: null, vy: null});
   for(let i = 0; i < WF_N; i++) _wfParticles.push(spawn());
 
   const step = ()=>{
@@ -1871,9 +2038,17 @@ function _wfStart(){
          p.x < 0 || p.y < 0 || p.x > cv.width || p.y > cv.height){
         Object.assign(p, spawn()); p.age = 0;
         p.node = pickNode(p.x, p.y);
+        p.vx = null; p.vy = null;
         return;
       }
-      const nx = p.x + uv[0], ny = p.y + uv[1];
+      // ★ 慣性：氣塊有動量，不會每一幀瞬間換成當地的風。
+      //   先前直接用當地向量當位移，測站之間一換就是一個折角 ——
+      //   線條看起來是一段段折線而不是流線（使用者：沒有流體的感覺）。
+      //   朝當地風鬆弛，轉折就變成平滑的彎。
+      if(p.vx == null){ p.vx = uv[0]; p.vy = uv[1]; }
+      p.vx += (uv[0] - p.vx) * WF_INERTIA;
+      p.vy += (uv[1] - p.vy) * WF_INERTIA;
+      const nx = p.x + p.vx, ny = p.y + p.vy;
       // ★ 依「真實風速（m/s）」著色，不是像素位移 ——
       //   位移已含基礎量，用它判斷會讓弱風也變紅。
       //   分界比照蒲福風級：<5.5 輕、5.5~10.8 中、≥10.8 強（6級以上）。
@@ -1891,8 +2066,10 @@ function _wfStart(){
       p.x = nx; p.y = ny; p.age++;
     });
     try{ _wfLegend(); }catch(e){}
-    _wfTimer = requestAnimationFrame(step);
+    // 影片錄製時改由外部逐步推進（每格固定步數），不跟真實時間跑
+    if(!window._wfManual) _wfTimer = requestAnimationFrame(step);
   };
+  window._wfStep = step;
   step();
 }
 
@@ -1903,6 +2080,8 @@ function toggleTerrainLayer(){
   if(!_terrainOn){
     if(_terrainOverlay){ try{ map.removeLayer(_terrainOverlay); }catch(e){}
                          _terrainOverlay = null; }
+    if(_terrainTop){ try{ map.removeLayer(_terrainTop); }catch(e){}
+                     _terrainTop = null; }
     return;
   }
   // ★ 圖層順序：本系統沒有底圖，seaPane(390) 有一張白色全域矩形當背景。
@@ -1915,9 +2094,30 @@ function toggleTerrainLayer(){
     map.getPane('terrainPane').style.zIndex = 392;
     map.getPane('terrainPane').style.pointerEvents = 'none';
   }
+  // ★ 第二層暈渲（疊在色塊之上，multiply 混合）：
+  //   只靠色塊半透明讓地形「透出來」，對比仍不足；
+  //   把陰影用色彩增值壓在色塊上，山脊與河谷的明暗才明顯，
+  //   而且色塊本身的色相不會被洗淡。
+  if(!map.getPane('terrainTopPane')){
+    map.createPane('terrainTopPane');
+    const tp2 = map.getPane('terrainTopPane');
+    tp2.style.zIndex = 397;          // townPane(395) 之上、overlayPane(400) 之下
+    tp2.style.pointerEvents = 'none';
+    tp2.style.mixBlendMode = 'multiply';
+  }
+  if(!_terrainImg){
+    _terrainImg = new Image();
+    _terrainImg.src = 'terrain_relief.png';
+  }
+  if(!_terrainTop){
+    _terrainTop = L.imageOverlay('terrain_relief.png', TERRAIN_RELIEF.bounds, {
+      opacity: TERR_TOP_OP, pane: 'terrainTopPane', interactive: false,
+      className: 'terrain-relief-top'
+    }).addTo(map);
+  }
   if(!_terrainOverlay){
     _terrainOverlay = L.imageOverlay('terrain_relief.png', TERRAIN_RELIEF.bounds, {
-      opacity: 0.9,           // 在色塊之下，不需太透明才看得清地形
+      opacity: 1,             // 在色塊之下，全不透明；立體感另由 CSS 濾鏡加強
       pane: 'terrainPane',    // 白色背景之上、鄉鎮色塊之下
       interactive: false,
       className: 'terrain-relief'
@@ -2077,7 +2277,7 @@ function toggleSidebar(){
     sb.style.overflow = 'hidden';
     if(btn) btn.textContent = '▶';
   }
-  setTimeout(()=> map.invalidateSize(), 280);
+  setTimeout(()=>{ try{ _afterMapResize(); }catch(e){} }, 280);
 }
 
 // 地圖資訊面板（指北針/圖例/比例尺）一次收合，含動畫
@@ -2112,7 +2312,10 @@ function toggleCtrl(){
   const btn  = document.getElementById('ctrl-toggle');
   if(ctrl) ctrl.classList.toggle('collapsed', !ctrlOpen);
   if(btn)  btn.textContent = ctrlOpen ? '▲' : '▼';
-  setTimeout(()=> map.invalidateSize(), 260);
+  // ★ #ctrl 的 max-height 過渡是 0.4s，先前 260ms 就量尺寸，量到的是
+  //   動畫中途的高度 —— 收合後地圖多出來的那一條沒有人重畫。
+  //   過渡途中與結束後各走一次單一入口（ResizeObserver 也會跟著補）。
+  [120, 260, 460].forEach(ms=> setTimeout(()=>{ try{ _afterMapResize(); }catch(e){} }, ms));
 }
 
 const TMAP = {};
@@ -2245,6 +2448,9 @@ function snapMap(){
         map.options.zoomSnap = prev.snap;
         map.invalidateSize({animate:false});
         map.setView(prev.center, prev.zoom, {animate:false});
+        // ★ 截圖期間容器被改成固定尺寸，自製畫布（風場、颱風粒子）
+        //   留在那個尺寸；還原後要一併同步，否則畫面下半截空白。
+        try{ _afterMapResize(); }catch(e){}
       });
       // ★ Canvas 渲染下向量層是同步繪製，只需讓 fitBounds 生效即可；
       //   先前等 1.2 秒（加上 html2canvas 本身）就是「按下要等 5 秒」的來源。
@@ -2329,17 +2535,157 @@ map.getPane('townPane').style.zIndex = 395;
 //   的所有點擊 —— 不像 SVG 只在實際畫到的幾何上捕捉事件。
 //   若不處理，位於上層 pane 的 canvas（海域、縣市界）會蓋住鄉鎮色塊，
 //   造成「地圖點不到」。故：只有鄉鎮層需要互動，其餘 pane 一律關閉指標事件。
-function _fixCanvasPointerEvents(){
-  ['seaPane', 'terrainPane', 'overlayPane'].forEach(pn=>{
-    const p2 = map.getPane(pn);
+// ★ 強制整張重畫（地圖被切割的根治）：
+//   Leaflet 的 Canvas 渲染器只重畫 _redrawBounds 涵蓋的那一塊，
+//   區域外保留舊畫面。平移、縮放或我們手動觸發重畫時，若邊界計算
+//   與實際不符，沒被涵蓋的部分就維持上一幀 —— 畫面看起來像被切掉一塊。
+//   把 _redrawBounds 清成 null，_clear() 就會清整張畫布再重畫。
+function _forceFullRedraw(){
+  if(!map) return;
+  ['townPane', 'seaPane', 'overlayPane', 'terrainPane'].forEach(pn=>{
+    let p2;
+    try{ p2 = map.getPane(pn); }catch(e){ return; }
     if(!p2) return;
-    p2.querySelectorAll('canvas').forEach(c=>{ c.style.pointerEvents = 'none'; });
+    p2.querySelectorAll('canvas').forEach(c=>{
+      const r = c._leaflet_renderer || (c.__proto__ && null);
+      void r;
+    });
   });
+  // 由圖層反查渲染器（Leaflet 沒有公開由畫布取得渲染器的方法）
+  const seen = new Set();
+  [townLayer, countyLayer, typeof disasterLayer !== 'undefined' ? disasterLayer : null,
+   typeof debrisLayer !== 'undefined' ? debrisLayer : null,
+   typeof landslideLayer !== 'undefined' ? landslideLayer : null]
+    .forEach(g=>{
+      if(!g || !g.eachLayer) return;
+      g.eachLayer(l=>{
+        const r = l._renderer;
+        if(!r || seen.has(r)) return;
+        seen.add(r);
+        // ★ 先 _update() 讓畫布尺寸跟上地圖大小，再清掉重畫範圍整張重繪。
+        //   只呼叫 _redraw() 的話，地圖被改尺寸（例如錄製時固定成 627×900）
+        //   畫布仍是舊尺寸，多出來的區域永遠是空白 —— 影片裡地圖整片不見、
+        //   截圖下半部全白，都是這個原因。
+        try{ if(r._update) r._update(); }catch(e){}
+        try{ r._redrawBounds = null; r._redraw(); }catch(e){}
+      });
+    });
+}
+// ★ 貼在 #map 上的自製畫布（風場、颱風粒子…）只在「建立時」量過一次容器大小。
+//   上方狀態列收合、視窗縮放、錄製改尺寸之後容器變高，這些畫布仍是舊尺寸，
+//   多出來的那一條就永遠空白 —— 使用者回報「狀態列收合之後很多地圖資訊
+//   沒辦法正常顯示」正是這個原因（Leaflet 自家的 pane 有 _update() 會跟上，
+//   自製畫布沒有人管）。
+//   這裡不逐一列舉畫布 id：凡是直接掛在 #map 底下、position:absolute 的
+//   <canvas> 一律同步，日後新增圖層不必再改這裡。
+function _syncOverlayCanvases(){
+  const mp = document.getElementById('map');
+  if(!mp) return false;
+  const r = mp.getBoundingClientRect();
+  const W = Math.round(r.width), H = Math.round(r.height);
+  if(W < 2 || H < 2) return false;
+  let changed = false;
+  Array.prototype.forEach.call(mp.children, el=>{
+    if(!el || el.tagName !== 'CANVAS') return;
+    if(el.width === W && el.height === H) return;
+    // 改 width/height 會清空畫布內容，粒子下一幀自然重畫，不需另外處理
+    el.width = W; el.height = H; changed = true;
+  });
+  return changed;
+}
+
+// ★ 單一入口：容器大小一改，全部該跟上的東西都在這裡跟上。
+//   先前各處各自呼叫 invalidateSize + _forceFullRedraw，
+//   但漏了自製畫布與內插渲染層，所以每次都只修好一半。
+let _armT = null;
+function _afterMapResize(){
+  if(!map) return;
+  try{ map.invalidateSize({animate: false}); }catch(e){}
+  try{ _syncOverlayCanvases(); }catch(e){}
+  try{ _fixCanvasPointerEvents(); }catch(e){}
+  try{ _forceFullRedraw(); }catch(e){}
+  // 內插渲染層是固定經緯範圍的 imageOverlay，Leaflet 會自己重新定位，
+  //   但鄉鎮著色（_townFill）與色階要重算才會跟上新視野，故補一次 renderLayer。
+  //   動畫播放中不插手，避免打斷逐格節奏。
+  clearTimeout(_armT);
+  _armT = setTimeout(()=>{
+    const playing = (typeof _animOn !== 'undefined' && _animOn);
+    if(playing) return;
+    try{ if(typeof renderLayer === 'function') renderLayer(); }catch(e){}
+    try{ _forceFullRedraw(); }catch(e){}
+  }, 120);
+}
+// 平移、縮放、改變大小後都整張重畫，避免殘留半張舊畫面
+try{ map.on('moveend zoomend resize', ()=>{
+  try{ _syncOverlayCanvases(); }catch(e){}
+  try{ _forceFullRedraw(); }catch(e){}
+}); }catch(e){}
+// ★ 地圖底部被切：容器大小改變（視窗縮放、面板展開收合）時，
+//   Leaflet 不會自動重算畫布尺寸，底部就留下一條空白。
+//   用 ResizeObserver 盯住容器，一變動就 invalidateSize + 整張重畫。
+try{
+  const _mpEl = document.getElementById('map');
+  if(_mpEl && window.ResizeObserver){
+    let _rzT = null;
+    new ResizeObserver(()=>{
+      clearTimeout(_rzT);
+      _rzT = setTimeout(()=>{ try{ _afterMapResize(); }catch(e){} }, 60);
+    }).observe(_mpEl);
+  }
+  window.addEventListener('resize', ()=>{ try{ _afterMapResize(); }catch(e){} });
+}catch(e){}
+
+function _fixCanvasPointerEvents(){
+  // ★ 改為全面掃描：地圖內所有畫布一律不接滑鼠，只有 townPane 的那張接。
+  //   先前只列舉三個 pane，之後新增的圖層（地形上層、風場、颱風粒子…）
+  //   只要忘了設定就會整片蓋住地圖，變成「地圖點不到」。
+  const mp = document.getElementById('map');
+  if(!mp || !map) return;
   const tp = map.getPane('townPane');
-  if(tp) tp.querySelectorAll('canvas').forEach(c=>{ c.style.pointerEvents = 'auto'; });
+  mp.querySelectorAll('canvas').forEach(c=>{
+    c.style.pointerEvents = (tp && tp.contains(c)) ? 'auto' : 'none';
+  });
+  // 疊在 townPane 之上的 pane，除非本來就要互動，否則一律放行滑鼠穿透
+  ['terrainPane', 'terrainTopPane', 'seaPane'].forEach(pn=>{
+    const p2 = map.getPane(pn);
+    if(p2) p2.style.pointerEvents = 'none';
+  });
+}
+// ★ 診斷：地圖點不到時在 console 執行 _whyNoClick()，
+//   會回報「滑鼠實際打到哪個元素」，一眼看出是誰蓋住的。
+function _whyNoClick(){
+  const mp = document.getElementById('map');
+  if(!mp) return '找不到地圖';
+  const r = mp.getBoundingClientRect();
+  const out = [];
+  [[0.5, 0.5], [0.3, 0.4], [0.7, 0.6]].forEach(([fx, fy])=>{
+    const e = document.elementFromPoint(r.left + r.width * fx, r.top + r.height * fy);
+    if(!e){ out.push('(無元素)'); return; }
+    const cls = (e.className && e.className.baseVal !== undefined)
+      ? e.className.baseVal : (e.className || '');
+    out.push(`${e.tagName}#${e.id || '-'}.${String(cls).slice(0, 40)}`
+      + ` z=${getComputedStyle(e).zIndex} pe=${getComputedStyle(e).pointerEvents}`);
+  });
+  console.log('地圖上三個取樣點打到的元素：\n  ' + out.join('\n  '));
+  return out;
 }
 map.on('layeradd zoomend moveend', ()=>{ try{ _fixCanvasPointerEvents(); }catch(e){} });
 
+
+// ★ 預設開啟的圖層（使用者指定）：Himawari、地形、風場、深色海、渲染。
+//   等資料與圖層都就緒後再開，否則會在初始化途中被覆寫。
+function _openDefaultLayers(){
+  const on = (flagName, fn)=>{
+    try{ if(!window[flagName] && typeof fn === 'function') fn(); }catch(e){}
+  };
+  try{ if(!_darkSea) toggleDarkSea(); }catch(e){}
+  try{ if(!_terrainOn) toggleTerrainLayer(); }catch(e){}
+  try{ if(!_himaOn) toggleHimawari(); }catch(e){}
+  try{ if(!_blurOn) toggleBlurRender(); }catch(e){}
+  try{ if(!_windFieldOn) toggleWindField(); }catch(e){}
+  void on;
+  try{ _fixCanvasPointerEvents(); _forceFullRedraw(); }catch(e){}
+}
 const seaLayer = L.rectangle([[-90,-180],[90,180]], {
   pane:'seaPane', color:'none', fillColor:'#ffffff', fillOpacity:1.0, interactive:false
 }).addTo(map);
@@ -2699,8 +3045,13 @@ function _fcQpf(t){
 }
 
 // 近 7 天偏差比（誤差追蹤 short 窗）
+// ★ 與後端融合同一組數字：優先用衰減加權（decay），沒有才退回 7 天窗
+function _fcSkill(z, m){
+  const o = ((window.MODEL_SKILL || {})[z] || {})[_FC_SK[m] || m] || {};
+  return o.decay || o.short || {};
+}
 function _fcBias(z, m){
-  const v = (((window.MODEL_SKILL || {})[z] || {})[_FC_SK[m] || m] || {}).short || {};
+  const v = _fcSkill(z, m);
   return (v.bias != null) ? v.bias : null;
 }
 
@@ -2757,10 +3108,14 @@ function _fcToggleFold(force){
 //   手動勾選；此時給偏低的 0.2，表示「你選了，但資料不支持它」。
 function _fcAutoWeight(z, m){
   const k = _FC_SK[m] || m;
-  const v = (((window.MODEL_SKILL || {})[z] || {})[k] || {}).short || {};
+  const v = _fcSkill(z, m);
   const P = ((window.PATTERN_SKILL || {})[z] || {})[k] || {};
   const bias = v.bias, mae = v.mae, n = v.n || 0;
+  // 雨量體積不足時不下判斷（與後端同一道關）
+  const vo = (v.eobs != null) ? v.eobs : v.obs;
+  const vm = (v.emod != null) ? v.emod : v.mod;
   if(bias == null || n < 20) return 0.6;                 // 樣本不足：中等權重
+  if((vo != null && vo < 100) || (vm != null && vm < 20)) return 0.6;   // 雨量太少
   if(mae != null && mae > 60) return 0.2;
   if(P.fc >= 8 && P.far != null && P.far >= 0.75) return 0.2;   // 包牌
   if(P.ob >= 5 && P.ets != null && P.ets <= 0.05) return 0.2;   // 型態無技術
@@ -2914,6 +3269,24 @@ function _fcImport(inp){
   document.addEventListener('mouseup', ()=>{ dragging = false; });
 })();
 
+// ★ 觀測佐證：雷達回波與實測雨量。用來判斷「模式報大雨但現實沒有」。
+function _radarHasEcho(t){
+  const r = (t.radar_1h != null) ? t.radar_1h : (t.radar != null ? t.radar : null);
+  return (r != null && r >= 1);
+}
+function _noRainEvidence(t){
+  // 雷達有回波 → 不算「沒有雨的證據」
+  if(_radarHasEcho(t)) return false;
+  // 近 1~3 小時的實測（rain_hourly 聚合）
+  let obs = 0;
+  for(let h = -3; h <= -1; h++){
+    const v = (typeof _obsHourlyAt === 'function') ? _obsHourlyAt(t, h) : null;
+    if(v != null) obs += v;
+  }
+  const today = (t.daily_rain || [])[0];
+  return obs < 1 && (today == null || today < 2);
+}
+
 function _blendQpf(t){
   // ★ 自適應選用（後端逐地形判定）：哪些模式該納入、各給多少權重，
   //   由 adaptive_blend 決定。亂報的模式直接不列入，多報／少報降低權重。
@@ -2943,6 +3316,7 @@ function _blendQpf(t){
 
   // ② 動態加權：MAE 越小權重越高（w = 1/(MAE+ε)）；無樣本者退回等權重
   const W = {};
+  let anyW = false;
   // 後端已給權重就直接用
   if(_ab){
     let ok = false;
@@ -2952,29 +3326,22 @@ function _blendQpf(t){
       if(w0 != null){ W[m] = w0; ok = true; }
     });
     if(ok){
+      // ★ 後端已給權重時，只補齊缺漏的預設值，不在這裡直接回傳 ——
+      //   先前這條路徑是單純加權平均並 return，完全繞過下方的
+      //   離群剔除、佐證原則與 CWA 仲裁（ICON 報 120mm 照樣被平均進去）。
       avail.forEach(m=>{ if(W[m] == null) W[m] = 0.3; });
-      const wS = avail.reduce((a, m)=>a + W[m], 0) || 1;
-      const out = [];
-      const len = Math.max(...avail.map(m=>arrs[m].length));
-      for(let i = 0; i < len; i++){
-        let s2 = 0, w2 = 0;
-        avail.forEach(m=>{
-          const v = arrs[m][i];
-          if(v == null || !isFinite(v)) return;
-          s2 += v * W[m]; w2 += W[m];
-        });
-        out.push(w2 > 0 ? Math.round(s2 / w2 * 10) / 10 : null);
-      }
-      return out;
+      anyW = true;
     }
   }
   let anySkill = false;
-  avail.forEach(m=>{
+  if(!anyW) avail.forEach(m=>{
     const s = sk[m];
     if(s && s.mae != null && s.n >= 10){ W[m] = 1 / (s.mae + 5); anySkill = true; }
     else W[m] = null;
   });
-  if(anySkill){
+  if(anyW){
+    // 後端權重已就緒，不再覆寫
+  } else if(anySkill){
     // 有樣本者用實測權重，其餘給平均權重（不因缺樣本而完全排除）
     const vals = avail.map(m=>W[m]).filter(x=>x != null);
     const avg = vals.reduce((a,b)=>a+b, 0) / vals.length;
@@ -2995,7 +3362,51 @@ function _blendQpf(t){
       out.push(ov != null ? ov : (arrs[avail[0]] || [])[i]);
       continue;
     }
+    // ★ 離群剔除 + 佐證原則（使用者指定）：
+    //   ① 先算各模式校正後的值與中位數。
+    //   ② 明顯不符現實者剔除：雷達與實測都沒有雨，模式卻報大雨。
+    //      判準用「觀測」而不是「跟別人不一樣」，才不會把真正的極端事件誤殺。
+    //   ③ 極端值要有佐證：某模式遠高於中位數時，需有第二個模式也報高
+    //      （或雷達已有回波）才採計全額，否則降權但不歸零。
+    //   ④ 剩下的模式若仍嚴重分歧，且 CWA 有官方值，改以 CWA 為準。
+    const cand = [];
+    avail.forEach(m=>{
+      const v0 = arrs[m][i];
+      if(v0 == null) return;
+      const s0 = sk[m];
+      const cap0 = AI_MODELS.has(m) ? 3.0 : 2.0;
+      const cv = (s0 && s0.bias && s0.n >= 10)
+        ? v0 * Math.max(0.5, Math.min(cap0, s0.bias)) : v0;
+      cand.push({m, v: cv, w: W[m]});
+    });
+    if(!cand.length){ out.push(null); continue; }
+    const sorted = cand.map(c=>c.v).sort((a, b)=>a - b);
+    const med = sorted[Math.floor(sorted.length / 2)];
+    // 近程（前 2 段＝約 12 小時內）才有觀測可以對照
+    const near = (i <= _nowSeg() + 1);
+    const noObs = near && _noRainEvidence(t);
+    const keep = cand.filter(c=>{
+      if(noObs && c.v >= 30 && med < 10) return false;   // ② 雷達與實測都沒雨，卻報大雨
+      return true;
+    });
+    const use = keep.length ? keep : cand;
+    // ③ 佐證：高於中位數 3 倍且 >50mm 者，需有第二個模式也超過中位數 2 倍
+    const highs = use.filter(c=>c.v > Math.max(50, med * 3));
+    use.forEach(c=>{
+      if(highs.length === 1 && c === highs[0] && !_radarHasEcho(t)) c.w *= 0.35;
+    });
+    // ④ 分歧過大且有官方值 → 以 CWA 為準
+    const lo = Math.min(...use.map(c=>c.v)), hi = Math.max(...use.map(c=>c.v));
+    const cwaV = (t.qpf_cwa || [])[i];
+    if(cwaV != null && hi > 30 && hi > lo * 6){
+      out.push(Math.round(cwaV * 10) / 10);
+      continue;
+    }
     let acc = 0, wa = 0;
+    use.forEach(c=>{ acc += c.v * c.w; wa += c.w; });
+    out.push(wa > 0 ? Math.round(acc / wa * 10) / 10 : null);
+    continue;
+    // eslint-disable-next-line no-unreachable
     avail.forEach(m=>{
       const v = arrs[m][i];
       if(v == null) return;
@@ -4385,7 +4796,11 @@ function drawCountyTowns(canvasId){
 // ══════════════════════════════════════════════════════════
 // ★ 校驗涵蓋所有模式，含「僅校驗、不進融合」者 —— 讓新模式先累積
 //   POD/FAR/CSI，確認表現再決定是否納入 FORMOSA。
-const VF_MODELS = ['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
+// ★ 'blend' ＝ FORMOSA 融合結果本身。後端（fetch_rainfall.py 的 MODELS）
+//   早就把它一起校驗並寫進 verify.json 了，是這裡的清單漏列，
+//   所以面板上一直看不到 —— 融合準不準沒有答案，加權調整也就無從檢討。
+const VF_MODELS = ['blend',
+                   'best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
                    'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom'];
 // 哪些已是融合成員（表格中標示，便於分辨）
 // ★ 融合狀態改為讀後端的自適應選用結果（逐地形），不再寫死 6 個模式。
@@ -4393,9 +4808,13 @@ const VF_MODELS = ['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
 //   後端尚未產生 adaptive_blend 時退回原本的核心 6 個。
 const VF_CORE = new Set(['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast']);
 // 使用者判定排除（與後端 ADAPT_BLOCK 一致）
-const BLEND_BLOCK = new Set(['cma']);
+// ★ 使用者判定排除（前端即時生效，不必等後端重跑）。
+//   ICON：跨地形總檢已判定整體亂報，這裡同步排除以求立即見效；
+//   等後端的自動判定累積穩定後可以移除，結果不變。
+const BLEND_BLOCK = new Set(['cma', 'icon']);
 const _VF_KEY = {gc: 'graphcast'};
 function _vfBlendZones(m){
+  if(m === 'blend') return 0;          // 融合本身不是成員，不掛 ◆
   const ab = window.ADAPTIVE_BLEND || {};
   const zs = Object.keys(ab);
   if(!zs.length) return VF_CORE.has(m) ? -1 : 0;     // -1＝無自適應資料、沿用核心
@@ -4405,7 +4824,7 @@ function _vfBlendZones(m){
 }
 const VF_IN_BLEND = { has: m => _vfBlendZones(m) !== 0 };
 // 預報校驗表的排序狀態（點欄位標題切換）
-let _vfSortKey = 'main', _vfSortDesc = true;
+let _vfSortKey = 'main', _vfSortDesc = true, _vfSortFlip = false;
 function _vfSortBy(k){
   if(_vfSortKey === k) _vfSortDesc = !_vfSortDesc;
   else { _vfSortKey = k; _vfSortDesc = (k !== 'FAR'); }   // FAR 越低越好，預設升冪
@@ -4414,6 +4833,7 @@ function _vfSortBy(k){
 const VF_NAME = {icon:'ICON', kma:'KMA 韓國', gem:'GEM 加拿大',
                  ukmo:'UK Met Office', mf:'Météo-France',
                  cma:'CMA GRAPES', bom:'BOM ACCESS',
+                 blend:'FORMOSA 融合',
                  best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
                  jma:'JMA', aifs:'EC-AIFS', graphcast:'GC-NCEP'};
 // ★ ETS：扣除隨機命中後的 CSI（乾季不虛高，跨季節可比）
@@ -4478,6 +4898,11 @@ function renderVerify(){
       if(!c) return;
       const a = agg[m] || (agg[m] = {hit:0, miss:0, 'false':0, correct_neg:0});
       ['hit','miss','false','correct_neg'].forEach(k=> a[k] += (c[k] || 0));
+      // ★ 雨量誤差累計（後端 amt 欄位）：欄位名與列聯表不同，另外加總
+      if(c.amt){
+        const am = a.amt || (a.amt = {n:0, ae:0, se:0, err:0, obs:0, mod:0});
+        ['n','ae','se','err','obs','mod'].forEach(k=> am[k] += (c.amt[k] || 0));
+      }
       // 門檻列聯表一併加總（ETS/SEDI 用）
       Object.keys(c).filter(k=>k.startsWith('thr') || k === 'hourly40').forEach(tk=>{
         const ta = a[tk] || (a[tk] = {hit:0, miss:0, 'false':0, correct_neg:0});
@@ -4488,9 +4913,36 @@ function renderVerify(){
   // ★ 指標切換（依討論後採用）：主指標為多門檻 ETS，
   //   罕見門檻用 SEDI，相對誤差保留當基線。
   const metric = (document.getElementById('vf-metric') || {}).value || 'ETS80';
+  // 雨量誤差（mm）：MAE／RMSE／平均偏差。沒有 amt 的舊資料回 null。
+  const _amt = m =>{
+    const a = (agg[m] || {}).amt;
+    if(!a || !a.n) return null;
+    return {n: a.n, mae: a.ae / a.n, rmse: Math.sqrt(a.se / a.n),
+            me: a.err / a.n,
+            ratio: a.obs > 0 ? a.mod / a.obs : null};   // 總量比（量的偏差）
+  };
+  // 分門檻頻率偏差：(命中+誤報)/(命中+漏報)
+  const _biasAt = (m, thr)=>{
+    const td = (agg[m] || {})['thr' + thr];
+    if(!td) return null;
+    const d = (td.hit || 0) + (td.miss || 0);
+    return d ? ((td.hit || 0) + (td['false'] || 0)) / d : null;
+  };
+  const _metricThr = metric === 'basic' ? null
+    : metric === 'SEDIH40' ? null
+    : /^(ETS|SEDI)(\d+)$/.test(metric) ? metric.replace(/^(ETS|SEDI)/, '') : null;
   const rows = Object.keys(agg).map(m=>{
     const sc = _vfScores(agg[m]);
-    if(metric === 'SEDIH40'){
+    sc.amt = _amt(m);
+    // ★ 偏差比跟著主指標的門檻走：只看 ≥1mm 會把融合說成最不準
+    sc.biasAt = _metricThr ? _biasAt(m, _metricThr) : sc.BIAS;
+    sc.biasLbl = _metricThr ? `≥${_metricThr}mm` : '≥1mm';
+    if(metric === 'MAE' || metric === 'RMSE'){
+      const a = sc.amt;
+      sc.main = a ? (metric === 'MAE' ? a.mae : a.rmse) : null;
+      sc.mainN = a ? a.n : 0;
+      sc.lowerBetter = true;
+    } else if(metric === 'SEDIH40'){
       // ★ 時雨量強度（僅 best/ecmwf/gfs 有 maxh，其餘模式沒有樣本）
       const hd = (agg[m] || {}).hourly40;
       sc.main = hd ? _vfSedi(hd) : null;
@@ -4505,6 +4957,15 @@ function renderVerify(){
     }
     return {m, s: sc, c: agg[m]};
   }).sort((a, b)=>{
+    // ★ MAE／RMSE 是越小越好，預設改成升冪，否則最準的會排最後
+    if((metric === 'MAE' || metric === 'RMSE') && _vfSortKey === 'main'
+       && !_vfSortFlip){ _vfSortFlip = true; _vfSortDesc = false; }
+    if(metric !== 'MAE' && metric !== 'RMSE' && _vfSortFlip){
+      _vfSortFlip = false; _vfSortDesc = true;
+    }
+    // ★ FORMOSA 是比較的基準，不隨排序跑掉，一律釘在第一列
+    if(a.m === 'blend') return -1;
+    if(b.m === 'blend') return 1;
     // ★ 依點選的欄位排序（使用者指定）；空值一律排最後
     const K = _vfSortKey;
     if(K === 'name'){
@@ -4512,7 +4973,9 @@ function renderVerify(){
       return _vfSortDesc ? y.localeCompare(x) : x.localeCompare(y);
     }
     const g = r => K === 'n' ? (r.s.mainN ?? r.s.n)
-                 : K === 'main' ? r.s.main : r.s[K];
+                 : K === 'main' ? r.s.main
+                 : K === 'MAE'  ? (r.s.amt && r.s.amt.mae)
+                 : K === 'BIAS' ? r.s.biasAt : r.s[K];
     const x = g(a), y = g(b);
     if(x == null && y == null) return 0;
     if(x == null) return 1;
@@ -4522,6 +4985,20 @@ function renderVerify(){
   const col = v => v == null ? '#7a94ac'
     : v >= 0.7 ? '#40d060' : v >= 0.5 ? '#FFFF00' : v >= 0.3 ? '#FF8C00' : '#FF4444';
   const fmt = v => v == null ? '—' : v.toFixed(2);
+  const lowBetter = (metric === 'MAE' || metric === 'RMSE');
+  // ★ MAE／RMSE 是 mm、越小越好：用「相對全體最佳」上色，不能套 0~1 色階
+  const _mains = rows.map(r=>r.s.main).filter(v=>v != null);
+  const _mBest = _mains.length ? Math.min(..._mains) : null;
+  const colMain = v => v == null ? '#7a94ac'
+    : !lowBetter ? col(v)
+    : (_mBest == null || v <= _mBest * 1.05) ? '#40d060'
+    : v <= _mBest * 1.25 ? '#FFFF00'
+    : v <= _mBest * 1.60 ? '#FF8C00' : '#FF4444';
+  // 偏差比：離 1 越遠越差（兩側對稱）
+  const colBias = v => v == null ? '#7a94ac'
+    : (v >= 0.9 && v <= 1.15) ? '#40d060'
+    : (v >= 0.75 && v <= 1.35) ? '#FFFF00'
+    : (v >= 0.6 && v <= 1.8) ? '#FF8C00' : '#FF4444';
   const period = ser.length === 1 ? ser[0].date
     : `${ser[0].date} ~ ${ser[ser.length-1].date}（${ser.length} 日）`;
   el.innerHTML = `<div style="color:#5a7a95;font-size:9px;margin-bottom:3px">
@@ -4537,14 +5014,21 @@ function renderVerify(){
               + `cursor:pointer;user-select:none;${on ? 'color:#f0c878' : ''}">`
               + label + (on ? (_vfSortDesc ? ' ▼' : ' ▲') : '') + '</th>';
           };
-          return TH('name', '模式', 'left') + TH('POD', 'POD', 'right') + TH('FAR', 'FAR', 'right')
-            + TH('main', metric === 'basic' ? 'CSI'
+          const mainLbl = metric === 'basic' ? 'CSI'
                  : metric === 'SEDIH40' ? 'SEDI ≥40mm/h'
-                 : metric.replace(/(\d+)/, ' ≥$1mm'), 'right')
-            + TH('BIAS', '偏差比', 'right') + TH('n', '樣本', 'right');
+                 : metric === 'MAE' ? 'MAE mm'
+                 : metric === 'RMSE' ? 'RMSE mm'
+                 : metric.replace(/(\d+)/, ' ≥$1mm');
+          return TH('name', '模式', 'left') + TH('POD', 'POD', 'right') + TH('FAR', 'FAR', 'right')
+            + TH('main', mainLbl, 'right')
+            + TH('BIAS', '偏差比' + (rows[0] ? rows[0].s.biasLbl : ''), 'right')
+            + TH('MAE', 'MAE', 'right')
+            + TH('n', '樣本', 'right');
         })()}</tr>
-      ${rows.map(r=>`<tr style="border-top:1px solid #12283c">
-        <td style="padding:2px 3px;color:#cfe4f5">${VF_NAME[r.m] || r.m}${
+      ${rows.map(r=>`<tr style="border-top:1px solid #12283c;${
+          r.m === 'blend' ? 'background:#10202e' : ''}">
+        <td style="padding:2px 3px;color:${r.m === 'blend' ? '#7ee8a8;font-weight:700' : '#cfe4f5'}">${
+          r.m === 'blend' ? '★ ' : ''}${VF_NAME[r.m] || r.m}${
           (()=>{ const n = _vfBlendZones(r.m);
             if(n === 0) return '';
             const nz = Object.keys(window.ADAPTIVE_BLEND || {}).length;
@@ -4553,16 +5037,80 @@ function renderVerify(){
         }</td>
         <td style="text-align:right;color:${col(r.s.POD)}">${fmt(r.s.POD)}</td>
         <td style="text-align:right;color:${col(r.s.FAR == null ? null : 1 - r.s.FAR)}">${fmt(r.s.FAR)}</td>
-        <td style="text-align:right;color:${col(r.s.main)};font-weight:700">${fmt(r.s.main)}</td>
-        <td style="text-align:right;color:#9fc8e8">${fmt(r.s.BIAS)}</td>
+        <td style="text-align:right;color:${colMain(r.s.main)};font-weight:700">${
+          r.s.main == null ? '—' : r.s.main.toFixed(lowBetter ? 1 : 2)}</td>
+        <td style="text-align:right;color:${colBias(r.s.biasAt)}">${fmt(r.s.biasAt)}</td>
+        <td style="text-align:right;color:#9fc8e8">${
+          r.s.amt ? r.s.amt.mae.toFixed(1) : '—'}</td>
         <td style="text-align:right;color:#5a7a95">${r.s.mainN ?? r.s.n}</td></tr>`).join('')}
     </table>
+    ${(()=>{
+      // ★ 這一段是 FORMOSA 對外的準確度佐證，要能獨立回答三個問題：
+      //   ① 技術得分有沒有贏過最好的單一模式（ETS／SEDI，扣除隨機命中）
+      //   ② 雨量上是不是真的最貼近觀測（MAE，這才是「貼近觀測值」）
+      //   ③ 偏差比的型態長什麼樣（分門檻攤開，不迴避）
+      const bl = rows.find(r=>r.m === 'blend');
+      const sg = rows.filter(r=>r.m !== 'blend');
+      if(!bl || !sg.length) return '';
+      const L = [];
+      const cmp = (label, get, lower, dp)=>{
+        const bv = get(bl); if(bv == null) return;
+        const pool = sg.filter(r=>get(r) != null);
+        if(!pool.length) return;
+        const best = pool.reduce((x, y)=>
+          (lower ? (get(y) < get(x)) : (get(y) > get(x))) ? y : x);
+        const d = get(bl) - get(best);
+        const win = lower ? d < -0.0005 : d > 0.0005;
+        const tie = Math.abs(d) <= 0.0005;
+        const c = win ? '#40d060' : tie ? '#f0c878' : '#FF6644';
+        const w = win ? '融合勝出' : tie ? '持平' : '融合落後';
+        const rel = (lower && get(best) > 0)
+          ? `，誤差少 ${((1 - get(bl) / get(best)) * 100).toFixed(0)}%` : '';
+        L.push(`<div style="margin:1px 0">${label}
+          <b style="color:#7ee8a8">${bv.toFixed(dp)}</b>
+          ｜最佳單模式 ${VF_NAME[best.m] || best.m}
+          <b>${get(best).toFixed(dp)}</b>
+          → <b style="color:${c}">${w}${win && rel ? rel : ''}</b></div>`);
+      };
+      const mainLbl = metric === 'basic' ? 'CSI'
+        : metric === 'SEDIH40' ? 'SEDI ≥40mm/h'
+        : metric === 'MAE' ? 'MAE'
+        : metric === 'RMSE' ? 'RMSE'
+        : metric.replace(/(\d+)/, ' ≥$1mm');
+      cmp(`技術得分 ${mainLbl}`, r=>r.s.main, lowBetter, lowBetter ? 1 : 3);
+      if(!lowBetter)
+        cmp('雨量誤差 MAE(mm)', r=>r.s.amt && r.s.amt.mae, true, 1);
+      // 偏差比剖面：分門檻攤開，讓「小雨報得寬、大雨不虛胖」自己說話
+      const prof = [['1', bl.s.BIAS]].concat(
+        [10, 50, 80].map(t=>[String(t), _biasAt('blend', t)]))
+        .filter(([, v])=>v != null)
+        .map(([t, v])=>`≥${t}mm <b style="color:${colBias(v)}">${v.toFixed(2)}</b>`)
+        .join('　');
+      const amt = bl.s.amt;
+      return `<div style="margin-top:4px;padding:4px 5px;border:1px solid #1e3c52;
+          border-radius:3px;background:#0b1a26;font-size:9px;color:#9fc8e8">
+          <div style="color:#7ee8a8;font-weight:700;margin-bottom:2px">
+            ★ FORMOSA 自我校驗</div>
+          ${L.join('')}
+          ${prof ? `<div style="margin:2px 0">事件頻率偏差比　${prof}</div>` : ''}
+          ${amt ? `<div style="margin:1px 0">總量比（模式÷觀測）
+            <b>${amt.ratio == null ? '—' : amt.ratio.toFixed(2)}</b>
+            ｜平均偏差 <b>${amt.me >= 0 ? '+' : ''}${amt.me.toFixed(1)}mm</b>
+            ｜樣本 ${amt.n}</div>` : ''}
+          <div style="color:#5a7a95;margin-top:2px;line-height:1.45">
+            偏差比是「報出有雨的地點數 ÷ 實際有雨的地點數」，量的是報得寬不寬，
+            不是準不準。融合在低門檻必然偏高（任一成員報雨，平均就容易越過門檻），
+            要論準確度請看 ETS／SEDI 與 MAE。</div>
+        </div>`;
+    })()}
     <div style="color:#5a7a95;font-size:9px;margin-top:3px">
       ${metric === 'SEDIH40' ? '時雨量強度：只有 CWA+ECMWF／ECMWF／GFS 有最大時雨量資料'
         : metric.startsWith('ETS') ? 'ETS 扣除隨機命中後的綜合指標，0＝與亂猜無異'
         : metric.startsWith('SEDI') ? 'SEDI 罕見事件專用，極端門檻下仍有鑑別力'
         : 'CSI 綜合指標，不納入正確無雨'}　偏差比 &gt;1 報太多<br>
-      ◆ 已納入 FORMOSA 融合（◆2＝僅 2 個地形採用）；無標記者目前未納入</div>`;
+      ◆ 已納入 FORMOSA 融合（◆2＝僅 2 個地形採用）；無標記者目前未納入<br>
+      ★ FORMOSA 融合為本系統的輸出結果，與各單模式用同一套判準校驗，固定列於首行<br>
+      MAE＝平均絕對誤差（mm），越小代表雨量越貼近觀測；偏差比隨主指標的門檻變動</div>`;
   try{ drawVerifyChart(); }catch(e){ console.warn('校驗圖失敗', e); }
 }
 // 時間序列圖：各模式的 CSI 隨日期變化
@@ -4599,14 +5147,17 @@ function drawVerifyChart(canvasId){
     ctx.fillText(d.date.slice(5), X(i), CH - pB + fs + 2);
   });
   // 各模式一條線（用融合明細同一組色）
-  const COL = {best:'#6bc8e8', ecmwf:'#40d060', gfs:'#FFFF00', icon:'#FF8C00',
+  const COL = {blend:'#7ee8a8',
+               best:'#6bc8e8', ecmwf:'#40d060', gfs:'#FFFF00', icon:'#FF8C00',
                jma:'#FF66CC', aifs:'#c8a8e8', graphcast:'#a0d8ff'};
-  VF_MODELS.forEach(m=>{
+  // ★ FORMOSA 最後畫、線最粗：它是基準線，要壓在其他模式之上看得清楚
+  const _order = VF_MODELS.filter(m=>m !== 'blend').concat(['blend']);
+  _order.forEach(m=>{
     const pts = ser.map((d, i)=>({i, v: d.scores[m] && d.scores[m].CSI}))
                    .filter(p=>p.v != null);
     if(pts.length < 2) return;
     ctx.strokeStyle = COL[m] || '#9fc8e8';
-    ctx.lineWidth = isZoom ? 3 : 1.6;
+    ctx.lineWidth = (m === 'blend') ? (isZoom ? 5 : 2.8) : (isZoom ? 3 : 1.6);
     ctx.beginPath();
     pts.forEach((p, k)=> k ? ctx.lineTo(X(p.i), Y(p.v)) : ctx.moveTo(X(p.i), Y(p.v)));
     ctx.stroke();
@@ -6118,20 +6669,38 @@ let _animSavedHour = null;
 function _animBuildFrames(){
   const stepMin = parseInt((document.getElementById('anim-step') || {}).value) || 60;
   // 自訂範圍的起訖（滑桿值）；非自訂範圍時用目前視窗的前後 24h
+  // ★ 兩種滑桿的單位不同（使用者回報選的時間和跑出來的對不上）：
+  //   逐時精度 → 滑桿值就是「距現在幾小時」
+  //   6 小時精度 → 滑桿值是「段索引」（以今天 00 時為基準），
+  //     必須用 segTime() 換算成距現在幾小時，不能直接乘 6。
+  const toH = seg => (segTime(seg).getTime() - Date.now()) / 3600e3;
   let h0, h1;
   const sS = document.getElementById('slS'), sE = document.getElementById('slE');
   if(winKey === 'custom' && sS && sE){
     const a = parseInt(sS.value), b = parseInt(sE.value);
     if(_custStep === 1){ h0 = Math.min(a, b); h1 = Math.max(a, b); }
-    else { h0 = Math.min(a, b) * 6; h1 = (Math.max(a, b) + 1) * 6; }
+    // ★ 迄點滑桿指的就是結束時刻，先前多加一段（＝多 6 小時）
+    else { h0 = toH(Math.min(a, b)); h1 = toH(Math.max(a, b)); }
   } else {
-    h0 = 0; h1 = 24;
+    // 非自訂視窗：用目前視窗實際涵蓋的時段
+    h0 = toH(Math.max(0, segFrom));
+    h1 = toH(Math.max(0, segTo));
   }
+  h0 = Math.round(h0 * 100) / 100;
+  h1 = Math.round(h1 * 100) / 100;
   const out = [];
   for(let h = h0; h <= h1 + 1e-9; h += stepMin / 60) out.push(Math.round(h * 100) / 100);
   return out;
 }
 
+// ★ 任何會影響時間範圍的操作都要讓幀序列失效（使用者回報下載一次後
+//   就鎖在那個時間段）：自訂範圍的滑桿、精度、視窗切換都算。
+function _animInvalidate(){
+  _animFrames = [];
+  _animIdx = 0;
+  const el = document.getElementById('anim-pos');
+  if(el) el.textContent = '';
+}
 function _animRebuild(){
   _animFrames = _animBuildFrames();
   _animIdx = 0;
@@ -6140,11 +6709,585 @@ function _animRebuild(){
 }
 
 // 套用某一幀：設定 _hourIdx 並重繪（小數小時交給內插）
+// ══════════════════════════════════════════════════════════
+//  動畫專用重繪
+//  ★ 播放時不呼叫 renderLayer()：它每幀重建 368 個鄉鎮並重算完整
+//    tooltip，實測約 140ms／幀，主執行緒被卡住，風場粒子跟著停頓 ——
+//    這就是「卡卡的」主因。播放中只改填色；停止時再完整重繪一次。
+//  ★ 級距改變時做 350ms 的顏色漸層（使用者指定「從淺到深」）：
+//    過渡期間的中間色只存在一瞬間，停下來時一定是圖例上的顏色。
+// ══════════════════════════════════════════════════════════
+const ANIM_TWEEN_MS = 600;   // 過渡拉長，跨級距時的淡入淡出較明顯
+// ★ 動畫中的連續色階（使用者反映淡入淡出不明顯）：
+//   一般模式的顏色是「級距」的，值在級距內怎麼變顏色都不動，
+//   只有跨級距才跳一下 —— 所以看起來幾乎沒有漸層。
+//   播放時改成在相鄰級距的顏色之間依值連續內插，
+//   由淺到深平順變化；停止播放後回到標準級距色。
+function _rampColor(v, scale){
+  if(v == null || !isFinite(v)) return null;
+  const S = scale;
+  let i = S.findIndex(b=>v < b.max);
+  if(i < 0) i = S.length - 1;
+  const base = _hexRgb(S[i].color);
+  if(!base) return S[i].color;
+  const lo = (i === 0) ? 0 : S[i-1].max;
+  const hi = (S[i].max === Infinity) ? lo * 1.5 + 1 : S[i].max;
+  const f = Math.max(0, Math.min(1, (v - lo) / Math.max(1e-9, hi - lo)));
+  // ★ 以「本級距的顏色」為基準，只在級距內做 ±10% 的明暗微調。
+  //   先前是從「前一級的顏色」漸變過來，等於整張圖都偏向上一級，
+  //   顏色明顯偏淡、判讀時容易誤判量級（使用者回報的問題）。
+  //   現在同一級距看起來仍是該級距的顏色，只是由略淺漸深。
+  const k = 1.14 - 0.28 * f;   // 級距內的明暗差加大，逐格變化才看得出來
+  return _rgbHex(base.map(c=>Math.round(Math.max(0, Math.min(255, c * k)))));
+}
+const _animTweens = new Map();
+let _animTweenRAF = null;
+function _hexRgb(h){
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(h || '').trim());
+  if(!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function _rgbHex(c){
+  return '#' + c.map(v=>Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('');
+}
+function _animPaint(){
+  if(!townLayer) return;
+  const now = performance.now();
+  townLayer.eachLayer(poly=>{
+    const t = poly._tw;
+    if(!t) return;
+    let f;
+    try{ f = _townFill(t, t === selected); }catch(e){ return; }
+    if(!f || !f.fillColor) return;
+    // 動畫中改用連續色階（僅雨量與 ETR2% 兩種有意義的連續量）
+    let to = f.fillColor;
+    if(mode === 'rain' || mode === 'etr'){
+      try{
+        const a = getAccum(t);
+        const v = a && (mode === 'etr' ? a.etrPct : a.totalRain);
+        const rc = _rampColor(v, mode === 'etr' ? ETR_SCALE : RAIN_SCALE);
+        if(rc) to = rc;
+      }catch(e){}
+    }
+    // ★ 顏色相同且已無進行中的過渡才略過。先前只比顏色，
+    //   等於仍是「跨級距才啟動一次」，看起來就是瞬間切換。
+    if(poly._animTo === to && !_animTweens.has(poly)) return;
+    poly._animTo = to;
+    if(f.fillOpacity != null) poly.setStyle({fillOpacity: f.fillOpacity});
+    const from = poly._animShown || poly.options.fillColor || to;
+    const a = _hexRgb(from), b = _hexRgb(to);
+    if(!a || !b){ poly.setStyle({fillColor: to}); poly._animShown = to; return; }
+    _animTweens.set(poly, {a, b, to, t0: now});
+  });
+  if(window._animManual) return;           // 錄影：由 _animPaintFrac 逐格推進
+  if(!_animTweenRAF && _animTweens.size) _animTweenRAF = requestAnimationFrame(_animTweenStep);
+}
+// 錄影用：把所有進行中的漸層推到指定進度（0~1），到 1 即完成
+function _animPaintFrac(k){
+  const e = k < 0.5 ? 2*k*k : 1 - Math.pow(-2*k + 2, 2) / 2;
+  _animTweens.forEach((tw, poly)=>{
+    if(k >= 1){ poly.setStyle({fillColor: tw.to}); poly._animShown = tw.to; _animTweens.delete(poly); return; }
+    const hex = _rgbHex(tw.a.map((v, i)=>Math.round(v + (tw.b[i] - v) * e)));
+    poly.setStyle({fillColor: hex}); poly._animShown = hex;
+  });
+}
+function _animTweenStep(){
+  _animTweenRAF = null;
+  const now = performance.now();
+  _animTweens.forEach((tw, poly)=>{
+    const k = Math.min(1, (now - tw.t0) / ANIM_TWEEN_MS);
+    if(k >= 1){
+      poly.setStyle({fillColor: tw.to}); poly._animShown = tw.to;
+      _animTweens.delete(poly); return;
+    }
+    const e = k < 0.5 ? 2*k*k : 1 - Math.pow(-2*k + 2, 2) / 2;   // 緩入緩出
+    const hex = _rgbHex(tw.a.map((v, i)=>Math.round(v + (tw.b[i] - v) * e)));
+    poly.setStyle({fillColor: hex}); poly._animShown = hex;
+  });
+  if(_animTweens.size) _animTweenRAF = requestAnimationFrame(_animTweenStep);
+}
+function _animPaintReset(){
+  _animTweens.clear();
+  if(_animTweenRAF){ cancelAnimationFrame(_animTweenRAF); _animTweenRAF = null; }
+  if(townLayer) townLayer.eachLayer(p=>{ p._animTo = null; p._animShown = null; });
+}
+
+// ══════════════════════════════════════════════════════════
+//  颱風動畫（真正連續）
+//  ★ 過去路徑、現在位置、預報點串成一條時間軸：
+//    位置用 Catmull-Rom 樣條（官方畫路徑的做法），暴風半徑線性內插。
+//  ★ 兩個動畫幀之間再以 requestAnimationFrame 平滑推進，
+//    颱風不會一格一格瞬移，暴風圈也不會瞬間放大縮小。
+//  ★ 七級風暴風圈觸及的鄉鎮閃爍，並記下首次觸及時刻。
+// ══════════════════════════════════════════════════════════
+let _tyA = null;   // {tl, layer, hitLayer, prevH, curH, t0, dur, raf, hit:Set, first:{}}
+function _tyTimeline(ty){
+  const pts = [];
+  const add = (ms, p)=>{
+    if(!isFinite(ms) || p.lat == null || p.lng == null) return;
+    pts.push({ms, lat: +p.lat, lng: +p.lng,
+              r15: (p.r15 != null ? +p.r15 : null), r25: (p.r25 != null ? +p.r25 : null),
+              ws: (p.ws != null ? +p.ws : null)});      // 近中心最大風速：粒子取色用
+  };
+  (ty.past || []).forEach(p=>add(Date.parse(p.t), p));
+  if(ty.current) add(Date.parse(ty.current.t || ''), ty.current);
+  (ty.forecast || []).forEach(f=>{
+    const base = Date.parse(f.init || (ty.current && ty.current.t) || '');
+    add(base + (f.fh || 0) * 3600e3, f);
+  });
+  pts.sort((a, b)=>a.ms - b.ms);
+  const out = [];
+  pts.forEach(p=>{ if(!out.length || p.ms - out[out.length-1].ms > 60e3) out.push(p);
+                   else Object.assign(out[out.length-1], p); });
+  // 缺半徑的點沿用相鄰值，避免暴風圈忽然消失
+  for(const k of ['r15', 'r25', 'ws']){
+    let last = null;
+    out.forEach(p=>{ if(p[k] == null) p[k] = last; else last = p[k]; });
+    last = null;
+    for(let i = out.length - 1; i >= 0; i--){ if(out[i][k] == null) out[i][k] = last; else last = out[i][k]; }
+  }
+  return out;
+}
+function _tyAt(tl, ms){
+  if(!tl || tl.length < 2 || ms < tl[0].ms || ms > tl[tl.length-1].ms) return null;
+  let i = 0;
+  while(i < tl.length - 2 && tl[i+1].ms <= ms) i++;
+  const p1 = tl[i], p2 = tl[i+1];
+  const p0 = tl[i-1] || p1, p3 = tl[i+2] || p2;
+  const f = (ms - p1.ms) / ((p2.ms - p1.ms) || 1);
+  const lin = (a, b)=> (a == null || b == null) ? (a ?? b) : a + (b - a) * f;
+  return {lat: _catmull(p0.lat, p1.lat, p2.lat, p3.lat, f),
+          lng: _catmull(p0.lng, p1.lng, p2.lng, p3.lng, f),
+          r15: lin(p1.r15, p2.r15), r25: lin(p1.r25, p2.r25),
+          ws: lin(p1.ws, p2.ws)};
+}
+function _kmBetween(a1, o1, a2, o2){
+  const R = 6371, d2r = Math.PI / 180;
+  const da = (a2 - a1) * d2r, dO = (o2 - o1) * d2r;
+  const x = Math.sin(da/2)**2 + Math.cos(a1*d2r) * Math.cos(a2*d2r) * Math.sin(dO/2)**2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
+}
+// ★ 暴風圈內的風流粒子（使用者指定，比螺旋臂更像真實氣旋）：
+//   粒子沿切線方向繞行，角速度隨半徑遞減（內快外慢），
+//   畫在專屬畫布上以做出長拖尾 —— 拖尾長度是風場的 5 倍以上。
+//   風場每幀保留 95%（約 45 幀可見），這裡保留 99%（約 230 幀），
+//   以 10 m/s 的內圈速度估算，尾巴長度約為風場的 5 倍。
+// ★ 拖尾由 0.99 降到 0.955：0.99 約 230 幀不散，整個畫面都是殘影，
+//   會蓋掉底下的雨量判讀（使用者回報）。0.955 約 50 幀，
+//   仍比風場（45 幀）略長，看得出漩渦但不糊。
+// ★ 參考 Windy：粒子多、單段短、拖尾短，靠密度表現流場，
+//   而不是靠長線條。長線在曲率大的地方必定失真。
+// 拖尾拉長（0.90≈22 幀 → 0.965≈65 幀），流場感才出得來
+// ★★ 颱風流線比臺灣周邊風場還短的原因：兩者用同一個 _wfPxPerMs()，
+//   但風場的每幀步長是 (0.05 + ws×pxPerMs)，颱風卻再乘一個 0.12 ——
+//   同樣風速下颱風粒子走得慢八倍，而颱風風速明明大得多，流線卻最短。
+//   之前為了「轉太快」把它壓到 0.12，壓過頭了。改成 0.55：
+//   以周邊風場 8 m/s、颱風七級風環 25 m/s 估算，颱風流線約為
+//   周邊風場的 1.7 倍長，符合「要再長很多」。
+const TY_SPEED_SCALE = 0.55;
+const TY_SPIRAL_RATIO = 8;     // 切向：徑向，數字越大螺旋越平緩
+// ★ 平流必須跟切向風同尺度縮放。先前把轉速乘 0.12 放慢，卻讓平流
+//   維持原尺度（0.85 × 中心每幀位移），平流就比切向風大了七倍 ——
+//   整片粒子往同一個方向平移、看起來像一條均勻的流，而不是漩渦，
+//   這正是「風場尾流不合理」的來源。乘上同一個 TY_SPEED_SCALE 後，
+//   移動速度／切向風速的比值回到真實值（約 5.5 / 40 ≈ 0.14）。
+const TY_ADVECT = 0.85 * TY_SPEED_SCALE;
+const TY_PART_N = 380;         // 密度降低（使用者指定：不需要這麼密）
+const TY_LIFE     = 260;       // 粒子壽命（幀）
+const TY_BETA_IN  = 22;        // 邊界層內流角（度），十級圈附近最大
+const TY_BETA_OUT = 32;        // 出七級圈後的外流角上限（度）
+const TY_RELAX    = 0.14;      // 圈內速度鬆弛係數（約 7 幀跟上當地風場）
+const TY_RELEASE  = 0.32;      // 出圈後鬆弛係數的衰減長度（愈小＝愈快放手）
+const TY_U_FRONT  = 1.45;      // 前緣消散半徑（r15 的倍數）
+const TY_U_BACK   = 2.10;      // 後方尾流消散半徑
+const TY_LINE_A   = 0.40;      // 單段線條透明度（大致均勻，強弱交給色階）
+const TY_VPX_CAP  = 8.0;       // 每幀像素步長上限（見 _tyPartStep 內的說明）
+// ★ 尾巴長度 ≈ 每幀步長 × 可見幀數，可見幀數 = ln(0.1)/ln(KEEP)。
+//   長度要靠「步長」拿，不能靠「保留幀數」硬撐 —— 0.975 是 91 幀，
+//   粒子走得又慢，結果就是殘影賴在畫面上不走（使用者回報殘留太久）。
+//   改回 0.95（45 幀，與風場層一致），長度改由上面的步長提供。
+const TY_TRAIL_KEEP = 0.95;
+// 拖尾可見幀數 = ln(0.1)/ln(TY_TRAIL_KEEP)，供密度正規化用。
+// ★ 必須宣告在 TY_TRAIL_KEEP 之後：const 有暫時性死區，放前面會在
+//   載入時就丟 ReferenceError，整段 script 停擺（實測過一次）。
+const TY_TRAIL_FRAMES = Math.log(0.1) / Math.log(TY_TRAIL_KEEP);
+let _tyCv = null, _tyParts = [];
+// 蒲福風級 → 風速（m/s）：取各級的代表值，與 _wsToBf 互為反函式
+function _bfToWs(bf){
+  const T = [0.2, 0.9, 2.5, 4.4, 6.7, 9.4, 12.3, 15.5, 19.0, 22.6, 26.5, 30.6, 34.9,
+             39.5, 44.3, 49.4, 54.7];
+  const i = Math.max(0, Math.min(T.length - 2, Math.floor(bf)));
+  return T[i] + (T[i+1] - T[i]) * (bf - i);
+}
+
+function _tyPartInit(){
+  const mp = document.getElementById('map');
+  if(!mp) return;
+  if(!_tyCv){
+    _tyCv = document.createElement('canvas');
+    _tyCv.style.cssText = 'position:absolute;inset:0;z-index:655;pointer-events:none';
+    mp.appendChild(_tyCv);
+  }
+  const r = mp.getBoundingClientRect();
+  _tyCv.width = Math.round(r.width); _tyCv.height = Math.round(r.height);
+  _tyParts = Array.from({length: TY_PART_N}, ()=>({dead: true}));
+}
+function _tyPartStep(list){
+  if(!_tyCv) return;
+  const ctx = _tyCv.getContext('2d');
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.fillStyle = `rgba(0,0,0,${TY_TRAIL_KEEP})`;
+  ctx.fillRect(0, 0, _tyCv.width, _tyCv.height);
+  ctx.globalCompositeOperation = 'source-over';
+  const act = list.filter(x=>x._P && x._P.r15);
+  if(!act.length) return;
+  // 每個系統只投影一次（中心像素位置、每公里像素、中心位移）
+  act.forEach(x=>{
+    const P = x._P;
+    try{
+      const c0 = map.latLngToContainerPoint([P.lat, P.lng]);
+      const c1 = map.latLngToContainerPoint([P.lat + 0.1, P.lng]);
+      x._dcx = (x._cx == null) ? 0 : (c0.x - x._cx);
+      x._dcy = (x._cy == null) ? 0 : (c0.y - x._cy);
+      x._cx = c0.x; x._cy = c0.y;
+      x._ppk = Math.abs(c1.y - c0.y) / 11.132;
+      x._uEye = Math.max(0.10, ((P.r25 || P.r15 * 0.33) / P.r15) * 0.45);
+    }catch(e){ x._ppk = null; }
+  });
+  const spawn = (p, x)=>{
+    p.sys = x || act[Math.floor(Math.random() * act.length)];
+    const sx = p.sys;
+    const uMin = sx._uEye || 0.12;
+    // 面積加權（指數 0.5）：圓盤上單位面積的粒子數一致，外圈才不會比內圈稀疏。
+    //   （指數大於 0.5 會把密度往內推，核心反而更糊 —— 試過 0.8，是反效果。）
+    const u = uMin + (1.15 - uMin) * Math.pow(Math.random(), 0.50);
+    const th = Math.random() * 2 * Math.PI;
+    const r = (sx._P.r15 * u) * (sx._ppk || 1);
+    // ★ 粒子存的是「畫面上的絕對位置」，不是相對颱風中心的極座標。
+    //   先前存極座標，颱風一移動全部粒子跟著瞬移，只好每幀斷線重畫 ——
+    //   那正是「點狀」而非流線的原因。
+    p.x = sx._cx + r * Math.sin(th);
+    p.y = sx._cy - r * Math.cos(th);
+    p.age = Math.random() * TY_LIFE;
+    p.dead = false;
+    p.px = null; p.py = null;
+    p.vx = null; p.vy = null;       // 首次由目標速度帶入，避免起步抽動
+  };
+  const _u2px = Math.max(1e-6, _wfPxPerMs() * TY_SPEED_SCALE);
+  _tyParts.forEach(p=>{
+    if(p.dead || !p.sys || !p.sys._P || p.age > TY_LIFE || p.x == null){ spawn(p); }
+    const x = p.sys, P = x._P;
+    if(!P || x._ppk == null) return;
+    // 由畫面位置反推相對颱風中心的半徑與方位
+    const dx = p.x - x._cx, dy = p.y - x._cy;
+    const rpx = Math.hypot(dx, dy);
+    const r15px = P.r15 * x._ppk;
+    const u = rpx / Math.max(1e-6, r15px);
+    const uEye = x._uEye || 0.12;
+    if(u < uEye * 0.75){ p.dead = true; return; }
+    const th = Math.atan2(dx, -dy);                  // 以正北為 0、往東為正
+    // ★ 尾流不對稱：颱風往前走，原本繞著它轉的空氣會留在後方，
+    //   所以尾流應該往後拖長，前緣則被壓縮。
+    const mv = Math.hypot(x._dcx || 0, x._dcy || 0);
+    const along = (mv > 1e-6 && rpx > 1e-6)
+      ? ((dx * (x._dcx || 0) + dy * (x._dcy || 0)) / (mv * rpx)) : 0;
+    const uMax = TY_U_FRONT + (TY_U_BACK - TY_U_FRONT) * Math.max(0, -along);
+    if(u > uMax){ p.dead = true; return; }
+
+    // ── (1) 切向風速剖面：修正 Rankine，用回報的 r25 / r15 直接錨定 ──
+    //   先前是在「蒲福風級」的數字上做線性內插，蒲福本身已經是冪次刻度，
+    //   等於在對數尺度上拉直線 —— 剖面既不是真實颱風的形狀，
+    //   也不通過 r25＝25m/s、r15＝15m/s 這兩個回報值，
+    //   這就是「不線性、跟現實差距很大」的來源。
+    //   現在改成分段冪次，並「解」出指數讓曲線必定通過那兩個半徑：
+    //     r ≤ RMW      ：vθ = vmax·(r/RMW)          固體旋轉核心
+    //     RMW < r ≤ r25：vθ = vmax·(RMW/r)^α1       α1 由 (RMW,vmax)→(r25,25) 解出
+    //     r > r25      ：vθ = 25·(r25/r)^α2         α2 由 (r25,25)→(r15,15) 解出
+    const ws = _tyVt(x, u);
+
+    // ── (2) 內流角：隨半徑改變，脫離七級圈後由內流轉為外流 ──
+    //   邊界層內是向內的螺旋（內流角約 22°），到七級圈附近轉為純切向；
+    //   出了七級圈，氣壓梯度已不足以提供維持圓周運動所需的向心力，
+    //   氣塊就順著切線往外離開（使用者指出的正是這一點）。
+    const beta = _tyBeta(x, u);                  // 正＝向內，負＝向外
+    const tanX = -Math.cos(th), tanY = -Math.sin(th);   // 逆時針（北半球）
+    const radX =  Math.sin(th), radY = -Math.cos(th);   // 由中心往外
+    const vr = -Math.tan(beta);                  // 相對切向風的徑向比例
+    const norm = 1 / Math.hypot(1, vr);
+    // ★ 每幀像素步長設上限：這是「畫得出來」的需要，不是物理主張。
+    //   眼牆風速 45 m/s，在常用比例尺下一幀要走 22px，45 幀的拖尾
+    //   繞得完眼牆八圈 —— 疊出來就是一塊紅色實心圓餅，什麼結構都看不到。
+    //   七級風（15 m/s）約 7.4px/幀，低於上限不受影響，
+    //   所以外圈流線的長度完全保留，只把核心壓到畫得出來的範圍。
+    const vpx = Math.min(TY_VPX_CAP, (0.05 + ws * _wfPxPerMs()) * TY_SPEED_SCALE);
+    const ax = (x._dcx || 0) * TY_ADVECT, ay = (x._dcy || 0) * TY_ADVECT;
+    // 地面相對風 ＝ 風暴相對風 ＋ 風暴移動（右半圈相加、左半圈相減）
+    const tgx = (tanX + radX * vr) * vpx * norm + ax;
+    const tgy = (tanY + radY * vr) * vpx * norm + ay;
+
+    // ── (3) 慣性：氣塊有動量，不會每一幀瞬間換成當地的場 ──
+    //   先前每幀都由位置重算速度、直接套用，等於粒子完全沒有質量 ——
+    //   軌跡因此是一段段折線而不是流線，這是「沒有流體感」的主因。
+    //   改為朝目標速度鬆弛：圈內跟得緊（場的約束強），
+    //   出了七級圈鬆弛係數指數衰減 → 向心約束逐漸消失，
+    //   氣塊靠慣性沿著切線直直飛出去，正是要的行為。
+    if(p.vx == null){ p.vx = tgx; p.vy = tgy; }
+    const kRel = (u <= 1) ? TY_RELAX
+                          : TY_RELAX * Math.exp(-(u - 1) / TY_RELEASE);
+    p.vx += (tgx - p.vx) * kRel;
+    p.vy += (tgy - p.vy) * kRel;
+    const nx = p.x + p.vx, ny = p.y + p.vy;
+
+    // ★ 色階用「物理風速」而不是畫面速度：上面的 TY_VPX_CAP 是為了畫得出來
+    //   而設的顯示上限，若拿受限後的像素速度回推風級，眼牆就會被壓到
+    //   十級上下、不再是全圖最強的顏色 —— 判讀會直接出錯。
+    //   這裡獨立算一次未受限的地面相對風速（m/s）。
+    const mxMs = ax / _u2px, myMs = ay / _u2px;
+    const wsG = Math.hypot((tanX + radX * vr) * norm * ws + mxMs,
+                           (tanY + radY * vr) * norm * ws + myMs);
+    const bfG = _wsToBf(Math.max(2, wsG));
+    p.age++;
+    if(nx < -80 || ny < -80 || nx > _tyCv.width + 80 || ny > _tyCv.height + 80){
+      p.dead = true; return;
+    }
+    if(p.px != null && Math.hypot(nx - p.px, ny - p.py) < 40){
+      const bd = BF_BANDS.find(b=>bfG < b.max) || BF_BANDS[BF_BANDS.length - 1];
+      // 出圈之後逐漸淡出，銜接周邊風場，不要有一圈突然消失的硬邊
+      const fade = (u <= 1) ? 1 : Math.max(0, 1 - (u - 1) / (uMax - 1));
+      // ★ 透明度先前是「愈靠核心愈濃」（0.32+0.38×(1-u)），方向剛好相反 ——
+      //   核心本來就重疊得最凶，再加濃就變成一塊實心色。改為大致均勻，
+      //   強弱交給色階（蒲福風級）表現，這也是 Windy 好讀的原因：
+      //   線條本身不搶戲，強度看顏色。
+      // ★ 密度正規化：拖尾長度固定（約 45 幀），但核心的周長很短、風速又快 ——
+      //   一顆粒子的拖尾可以繞眼牆八圈，疊起來就是一塊實心色（先前的紅色圓餅）。
+      //   算出「這條拖尾會繞幾圈」，用它把透明度除回去，
+      //   視覺密度在各半徑就一致了，核心也才看得出結構而不是一坨。
+      const wrap = (TY_TRAIL_FRAMES * Math.hypot(p.vx, p.vy))
+                 / Math.max(1e-6, 2 * Math.PI * rpx);
+      const a = TY_LINE_A * fade * Math.max(0.08, Math.min(1, 0.9 / Math.max(1e-6, wrap)));
+      ctx.strokeStyle = _hexA(bd.color, a);
+      // 核心反而畫細一點（先前核心 1.4 最粗，等於再加一層濃）
+      ctx.lineWidth = u < 0.35 ? 0.9 : 1.15;
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath(); ctx.moveTo(p.px, p.py); ctx.lineTo(nx, ny); ctx.stroke();
+    }
+    p.px = nx; p.py = ny;
+    p.x = nx; p.y = ny;
+  });
+}
+
+// ★ 每個系統只算一次剖面參數（指數由回報半徑解出，隨颱風強度變化）
+function _tyProf(x){
+  const P = x._P;
+  if(x._prof && x._profWs === P.ws && x._profR15 === P.r15 && x._profR25 === P.r25)
+    return x._prof;
+  const r15 = P.r15;
+  const r25 = (P.r25 && P.r25 > 0 && P.r25 < r15) ? P.r25 : r15 * 0.33;
+  const vmax = Math.max(26, P.ws || 35);          // 至少比十級風大才有核心
+  const rmw  = Math.max(r25 * 0.55, r15 * 0.05);  // 最大風速半徑在十級圈之內
+  const cl = (v, lo, hi)=>Math.max(lo, Math.min(hi, v));
+  // 解指數：vmax·(rmw/r25)^a1 = 25 → a1 = ln(vmax/25) / ln(r25/rmw)
+  const a1 = cl(Math.log(vmax / 25) / Math.log(Math.max(1.05, r25 / rmw)), 0.25, 1.40);
+  const a2 = cl(Math.log(25 / 15)   / Math.log(Math.max(1.05, r15 / r25)), 0.25, 1.40);
+  x._profWs = P.ws; x._profR15 = P.r15; x._profR25 = P.r25;
+  return (x._prof = {r15, r25, vmax, rmw, a1, a2,
+                     u25: r25 / r15, uRmw: rmw / r15});
+}
+// 切向風速（m/s），u = r / r15
+function _tyVt(x, u){
+  const q = _tyProf(x);
+  if(u <= q.uRmw) return Math.max(2, q.vmax * (u / Math.max(1e-6, q.uRmw)));
+  if(u <= q.u25)  return Math.max(2, q.vmax * Math.pow(q.uRmw / u, q.a1));
+  return Math.max(2, 25 * Math.pow(q.u25 / u, q.a2));
+}
+// 內流角（弧度，正＝向內）：核心外圍最強，七級圈歸零，之後轉為外流
+function _tyBeta(x, u){
+  const q = _tyProf(x);
+  const D = Math.PI / 180;
+  if(u <= q.u25) return TY_BETA_IN * D * (u / Math.max(1e-6, q.u25));
+  if(u <= 1){
+    const w = (u - q.u25) / Math.max(1e-6, 1 - q.u25);
+    return TY_BETA_IN * D * (1 - w);              // 到七級圈收斂為純切向
+  }
+  return -Math.min(TY_BETA_OUT, TY_BETA_OUT * (u - 1) / 0.30) * D;
+}
+
+function _tyPartStop(){
+  if(_tyCv){ try{ _tyCv.remove(); }catch(e){} _tyCv = null; }
+  _tyParts = [];
+}
+
+function _tyAnimStart(){
+  if(_tyA || typeof showTyphoon === 'undefined' || !showTyphoon) return;
+  const list = (window.TYPHOON_TRACK || []).map(ty=>({ty, tl: _tyTimeline(ty)}))
+                .filter(x=>x.tl.length >= 2);
+  if(!list.length) return;
+  // 靜態颱風圖層先收起（避免固定位置的暴風圈與移動中的重疊），停止後還原
+  try{ if(typhoonLayer){ map.removeLayer(typhoonLayer); typhoonLayer = null; } }catch(e){}
+  const layer = L.layerGroup().addTo(map);
+  list.forEach(x=>{
+    // 路徑底線（淡）
+    L.polyline(x.tl.map(p=>[p.lat, p.lng]), {pane:'townPane', color:'#ffffff',
+      weight:1.2, opacity:0.45, dashArray:'4 4', interactive:false}).addTo(layer);
+    // ★ 暴風圈：底色用實心圓、轉動的「虛線」改為自己畫的弧段。
+    //   Leaflet 的 Canvas 渲染器只支援 setLineDash、完全不處理 dashOffset，
+    //   所以先前用 dashOffset 做旋轉永遠不會動（使用者回報的正是這點）。
+    x.f15 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#f5a623', weight:BORDER_W,
+      opacity:0.35, fillColor:'#f5a623', fillOpacity:0.07, interactive:false}).addTo(layer);
+    x.f25 = L.circle([0, 0], {pane:'townPane', radius:1, color:'#e8453c', weight:BORDER_W,
+      opacity:0.4, fill:false, interactive:false}).addTo(layer);
+    // ★ 轉動的暴風圈弧段也跟著收細（原 2.4/2.8），與縣市界同一個基準；
+    //   略加粗一點點是因為它在轉、要看得出來，但不再是畫面最粗的線。
+    x.a15 = Array.from({length: 10}, ()=>L.polyline([[0,0]], {pane:'townPane',
+      color:'#f5a623', weight:BORDER_W*1.5, opacity:0.95, interactive:false}).addTo(layer));
+    x.a25 = Array.from({length: 8}, ()=>L.polyline([[0,0]], {pane:'townPane',
+      color:'#e8453c', weight:BORDER_W*1.75, opacity:1, interactive:false}).addTo(layer));
+    x.arms = [];      // 螺旋臂已改為暴風圈內的粒子流（見 _tyPartStep）
+    x.eye = L.circleMarker([0, 0], {pane:'townPane', radius:6, color:'#000', weight:2,
+      fillColor:'#ff2d2d', fillOpacity:1, interactive:false}).addTo(layer);
+  });
+  // 各鄉鎮邊界取樣點（判斷暴風圈是否觸及用，不只看中心點）
+  const towns = [];
+  if(townLayer) townLayer.eachLayer(poly=>{
+    const t = poly._tw; if(!t) return;
+    const flat = [];
+    const walk = a=>{ if(!a) return; if(a.lat != null) flat.push(a); else a.forEach(walk); };
+    walk(poly.getLatLngs());
+    const step = Math.max(1, Math.floor(flat.length / 40));
+    towns.push({t, poly, pts: flat.filter((_, k)=>k % step === 0),
+                key: (t.county || '') + (t.township || '')});
+  });
+  _tyPartInit();
+  _tyA = {list, layer, towns, hitLayer: L.layerGroup().addTo(map),
+          prevH: null, curH: null, t0: 0, dur: 100, raf: null, hit: new Set(), first: {}};
+  _tyA.raf = requestAnimationFrame(_tyAnimLoop);
+}
+function _tyAnimSetHour(h){
+  if(!_tyA) _tyAnimStart();
+  if(!_tyA) return;
+  const fps = parseInt((document.getElementById('anim-fps') || {}).value) || 12;
+  _tyA.prevH = (_tyA.curH == null) ? h : _tyA.curH;
+  _tyA.curH = h;
+  _tyA.t0 = performance.now();
+  _tyA.dur = 1000 / fps;
+  // 觸及判定以「本幀時刻」為準
+  const ms = Date.now() + h * 3600e3;
+  const hit = new Set();
+  _tyA.list.forEach(x=>{
+    const P = _tyAt(x.tl, ms);
+    if(!P || !P.r15) return;
+    _tyA.towns.forEach(tw=>{
+      if(tw.pts.some(q=>_kmBetween(P.lat, P.lng, q.lat, q.lng) <= P.r15)){
+        hit.add(tw.key);
+        if(!_tyA.first[tw.key]) _tyA.first[tw.key] = ms;
+      }
+    });
+  });
+  const changed = hit.size !== _tyA.hit.size || [...hit].some(k=>!_tyA.hit.has(k));
+  _tyA.hit = hit;
+  if(changed) _tyRebuildHits();
+}
+function _tyRebuildHits(){
+  if(!_tyA) return;
+  _tyA.hitLayer.clearLayers();
+  _tyA.towns.forEach(tw=>{
+    if(!_tyA.hit.has(tw.key)) return;
+    const d = new Date(_tyA.first[tw.key]);
+    L.polygon(tw.poly.getLatLngs(), {pane:'townPane', color:'#ff3030', weight:3,
+      fill:false, opacity:1})
+      .bindTooltip(`<b>${tw.t.county}${tw.t.township}</b><br>七級風暴風圈首次觸及：`
+        + `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:`
+        + `${String(d.getMinutes()).padStart(2,'0')}`, {sticky:true})
+      .addTo(_tyA.hitLayer);
+  });
+}
+function _tyAnimLoop(){
+  if(!_tyA) return;
+  const now = performance.now();
+  if(_tyA.curH != null){
+    const k = Math.min(1, (now - _tyA.t0) / (_tyA.dur || 1));
+    _tyDrawAt(_tyA.prevH + (_tyA.curH - _tyA.prevH) * k, now);   // 兩幀之間平滑推進
+  }
+  if(!window._animManual) _tyA.raf = requestAnimationFrame(_tyAnimLoop);
+}
+// 在指定時刻（距現在 h 小時）繪製颱風與閃爍；錄影時由外部逐格呼叫
+function _tyDrawAt(h, now){
+  if(!_tyA) return;
+  {
+    const ms = Date.now() + h * 3600e3;
+    _tyA.list.forEach(x=>{
+      const P = _tyAt(x.tl, ms);
+      const on = !!P;
+      x.arms.forEach(a=>a.setStyle({opacity: on ? 0.45 : 0}));
+      [...x.a15, ...x.a25].forEach(l=>l.setStyle({opacity: on ? 1 : 0}));
+      [x.f15, x.f25, x.eye].forEach(l=>l.setStyle({opacity: on ? (l === x.eye ? 1 : 0.38) : 0,
+        fillOpacity: on ? (l === x.eye ? 1 : (l === x.f15 ? 0.07 : 0)) : 0}));
+      x._P = P;
+      if(!P) return;
+      x.eye.setLatLng([P.lat, P.lng]);
+      x.f15.setLatLng([P.lat, P.lng]).setRadius((P.r15 || 0) * 1000);
+      x.f25.setLatLng([P.lat, P.lng]).setRadius((P.r25 || 0) * 1000);
+      if(!P.r25) x.f25.setStyle({opacity: 0, fillOpacity: 0});
+      // ★ 弧段逆時針轉動：內圈（十級風）快、外圈（七級風）慢
+      const kmLat0 = 111.32, kmLng0 = 111.32 * Math.cos(P.lat * Math.PI / 180) || 1;
+      const drawArcs = (arcs, rkm, periodSec)=>{
+        if(!rkm){ arcs.forEach(a=>a.setStyle({opacity: 0})); return; }
+        const n = arcs.length;
+        const gap = 2 * Math.PI / n;            // 每段佔的角度
+        const span = gap * 0.62;                 // 實際畫出的比例（其餘留白＝虛線感）
+        const base = -(now / 1000) * (2 * Math.PI / periodSec);   // 負號＝逆時針
+        arcs.forEach((arc, ai)=>{
+          const a0 = base + ai * gap;
+          // ★ 取樣密度：每段 ≤0.02 弧度（整圈約 314 點），
+          //   先前每段只取 6 點，整圈等於 60 邊形，肉眼看得出稜角。
+          const nseg = Math.max(12, Math.ceil(span / (2 * Math.PI / 1080)));   // 整圈 1080 邊
+          const pts = [];
+          for(let k = 0; k <= nseg; k++){
+            const th = a0 + span * (k / nseg);
+            pts.push([P.lat + rkm * Math.cos(th) / kmLat0,
+                      P.lng + rkm * Math.sin(th) / kmLng0]);
+          }
+          arc.setLatLngs(pts);
+          arc.setStyle({opacity: arcs === x.a25 ? 1 : 0.95});
+        });
+      };
+      drawArcs(x.a25, P.r25 || 0, 3.0);         // 十級風：3 秒一圈
+      drawArcs(x.a15, P.r15 || 0, 9.0);         // 七級風：9 秒一圈
+      // 暴風圈內的風流由 _tyPartStep 繪製（獨立畫布，可做長拖尾）
+    });
+    // 觸及鄉鎮閃爍（週期約 0.8 秒）
+    const op = 0.25 + 0.75 * Math.abs(Math.sin(now / 800 * Math.PI));
+    _tyA.hitLayer.eachLayer(l=>l.setStyle({opacity: op}));
+    try{ _tyPartStep(_tyA.list); }catch(e){}
+    try{ _tyA.layer.eachLayer(l=>l.bringToFront && l.bringToFront());
+         _tyA.hitLayer.eachLayer(l=>l.bringToFront && l.bringToFront()); }catch(e){}
+  }
+}
+function _tyAnimStop(){
+  if(!_tyA) return;
+  if(_tyA.raf) cancelAnimationFrame(_tyA.raf);
+  const hits = Object.keys(_tyA.first);
+  if(hits.length){
+    console.log('暴風圈首次觸及：' + hits.sort((a, b)=>_tyA.first[a] - _tyA.first[b]).map(k=>{
+      const d = new Date(_tyA.first[k]);
+      return `${k} ${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}時`;
+    }).join('、'));
+  }
+  try{ map.removeLayer(_tyA.layer); map.removeLayer(_tyA.hitLayer); }catch(e){}
+  _tyPartStop();
+  _tyA = null;
+  try{ renderTyphoonLayer(); }catch(e){}
+}
+
 function _animApply(i){
   if(!_animFrames.length) return;
   const h = _animFrames[i];
   _hourIdx = h;
-  try{ renderLayer(); }catch(e){}
+  // 播放中只改顏色；渲染模式（色帶內插）仍需整張重算
+  if(typeof _blurOn !== 'undefined' && _blurOn){ try{ renderLayer(); }catch(e){} }
+  else { try{ _animPaint(); }catch(e){ try{ renderLayer(); }catch(e2){} } }
+  try{ _tyAnimSetHour(h); }catch(e){}
   // ★ 不要每幀 _wfStart()：那會重建整個風場、粒子全部重置，
   //   錄下來就是一格一格的靜止（使用者回報「有些秒數完全不會動」）。
   //   改為只更新節點的風向風速，粒子繼續沿著自己的軌跡流動。
@@ -6165,14 +7308,53 @@ function _animApply(i){
 //   用既有的 html2canvas（已載入），不另外引入編碼函式庫 ——
 //   改以 WebM 錄製（瀏覽器原生 MediaRecorder），檔案更小、畫質更好，
 //   且不需要額外的 GIF 編碼器。若瀏覽器不支援才退回逐幀 PNG 下載。
+// ★ 背景分頁的計時器節流：瀏覽器會把隱藏分頁的 setTimeout 壓到每秒一次
+//   （閒置 5 分鐘後更降到每分鐘一次），錄製因此停住。
+//   Worker 裡的計時器不受這個限制，所以改由 Worker 發拍子給主執行緒。
+//   另外播放一段無聲音訊：瀏覽器會把「正在播放聲音」的分頁視為活躍，
+//   進一步避免被降頻。兩者都失敗時才退回一般的 setTimeout。
+let _bgTicker = null, _bgSilent = null;
+function _bgStart(){
+  try{
+    const src = 'onmessage=e=>{const t=e.data;setTimeout(()=>postMessage(1),t);}';
+    _bgTicker = new Worker(URL.createObjectURL(new Blob([src], {type:'text/javascript'})));
+  }catch(e){ _bgTicker = null; }
+  try{
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if(AC){
+      const ac = new AC();
+      const g = ac.createGain(); g.gain.value = 0.0001;
+      const o = ac.createOscillator(); o.frequency.value = 20;
+      o.connect(g); g.connect(ac.destination); o.start();
+      _bgSilent = {ac, o};
+    }
+  }catch(e){ _bgSilent = null; }
+}
+function _bgStop(){
+  try{ if(_bgTicker) _bgTicker.terminate(); }catch(e){}
+  _bgTicker = null;
+  try{ if(_bgSilent){ _bgSilent.o.stop(); _bgSilent.ac.close(); } }catch(e){}
+  _bgSilent = null;
+}
+// 不被節流的等待
+function _bgWait(ms){
+  if(!_bgTicker) return new Promise(rs => setTimeout(rs, ms));
+  return new Promise(rs =>{
+    const h = ()=>{ _bgTicker.removeEventListener('message', h); rs(); };
+    _bgTicker.addEventListener('message', h);
+    _bgTicker.postMessage(ms);
+  });
+}
+
 async function exportAnim(){
-  if(!_animFrames.length) _animRebuild();
+  _animRebuild();          // 依當下設定重建，不沿用上次下載的範圍
   if(!_animFrames.length){ alert('請先設定自訂時間範圍'); return; }
   const mp = document.getElementById('map');
   if(!mp) return;
   const btn = document.getElementById('bAnimExport');
   const setTxt = t => { if(btn) btn.textContent = t; };
   const saved = _hourIdx;
+  let _savedTerrain = null;      // finally 要還原，必須宣告在 try 之外
   // ★ 固定取景（與截圖同一套）：臺灣置中、外延到海警線附近。
   //   先前直接錄螢幕上的地圖，尺寸隨視窗變動，也會錄到使用者當下的
   //   縮放與平移，每次結果都不一樣。
@@ -6192,7 +7374,8 @@ async function exportAnim(){
     map.options.zoomSnap = 0;
     map.invalidateSize({animate: false});
     map.fitBounds(L.latLngBounds(B2), {animate: false, padding: [0, 0]});
-    await new Promise(rs => setTimeout(rs, 300));
+    _bgStart();
+    await _bgWait(300);
     const cv = document.createElement('canvas');
     cv.width = SNAP_W2; cv.height = SNAP_H2;
     const ctx = cv.getContext('2d');
@@ -6201,46 +7384,113 @@ async function exportAnim(){
       return;
     }
     const fps = parseInt((document.getElementById('anim-fps') || {}).value) || 12;
-    const stream = cv.captureStream(fps);
+    // 手動送格：每畫好一張才 requestFrame，時間由 pause/resume 控制
+    const stream = cv.captureStream(0);
     const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
       ? 'video/webm;codecs=vp9' : 'video/webm';
-    const rec = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: 6e6});
+    const rec = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: 8e6});
     const chunks = [];
     rec.ondataavailable = e => { if(e.data && e.data.size) chunks.push(e.data); };
     const done = new Promise(res => { rec.onstop = res; });
+
+    // ★ 逐格決定性錄製（使用者指出影片比網頁差很多）：
+    //   原本每格截圖要 0.2~0.5 秒，而錄影機照真實時間走 ——
+    //   漸層早就播完、粒子已跑掉十幾步、截圖慢的那格在影片裡停特別久。
+    //   改法：截圖期間讓錄影機暫停（暫停時間不計入影片），
+    //   並把漸層、颱風、風場粒子都改為「由程式推到這一格該有的狀態」，
+    //   不跟真實時間跑。每一格在影片中佔用完全相同的時間。
+    window._animManual = true;              // 三種動畫改為手動推進
+    window._wfManual = true;
+    try{ if(typeof _wfTimer !== 'undefined' && _wfTimer) cancelAnimationFrame(_wfTimer); }catch(e){}
+    try{ if(_tyA && _tyA.raf) cancelAnimationFrame(_tyA.raf); }catch(e){}
+    const VF = 24;                           // 影片幀率
+    const SUB = Math.max(1, Math.round(VF / fps));   // 每個資料格切成幾張影片幀
+    const WF_STEPS = 2;                      // 每張影片幀推進幾步粒子
+    const total = _animFrames.length * SUB;
+    let vf = 0;
+    // ★ html2canvas 不支援 mix-blend-mode：地形的陰影層（色彩增值）
+    //   會被當成一般疊圖直接蓋上去，整張圖被洗淡 ——
+    //   這就是「網頁顏色正常、下載的影片偏淡」的原因。
+    //   錄製期間把它排除，色塊顏色才與網頁一致；
+    //   底下那層地形（在色塊之下）不受影響，立體感仍在。
+    const shot = async ()=>await html2canvas(mp, {
+      backgroundColor: '#ffffff', scale: 1, useCORS: true, logging: false,
+      ignoreElements: n => n.classList && (
+        n.classList.contains('leaflet-control') ||
+        n.classList.contains('leaflet-control-attribution') ||
+        n.classList.contains('terrain-relief-top') ||
+        (n.style && n.style.mixBlendMode === 'multiply'))
+    });
+    // ★ 只收起「色彩增值」的陰影層（html2canvas 不支援混合模式，會洗淡畫面），
+    //   底下那層地形保留 —— 先前整個關掉 _terrainOn，動畫裡就完全沒有地形了。
+    _savedTerrain = _terrainTop;
+    try{ if(_terrainTop){ map.removeLayer(_terrainTop); } }catch(e){}
+    try{ _animPaintReset(); renderLayer(); _forceFullRedraw(); }catch(e){}
     rec.start();
+    rec.pause();                             // 先暫停，畫好一格才放行
     for(let i = 0; i < _animFrames.length; i++){
-      setTxt(`錄製 ${i+1}/${_animFrames.length}`);
-      _animApply(i);
-      await new Promise(rs => requestAnimationFrame(()=>requestAnimationFrame(rs)));
-      const shot = await html2canvas(mp, {
-        backgroundColor: '#ffffff', scale: 1, useCORS: true, logging: false,
-        ignoreElements: n => n.classList && (
-          n.classList.contains('leaflet-control') ||
-          n.classList.contains('leaflet-control-attribution'))
-      });
-      // ★ html2canvas 會依 devicePixelRatio 回傳較大的畫布，
-      //   直接 drawImage(shot,0,0,w,h) 會把「原尺寸的左上角一塊」
-      //   塞進目標，於是影片只看得到一小塊範圍。
-      //   明確指定來源矩形為 shot 的完整尺寸。
-      ctx.clearRect(0, 0, cv.width, cv.height);
-      ctx.drawImage(shot, 0, 0, shot.width, shot.height,
-                          0, 0, cv.width, cv.height);
-      // 時間戳記（影片沒有旁邊的面板可看）
-      const h = _animFrames[i];
-      const d = new Date(Date.now() + h * 3600e3);
-      const exact = Math.abs(h - Math.round(h)) < 1e-6;
-      ctx.fillStyle = 'rgba(4,12,20,0.75)';
-      ctx.fillRect(8, 8, exact ? 150 : 210, 24);
-      ctx.fillStyle = '#cfe4f5'; ctx.font = '14px sans-serif';
-      ctx.fillText(`${d.getMonth()+1}/${d.getDate()} `
-        + `${String(d.getHours()).padStart(2,'0')}:`
-        + `${String(d.getMinutes()).padStart(2,'0')}`
-        + (exact ? '' : '　⚡ 內插顯示'), 14, 25);
-      // ★ 讓風場粒子在兩幀之間實際推進若干步，錄下來才是連續流動。
-      //   html2canvas 擷取的是當下狀態，不等粒子自己跑。
-      await new Promise(rs => setTimeout(rs, Math.max(60, 1000 / fps)));
+      _animApply(i);                         // 設定本格資料（顏色目標、颱風時刻、觸及判定）
+      const h0 = (i > 0) ? _animFrames[i-1] : _animFrames[i];
+      const h1 = _animFrames[i];
+      for(let sdx = 1; sdx <= SUB; sdx++){
+        const frac = sdx / SUB;
+        setTxt(`錄製 ${++vf}/${total}`);
+        // ★ 背景錄製診斷：記錄每一步的實際耗時，切到別的分頁後
+        //   從 console 就能看出是哪一段被瀏覽器擋住（拍子／截圖／送格）。
+        const _t0 = performance.now();
+        try{ _animPaintFrac(frac); }catch(e){}
+        try{ _forceFullRedraw(); }catch(e){}   // 立即整張重畫，不等 rAF                  // 顏色漸層推到本子格
+        try{ _tyDrawAt(h0 + (h1 - h0) * frac, performance.now()); }catch(e){}
+        try{ for(let k = 0; k < WF_STEPS; k++) window._wfStep && window._wfStep(); }catch(e){}
+        // ★ 背景分頁會把 requestAnimationFrame 節流到幾乎停擺，
+        //   錄製因此中斷或卡住。改用 setTimeout，切到其他分頁也能跑完。
+        await _bgWait(16);
+        const img = await shot();
+        ctx.clearRect(0, 0, cv.width, cv.height);
+        ctx.drawImage(img, 0, 0, img.width, img.height, 0, 0, cv.width, cv.height);
+        // ★ 自行合成地形陰影（使用者反映動畫的地形是舊版的）：
+        //   html2canvas 不支援 mix-blend-mode，所以先排除那一層，
+        //   再由我們用 multiply 畫上去 —— 與網頁看到的完全一致。
+        if(_terrainOn && _terrainImg && _terrainImg.complete){
+          try{
+            const bb = TERRAIN_RELIEF.bounds;
+            const p1 = map.latLngToContainerPoint([bb[1][0], bb[0][1]]);   // 左上
+            const p2 = map.latLngToContainerPoint([bb[0][0], bb[1][1]]);   // 右下
+            ctx.save();
+            ctx.globalCompositeOperation = 'multiply';
+            ctx.globalAlpha = 0.55;
+            ctx.drawImage(_terrainImg, p1.x, p1.y, p2.x - p1.x, p2.y - p1.y);
+            ctx.restore();
+          }catch(e){}
+        }
+        // 時間戳記（影片沒有旁邊的面板可看）
+        const hh = h0 + (h1 - h0) * frac;
+        const d = new Date(Date.now() + hh * 3600e3);
+        const exact = Math.abs(hh - Math.round(hh)) < 1e-6;
+        ctx.fillStyle = 'rgba(4,12,20,0.75)';
+        ctx.fillRect(8, 8, exact ? 150 : 210, 24);
+        ctx.fillStyle = '#cfe4f5'; ctx.font = '14px sans-serif';
+        ctx.fillText(`${d.getMonth()+1}/${d.getDate()} `
+          + `${String(d.getHours()).padStart(2,'0')}:`
+          + `${String(d.getMinutes()).padStart(2,'0')}`
+          + (exact ? '' : '　⚡ 內插顯示'), 14, 25);
+        // 放行這一格：恰好佔用 1/VF 秒的影片時間，然後再暫停去截下一張
+        const _t1 = performance.now();
+        rec.resume();
+        const _vt = stream.getVideoTracks()[0];
+        if(_vt.requestFrame) _vt.requestFrame();
+        else if(_vt.requestFrame === undefined && cv.captureStream) { /* 舊版瀏覽器：靠 fps 自動取樣 */ }
+        await _bgWait(1000 / VF);
+        rec.pause();
+        if(vf <= 3 || vf % 25 === 0){
+          console.log(`錄製第 ${vf} 格：截圖 ${(_t1-_t0).toFixed(0)}ms、`
+            + `送格 ${(performance.now()-_t1).toFixed(0)}ms（目標 ${(1000/VF).toFixed(0)}ms）、`
+            + `分頁${document.hidden ? '在背景' : '在前景'}、`
+            + `已收到 ${chunks.length} 段資料`);
+        }
+      }
     }
+    rec.resume();
     rec.stop();
     await done;
     const blob = new Blob(chunks, {type: 'video/webm'});
@@ -6254,6 +7504,14 @@ async function exportAnim(){
     alert('匯出失敗：' + (e && e.message ? e.message : e));
   }finally{
     setTxt('⬇ 影片');
+    try{ if(_savedTerrain && _terrainOn){ _savedTerrain.addTo(map); _terrainTop = _savedTerrain; } }catch(e){}
+    _bgStop();
+    window._animManual = false;
+    window._wfManual = false;
+    try{ if(window._wfStep) window._wfStep(); }catch(e){}   // 恢復自動迴圈
+    try{ if(_tyA && !_tyA.raf) _tyA.raf = requestAnimationFrame(_tyAnimLoop); }catch(e){}
+    try{ _tyAnimStop(); }catch(e){}
+    try{ _animPaintReset(); }catch(e){}
     _hourIdx = saved;
     // 還原取景（尺寸、縮放吸附、原本的視野）
     try{
@@ -6262,6 +7520,8 @@ async function exportAnim(){
       map.options.zoomSnap = prevView.snap;
       map.invalidateSize({animate: false});
       map.setView(prevView.center, prevView.zoom, {animate: false});
+      _forceFullRedraw();
+      try{ _afterMapResize(); }catch(e){}
     }catch(e){}
     try{ renderLayer(); _syncTimeBar(); }catch(e){}
   }
@@ -6276,13 +7536,15 @@ function toggleAnim(){
   }
   if(!_animOn){
     if(_animTimer){ clearTimeout(_animTimer); _animTimer = null; }
+    try{ _tyAnimStop(); }catch(e){}
+    try{ _animPaintReset(); }catch(e){}
     // 還原播放前的時刻，避免使用者以為資料被改了
     if(_animSavedHour != null){ _hourIdx = _animSavedHour; _animSavedHour = null; }
     try{ renderLayer(); _syncTimeBar(); }catch(e){}
     return;
   }
   _animSavedHour = _hourIdx;
-  if(!_animFrames.length) _animRebuild();
+  _animRebuild();          // 每次播放都依當下設定重建
   const fps = parseInt((document.getElementById('anim-fps') || {}).value) || 12;
   const tick = ()=>{
     if(!_animOn) return;
@@ -6661,6 +7923,24 @@ function getObsEtr(t){
 // ★ 陸地一律不透明（使用者指定）：各圖層先前用 0.78／0.25／0.12／0.05，
 //   深色海底會透上來，陸地看起來深淺不一、發灰發黃。
 //   無資料時用純白 1.0，有值時 0.96（留一點讓地形隱約可見）。
+// ★★ 陸地偏灰、地形起伏不明顯、色階與圖例對不上 —— 三個現象同一個成因：
+//   立體感被「算了兩次」。開啟地形時，色塊被降到 0.80、無資料區降到 0.45、
+//   內插渲染層降到 0.72，好讓底下（terrainPane 392）的灰階暈渲透上來；
+//   但色塊之上（terrainTopPane 397）本來就還有一層色彩增值的陰影。
+//   結果是：顏色被灰色底稀釋 → 整片偏灰、色階與圖例對不上；
+//   而山脊谷地的明暗被上下兩層互相抵銷 → 起伏反而更不明顯。
+//   正解就是程式碼自己的註解寫的那句「色塊本身的色相不會被洗淡」：
+//   色塊一律不透明，立體感全部交給上方那層色彩增值，並把它調強一點。
+// ★ 全系統界線寬度基準（使用者指定 0.8px）：縣市界與颱風暴風圈共用，
+//   改一處即可，不會再出現「改了縣市界忘了暴風圈」的情況。
+//   1.0 → 0.8 → 0.6（使用者兩次指定）。
+const BORDER_W = 0.6;
+const TERR_FILL_OP   = 1.0;   // 有資料的色塊：不再被灰階底稀釋
+const TERR_NODATA_OP = 1.0;   // 無資料（含 <5mm 的白）：純白，起伏由上層陰影表現
+const TERR_TOP_OP    = 0.86;  // 上方色彩增值陰影（原 0.55）。實測掃描 0.55~0.95：
+//   0.86 時本島的起伏對比（亮度標準差）30.7 > 修正前的 29.1，
+//   同時平均亮度 233.9 > 226.9、純白區 56.8% > 42.5% ——
+//   也就是「更不灰、更亮、起伏還更清楚」三者同時成立。
 function _townFill(t, isSel){
   // 渲染模式下本島由內插色帶層顯示，polygon 僅留 hover 熱區；
   // 金馬在內插範圍外，維持原色塊。
@@ -6680,7 +7960,7 @@ function _townFill(t, isSel){
         if(v!=null && (band===null || v>band)) band = v;
       }
       const col = cwaBandColor(band);
-      if(col){ fillColor=col; fillOp=isSel?1:1.0; }
+      if(col){ fillColor=col; fillOp=isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0); }
       else   { fillColor='#FFFFFF'; fillOp=1.0; }   // 無CWA色塊＝白
     } else {
     const acc = getAccum(t);
@@ -6689,47 +7969,47 @@ function _townFill(t, isSel){
       // 雷達1h：用雨量色階，無回波(null)＝白
       // ★ 深色海底時陸地仍須純白（不可被下方深色海透出而變灰）
     fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain);
-      fillOp    = (totalRain==null) ? 1.0 : (isSel?1:1.0);
+      fillOp    = (totalRain==null) ? (_terrainOn ? TERR_NODATA_OP : 1.0) : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     } else if(acc.isWarn){
       // ★ 各 mode 分支必須排在「totalRain === null」之前。
       //   否則警特報未達標(0/null)、浪高內陸(null) 會先被通用的 null 分支
       //   攔成白色，永遠走不到自己的著色邏輯 —— 實測即為「警特報不顯示、
       //   浪高看起來沒有資料」的原因。
       fillColor = warnMapColor(totalRain || 0);
-      fillOp    = (totalRain||0)>0 ? (isSel?1:1.0) : 1.0;
+      fillOp    = (totalRain||0)>0 ? (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0)) : (_terrainOn ? TERR_NODATA_OP : 1.0);
     } else if(acc.isTemp){
       // 氣溫：無資料留白（不可視為 0°C）
       fillColor = _tempColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:1.0);
+      fillOp    = (totalRain == null) ? (_terrainOn ? TERR_NODATA_OP : 1.0) : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     } else if(acc.isWave){
       // 浪高：內陸無值 → 極淡灰（明確表示「非沿海」而非「浪高 0」）
       // ★ 內陸無浪高資料時用純白，不可用淺灰（深色海底會顯得髒）
       fillColor = _waveColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:1.0);
+      fillOp    = (totalRain == null) ? (_terrainOn ? TERR_NODATA_OP : 1.0) : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     } else if(acc.isWind){
       // 風力預測：蒲福風級色階（<4白/4-7綠/7-10黃/10-13紅/>=13紫）
       fillColor = _bfColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:1.0);
+      fillOp    = (totalRain == null) ? (_terrainOn ? TERR_NODATA_OP : 1.0) : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     } else if(totalRain === null || totalRain === undefined){
       // 無資料：顯示淡灰色，保留視覺邊界（不設為0.0，否則鄉鎮消失）
       fillColor='#FFFFFF'; fillOp=1.0;
     } else if(acc.isRisk){
       fillColor = riskColor(totalRain);
-      fillOp    = isSel?1:1.0;
+      fillOp    = isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0);
     } else if(acc.isEtrMode){
       // ETR2%模式：用 etrColor 對應現況 etr2_pct
       fillColor = totalRain===null ? '#FFFFFF' : etrColor(totalRain);
-      fillOp    = totalRain===null ? 1.0 : (isSel?1:1.0);
+      fillOp    = totalRain===null ? 1.0 : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     // ★ isHourly 排在各專屬圖層之後、通用分支之前：逐時視窗下氣溫／
   //   浪高／風力／風險也會帶 isHourly，若先判斷就會被套上時雨量
   //   色階 —— 這正是「風險指標出現藍色」的原因。
   } else if(acc.isHourly){
       // ★ 逐時視窗用時雨量色階（非累積雨量色階）
       fillColor = _hourlyColor(totalRain) || '#FFFFFF';
-      fillOp    = (totalRain == null) ? 1.0 : (isSel?1:1.0);
+      fillOp    = (totalRain == null) ? (_terrainOn ? TERR_NODATA_OP : 1.0) : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     } else {
       fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#FFFFFF':etrColor(etrPct));
-      fillOp    = isSel?1:1.0;
+      fillOp    = isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0);
     }
     }
   }
@@ -6778,7 +8058,9 @@ function renderLayer(){
       // 深灰但不過重：#2a2a2a 太黑會蓋過色塊，改中灰並降低不透明度
       // ★ 鄉鎮界在深色海底時與白底地圖完全一致（使用者指定）——
     //   先前改成純黑又加粗，深色底上反而過於搶眼、地圖變糊。
-    color: isSel ? '#ffff44' : (_terrainOn ? '#3a3a3a' : '#5a5a5a'),
+    // ★ 顏色再調淺（使用者指定）：#3a3a3a/#5a5a5a → #8e8e8e/#a2a2a2，
+    //   界線仍分得出鄉鎮，但不再與縣市界搶視覺重量
+    color: isSel ? '#ffff44' : (_terrainOn ? '#8e8e8e' : '#a2a2a2'),
       // ★ 渲染模式下仍畫鄉鎮界（先前 weight 0 等於整個消失）；
       //   界線是判讀行政責任範圍的依據，不該因為換呈現方式就不見。
       weight: isSel ? 1.6
@@ -6789,7 +8071,9 @@ function renderLayer(){
       // 地形疊圖開啟時降低填色不透明度，讓下層暈渲透出來
       // ★ 地形疊圖時的可讀性：只降低不透明度會讓色塊被灰階地形沖淡、
       //   顏色難以辨識。改為「小幅降低 + 加深邊框」，保留色相與飽和度。
-      fillOpacity: _hideFill ? 0.02 : (_terrainOn ? fillOp * 0.82 : fillOp),
+      // ★ 這裡還有一個 0.82：上一輪把 TERR_FILL_OP 調回 1.0，卻漏了這個
+      //   乘數，色塊實際仍只有 0.82 —— 陸地偏灰的最後一塊拼圖。
+      fillOpacity: _hideFill ? 0.02 : fillOp,
       smoothFactor: 0  // 停用Leaflet的路徑平滑，避免縮放時端點偏移
     };
     // 使用快取的座標（見 llOf 說明）
@@ -6894,6 +8178,7 @@ function renderLayer(){
         selected=t; renderLayer(); updateInfo(t);
       });
     }
+    poly._tw = t;                 // 動畫改色用：直接對到鄉鎮，不必重建圖層
     poly.addTo(townLayer);
   });
   townLayer.addTo(map);
@@ -6904,7 +8189,8 @@ function renderLayer(){
     // ★ 深色海底時縣市界改金黃並加粗，否則深底上的黑線看不見
     const _ds = (typeof _darkSea !== 'undefined' && _darkSea);
     const opts={color: _ds ? '#f0c040' : '#000000',
-                weight: 1, fill:false,   // ★ 統一 1.0px（使用者指定）
+                // ★ 統一 BORDER_W（使用者指定）：白底與深色底一致
+                weight: BORDER_W, fill:false,
                 opacity: _ds ? 0.95 : 0.7, interactive:false};
     const _c = llOf(feat);                 // 座標快取（同鄉鎮層）
     if(_c.type === 'Polygon'){
@@ -7815,6 +9101,16 @@ function drawSegs(t){
   }).join('');
 }
 
+// ★ 漸層式圖例（使用者提議）：地圖在動畫時用的是級距內由淺到深的連續色，
+//   圖例若只給單一色塊，兩者就對不起來。改成每一格畫出該級距內的漸層，
+//   與 _rampColor 用的是同一條公式（1.14 → 0.86 的明暗係數）。
+function _legendSwatch(scale, i){
+  const c = _hexRgb(scale[i].color);
+  if(!c) return scale[i].color;
+  const shade = k => _rgbHex(c.map(v=>Math.round(Math.max(0, Math.min(255, v * k)))));
+  return `linear-gradient(to right, ${shade(1.14)}, ${shade(0.86)})`;
+}
+
 function renderLegend(){
   const isFuture6h = false;  // fut6 已改回累積雨量色階
   // 風力預測：以蒲福風級色階呈現（與 BF_BANDS 同一組定義，避免兩處分歧）
@@ -7881,7 +9177,7 @@ function renderLegend(){
     cbTitle.textContent = titleText;
     cbItems.innerHTML = sc.map((s,i)=>`
       <div style="display:flex;align-items:center;gap:5px;margin:2px 0">
-        <div style="width:14px;height:10px;border-radius:1px;background:${s.color};
+        <div style="width:14px;height:10px;border-radius:1px;background:${_legendSwatch(sc,i)};
           border:1px solid rgba(0,0,0,.25);flex-shrink:0"></div>
         <span style="color:#111;font-size:10px;font-weight:600">${rangeLabel(sc,i)}</span>
       </div>`).join('');
@@ -8190,6 +9486,9 @@ async function tryLoadLive(){
       try{ if(typeof renderVerify === 'function') renderVerify(); }catch(e){}
       try{ renderLayer(); }catch(e){}
       try{ updateInfo(selected || null); }catch(e){}
+      // 預設圖層只在首次載入時開啟（之後的自動更新不覆寫使用者的選擇）
+      if(!window._defaultsDone){ window._defaultsDone = true;
+        try{ _openDefaultLayers(); }catch(e){} }
       // ★ 雷達發布時間由並行區塊中的 radar.json 設定，必須等它到齊才顯示，
       //   否則會固定顯示「本次無資料」。
       try{
@@ -8424,6 +9723,7 @@ function setWin(key){
   //   直接沿用 _refreshAfterFactorChange（它已涵蓋全部面板與圖層，且有 _safeCall
   //   逐一報錯），避免這裡再維護一份會漏掉的清單。
   hideNoData();
+  try{ _animInvalidate(); }catch(e){}   // 換視窗 → 幀序列重來
   _refreshAfterFactorChange();
   // ★ 風場隨時間視窗更新（風向會變，粒子場必須重建）
   try{ if(_windFieldOn) _wfStart(); }catch(e){}
@@ -8462,6 +9762,7 @@ function setCustStep(v){
 }
 
 function onSlider(){
+  try{ _animInvalidate(); }catch(e){}   // 自訂範圍一動，動畫幀序列重來
   buildSliderTicks();
   let s=parseInt(document.getElementById('slS').value);
   let e=parseInt(document.getElementById('slE').value);
@@ -8740,6 +10041,7 @@ function stepWin(delta){
       el.value = Math.max(parseInt(el.min), Math.min(parseInt(el.max), v));
     });
     if(typeof onSlider === 'function') onSlider();
+    try{ _animInvalidate(); }catch(e){}
     return;
   }
   const m6 = winKey.match(/^fut6_(\d+)$/);
@@ -9073,27 +10375,64 @@ function updateDistrictSummary(){
     const towns = TOWNSHIPS.filter(t=>counties.includes(t.county));
     let maxRain=-1, maxRainT=null, maxEtr=-1, maxEtrT=null,
         maxRisk=-1, maxRiskT=null, maxWarn=0, maxWarnT=null;
+    // ★ 分署內再分兩群（使用者指定）：
+    //   平地群＝平地＋沿海地區、山區群＝山區＋淺山區。
+    //   兩群各自取最大，摘要每個分署顯示兩行，並標出實際的地形分類。
+    const G = {plain:{rain:-1,rt:null,etr:-1,et:null,risk:-1,rkt:null,warn:0,wt:null},
+               hill: {rain:-1,rt:null,etr:-1,et:null,risk:-1,rkt:null,warn:0,wt:null}};
+    const grpOf = t =>{
+      const z = _townZone(t) || '';
+      return (z === '山區' || z === '淺山區') ? 'hill' : 'plain';
+    };
     towns.forEach(t=>{
       // 雨量一律另外用 rain 模式邏輯：直接算 QPF/觀測累積
+      const g = G[grpOf(t)];
       const rainVal = _summaryRain(t);
       if(rainVal != null && rainVal > maxRain){ maxRain=rainVal; maxRainT=t; }
+      if(rainVal != null && rainVal > g.rain){ g.rain=rainVal; g.rt=t; }
       if(t.alert_val > 0){
         const ep = _summaryEtr(t);
         if(ep != null && ep > maxEtr){ maxEtr=ep; maxEtrT=t; }
+        if(ep != null && ep > g.etr){ g.etr=ep; g.et=t; }
       }
       // 風險指標 / 警特報（常駐計算，摘要四表齊全）
       const r = calcRiskIndicator(t, Math.max(0, segTo));
       if(r && r.R > maxRisk){ maxRisk=r.R; maxRiskT=t; }
+      if(r && r.R > g.risk){ g.risk=r.R; g.rkt=t; }
       let lv=0;
       for(let s=Math.max(0,segFrom); s<=Math.max(0,segTo); s++){
         lv=Math.max(lv,_warnLevelAt(t,s)); if(lv>=4)break;
       }
       if(lv > maxWarn){ maxWarn=lv; maxWarnT=t; }
+      if(lv > g.warn){ g.warn=lv; g.wt=t; }
     });
-    return {district, maxRain, maxRainT, maxEtr, maxEtrT, maxRisk, maxRiskT, maxWarn, maxWarnT};
+    return {district, maxRain, maxRainT, maxEtr, maxEtrT, maxRisk, maxRiskT, maxWarn, maxWarnT, G};
   });
 
   const nameOf = t => t ? `${t.county}${t.township}` : '—';
+  // ★ 地形色點：直接標出該筆屬於哪一種地形（山區／淺山區／平地／沿海地區）
+  const zoneDot = t =>{
+    if(!t) return '';
+    const z = _townZone(t) || '';
+    const c = TERRAIN_COLORS[z] || '#5a7a95';
+    return `<span title="${z}" style="display:inline-block;width:6px;height:6px;`
+      + `border-radius:50%;background:${c};margin-right:4px;vertical-align:middle"></span>`;
+  };
+  // 一個分署輸出兩行：上「平地」（含沿海）、下「山區」（含淺山區）
+  const twoRows = (district, G, pick, fmt)=>{
+    const c = DISTRICT_COLOR[district] || '#aaccee';
+    return [['plain', '平地'], ['hill', '山區']].map(([k, lab], idx)=>{
+      const g = G[k], t = pick.t(g), v = pick.v(g);
+      return `<tr style="border-bottom:1px solid ${idx ? '#0d2030' : '#091722'}">
+        <td style="padding:1px 4px;color:${c};font-weight:700;font-size:9px">${
+          idx ? '' : district.replace('分署', '')}</td>
+        <td style="padding:1px 4px;color:#6a8a9a;font-size:9px">${lab}</td>
+        <td style="text-align:right;padding:1px 4px;color:#8ab8d8;font-size:9px">
+          ${zoneDot(t)}<span ${linkAttr(t)}>${nameOf(t)}</span></td>
+        <td style="text-align:right;padding:1px 4px;color:#aaccee;font-weight:700">${fmt(v, t)}</td>
+      </tr>`;
+    }).join('');
+  };
   const linkAttr = t => t ? `style="cursor:pointer;text-decoration:underline dotted" onclick="focusTownship('${t.county}','${t.township}')"` : '';
 
   const secHead = (kind, title) =>
@@ -9106,34 +10445,27 @@ function updateDistrictSummary(){
   h += `<table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:2px">
     <thead><tr style="background:#081420;color:#5a8aaa;font-size:9px">
       <th style="text-align:left;padding:2px 4px">分署</th>
+      <th style="text-align:left;padding:2px 4px">地形</th>
       <th style="text-align:right;padding:2px 4px">累積雨量最高鄉鎮市區</th>
       <th style="text-align:right;padding:2px 4px">數值</th>
     </tr></thead><tbody>`;
-  rows.forEach(({district,maxRain,maxRainT})=>{
-    const c=DISTRICT_COLOR[district]||'#aaccee';
-    const rs = maxRain<0 ? '—' : (maxRain>=10?Math.round(maxRain)+'mm':maxRain.toFixed(1)+'mm');
-    h+=`<tr style="border-bottom:1px solid #0d2030">
-      <td style="padding:2px 4px;color:${c};font-weight:700">${district.replace('分署','')}</td>
-      <td style="text-align:right;padding:2px 4px;color:#8ab8d8;font-size:9px"><span ${linkAttr(maxRainT)}>${nameOf(maxRainT)}</span></td>
-      <td style="text-align:right;padding:2px 4px;color:#aaccee;font-weight:700">${rs}</td>
-    </tr>`;
+  rows.forEach(({district, G})=>{
+    h += twoRows(district, G, {t: g=>g.rt, v: g=>g.rain},
+      v => v < 0 ? '—' : (v >= 10 ? Math.round(v) + 'mm' : v.toFixed(1) + 'mm'));
   });
   h += `</tbody></table></div>`;
   h += secHead('etr','ETR2%');
   h += `<table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:4px">
     <thead><tr style="background:#081420;color:#5a8aaa;font-size:9px">
       <th style="text-align:left;padding:2px 4px">分署</th>
+      <th style="text-align:left;padding:2px 4px">地形</th>
       <th style="text-align:right;padding:2px 4px">ETR2%最高鄉鎮市區</th>
       <th style="text-align:right;padding:2px 4px">ETR2%</th>
     </tr></thead><tbody>`;
-  rows.forEach(({district,maxEtr,maxEtrT})=>{
-    const c=DISTRICT_COLOR[district]||'#aaccee';
-    const ec=etrColor(maxEtr<0?0:maxEtr);
-    h+=`<tr style="border-bottom:1px solid #0d2030">
-      <td style="padding:2px 4px;color:${c};font-weight:700">${district.replace('分署','')}</td>
-      <td style="text-align:right;padding:2px 4px;color:#8ab8d8;font-size:9px"><span ${linkAttr(maxEtrT)}>${nameOf(maxEtrT)}</span></td>
-      <td style="text-align:right;padding:2px 4px;color:${ec};font-weight:700">${maxEtr<0?'—':maxEtr+'%'}</td>
-    </tr>`;
+  rows.forEach(({district, G})=>{
+    h += twoRows(district, G, {t: g=>g.et, v: g=>g.etr},
+      v => v < 0 ? '—'
+        : `<span style="color:${etrColor(v)}">${v}%</span>`);
   });
   h += '</tbody></table></div>';
 
@@ -9143,25 +10475,22 @@ function updateDistrictSummary(){
     h += `<table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:4px">
       <thead><tr style="background:#081420;color:#5a8aaa;font-size:9px">
         <th style="text-align:left;padding:2px 4px">分署</th>
+      <th style="text-align:left;padding:2px 4px">地形</th>
         <th style="text-align:right;padding:2px 4px">${title}最高鄉鎮市區</th>
         <th style="text-align:right;padding:2px 4px">${vh}</th>
       </tr></thead><tbody>`;
-    rows.forEach(({district,maxRisk,maxRiskT,maxWarn,maxWarnT})=>{
-      const c=DISTRICT_COLOR[district]||'#aaccee';
-      let vT, vs, vc;
-      if(kind==='risk'){
-        vT=maxRiskT; vs=maxRisk<0?'—':Math.round(maxRisk); vc=riskColor(maxRisk<0?0:maxRisk);
-        if(vc==='#FFFFFF') vc='#aaccee';
-      } else {
-        vT=maxWarnT; vs=maxWarn>0?WARN_NAMES[maxWarn]:'—';
-        vc=maxWarn>0?WARN_COLORS[maxWarn]:'#8899aa';
-      }
-      h+=`<tr style="border-bottom:1px solid #0d2030">
-        <td style="padding:2px 4px;color:${c};font-weight:700">${district.replace('分署','')}</td>
-        <td style="text-align:right;padding:2px 4px;color:#8ab8d8;font-size:9px"><span ${linkAttr(vT)}>${nameOf(vT)}</span></td>
-        <td style="text-align:right;padding:2px 4px;color:${vc};font-weight:700">${vs}</td>
-      </tr>`;
-    });
+    rows.forEach(({district, G})=>{
+      h += twoRows(district, G,
+        {t: g=>(kind === 'risk' ? g.rkt : g.wt), v: g=>(kind === 'risk' ? g.risk : g.warn)},
+        v =>{
+          if(kind === 'risk'){
+            if(v < 0) return '—';
+            let vc = riskColor(v); if(vc === '#FFFFFF') vc = '#aaccee';
+            return `<span style="color:${vc}">${Math.round(v)}</span>`;
+          }
+          return v > 0 ? `<span style="color:${WARN_COLORS[v]}">${WARN_NAMES[v]}</span>` : '—';
+        });
+        });
     h += '</tbody></table></div>';
   });
 
@@ -10470,6 +11799,9 @@ function toggleTyphoonLayer(){
   const btn = document.getElementById('bTyphoon');
   if(btn) btn.classList.toggle('on', showTyphoon);
   renderTyphoonLayer();
+  // ★ 圖例跟著按鈕一起開關（使用者指定）：先前只有在重繪圖例時才會檢查
+  //   showTyphoon，切換按鈕不會重畫圖例，於是關掉圖層圖例還留在地圖上。
+  try{ renderTyphoonLegend(); }catch(e){}
   try{ updateTyphoonPanel(); }catch(e){}
 }
 function _tyIntensity(ws){
@@ -10541,10 +11873,10 @@ function renderTyphoonLayer(){
     // (5) 現在位置：暴風圈 + 颱風符號
     if(cur){
       if(cur.r15) L.circle([cur.lat,cur.lng], {radius:cur.r15*1000, color:'#f5a623',
-        weight:1.5, opacity:0.8, fillColor:'#f5a623', fillOpacity:0.10,
+        weight:BORDER_W, opacity:0.8, fillColor:'#f5a623', fillOpacity:0.10,
         interactive:false}).addTo(typhoonLayer);   // 七級風(15m/s)
       if(cur.r25) L.circle([cur.lat,cur.lng], {radius:cur.r25*1000, color:'#e8453c',
-        weight:1.5, opacity:0.9, fillColor:'#e8453c', fillOpacity:0.16,
+        weight:BORDER_W, opacity:0.9, fillColor:'#e8453c', fillOpacity:0.16,
         interactive:false}).addTo(typhoonLayer);   // 十級風(25m/s)
       const it = _tyIntensity(cur.ws);
       L.marker([cur.lat,cur.lng], {icon: L.divIcon({className:'', html:
@@ -10588,14 +11920,20 @@ function renderTyphoonLayer(){
         `十級風半徑 ${pt.r25==null?'—':Math.round(pt.r25)} km<br>${reach}</div>`;
 
       if(pt.r15) L.circle([pt.lat,pt.lng], {radius: pt.r15*1000, color: st.color,
-        weight:1.2, opacity:0.5, dashArray:'6,6', fill:false, interactive:false}).addTo(typhoonLayer);
+        weight:BORDER_W, opacity:0.5, dashArray:'6,6', fill:false, interactive:false}).addTo(typhoonLayer);
       if(pt.r25) L.circle([pt.lat,pt.lng], {radius: pt.r25*1000, color: st.color,
-        weight:1.2, opacity:0.7, dashArray:'2,4', fill:false, interactive:false}).addTo(typhoonLayer);
+        weight:BORDER_W, opacity:0.7, dashArray:'2,4', fill:false, interactive:false}).addTo(typhoonLayer);
+      // ★ 與左下圖例同一個理由改用 SVG：圖例的色點在匯出的動畫裡
+      //   全部變灰（CSS border-radius + background 在 html2canvas 下失色，
+      //   同一張圖裡的 SVG 卻正常），這裡的編號徽章是完全相同的寫法，
+      //   一併改掉，免得影片裡的徽章也失去顏色。
       L.marker([pt.lat,pt.lng], {icon: L.divIcon({className:'', html:
-        `<div style="width:18px;height:18px;border-radius:50%;background:${st.color};
-          border:2px solid #fff;box-sizing:border-box;color:#fff;font-size:11px;
-          font-weight:700;line-height:14px;text-align:center;font-family:system-ui,sans-serif;
-          box-shadow:0 1px 3px rgba(0,0,0,.6)">${n}</div>`,
+        `<svg width="18" height="18" style="display:block;overflow:visible">
+          <circle cx="9" cy="9" r="8" fill="${st.color}" stroke="#fff" stroke-width="2"/>
+          <text x="9" y="9" fill="#fff" font-size="10" font-weight="700"
+            text-anchor="middle" dominant-baseline="central"
+            font-family="system-ui,sans-serif">${n}</text>
+        </svg>`,
         iconSize:[18,18], iconAnchor:[9,9]})})
         .bindTooltip(tip, {sticky:true, direction:'top'}).addTo(typhoonLayer);
     });
@@ -10616,7 +11954,12 @@ function renderTyphoonLegend(){
   const el   = document.getElementById('typhoon-legend');
   const wrap = document.getElementById('typhoon-legend-wrap');
   if(!el || !wrap) return;
-  if(!showTyphoon){ wrap.style.display = 'none'; return; }
+  // ★ 動畫期間靜態颱風圖層被收起，但圖例仍要完整重畫。
+  //   先前在這裡直接 return，圖例就停在「圖層被收起當下」的殘缺內容
+  //   —— 五個顏色點消失正是這個原因，不是樣式問題。
+  const _anim = (typeof _tyA !== 'undefined' && _tyA);
+  if(!showTyphoon && !_anim){ wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
   const rows = [
     ['#1e6fd9', '▼', '暴風圈觸及100km海域'],
     ['#d92020', '▼', '暴風圈觸及陸地'],
@@ -10632,9 +11975,14 @@ function renderTyphoonLegend(){
     </div>
     <div style="font-weight:700;margin-bottom:2px">關鍵時間點（編號對應地圖徽章）</div>`;
   rows.forEach(([c,ic,txt])=>{
+    // ★ 用 SVG 圓而非 CSS 圓形背景：動畫匯出時 html2canvas 對
+    //   border-radius + background 的組合支援不完整，五個點會全部變灰
+    //   （同一張圖裡以 SVG 畫的虛線卻正常，這是判斷依據）。
     h += `<div style="display:flex;align-items:center;gap:5px;line-height:1.6">
-      <span style="width:13px;height:13px;border-radius:50%;background:${c};
-        border:1.5px solid #fff;box-sizing:border-box;box-shadow:0 0 0 1px #99a"></span>
+      <svg width="14" height="14" style="flex:0 0 14px;display:block">
+        <circle cx="7" cy="7" r="5.6" fill="${c}" stroke="#fff" stroke-width="1.5"/>
+        <circle cx="7" cy="7" r="6.4" fill="none" stroke="#99a" stroke-width="1"/>
+      </svg>
       <span>${txt}</span></div>`;
   });
   h += `<div style="margin-top:5px;padding-top:4px;border-top:1px solid #ccd">
@@ -13598,7 +14946,7 @@ function toggleLsb(){
   const btn = document.getElementById('lsb-toggle');
   if(lsb) lsb.style.width = lsbOpen ? '230px' : '0px';
   if(btn) btn.textContent = lsbOpen ? '◀' : '▶';
-  setTimeout(()=> map.invalidateSize(), 280);
+  setTimeout(()=>{ try{ _afterMapResize(); }catch(e){} }, 280);
 }
 
 // ════════════════════════════════════════════════
@@ -14045,7 +15393,7 @@ function _paintGrid(grid, NX, NY, UP, W, H, lat0, lng0, lat1, lng1){
   const _tp=map.getPane('townPane');
   if(_tp) _tp.style.filter='';  // 防禦：確保無殘留模糊濾鏡
   // ★ 地形疊圖開啟時降低不透明度，讓下層暈渲透出來（先前 1.0 全蓋住）
-  const _op = (typeof _terrainOn !== 'undefined' && _terrainOn) ? 0.72 : 1.0;
+  const _op = 1.0;   // ★ 同上：不再靠半透明透出地形，改由上方色彩增值層表現
   if(_interpOverlay){ _interpOverlay.setUrl(url); _interpOverlay.setOpacity(_op); }
   else{
     _interpOverlay=L.imageOverlay(url, INTERP_BOUNDS,
