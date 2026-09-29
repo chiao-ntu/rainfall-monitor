@@ -2653,6 +2653,182 @@ TERRAIN_FILE = "terrain_zones_official.json"   # 地形分類（山區/淺山/�
 SKILL_FILE = "model_skill.json"
 VERIFY_FILE = "verify.json"      # 逐日校驗（列聯表 + POD/FAR/CSI）
 VERIFY_KEEP_DAYS = 60            # 保留 60 天，供選日期回溯
+
+# ══════════════════════════════════════════════════════════
+#  預報存檔（forecast_log.json）
+# ══════════════════════════════════════════════════════════
+# ★ 為什麼非建不可，而且愈早愈好：
+#   ① 目前的「校驗」其實只驗到極短預報。fetch_models_yesterday 是重新去抓
+#      各模式「對昨天的回算」，那是最新一報回頭看昨天，不是幾天前真的
+#      發布過的那一報。所以現在所有模式的分數，講的都是 lead time 接近 0
+#      的表現 —— 「這個模式準」這句話目前只在最短預報成立。
+#   ② 要知道 D+1 跟 D+5 誰準（權重本來就該分 lead time），必須有當時
+#      真的發布過什麼的紀錄。
+#   ③ 型態一致性（同一有效日、相鄰兩報之間雨區有沒有搬家）同樣需要它。
+#   ④ 這份資料無法回補 —— 今天沒存，今天的預報就永遠拿不回來了。
+#      這是它比其他項目急迫的真正理由，不是因為它最有效。
+FORECAST_LOG_FILE = "forecast_log.json"
+FORECAST_LOG_KEEP = 12           # 保留 12 天的發布（足夠比對 D+7 與相鄰報次）
+FORECAST_LOG_DAYS = 7            # 每次存未來 7 個完整日曆日
+FCLOG_MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'gc',
+                'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom')
+FCLOG_WET_MIN = 2.0              # 全島平均低於此值的日子不計型態（小雨日的型態是雜訊）
+
+
+def _fclog_town_key(t):
+    return (t.get('county') or '') + (t.get('township') or '')
+
+
+def update_forecast_log(out_towns, base_dt, now_tpe):
+    """把「這一報對未來各日曆日的預報」存檔，供 lead time 校驗與型態一致性。
+
+    結構：{'towns': [鄉鎮鍵...],
+           'issues': {發布日: {有效日: {模式: [各鄉鎮日總雨量]}}}}
+    ★ 逐段對齊：segs[i] 涵蓋 base_dt + 6i 起的 6 小時，base_dt 已對齊
+      0/6/12/18 時，故每一段必定完整落在某一個日曆日內。
+      只存「四段都有」的完整日，否則半天的總量會污染比較。
+    """
+    log = {'towns': [], 'issues': {}}
+    if os.path.exists(FORECAST_LOG_FILE):
+        try:
+            with open(FORECAST_LOG_FILE, encoding='utf-8') as f:
+                log = json.load(f) or log
+        except Exception:
+            log = {'towns': [], 'issues': {}}
+    log.setdefault('towns', [])
+    log.setdefault('issues', {})
+
+    towns = [_fclog_town_key(t) for t in out_towns]
+    if log['towns'] and log['towns'] != towns:
+        # 鄉鎮清單變了（新增／改名）→ 舊紀錄的索引對不上，整份重來比對錯安全
+        print("  預報存檔：鄉鎮清單有變動，重建索引（捨棄舊紀錄）")
+        log = {'towns': towns, 'issues': {}}
+    log['towns'] = towns
+
+    issue = now_tpe.strftime('%Y-%m-%d')
+    # 每個日曆日對應哪幾個 6h 段
+    day_segs = {}
+    for i in range(64):
+        d = (base_dt + timedelta(hours=6 * i)).strftime('%Y-%m-%d')
+        day_segs.setdefault(d, []).append(i)
+    # 只要未來的、且四段齊全的日子
+    days = [d for d, ss in sorted(day_segs.items())
+            if len(ss) == 4 and d > issue][:FORECAST_LOG_DAYS]
+
+    rec = {}
+    for d in days:
+        segs = day_segs[d]
+        per_model = {}
+        for m in FCLOG_MODELS:
+            fld = 'qpf_' + m
+            vec = []
+            okn = 0
+            for t in out_towns:
+                arr = t.get(fld) or []
+                if len(arr) > segs[-1]:
+                    v = sum((arr[i] or 0.0) for i in segs)
+                    vec.append(round(v, 1)); okn += 1
+                else:
+                    vec.append(None)
+            if okn >= len(out_towns) * 0.8:      # 太多缺值就不存這個模式
+                per_model[m] = vec
+        if per_model:
+            rec[d] = per_model
+    if rec:
+        log['issues'][issue] = rec
+
+    cut = (now_tpe - timedelta(days=FORECAST_LOG_KEEP)).strftime('%Y-%m-%d')
+    log['issues'] = {k: v for k, v in log['issues'].items() if k >= cut}
+    log['updated'] = now_tpe.isoformat()
+    try:
+        with open(FORECAST_LOG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(log, f, ensure_ascii=False, separators=(',', ':'))
+        _nd = sum(len(v) for v in log['issues'].values())
+        print(f"  預報存檔：本報存 {len(rec)} 個有效日，"
+              f"累積 {len(log['issues'])} 報 / {_nd} 筆（保留 {FORECAST_LOG_KEEP} 天）")
+    except Exception as e:
+        print(f"  預報存檔寫入失敗：{e}")
+    return log
+
+
+def _corr(a, b):
+    """兩個等長向量的 Pearson 相關；樣本不足或無變異回 None。"""
+    xs = [(x, y) for x, y in zip(a, b) if x is not None and y is not None]
+    n = len(xs)
+    if n < 30:
+        return None
+    mx = sum(x for x, _ in xs) / n
+    my = sum(y for _, y in xs) / n
+    sxx = sum((x - mx) ** 2 for x, _ in xs)
+    syy = sum((y - my) ** 2 for _, y in xs)
+    if sxx <= 1e-9 or syy <= 1e-9:
+        return None
+    sxy = sum((x - mx) * (y - my) for x, y in xs)
+    return sxy / math.sqrt(sxx * syy)
+
+
+def _norm_pattern(v):
+    """去掉振幅只留型態：除以自身的空間平均。
+
+    ★ 使用者明確允許「雨量逐次調整」，不允許的是雨區搬家。
+      不先去振幅的話，一個正確把雨量翻倍的模式會被判成不穩定。
+    """
+    xs = [x for x in v if x is not None]
+    if not xs:
+        return None, 0.0
+    mean = sum(xs) / len(xs)
+    if mean < 1e-6:
+        return None, mean
+    return [None if x is None else x / mean for x in v], mean
+
+
+def forecast_consistency(log, valid_date, obs_vec=None):
+    """同一有效日、相鄰兩報之間的空間型態變化。
+
+    回傳 {模式: {'jump': 1-r, 'excess': 相對共識的超額, 'gain': 修正是否往觀測靠}}
+
+    ★ 判讀方式（使用者提出、這裡照著實作）：
+      天氣翻盤本來就會發生，但通常大家會一起翻，差別在時間早晚。
+      所以關鍵不是「有沒有翻」，而是「別人沒翻你翻了」或「大家翻了你沒翻」。
+      故 jump 要減掉當日全體模式的中位數，得到 excess。
+    ★ 但只看 excess 會罰錯人：率先翻對的模式正是最好的模式。
+      所以同時記 gain＝corr(新報, 觀測) − corr(舊報, 觀測)，
+      excess 大且 gain 為正＝領先，excess 大且 gain 為負＝亂報。
+      兩者要一起看，缺一個就會把領先者當成亂報。
+    """
+    issues = sorted(k for k, v in (log.get('issues') or {}).items()
+                    if valid_date in (v or {}))
+    if len(issues) < 2:
+        return {}
+    prev_i, new_i = issues[-2], issues[-1]
+    out = {}
+    for m in FCLOG_MODELS:
+        a = (log['issues'][prev_i][valid_date] or {}).get(m)
+        b = (log['issues'][new_i][valid_date] or {}).get(m)
+        if not a or not b or len(a) != len(b):
+            continue
+        pa, ma = _norm_pattern(a)
+        pb, mb = _norm_pattern(b)
+        if pa is None or pb is None or max(ma, mb) < FCLOG_WET_MIN:
+            continue                      # 小雨日不計
+        r = _corr(pa, pb)
+        if r is None:
+            continue
+        d = {'jump': round(1 - r, 4), 'lead_prev': (
+                datetime.strptime(valid_date, '%Y-%m-%d')
+                - datetime.strptime(prev_i, '%Y-%m-%d')).days}
+        if obs_vec:
+            ra, rb = _corr(a, obs_vec), _corr(b, obs_vec)
+            if ra is not None and rb is not None:
+                d['gain'] = round(rb - ra, 4)
+        out[m] = d
+    if not out:
+        return {}
+    js = sorted(v['jump'] for v in out.values())
+    med = js[len(js) // 2]
+    for v in out.values():
+        v['excess'] = round(v['jump'] - med, 4)
+    return out
 # ★ 有效降水門檻（使用者指定）：1mm。
 #   0.1mm 只是「有無降水」，防災判讀用 1mm 才有意義。
 RAIN_THRESHOLD = 1.0
@@ -5293,6 +5469,33 @@ def main():
                     _prev_sk = json.load(_f).get('model_skill') or {}
         except Exception:
             _prev_sk = {}
+        # ★ 預報存檔：先讀「昨天之前存過的」來算型態一致性，再寫入這一報。
+        #   順序不能顛倒 —— 先寫入會把這一報也算進相鄰兩報的比較裡，
+        #   但這一報還沒有對應的觀測，比出來的數字沒有意義。
+        try:
+            _fclog_old = {'towns': [], 'issues': {}}
+            if os.path.exists(FORECAST_LOG_FILE):
+                with open(FORECAST_LOG_FILE, encoding='utf-8') as _f:
+                    _fclog_old = json.load(_f) or _fclog_old
+            _yd = (now_tpe - timedelta(days=1)).strftime('%Y-%m-%d')
+            _obs_vec = None
+            if (_fclog_old.get('towns') or []) == [_fclog_town_key(t) for t in out_towns]:
+                _obs_vec = [((t.get('daily_rain') or [None, None])[1]) for t in out_towns]
+            _cons = forecast_consistency(_fclog_old, _yd, _obs_vec)
+            if _cons:
+                output['forecast_consistency'] = {'valid': _yd, 'models': _cons}
+                _bad = sorted(_cons.items(),
+                              key=lambda kv: -(kv[1].get('excess') or 0))[:3]
+                print(f"  型態一致性（{_yd}）：" + "、".join(
+                    f"{m} 跳動{v['jump']:.2f}/超額{v.get('excess', 0):+.2f}"
+                    + (f"/修正{v['gain']:+.2f}" if v.get('gain') is not None else "")
+                    for m, v in _bad))
+        except Exception as _e:
+            print(f"  型態一致性計算略過：{_e}")
+        try:
+            update_forecast_log(out_towns, base_dt, now_tpe)
+        except Exception as _e:
+            print(f"  預報存檔略過：{_e}")
         _skill = update_model_skill(out_towns, _zones, now_tpe, _prev_w, _prev_sk)
         # 校驗（POD/FAR/CSI）：與誤差追蹤共用同一批樣本
         _verify = update_verify(out_towns, _zones, now_tpe, hourly_ser, _prev_w, _prev_sk)
