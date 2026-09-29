@@ -271,6 +271,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       style="border-color:#5a3a8a;color:#b08ae8">自訂色階級距</button>
     <button class="b" id="bBlurRender" onclick="toggleBlurRender()"
       style="border-color:#3a7a8a;color:#7ad8e8">渲染</button>
+    <button class="b on" id="bNowcast" onclick="toggleNowcast()"
+      style="border-color:#2a7a4a;color:#5ad88a">⏱ 0-6h 觀測接管</button>
     <button class="b" onclick="downloadRangeCsv()"
       style="border-color:#2a7a4a;color:#5ad88a">⬇ CSV</button>
     <a href="taiwan_blank_map.html" target="_blank" class="b"
@@ -3298,6 +3300,120 @@ function _fcImport(inp){
   document.addEventListener('mouseup', ()=>{ dragging = false; });
 })();
 
+// ══════════════════════════════
+//  ★★ 極端訊號旗標
+// ══════════════════════════════
+//  警戒軌道刻意壓掉「沒有任何佐證的孤例」—— 一個模式報 300mm、其餘五個
+//  報 5mm，佐證原則會把它降權，警戒值仍是 5。這是對的：警戒若能被單一
+//  模式綁架就失去可信度。
+//  但那個訊號不該就此消失。它可能是唯一看到的那個模式，也可能是亂報，
+//  差別要由人判斷，不是由系統偷偷丟掉。
+//  所以另開一條旗標：不進任何計算、不影響任何著色，只誠實回報
+//  「有幾個模式報出多少」，讓判讀者自己決定要不要提高警覺。
+const FLAG_MM = 80;            // 單日豪雨量級；達此值即記錄
+function _extremeFlag(t, seg){
+  const zone = _townZone(t) || '';
+  const ab0 = ((window.ADAPTIVE_BLEND || {})[zone] || {}).models || null;
+  const KEY = {graphcast: 'gc'};
+  const cand = ab0
+    ? Object.keys(ab0).map(k=>KEY[k] || k).filter(k=>MODEL_FIELD[k])
+    : BLEND_MODELS;
+  const hits = [];
+  cand.forEach(m=>{
+    const a = t[MODEL_FIELD[m]];
+    if(!Array.isArray(a)) return;
+    const v = a[seg];
+    if(v != null && v >= FLAG_MM) hits.push({m, v});
+  });
+  // 被排除的模式另記（它們不進融合，但報出極端值仍值得知道）
+  const blocked = [];
+  Array.from(BLEND_BLOCK).forEach(m=>{
+    const k = KEY[m] || m;
+    const a = t[MODEL_FIELD[k]];
+    if(!Array.isArray(a)) return;
+    const v = a[seg];
+    if(v != null && v >= FLAG_MM) blocked.push({m: k, v});
+  });
+  if(!hits.length && !blocked.length) return null;
+  hits.sort((x, y)=>y.v - x.v);
+  blocked.sort((x, y)=>y.v - x.v);
+  const warn = (getQpfArr(t, 'qpf_warn') || [])[seg];
+  return {
+    n: hits.length, total: cand.length, hits, blocked,
+    max: hits.length ? hits[0].v : (blocked[0] || {}).v,
+    // ★ 關鍵欄位：警戒軌道有沒有把這個訊號吃掉。
+    //   suppressed 為真＝有模式報出豪雨，但警戒值遠低於它 —— 這種情況
+    //   最需要人看一眼，因為系統已經決定不採信了。
+    suppressed: (warn != null && hits.length > 0 && warn < hits[0].v * 0.5),
+    warnVal: warn == null ? null : warn,
+  };
+}
+
+// ══════════════════════════════════════════════════════════
+//  ★★ 0–6 小時觀測接管（nowcast blending）
+// ══════════════════════════════════════════════════════════
+//  最短預報的誤差幾乎都來自同一件事：「現在這一段 6 小時」裡，已經下過的
+//  部分模式照樣在猜。但那一段已經發生了，實測是事實不是預報 —— 拿模式去
+//  猜一件已經知道答案的事，是白白送掉的誤差。
+//  本段把當前 6h 段拆成三塊，各用最可靠的來源：
+//    ① 已經過去的小時 → 測站實測（rain_hourly）
+//    ② 接下來第 1 小時 → 雷達 QPF（短時效內雷達優於任何 NWP）
+//    ③ 之後的小時     → 模式，依比例分攤
+//  只動「當前這一段」，其餘時段完全不碰；也只套用在 FORMOSA 兩條軌道上
+//  —— 若連各單一模式都套，所有模式在這一段會變成同一個數字，
+//  模式比較與校驗就失去意義。
+let _nowcastOn = true;
+function toggleNowcast(){
+  _nowcastOn = !_nowcastOn;
+  const b = document.getElementById('bNowcast');
+  if(b) b.classList.toggle('on', _nowcastOn);
+  try{
+    TOWNSHIPS.forEach(t=>{ t._blendCache = null; t._warnCache = null; });
+    renderLayer();
+  }catch(e){}
+  console.log('0-6h 觀測接管：', _nowcastOn ? '開' : '關');
+}
+// 回傳 {val, src} —— src 供 tooltip 標示這個數字怎麼來的
+function _nowcastSeg(t, segVal){
+  const ns = _nowSeg();
+  const el = Math.max(0, Math.min(5, new Date().getHours() - 6 * ns));  // 已過小時
+  const perH = (segVal == null) ? null : segVal / 6;
+  if(perH == null) return null;
+  // ① 已過的小時用實測；任何一小時缺值就整段不用實測
+  //    （半套實測半套模式會系統性少算，比全用模式更糟）
+  let obs = 0, ok = true;
+  for(let k = 1; k <= el; k++){
+    const v = _obsHourlyAt(t, -k);
+    if(v == null){ ok = false; break; }
+    obs += v;
+  }
+  const rem = 6 - el;
+  const radar = t.qpf_radar_1h;
+  const useObs = (el > 0 && ok);
+  const useRadar = (rem >= 1 && radar != null && isFinite(radar));
+  if(!useObs && !useRadar) return null;              // 沒有任何可用觀測 → 不動
+  const past = useObs ? obs : perH * el;
+  const next1 = useRadar ? radar : perH;
+  const rest = perH * Math.max(0, rem - 1);
+  const src = (useObs ? '實測' : '') + (useObs && useRadar ? '＋' : '')
+            + (useRadar ? '雷達' : '');
+  return {val: Math.round((past + next1 + rest) * 10) / 10,
+          src, el, obs: useObs ? Math.round(obs * 10) / 10 : null,
+          radar: useRadar ? radar : null};
+}
+// 套用到整串 6h 段（只改當前段），回傳新陣列
+function _applyNowcast(t, arr){
+  if(!_nowcastOn || !Array.isArray(arr) || !arr.length) return arr;
+  const ns = _nowSeg();
+  if(ns >= arr.length) return arr;
+  const r = _nowcastSeg(t, arr[ns]);
+  if(!r) return arr;
+  const out = arr.slice();
+  out[ns] = r.val;
+  t._ncInfo = r;                 // 供 tooltip 說明來源
+  return out;
+}
+
 // ★ 警戒軌道取的分位數：0.85 代表「成員裡較高的那一端」，
 //   既不是平均（會低估極端）也不是最大值（會被單一亂報綁架）。
 const BLEND_WARN_Q = 0.85;
@@ -3360,8 +3476,10 @@ function _blendQpf(t, mode){
     if(Array.isArray(a) && a.length){ arrs[m] = a; sk[m] = _skillOf(t, m); }
   });
   const avail = Object.keys(arrs);
-  if(!avail.length) return t.qpf_best || [];
-  if(avail.length === 1) return arrs[avail[0]];
+  // ★ 早退的兩條路徑也要套 nowcast，否則「只有一個模式有資料」的鄉鎮
+  //   就享受不到觀測接管，同一張圖上會出現兩種標準。
+  if(!avail.length) return _applyNowcast(t, t.qpf_best || []);
+  if(avail.length === 1) return _applyNowcast(t, arrs[avail[0]]);
 
   // ② 動態加權：MAE 越小權重越高（w = 1/(MAE+ε)）；無樣本者退回等權重
   const W = {};
@@ -3486,7 +3604,7 @@ function _blendQpf(t, mode){
     });
     out.push(wa > 0 ? Math.round(acc / wa * 10) / 10 : null);
   }
-  return out;
+  return _applyNowcast(t, out);
 }
 
 // ④ 模式離散度 → 信心度（各模式在該時窗的差異）
@@ -5614,8 +5732,46 @@ function renderBlendDetail(t){
   //   不必先點某個鄉鎮。點選後再切換為該鄉鎮的細節。
   if(!t){ el.innerHTML = _blendOverviewHtml(); return; }
 
+  // ★ 兩條軌道與觀測接管、極端旗標的說明列：放在融合明細最上方，
+  //   讓「這個數字怎麼來的」在同一個地方講完。
+  const _trackHtml = (()=>{
+    const sg = Math.max(0, (typeof segFrom === 'number' ? segFrom : _nowSeg()));
+    const mean = (getQpfArr(t, 'qpf_blend') || [])[sg];
+    const warn = (getQpfArr(t, 'qpf_warn') || [])[sg];
+    const nc = t._ncInfo;
+    const fl = _extremeFlag(t, sg);
+    let h = `<div style="border:1px solid #1e3c52;border-radius:3px;background:#0b1a26;
+        padding:4px 6px;margin-bottom:5px;font-size:10px;line-height:1.6">
+      <div style="color:#7ee8a8;font-weight:700">兩條軌道（第 ${sg} 段）</div>
+      <div>量的軌道（加權平均，供判讀雨量）
+        <b style="color:#cfe4f5">${mean == null ? '—' : mean + ' mm'}</b></div>
+      <div>警戒軌道（成員 85 分位，供 ETR2／警戒）
+        <b style="color:#ffcc66">${warn == null ? '—' : warn + ' mm'}</b></div>`;
+    if(nc && sg === _nowSeg()){
+      h += `<div style="color:#5ad88a">⏱ 本段已由觀測接管：${nc.src}`
+        + (nc.obs != null ? `（過去 ${nc.el} 小時實測 ${nc.obs}mm` : '（')
+        + (nc.radar != null ? `、雷達次 1 小時 ${nc.radar}mm` : '')
+        + `）</div>`;
+    }
+    if(fl){
+      const lst = fl.hits.map(x=>`${(VF_NAME[x.m] || x.m)} ${x.v}`).join('、');
+      const blk = fl.blocked.map(x=>`${(VF_NAME[x.m] || x.m)} ${x.v}`).join('、');
+      h += `<div style="color:${fl.suppressed ? '#ff9944' : '#c8b8d8'}">
+        ⚠ 極端訊號：${fl.n}/${fl.total} 個成員報 ≥${FLAG_MM}mm`
+        + (lst ? `（${lst}）` : '')
+        + (blk ? `；排除名單中 ${blk}` : '') + '</div>';
+      if(fl.suppressed){
+        h += `<div style="color:#ff9944">
+          ↑ 警戒軌道未採信（${fl.warnVal}mm）—— 該極端值缺乏其他成員佐證，
+          請自行判斷是否提高警覺</div>`;
+      }
+    }
+    return h + '</div>';
+  })();
+
   const zone = _townZone(t) || '—';
   const rows = [];
+  rows.push(_trackHtml);
   const sks = {}, ws = {};
   let anySkill = false;
   BLEND_MODELS.forEach(m=>{

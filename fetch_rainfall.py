@@ -2737,8 +2737,18 @@ def update_forecast_log(out_towns, base_dt, now_tpe):
     if rec:
         log['issues'][issue] = rec
 
+    # ★ 逐日逐鄉鎮觀測也存進同一份檔：驗證腳本才不必再去湊第二個資料來源，
+    #   而且觀測與預報的鄉鎮索引保證一致（分開存最容易錯位）。
+    #   daily_rain[1] ＝昨天（見 get_daily_rain_array）。
+    log.setdefault('obs', {})
+    yday = (now_tpe - timedelta(days=1)).strftime('%Y-%m-%d')
+    ov = [((t.get('daily_rain') or [None, None])[1]) for t in out_towns]
+    if sum(1 for v in ov if v is not None) >= len(out_towns) * 0.5:
+        log['obs'][yday] = [None if v is None else round(float(v), 1) for v in ov]
+
     cut = (now_tpe - timedelta(days=FORECAST_LOG_KEEP)).strftime('%Y-%m-%d')
     log['issues'] = {k: v for k, v in log['issues'].items() if k >= cut}
+    log['obs'] = {k: v for k, v in (log.get('obs') or {}).items() if k >= cut}
     log['updated'] = now_tpe.isoformat()
     try:
         with open(FORECAST_LOG_FILE, 'w', encoding='utf-8') as f:
