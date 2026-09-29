@@ -555,9 +555,19 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
       <div id="scalebar-wrap" style="pointer-events:none;background:#fff;border:1px solid #99aabb;border-radius:4px;padding:2px 6px;width:fit-content"></div>
     </div>
-    <!-- 颱風動態圖例：左下角（按下颱風動態按鈕才顯示），可收合 -->
-    <div id="typhoon-legend-wrap" style="display:none;position:absolute;bottom:30px;left:12px;
-      z-index:600;display:none;flex-direction:column;align-items:flex-start;gap:5px">
+    <!-- 左下角圖例欄：風場在上、颱風動態在下，兩者各自獨立顯示 -->
+    <div id="bl-legends" style="position:absolute;bottom:30px;left:12px;z-index:600;
+      display:flex;flex-direction:column;align-items:flex-start;gap:6px">
+    <!-- ★ 風速圖例改用 DOM（原本畫在風場畫布上）：
+         畫布文字沒有 subpixel antialiasing，即使把 devicePixelRatio 補好了
+         也還是比旁邊的 DOM 圖例糊一截，色塊邊緣同樣會鬆掉。
+         改成 HTML 之後與右下角的色階圖例同一種清晰度，且不隨縮放失真。 -->
+    <div id="wf-legend" style="display:none;background:#fff;border:1px solid #99aabb;
+      border-radius:5px;padding:5px 8px;font-size:11px;color:#111;pointer-events:none;
+      width:fit-content;box-shadow:0 1px 4px rgba(0,0,0,.3)"></div>
+    <!-- 颱風動態圖例（按下颱風動態按鈕才顯示），可收合 -->
+    <div id="typhoon-legend-wrap" style="display:none;
+      flex-direction:column;align-items:flex-start;gap:5px">
       <div id="typhoon-legend" style="background:rgba(255,255,255,0.96);border:1px solid #99aabb;
         border-radius:5px;padding:7px 9px;font-size:10px;color:#111;pointer-events:none;
         width:fit-content;max-width:230px;box-shadow:0 1px 4px rgba(0,0,0,.3);
@@ -567,6 +577,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         font-size:11px;cursor:pointer;color:#222;display:flex;align-items:center;
         justify-content:center;pointer-events:auto;box-shadow:0 1px 3px rgba(0,0,0,.25);
         transition:transform 0.2s ease">&#9660;</button>
+    </div>
     </div>
     <div id="map-overlay"></div>
     <div id="no-data-msg">
@@ -1806,6 +1817,8 @@ function _wfStop(){
   if(_wfTimer){ cancelAnimationFrame(_wfTimer); _wfTimer = null; }
   if(_wfCanvas){ _wfCanvas.remove(); _wfCanvas = null; }
   _wfParticles = [];
+  const _lg = document.getElementById('wf-legend');
+  if(_lg) _lg.style.display = 'none';
 }
 function _wfStart(){
   _wfStop();
@@ -1895,30 +1908,21 @@ function _wfStart(){
     return;
   }
   console.log(`風場：${nodes.length} 個鄉鎮有風向資料`);
-  // ★ 圖例：粒子顏色對應風速，沒有圖例會看不出快慢
+  // ★ 圖例：粒子顏色對應風速，沒有圖例會看不出快慢。
+  //   改為更新 DOM（見 #wf-legend 的說明），每幀呼叫但只在內容變動時重寫。
   const _wfLegend = ()=>{
-    const ctx2 = cv.getContext('2d');
-    // ★ 圖例用蒲福風級，與風力預測圖層同一套
-    const items = BF_BANDS.map(b=>[b.color, b.name]);
-    let lx = 10, ly = cv._ch - 10;
-    ctx2.font = '11px sans-serif'; ctx2.textAlign = 'left';
-    ctx2.textBaseline = 'alphabetic';
-    // ★ 底色寬度改為量出來的，不再寫死 300px：字多時不會溢出底色、
-    //   字少時也不會拖一條多餘的深色長條。
-    const _w = 10 + 26 + items.reduce((a2, [, t3])=>
-      a2 + 15 + ctx2.measureText(t3).width + 8, 0);
-    ctx2.fillStyle = 'rgba(4,12,20,0.82)';
-    ctx2.fillRect(4, ly - 15, Math.min(_w, cv._cw - 8), 21);
-    ctx2.fillStyle = '#7a94ac';
-    ctx2.fillText('風級', lx, ly);
-    lx += 26;
-    items.forEach(([c, t2])=>{
-      ctx2.strokeStyle = c; ctx2.lineWidth = 2.5;
-      ctx2.beginPath(); ctx2.moveTo(lx, ly - 4); ctx2.lineTo(lx + 12, ly - 4); ctx2.stroke();
-      lx += 15;
-      ctx2.fillStyle = '#9fc8e8'; ctx2.fillText(t2, lx, ly);
-      lx += ctx2.measureText(t2).width + 8;
-    });
+    const el = document.getElementById('wf-legend');
+    if(!el) return;
+    if(el._built){ el.style.display = 'block'; return; }
+    const sw = ([c, t2])=>`<span style="display:inline-flex;align-items:center;gap:3px">
+        <span style="display:inline-block;width:14px;height:4px;border-radius:2px;
+          background:${c};border:1px solid #99a;box-sizing:border-box"></span>
+        <span>${t2}</span></span>`;
+    el.innerHTML = `<div style="display:flex;align-items:center;gap:7px;white-space:nowrap">
+        <b style="font-weight:700">風級</b>${BF_BANDS.map(b=>sw([b.color, b.name])).join('')}
+      </div>`;
+    el.style.display = 'block';
+    el._built = true;
   };
 
   // 反距離加權：回傳畫布座標處的 [dx, dy]（像素／幀）
@@ -3294,6 +3298,18 @@ function _fcImport(inp){
   document.addEventListener('mouseup', ()=>{ dragging = false; });
 })();
 
+// ★ 警戒軌道取的分位數：0.85 代表「成員裡較高的那一端」，
+//   既不是平均（會低估極端）也不是最大值（會被單一亂報綁架）。
+const BLEND_WARN_Q = 0.85;
+// 警戒軌道的快取（與量的軌道各存一份，避免互相覆寫）
+function _blendWarnQpf(t){
+  const k = (window._dataGenAt || '') + '|' + _factorKey();
+  if(!t._warnCache || t._warnKey !== k){
+    t._warnCache = _blendQpf(t, 'warn');
+    t._warnKey = k;
+  }
+  return t._warnCache;
+}
 // ★ 觀測佐證：雷達回波與實測雨量。用來判斷「模式報大雨但現實沒有」。
 function _radarHasEcho(t){
   const r = (t.radar_1h != null) ? t.radar_1h : (t.radar != null ? t.radar : null);
@@ -3312,7 +3328,15 @@ function _noRainEvidence(t){
   return obs < 1 && (today == null || today < 2);
 }
 
-function _blendQpf(t){
+// ★★ 兩條軌道（使用者指定）：同一批成員、同一套偏差校正與離群剔除，
+//   只有最後「怎麼合成一個數字」不同。
+//     mode='mean'（量的軌道，預設）：加權平均 → MAE 最小，是「最貼近觀測值」
+//     mode='warn'（警戒軌道）      ：加權高分位數 → 漏報率最低
+//   為什麼要分開：平均會系統性平滑掉極端，拿它發警戒必然在最該發的時候縮手；
+//   反過來用高分位數報雨量又會天天高估。一個數字同時服務兩個目的，
+//   兩邊都只能拿到次佳解。分開之後各自都能做到最好，而且各自可獨立校驗
+//   —— 量的看 MAE，警戒的看 POD／漏報率。
+function _blendQpf(t, mode){
   // ★ 自適應選用（後端逐地形判定）：哪些模式該納入、各給多少權重，
   //   由 adaptive_blend 決定。亂報的模式直接不列入，多報／少報降低權重。
   //   後端沒有這份資料時（尚未部署或樣本不足）才退回原本的 MAE 加權。
@@ -3425,6 +3449,20 @@ function _blendQpf(t){
     const cwaV = (t.qpf_cwa || [])[i];
     if(cwaV != null && hi > 30 && hi > lo * 6){
       out.push(Math.round(cwaV * 10) / 10);
+      continue;
+    }
+    if(mode === 'warn'){
+      // 加權分位數：把成員依值排序，累積權重達到 BLEND_WARN_Q 的那一個。
+      //   取 0.85 而不是最大值 —— 最大值等於讓最誇張的那個模式單獨決定警戒，
+      //   佐證原則的降權也會失去意義。
+      const srt = use.slice().sort((a2, b2)=>a2.v - b2.v);
+      const tw = srt.reduce((a2, c)=>a2 + c.w, 0);
+      let cum = 0, pick = srt[srt.length - 1].v;
+      for(const c of srt){
+        cum += c.w;
+        if(cum >= tw * BLEND_WARN_Q){ pick = c.v; break; }
+      }
+      out.push(Math.round(pick * 10) / 10);
       continue;
     }
     let acc = 0, wa = 0;
@@ -5827,6 +5865,10 @@ function getQpfArr(t, qpfField){
     const k2 = (window._dataGenAt || '') + '|' + _factorKey() + '|' + _fcKey();
     if(!t._fcCache || t._fcKeyV !== k2){ t._fcCache = _fcQpf(t); t._fcKeyV = k2; }
   }
+  if(qpfField === 'qpf_warn'){
+    // 警戒軌道：只有 FORMOSA 有（單一模式沒有「成員」可以取分位數）
+    _blendWarnQpf(t);
+  }
   if(qpfField === 'qpf_blend'){
     if(!t._blendCache || t._blendKey !== ((window._dataGenAt || '') + '|' + _factorKey())){
       t._blendCache = _blendQpf(t);
@@ -5836,7 +5878,8 @@ function getQpfArr(t, qpfField){
     //   24h 偏差比與自訂倍率，融合模式因此完全不受修正影響。
     //   融合是本系統的推估值（非官方值），本來就該接受這些調整。
   }
-  const base = (qpfField === 'qpf_blend' ? t._blendCache
+  const base = (qpfField === 'qpf_warn' ? t._warnCache
+              : qpfField === 'qpf_blend' ? t._blendCache
               : qpfField === 'qpf_fc' ? t._fcCache
               : (qpfField === 'qpf_hi' || qpfField === 'qpf_lo') ? t._hiloCache
               : t[qpfField])
@@ -6467,6 +6510,11 @@ function calcEtr2MaxIn(t, segA, segB, qpfField){
 }
 
 function calcEtr2AtSeg(t, seg, qpfField){
+  // ★★ 兩條軌道的分流點：ETR2% 是警戒側的量（土壤含水 → 坡地警戒），
+  //   選 FORMOSA 時改走警戒軌道（成員的加權 85 分位數）而不是平均。
+  //   理由：平均會平滑掉極端，用它推 ETR2 等於在最該示警的日子低估。
+  //   地圖上顯示的「累積雨量」仍走量的軌道（加權平均），兩者互不影響。
+  if(qpfField === 'qpf_blend') qpfField = 'qpf_warn';
   const anchor = t.etr2;
   if(anchor === null || anchor === undefined || !isFinite(anchor)){
     return _calcEtr2Raw(t, seg, qpfField);
