@@ -35,6 +35,10 @@ _LS_TIER_NAME = {'exact': '代表站精確', 'norm': '代表站正規化',
                  'town': '退回鄉鎮值', 'none': '無值'}
 ALL_TOWNSHIPS_FILE = "all_townships.json"  # 全台368個行政區（含座標），不依賴是否有觀測站
 HISTORY_FILE = "obs_history.json"
+# ★ 跨日定版的時限：00~03 時之間執行到就把昨天定版。
+#   放寬到 3 時是因為排程可能延遲或某幾輪失敗；時間愈晚，
+#   rain_24h 的視窗偏離日曆日愈多，但仍遠勝於凍結在白天的值。
+DAY_FINALIZE_HOUR = 3
 OUTPUT_FILE  = "data.json"
 ETR2_WEIGHTS = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1]  # R0~R6 固定權重
 # ── CWA 請求節流 ────────────────────────────────────────────
@@ -1249,11 +1253,30 @@ def update_history(stations, now_tpe):
         if y2 not in rec: rec[y2] = max(0.0, round(r2d - r24h, 1))
         if y3 not in rec: rec[y3] = max(0.0, round(r3d - r2d, 1))
 
+        # ★★ 跨日定版（2026-10-02 修正）
+        #   原本的致命假設是「該日最後一次執行寫入的 Now 值 ≈ 全日雨量」。
+        #   這只有在當天 23 時那一輪成功跑完才成立。排程延遲或失敗時，
+        #   該日就永遠凍結在中途值 —— 例如最後一輪是 19 時，而主要降雨
+        #   發生在 19~24 時，該日觀測就被低估一大截，而且跨日後
+        #   「絕不覆寫」的規則會讓它永遠錯下去。
+        #   觀測是校驗的絕對基準，這種錯會讓所有模式的分數跟著失真。
+        #   對策：跨日後的前幾輪用 rain_24h 把昨天定版。
+        #   00:0x 執行時，rain_24h 涵蓋「昨天 00:0x ~ 今天 00:0x」，
+        #   與日曆日只差幾分鐘，遠比凍結在白天的值準確。
+        #   取 max 是為了安全：若既有值本來就完整，不會被改小。
+        if now_tpe.hour <= DAY_FINALIZE_HOUR and rec.get('FINAL') != y1:
+            rec[y1] = max(rec.get(y1, 0.0) or 0.0, round(r24h, 1))
+            rec['FINAL'] = y1          # 定版標記（非日期鍵，不影響日值查詢）
+
         # 今天：本日00時起累積（權威值，直接覆蓋更新）
         rec[today] = round(r_now, 1)
 
     cutoff = (now_tpe-timedelta(days=16)).strftime('%Y-%m-%d')   # 保留16天：過去7日視圖的ETR2需回推7+7天雨齡尾巴
-    for sid in history: history[sid]={d:v for d,v in history[sid].items() if d>cutoff}
+    # ★ 'FINAL' 是定版標記不是日期，字串比較下 'F' > '2' 會被保留，
+    #   但這裡寫明白，避免日後有人改了保留邏輯就把標記洗掉。
+    for sid in history:
+        history[sid] = {d: v for d, v in history[sid].items()
+                        if d == 'FINAL' or d > cutoff}
     with open(HISTORY_FILE,'w',encoding='utf-8') as f:
         json.dump(history,f,ensure_ascii=False,separators=(',',':'))
     print(f"  歷史更新：{len(history)} 站，今日={today}（今日累積=Now權威值）")
@@ -1276,6 +1299,8 @@ def get_daily_rain_array(sid, history, now_tpe, days=15):
     """
     if sid not in history: return [0.0]*days
     daily = history[sid]
+    # 'FINAL' 是定版標記，不是某一天的雨量；以日期鍵查詢不會取到它，
+    #   這裡保留註解提醒結構裡有這個非日期鍵。
     return [
         daily.get((now_tpe-timedelta(days=i)).strftime('%Y-%m-%d'), 0.0)
         for i in range(days)
