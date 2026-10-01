@@ -3423,39 +3423,70 @@ function toggleNowcast(){
   console.log('0-6h 觀測接管：', _nowcastOn ? '開' : '關');
 }
 // 回傳 {val, src} —— src 供 tooltip 標示這個數字怎麼來的
-function _nowcastSeg(t, segVal){
+// ★★ 2026-10-01 修正（使用者回報「沒有模式報雨的地方反而累積雨量最大」）：
+//   原本的寫法有三個錯，三個都會讓數字虛胖，而且在無雨區最明顯。
+//   ① 量綱不一致：觀測取的是「鄉鎮內各測站的最大值」（點極值），
+//      卻直接加在模式的「面平均」QPF 上。測站愈多的鄉鎮虛胖愈嚴重，
+//      與模式報不報雨完全無關 —— 這是主因。
+//      改為：量的軌道用面積平均，警戒軌道才用最大值。
+//   ② 時間沒對齊：原本從陣列尾端往回數 k 格當作「k 小時前」。
+//      rain_hourly.json 會延遲、而且刻意允許缺小時，數格子會把
+//      幾小時前的雨算成剛剛下的。改為用實際時鐘小時去查。
+//   ③ 雷達重複計算：qpf_radar_1h 是「未來 1 小時」，但 radar.json 若
+//      已經過期，那一小時其實已經過去、也已被實測涵蓋，加上去就重複。
+//      改為只在雷達夠新時才採用。
+const RADAR_MAX_AGE_MIN = 75;      // 雷達值超過這個分鐘數就不採用
+function _radarFresh(){
+  const s0 = window._radarQpfTime;
+  if(!s0) return false;
+  const d = new Date(String(s0).replace(' ', 'T'));
+  if(isNaN(d)) return false;
+  const age = (Date.now() - d.getTime()) / 60000;
+  // ★ 後端寫的是臺北時間且不帶時區，瀏覽器會當成當地時間解析。
+  //   在臺灣看一切正常；若從其他時區開啟，時間會整個平移。
+  //   負的「年齡」代表時戳在未來 —— 時鐘偏移或時區不符，
+  //   此時必須判定為不可用，而不是讓它通過（寧可不接管，不可用錯資料）。
+  if(age < -10) return false;
+  return age <= RADAR_MAX_AGE_MIN;
+}
+function _nowcastSeg(t, segVal, mode){
   const ns = _nowSeg();
-  const el = Math.max(0, Math.min(5, new Date().getHours() - 6 * ns));  // 已過小時
+  const now = new Date();
+  const segStart = 6 * ns;
+  const el = Math.max(0, Math.min(5, now.getHours() - segStart));  // 已過小時
   const perH = (segVal == null) ? null : segVal / 6;
   if(perH == null) return null;
-  // ① 已過的小時用實測；任何一小時缺值就整段不用實測
+  // ① 已過的小時：逐一用「實際時鐘小時」查，任何一小時查不到就整段不用實測
   //    （半套實測半套模式會系統性少算，比全用模式更糟）
   let obs = 0, ok = true;
-  for(let k = 1; k <= el; k++){
-    const v = _obsHourlyAt(t, -k);
+  for(let k = 0; k < el; k++){
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(),
+                       segStart + k, 0, 0, 0);
+    const v = _obsAtHour(t, d, mode === 'warn' ? 'max' : 'mean');
     if(v == null){ ok = false; break; }
     obs += v;
   }
   const rem = 6 - el;
   const radar = t.qpf_radar_1h;
   const useObs = (el > 0 && ok);
-  const useRadar = (rem >= 1 && radar != null && isFinite(radar));
+  const useRadar = (rem >= 1 && radar != null && isFinite(radar) && _radarFresh());
   if(!useObs && !useRadar) return null;              // 沒有任何可用觀測 → 不動
   const past = useObs ? obs : perH * el;
   const next1 = useRadar ? radar : perH;
   const rest = perH * Math.max(0, rem - 1);
-  const src = (useObs ? '實測' : '') + (useObs && useRadar ? '＋' : '')
+  const src = (useObs ? (mode === 'warn' ? '實測(站極值)' : '實測(面平均)') : '')
+            + (useObs && useRadar ? '＋' : '')
             + (useRadar ? '雷達' : '');
   return {val: Math.round((past + next1 + rest) * 10) / 10,
           src, el, obs: useObs ? Math.round(obs * 10) / 10 : null,
-          radar: useRadar ? radar : null};
+          radar: useRadar ? radar : null, mode: mode || 'mean'};
 }
 // 套用到整串 6h 段（只改當前段），回傳新陣列
-function _applyNowcast(t, arr){
+function _applyNowcast(t, arr, mode){
   if(!_nowcastOn || !Array.isArray(arr) || !arr.length) return arr;
   const ns = _nowSeg();
   if(ns >= arr.length) return arr;
-  const r = _nowcastSeg(t, arr[ns]);
+  const r = _nowcastSeg(t, arr[ns], mode);
   if(!r) return arr;
   const out = arr.slice();
   out[ns] = r.val;
@@ -3527,8 +3558,8 @@ function _blendQpf(t, mode){
   const avail = Object.keys(arrs);
   // ★ 早退的兩條路徑也要套 nowcast，否則「只有一個模式有資料」的鄉鎮
   //   就享受不到觀測接管，同一張圖上會出現兩種標準。
-  if(!avail.length) return _applyNowcast(t, t.qpf_best || []);
-  if(avail.length === 1) return _applyNowcast(t, arrs[avail[0]]);
+  if(!avail.length) return _applyNowcast(t, t.qpf_best || [], mode);
+  if(avail.length === 1) return _applyNowcast(t, arrs[avail[0]], mode);
 
   // ② 動態加權：MAE 越小權重越高（w = 1/(MAE+ε)）；無樣本者退回等權重
   const W = {};
@@ -3653,7 +3684,7 @@ function _blendQpf(t, mode){
     });
     out.push(wa > 0 ? Math.round(acc / wa * 10) / 10 : null);
   }
-  return _applyNowcast(t, out);
+  return _applyNowcast(t, out, mode);
 }
 
 // ④ 模式離散度 → 信心度（各模式在該時窗的差異）
@@ -6913,6 +6944,25 @@ function _obsHourlyAt(t, h){
   const v = arr[idx];
   return (v == null || !isFinite(v)) ? null : v;
 }
+// ★★ 依「實際時鐘小時」取觀測值，而不是從陣列尾端往回數。
+//   rain_hourly.json 的 hours 是升冪的時戳陣列，而且**刻意允許有缺口**
+//   （來源失敗的那一小時整個不寫入，見 fetch_qpesums_hourly 的註解）。
+//   從尾端往回數 k 格並不等於「k 小時前」—— 檔案延遲或中間缺一小時，
+//   就會把幾小時前的雨量當成剛剛下的，累積量平白多出一截。
+//   mode: 'max' 取測站極值（警戒用）、'mean' 取面積平均（量用）。
+function _obsAtHour(t, d, mode){
+  const hours = window.RAIN_HOURLY_HOURS;
+  const H = (mode === 'mean') ? window.RAIN_HOURLY_MEAN : window.RAIN_HOURLY;
+  if(!Array.isArray(hours) || !hours.length || !H) return null;
+  const p = n => String(n).padStart(2, '0');
+  const kk = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}`;
+  const i = hours.indexOf(kk);
+  if(i < 0) return null;                      // 該小時根本沒有資料 → 不猜
+  const arr = H[(t.county || '') + (t.township || '')];
+  if(!Array.isArray(arr)) return null;
+  const v = arr[i];
+  return (v == null || !isFinite(v)) ? null : v;
+}
 
 // ★ 風力／氣溫／浪高：官方資料為逐 3 小時，取該小時所屬的 3 小時區段值。
 //   同一個區段內的小時顯示同值，跨過邊界才變動。
@@ -9642,7 +9692,7 @@ async function tryLoadLive(){
             if(st.sid) NAME2TOWN[st.sid] = k;      // 站號也留著，兩種都能對
           });
         });
-        const agg = {};
+        const agg = {}, sum = {}, cnt = {};
         hours.forEach((hk, hi)=>{
           const snap = cwa[hk] || {};
           Object.keys(snap).forEach(sid=>{
@@ -9652,23 +9702,42 @@ async function tryLoadLive(){
             const v = snap[sid];
             if(v == null || !isFinite(v)) return;
             agg[k][hi] = (agg[k][hi] == null) ? v : Math.max(agg[k][hi], v);
+            // ★ 同時累計「面積平均」：
+            //   最大值是「點」的極值，模式 QPF 是「面」的代表值，
+            //   兩者量綱不同。拿最大值去接模式的累積量會系統性高估 ——
+            //   測站多的鄉鎮高估得更凶（這正是「沒有模式報雨的地方
+            //   反而累積雨量最大」的主因）。
+            //   警戒看極值、量看平均，與兩條軌道的分法一致。
+            if(!sum[k]) { sum[k] = new Array(hours.length).fill(0);
+                          cnt[k] = new Array(hours.length).fill(0); }
+            sum[k][hi] += v; cnt[k][hi] += 1;
           });
         });
+        const mean = {};
+        Object.keys(sum).forEach(k=>{
+          mean[k] = sum[k].map((sv, i)=> cnt[k][i] ? sv / cnt[k][i] : null);
+        });
         window.RAIN_HOURLY = agg;
+        window.RAIN_HOURLY_MEAN = mean;
         window.RAIN_HOURLY_HOURS = hours;
+        const _nst = Object.values(cnt).reduce((a2, c)=>
+          a2 + (c[c.length-1] || 0), 0);
         console.log(`rain_hourly.json 載入：${Object.keys(agg).length} 個鄉鎮、`
-          + `${hours.length} 小時序列（測站取最大值聚合）`);
+          + `${hours.length} 小時序列（同時建立 最大值／面積平均 兩套，`
+          + `最近一小時共 ${_nst} 個測站）`);
       }
     }catch(e){ console.warn('rain_hourly.json 讀取失敗（過去逐時不可用）', e.message); }
       })(),
       ()=>(async()=>{
     // ── 雷達1h QPF：獨立讀 radar.json（由每小時腳本寫，與 data.json 分離避免競態）──
     let _radarDt = d.radar_qpf_time || '';
+    window._radarQpfTime = _radarDt;
     try{
       const rr = await fetch('radar.json?t='+Date.now());
       if(rr.ok){
         const rd = await rr.json();
         _radarDt = rd.radar_qpf_time || _radarDt;
+        window._radarQpfTime = _radarDt;      // 供 nowcast 判斷新鮮度
         const rmap = rd.townships || {};
         let _nr = 0;
         for(const key in rmap){
