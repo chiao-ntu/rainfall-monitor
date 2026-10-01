@@ -161,8 +161,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   </div>
   <span class="tag time" id="base-tag"></span>
 </div>
-<div id="data-age-banner" style="display:none;padding:5px 14px;font-size:12px;
-  color:#fff;border-bottom:2px solid;flex-shrink:0;line-height:1.5"></div>
 <div id="ctrl">
     <!-- 外援連結 -->
   <div class="ctrl-row" style="flex-wrap:wrap;gap:3px;padding:3px 0">
@@ -1110,38 +1108,31 @@ const TOWNSHIPS = [{"county":"屏東縣","township":"來義鄉","alert_val":450.
 // ════════════════════════════════════════════════
 // TOWN_GEO and COUNTY_GEO are embedded as const above
 let BASE_TIME = new Date(2025,5,26,5,0,0);
-// ══════════════════════════════════════════════════════════
-//  ★★ 資料新鮮度警示
-// ══════════════════════════════════════════════════════════
-//  先前資料過舊只寫到 console.warn —— 使用者看不到，畫面一切正常。
-//  這在「主站掛掉、改看鏡像」的情境下特別危險：鏡像拿不到新資料時
-//  照樣把幾小時前的雨量畫得漂漂亮亮，判讀者以為那是現況。
-//  對預警系統來說，顯示舊資料而不說，比顯示不出來更糟。
-const DATA_AGE_WARN = 2.5;    // 小時：主排程每小時一次，超過 2.5h 視為異常
-const DATA_AGE_BAD  = 6;      // 小時：超過 6h 已不可作為判讀依據
-function _dataAgeHours(){
-  if(!(BASE_TIME instanceof Date) || isNaN(BASE_TIME)) return null;
-  return (Date.now() - BASE_TIME.getTime()) / 3600e3;
-}
-function _checkDataAge(){
-  const h = _dataAgeHours();
-  const el = document.getElementById('data-age-banner');
-  if(!el) return;
-  if(h == null || h < DATA_AGE_WARN){ el.style.display = 'none'; return; }
-  const bad = h >= DATA_AGE_BAD;
-  const hh = h < 48 ? `${h.toFixed(1)} 小時` : `${(h / 24).toFixed(1)} 天`;
-  el.style.display = 'block';
-  el.style.background = bad ? '#7a1010' : '#7a5510';
-  el.style.borderColor = bad ? '#ff4444' : '#ffbb33';
-  el.innerHTML = `<b>⚠ 資料已過時 ${hh}</b>（最後更新 ${fmtDT(BASE_TIME)}）　`
-    + (bad ? '<b>請勿作為現況判讀依據</b>，請改用官方即時資訊；'
-           : '自動更新可能中斷，畫面上的雨量非即時值；')
-    + '本頁其餘功能仍可運作。';
-}
-// 每 5 分鐘重新評估一次：頁面開著沒重整時，資料同樣會隨時間變舊
-setInterval(()=>{ try{ _checkDataAge(); }catch(e){} }, 5 * 60e3);
 // SEG_EPOCH：seg 索引的時間原點＝今天00時（qpf_15d[0]=今天00-06時，日曆日對齊）
 function SEG_EPOCH(){ const d=new Date(BASE_TIME); d.setHours(0,0,0,0); return d; }
+// ★★ 2026-10-02 修正（使用者回報「昨天有紅卻顯示在今天」）：
+//   daily_rain[i] 是以「資料產生當天」為原點往回數的，不是以「觀看當下」。
+//   原本工具列的日期按鈕用 SEG_EPOCH()（資料日），下拉選單卻用 new Date()
+//   （觀看者的今天）—— 兩個原點不同。只要 data.json 不是今天產的
+//   （排程失敗、或清晨還沒跑出今天第一輪），兩邊就差一天，
+//   而且**都指向同一個 daily_rain[0]**，於是昨天的觀測被標成今天。
+//   觀測是有絕對答案的資料，標錯日期等於校驗基準整個失效。
+//   正解：所有日期標籤一律以資料日為原點（下面這個函式是唯一來源）。
+function DATA_DAY(){ return SEG_EPOCH(); }
+// 資料日與觀看者的今天是否同一天
+function _dataDayIsToday(){
+  const a0 = DATA_DAY(), b0 = new Date(); b0.setHours(0,0,0,0);
+  return a0.getTime() === b0.getTime();
+}
+// 「今天」這個詞只有在資料日＝觀看日時才成立；不成立就直接標日期，
+//   不用「今天」兩個字去誤導判讀。
+function _todayLabel(withWd){
+  const d = DATA_DAY();
+  const WD2 = ['日','一','二','三','四','五','六'];
+  const md = `${d.getMonth()+1}/${d.getDate()}`;
+  if(_dataDayIsToday()) return withWd ? `${md}（${WD2[d.getDay()]}）今天` : `今天(${md})`;
+  return withWd ? `${md}（${WD2[d.getDay()]}）資料日` : `資料日(${md})`;
+}
 function segTime(seg){ return new Date(SEG_EPOCH().getTime() + seg*6*3600000); }
 
 // 無條件進位到十位數
@@ -9913,7 +9904,6 @@ async function tryLoadLive(){
   }
   const baseTag = document.getElementById('base-tag');
   if(baseTag) baseTag.textContent = `更新時間：${fmtDT(BASE_TIME)}`;
-  try{ _checkDataAge(); }catch(e){}
   buildPastBtns();
   buildFuture6hBtns();
   buildFuture1hBtns();
@@ -10174,7 +10164,10 @@ function buildPastBtns(){
     const btn = document.createElement('button');
     btn.className = 'b';
     btn.id = 'bpast'+n;
-    btn.textContent = n===0 ? `昨天(${fmtDay(dt)})` : `${fmtDay(dt)}`;
+    // ★ 「昨天」同樣只有在資料日＝觀看日時才成立；
+    //   data.json 跨夜時 past0 其實是前天，直接標日期不要用相對詞誤導。
+    btn.textContent = (n===0 && _dataDayIsToday())
+      ? `昨天(${fmtDay(dt)})` : `${fmtDay(dt)}`;
     btn.onclick = (nn=>()=>setWin('past'+nn))(n);
     c.appendChild(btn);
     ALL_DYNAMIC_BTN_IDS.push('bpast'+n);
@@ -10320,16 +10313,17 @@ function openTimePicker(ev){
     }
   } else {
     // 逐日：過去 9 天 + 今天 + 未來 15 天
+    // ★ 一律以資料日為原點（原本這裡用 new Date()，與工具列按鈕的
+    //   SEG_EPOCH() 不同源，data.json 一過夜就差一天）
     for(let k = 8; k >= 0; k--){
-      const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate() - k - 1);
+      const d = DATA_DAY(); d.setDate(d.getDate() - k - 1);
       items.push({label: `${d.getMonth()+1}/${d.getDate()}（${WD[d.getDay()]}）觀測`,
         on: (winKey === 'past' + k), act: ()=>setWin('past' + k)});
     }
-    const t0 = new Date(); t0.setHours(0,0,0,0);
-    items.push({label: `${t0.getMonth()+1}/${t0.getDate()}（${WD[t0.getDay()]}）今天`,
+    items.push({label: _todayLabel(true),
       on: (winKey === 'today'), act: ()=>setWin('today')});
     for(let n = 2; n <= 16; n++){
-      const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate() + n - 1);
+      const d = DATA_DAY(); d.setDate(d.getDate() + n - 1);
       items.push({label: `${d.getMonth()+1}/${d.getDate()}（${WD[d.getDay()]}）預報`,
         on: (winKey === 'day' + n), act: ()=>setWin('day' + n)});
     }
@@ -10568,7 +10562,7 @@ function buildDayBtns(){
   const btnToday = document.createElement('button');
   btnToday.className = 'b';
   btnToday.id = 'bToday';
-  btnToday.textContent = `今天(${fmtDay(SEG_EPOCH())})`;
+  btnToday.textContent = _todayLabel(false);
   btnToday.onclick = () => setWin('today');
   c.appendChild(btnToday);
   ALL_DYNAMIC_BTN_IDS.push('bToday');
