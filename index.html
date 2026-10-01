@@ -4078,7 +4078,7 @@ function _bindScatterClick(cv, hits, isZoom){
 }
 // 散佈圖 tooltip 內容：與地圖上的 tooltip 同一組欄位
 function _scatterTipHtml(t){
-  const acc = getAccum(t);
+  const acc = getAccum(t, 'rain');   // ★ 要的是雨量/ETR2，不可隨圖層變
   const rain = (t.daily_rain || [])[0];
   const obs = getObsEtr(t);
   return `<b>${t.county} ${t.township}</b>`
@@ -4122,7 +4122,7 @@ function _coverageWarn(){
   const step = Math.max(1, Math.floor(TOWNSHIPS.length / 30));
   let n = 0, got = 0;
   for(let i = 0; i < TOWNSHIPS.length; i += step){
-    const acc = getAccum(TOWNSHIPS[i]);
+    const acc = getAccum(TOWNSHIPS[i], 'rain');   // ★ 數的是雨量覆蓋率
     n++;
     if(acc && acc.totalRain != null && isFinite(acc.totalRain)) got++;
   }
@@ -4696,9 +4696,11 @@ function downloadAllCsv(){
     ['ETR2官方現值%', t=>{ const v = getObsEtr(t); return v != null ? v.toFixed(1) : ''; }],
     // ★ 預估欄位一律走 getAccum，隨所選時間視窗與模式變動
   //   （先前固定讀 t.etr2_pct，切換時段時 CSV 內容完全不變）。
-  ['ETR2預估%', t=>{ const a = getAccum(t);
+  // ★ 欄名已寫死是 ETR2% 與雨量，必須指定圖層，否則匯出時停在哪個圖層
+  //   就把那個圖層的值填進這兩欄（切到風險指標時「預測雨量mm」會是風險值）
+  ['ETR2預估%', t=>{ const a = getAccum(t, 'rain');
                      return (a && a.etrPct != null) ? a.etrPct.toFixed(1) : ''; }],
-  ['本視窗預測雨量mm', t=>{ const a = getAccum(t);
+  ['本視窗預測雨量mm', t=>{ const a = getAccum(t, 'rain');
                      return (a && a.totalRain != null) ? a.totalRain.toFixed(1) : ''; }],
     ['警戒值mm', t=>t.alert_val],
   ];
@@ -5894,7 +5896,7 @@ function renderBlendDetail(t){
       　信心 <b>${sp.level}</b></div>`;
   }
   if(rg){
-    const acc = getAccum(t);
+    const acc = getAccum(t, 'rain');   // ★ 官方研判區間是雨量，比對對象也必須是雨量
     const v = acc && acc.totalRain;
     const out = (v == null) ? null : v < rg.lo ? '低於' : v > rg.hi ? '高於' : null;
     extra += `<div style="margin-top:3px">官方研判（${rg.region === 'mountain' ? '山區' : '平地'}）：
@@ -7982,7 +7984,22 @@ function _etrAtHour(t, h, qpfField){
   return (den > 0) ? Math.round(etr / den * 1000) / 10 : null;
 }
 
-function getAccum(t){
+// ★★ 2026-10-02 修正（使用者回報「切圖層時各分署警戒摘要的累積雨量會變」）：
+//   getAccum 會依「畫面當前圖層」(全域 mode) 回傳不同的量 ——
+//   rain→雨量、etr→ETR2%、risk→風險、warn→警特報級別、wind/wave/temp→該要素，
+//   而且一律放在 totalRain 這個欄位裡。
+//   所以任何「我就是要雨量」或「我就是要 ETR2」的呼叫端都必須指明。
+//   先前 _summaryRain 寫成 getAccum(t, 'rain')，但函式只接一個參數，
+//   第二個參數被默默忽略 —— 摘要的「累積雨量」因此跟著圖層跑。
+//   這裡把 forceMode 做成真的參數（暫時切換全域 mode 後還原，
+//   與既有的 _accumAs 同一套做法）。
+function getAccum(t, forceMode){
+  if(!forceMode || forceMode === mode) return _getAccumRaw(t);
+  const saved = mode;
+  try{ mode = forceMode; return _getAccumRaw(t); }
+  finally{ mode = saved; }
+}
+function _getAccumRaw(t){
   const hasObs = t.rain_24h !== null && t.rain_24h !== undefined;
   const hasEtr = t.alert_val !== null && t.alert_val !== undefined && t.alert_val > 0;
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
@@ -8685,7 +8702,8 @@ function updateInfo(t){
   document.getElementById('iTitle').textContent = `${t.county} ${t.township}`;
   document.getElementById('iCont-hint').style.display = 'none';
 
-  const {totalRain, etrPct} = getAccum(t);
+  // ★ 下方以「預測累積QPF … mm」呈現，必須取雨量而不是當前圖層的值
+  const {totalRain, etrPct} = getAccum(t, 'rain');
   const obsEtr  = getObsEtr(t);
   const hasObs  = t.rain_24h !== null && t.rain_24h !== undefined;
   const hasEtr  = t.alert_val !== null && t.alert_val !== undefined;
@@ -13399,7 +13417,7 @@ function _modeHeadRow(t){
     let h = '';
     if(sp && sp.level) h += `<span style="font-size:10px">　信心 <b>${sp.level}</b></span>`;
     if(rg){
-      const acc = getAccum(t);
+      const acc = getAccum(t, 'rain');   // ★ 同上：與雨量區間比對
       const v = acc && acc.totalRain;
       if(v != null){
         const out = v < rg.lo ? '低於' : v > rg.hi ? '高於' : null;
