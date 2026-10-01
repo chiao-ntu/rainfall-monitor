@@ -1,0 +1,25 @@
+name: 離線單檔打包
+
+# 產出可完全離線使用的 formosa_offline.html，供颱風期間網路中斷時查閱。
+# ★ 刻意「不」commit 進 repo：檔案 6~12MB，每次 commit 都會讓 git 歷史暴增。
+#   改為上傳成 Actions artifact，需要時到 Actions 頁面下載即可。
+on:
+  schedule:
+    - cron: '17 21 * * *'      # 每日 05:17 TST（UTC+8），避開整點壅塞
+  workflow_dispatch:
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: 打包
+        run: python build_offline.py
+      - name: 上傳
+        uses: actions/upload-artifact@v4
+        with:
+          name: formosa-offline-${{ github.run_number }}
+          path: formosa_offline.html
+          retention-days: 14

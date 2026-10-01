@@ -4,10 +4,27 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>FORMOSA</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- ★ Leaflet 與 html2canvas 改由本站提供，不再依賴 unpkg／cdnjs。
+     原因：這兩個是「載不到就整頁不能用」的硬相依，而第三方 CDN 的
+     可用性不在我們掌控之內。改成本地檔之後，只要網頁本身載得到，
+     地圖就一定畫得出來；鏡像站與離線單檔也才有意義。
+     若本地檔缺失，下面的 onerror 會自動退回 CDN，不會直接開天窗。 -->
+<link rel="stylesheet" href="vendor/leaflet.css"/>
+<script src="vendor/leaflet.js"></script>
   <!-- 截圖：直接擷取現有畫面，不另行重繪（重繪容易與畫面不一致） -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="vendor/html2canvas.min.js"></script>
+  <script>
+  // ★ 相依缺失時給出可讀的訊息，而不是一片空白。
+  //   vendor/ 與本頁同源，正常部署不會缺；會缺就是部署漏了資料夾。
+  window.addEventListener('DOMContentLoaded', function(){
+    if(typeof L === 'undefined'){
+      document.body.insertAdjacentHTML('afterbegin',
+        '<div style="padding:14px;background:#7a1010;color:#fff;font-size:14px;'
+        + 'line-height:1.6">\u26a0 地圖元件（vendor/leaflet.js）載入失敗，'
+        + '本頁無法運作。<br>部署時請確認 vendor/ 資料夾與 index.html 一起上傳。</div>');
+    }
+  });
+  </script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Microsoft JhengHei',sans-serif;background:#0c1822;color:#dde8f2;height:100vh;display:flex;flex-direction:column;overflow:hidden}
@@ -144,6 +161,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   </div>
   <span class="tag time" id="base-tag"></span>
 </div>
+<div id="data-age-banner" style="display:none;padding:5px 14px;font-size:12px;
+  color:#fff;border-bottom:2px solid;flex-shrink:0;line-height:1.5"></div>
 <div id="ctrl">
     <!-- 外援連結 -->
   <div class="ctrl-row" style="flex-wrap:wrap;gap:3px;padding:3px 0">
@@ -1091,6 +1110,36 @@ const TOWNSHIPS = [{"county":"屏東縣","township":"來義鄉","alert_val":450.
 // ════════════════════════════════════════════════
 // TOWN_GEO and COUNTY_GEO are embedded as const above
 let BASE_TIME = new Date(2025,5,26,5,0,0);
+// ══════════════════════════════════════════════════════════
+//  ★★ 資料新鮮度警示
+// ══════════════════════════════════════════════════════════
+//  先前資料過舊只寫到 console.warn —— 使用者看不到，畫面一切正常。
+//  這在「主站掛掉、改看鏡像」的情境下特別危險：鏡像拿不到新資料時
+//  照樣把幾小時前的雨量畫得漂漂亮亮，判讀者以為那是現況。
+//  對預警系統來說，顯示舊資料而不說，比顯示不出來更糟。
+const DATA_AGE_WARN = 2.5;    // 小時：主排程每小時一次，超過 2.5h 視為異常
+const DATA_AGE_BAD  = 6;      // 小時：超過 6h 已不可作為判讀依據
+function _dataAgeHours(){
+  if(!(BASE_TIME instanceof Date) || isNaN(BASE_TIME)) return null;
+  return (Date.now() - BASE_TIME.getTime()) / 3600e3;
+}
+function _checkDataAge(){
+  const h = _dataAgeHours();
+  const el = document.getElementById('data-age-banner');
+  if(!el) return;
+  if(h == null || h < DATA_AGE_WARN){ el.style.display = 'none'; return; }
+  const bad = h >= DATA_AGE_BAD;
+  const hh = h < 48 ? `${h.toFixed(1)} 小時` : `${(h / 24).toFixed(1)} 天`;
+  el.style.display = 'block';
+  el.style.background = bad ? '#7a1010' : '#7a5510';
+  el.style.borderColor = bad ? '#ff4444' : '#ffbb33';
+  el.innerHTML = `<b>⚠ 資料已過時 ${hh}</b>（最後更新 ${fmtDT(BASE_TIME)}）　`
+    + (bad ? '<b>請勿作為現況判讀依據</b>，請改用官方即時資訊；'
+           : '自動更新可能中斷，畫面上的雨量非即時值；')
+    + '本頁其餘功能仍可運作。';
+}
+// 每 5 分鐘重新評估一次：頁面開著沒重整時，資料同樣會隨時間變舊
+setInterval(()=>{ try{ _checkDataAge(); }catch(e){} }, 5 * 60e3);
 // SEG_EPOCH：seg 索引的時間原點＝今天00時（qpf_15d[0]=今天00-06時，日曆日對齊）
 function SEG_EPOCH(){ const d=new Date(BASE_TIME); d.setHours(0,0,0,0); return d; }
 function segTime(seg){ return new Date(SEG_EPOCH().getTime() + seg*6*3600000); }
@@ -9795,6 +9844,7 @@ async function tryLoadLive(){
   }
   const baseTag = document.getElementById('base-tag');
   if(baseTag) baseTag.textContent = `更新時間：${fmtDT(BASE_TIME)}`;
+  try{ _checkDataAge(); }catch(e){}
   buildPastBtns();
   buildFuture6hBtns();
   buildFuture1hBtns();
