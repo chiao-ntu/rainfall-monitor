@@ -2787,7 +2787,28 @@ const RISK_SCALE=[
   {max:100, color:'#FF0000', label:'90–100 高'},
   {max:1e9, color:'#FF00FF', label:'≥100 極高'},
 ];
-function rainColor(v){for(const s of RAIN_SCALE)if(v<s.max)return s.color;return'#FFAAFF'}
+// ★ 雨量色階的單一真相：時雨量 vs 累積雨量
+//   圖例 renderLegend 早已切到 HOURLY_SCALE，但地圖填色、漸層動畫、
+//   渲染內插三條路徑各自硬寫 RAIN_SCALE／RAIN_SCALE_CWA，造成
+//   「圖例說時雨量、地圖畫日雨量」：時雨量 <5mm 全被塗白，看起來
+//   六小時有雨、逐時沒雨（使用者回報的現象）。
+//   色階必須由「數值本身的來歷」決定，不可由全域視窗猜：逐時視窗下
+//   若某鄉鎮取不到逐時值會退回 6h／日累積量，那個值仍須用累積色階，
+//   否則 40mm 的日累積會被畫成時雨量色階的紅色（反向高估）。
+function rainColor(v, scale){
+  const S = scale || RAIN_SCALE;
+  for(const s of S) if(v < s.max) return s.color;
+  return S[S.length - 1].color;
+}
+// 依 getAccum() 的結果挑雨量色階（isHourly＝逐時、isRadar＝雷達1h 皆為時雨量）
+function _rainScaleOf(acc){
+  if(mode !== 'rain') return RAIN_SCALE;
+  return (acc && (acc.isHourly || acc.isRadar)) ? HOURLY_SCALE : RAIN_SCALE;
+}
+// 全域視窗是否為「時雨量語意」（供圖例與渲染內插層用，兩者本質是整張圖一個尺度）
+function _isHourlyRainWin(){
+  return mode === 'rain' && (_hourIdx != null || winKey === 'radar');
+}
 
 // CWA 定量降水預報官方色階（值→官方色；與後端 QPF_PNG_BANDS 對應）。
 //   CWA 模式為「色階類別」呈現：直接還原官方圖的色帶顏色，不顯示數字。
@@ -7087,7 +7108,9 @@ function _animPaint(){
       try{
         const a = getAccum(t);
         const v = a && (mode === 'etr' ? a.etrPct : a.totalRain);
-        const rc = _rampColor(v, mode === 'etr' ? ETR_SCALE : RAIN_SCALE);
+        // ★ 動畫的連續色也必須用同一條色階挑選規則，否則播放時
+        //   逐時畫面會跳回日累積色階（停播正常、一播就變白）。
+        const rc = _rampColor(v, mode === 'etr' ? ETR_SCALE : _rainScaleOf(a));
         if(rc) to = rc;
       }catch(e){}
     }
@@ -8304,7 +8327,9 @@ function _townFill(t, isSel){
     if(acc.isRadar){
       // 雷達1h：用雨量色階，無回波(null)＝白
       // ★ 深色海底時陸地仍須純白（不可被下方深色海透出而變灰）
-    fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain);
+    // ★ 雷達是「未來1小時」的量，必須用時雨量色階，不可用日累積色階
+    //   （與逐時視窗同一個缺陷：3mm/h 會被日累積色階塗成白色）。
+    fillColor = (totalRain==null) ? '#FFFFFF' : rainColor(totalRain, _rainScaleOf(acc));
       fillOp    = (totalRain==null) ? (_terrainOn ? TERR_NODATA_OP : 1.0) : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     } else if(acc.isWarn){
       // ★ 各 mode 分支必須排在「totalRain === null」之前。
@@ -8344,7 +8369,7 @@ function _townFill(t, isSel){
       fillColor = _hourlyColor(totalRain) || '#FFFFFF';
       fillOp    = (totalRain == null) ? (_terrainOn ? TERR_NODATA_OP : 1.0) : (isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0));
     } else {
-      fillColor = mode==='rain' ? rainColor(totalRain) : (etrPct===null?'#FFFFFF':etrColor(etrPct));
+      fillColor = mode==='rain' ? rainColor(totalRain, _rainScaleOf(acc)) : (etrPct===null?'#FFFFFF':etrColor(etrPct));
       fillOp    = isSel?1:(_terrainOn ? TERR_FILL_OP : 1.0);
     }
     }
@@ -9217,7 +9242,9 @@ function _drawHourlyChart(t, canvasId, isZoom){
     const x=pL+h*bw, bh=ch*v/axisMax;
     ctx.globalAlpha = h<nowIdx ? (_em[h] ? 0.26 : 0.5) : 1.0;   // 分配槽更暗
     // ★ 長條改用雨量色階（同地圖圖例），可直接對應強度分級
-    ctx.fillStyle = (RAIN_SCALE.find(b=>v<b.max)||RAIN_SCALE[RAIN_SCALE.length-1]).color;
+    //   這是逐時雨型圖，必須用時雨量色階：先前用日累積色階，
+    //   3mm/h 取到 <5mm 的白色，在深色底上等於整根長條消失。
+    ctx.fillStyle = rainColor(v, HOURLY_SCALE);
     ctx.fillRect(x+bw*0.12, pT+ch-bh, bw*0.76, bh);
     if(v>=40 && isZoom){
       ctx.strokeStyle='#FF0000'; ctx.lineWidth=4;
@@ -9455,7 +9482,8 @@ function renderLegend(){
   const ELEV_SCALE = ELEV_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
   const TEMP_SCALE = TEMP_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
   const WAVE_SCALE = WAVE_BANDS.map(b=>({max:b.max, color:b.color, label:b.name}));
-  const sc = (_hourIdx != null && mode==='rain') ? HOURLY_SCALE
+  // ★ 逐時視窗與雷達1h 都是「時雨量」語意，共用同一條判斷（_isHourlyRainWin）
+  const sc = _isHourlyRainWin() ? HOURLY_SCALE
            : mode==='temp' ? TEMP_SCALE
            : mode==='wave' ? WAVE_SCALE
            : mode==='rain' ? RAIN_SCALE
@@ -9468,8 +9496,9 @@ function renderLegend(){
                    temp: '氣溫(°C)', wave: '浪高' };
   // ★ 逐時視窗的雨量圖例標題為「時雨量」（先前誤寫成 return，
   //   等於提早結束 renderLegend，整個圖例都畫不出來）。
-  const titleText = (_hourIdx != null && mode === 'rain')
-    ? '時雨量(mm/h)' : (titles[mode] || '');
+  const titleText = _isHourlyRainWin()
+    ? (winKey === 'radar' ? '雷達時雨量(mm/h)' : '時雨量(mm/h)')
+    : (titles[mode] || '');
 
   // 強度分級用描述性文字，不顯示數字範圍
   const INTENSITY_DESC = ['未達警戒', '大雨', '豪雨', '大豪雨', '超大豪雨'];
@@ -11290,7 +11319,7 @@ function showChartTooltip(evt, canvasId){
     const pastTag = hIdx<_nP ? '（模式回算）' : '';
     const warnTag = (v>=40 ? ' <span style="color:#FFFF00;font-weight:700">≥大雨1h標準</span>' : '') + pastTag;
     tip2.innerHTML = `<b>${d0.getMonth()+1}/${d0.getDate()} ${String(d0.getHours()).padStart(2,'0')}-${String(d1.getHours()).padStart(2,'0')}時</b><br>`+
-      `時雨量：<b>${v.toFixed(1)} mm</b>${warnTag}`;
+      `時雨量：<b style="color:${rainColor(v, HOURLY_SCALE)}">${v.toFixed(1)} mm/h</b>${warnTag}`;
     tip2.style.display='block';
     tip2.style.left=(evt.clientX+14)+'px';
     tip2.style.top =(evt.clientY-10)+'px';
@@ -13437,11 +13466,12 @@ function _modeHeadRow(t){
         + '<span style="color:#e8a860">（此圖層官方資料為逐3小時）</span></span>';
     }
     if(acc && acc.isHourly){
+      // ★ 這是逐時值：色階與單位都必須用時雨量（先前用日累積色階且標 mm）
       const c = (acc.totalRain != null)
-        ? (RAIN_SCALE.find(b=>acc.totalRain < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color
+        ? rainColor(acc.totalRain, HOURLY_SCALE)
         : '#8a9aaa';
       return `<span style="font-size:10px">　+${_hourIdx}h `
-        + `<b style="color:${c}">${acc.totalRain != null ? acc.totalRain + ' mm' : '—'}</b>`
+        + `<b style="color:${c}">${acc.totalRain != null ? acc.totalRain + ' mm/h' : '—'}</b>`
         + (acc.approx
             ? '<span style="color:#e8a860">（段內平均，非原生逐時）</span>'
             : '<span style="color:#8ad8a0">（IFS HRES 原生逐時）</span>')
@@ -14163,7 +14193,8 @@ function downloadRangeCsv(){
       const r = calcRiskIndicator(t, Math.max(0, segTo));
       color = riskColor(r.R);
     } else {
-      color = (rain!=null) ? rainColor(rain) : '#FFFFFF';
+      // ★ 匯出的顏色必須與地圖同色階（逐時→時雨量），否則匯出後變成另一張圖
+      color = (rain!=null) ? rainColor(rain, _rainScaleOf(getAccum(t,'rain'))) : '#FFFFFF';
     }
     rows.push(['鄉鎮', t.county, t.township, '', color, rain ?? '', ep ?? '', rangeLabel]);
   });
@@ -15633,7 +15664,7 @@ function _valueColorForMode(v){
   if(mode==='etr')  return etrColor(v);
   if(mode==='risk') return riskColor(v);
   if(mode==='warn') return warnMapColor(Math.round(v));
-  return rainColor(v);
+  return rainColor(v, _isHourlyRainWin() ? HOURLY_SCALE : RAIN_SCALE);
 }
 
 // CWA 官方定量降水色階（僅供「渲染」內插層用，讓渲染後的分布圖貼近氣象署官方配色）
@@ -15661,6 +15692,10 @@ function _modeBandsRgb(){
   else if(mode==='wind') sc = BF_BANDS;
   else if(mode==='temp') sc = TEMP_BANDS;
   else if(mode==='wave') sc = WAVE_BANDS;
+  // ★ 渲染內插層：逐時／雷達視窗整張圖都是時雨量，必須換成時雨量色階。
+  //   先前一律用 RAIN_SCALE_CWA（門檻同日累積），開啟渲染後逐時圖
+  //   同樣 <5mm 全白，與圖例的時雨量色帶對不起來。
+  else if(_isHourlyRainWin()) sc = HOURLY_SCALE;
   else sc = RAIN_SCALE_CWA;  // 渲染時累積雨量用CWA官方配色（門檻同RAIN_SCALE，僅換色）
   return sc.map(s=>({max:s.max, rgb:hex2rgb(s.color)}));
 }

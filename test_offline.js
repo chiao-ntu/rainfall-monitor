@@ -33,10 +33,14 @@ const puppeteer=require('puppeteer');
   const bn = document.querySelector('div');
   ok(/離線單檔版/.test(document.body.textContent), '離線橫幅已顯示');
   ok(/2026-09-30T22:00:00/.test(document.body.textContent), '資料時間已標示');
-  // 資料過時橫幅（打包資料是舊的，應該也要跳出來）
-  // 把資料時間往前推 8 小時，確認過時警示會跳出來（原打包資料才 1.4h，不該跳）
+  // 資料過時橫幅：兩個方向都要測。
+  // ★ 原本斷言「打包資料才 1.4h，不該跳」，那是寫測試當天的狀況；
+  //   打包檔放幾天後資料自然變舊，橫幅本來就該跳，這條會變成假警報。
+  //   改為自己注入時間，與打包當下的新鮮度無關。
   const age=document.getElementById('data-age-banner');
-  ok(age && age.style.display === 'none', '資料僅 1.4 小時 → 不誤報過時');
+  BASE_TIME = new Date(Date.now() - 1.4*3600e3);
+  _checkDataAge();
+  ok(age && age.style.display === 'none', '注入資料時間 1.4 小時 → 不誤報過時');
   BASE_TIME = new Date(Date.now() - 8*3600e3);
   _checkDataAge();
   ok(age && age.style.display !== 'none' && /過時/.test(age.textContent),
