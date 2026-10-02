@@ -1,0 +1,98 @@
+name: 發布公開版（程式碼）
+
+# 放在「私有」的 formosa-core repo。
+# 作用：把 index.html 剝掉註解後推到「公開」的 Pages repo。
+# 私有 repo 留完整原始碼與註解；公開 repo 只有能跑的成品。
+#
+# ★★ 這支只管「程式碼」，不管資料。這是刻意分開的，理由是分鐘數：
+#   私有 repo 的 Actions 免費額度是 2,000 分鐘/月，而且「每個 job 不足一分鐘
+#   也算一分鐘」。建置＋驗證＋瀏覽器測試一輪約 3–5 分鐘，若每次資料更新
+#   都跑，每月就要 2,000 分鐘以上 —— 光這一支就把額度用完。
+#   資料更新頻繁（逐時）但只是 git push，很便宜；程式碼很少改但建置很貴。
+#   所以：資料由抓取那支 workflow 直接推，程式碼只在真的改動時才發布。
+#
+# ★ 設定：下面三個 env，加上 secret PUBLISH_TOKEN。
+#   PUBLISH_TOKEN 用 fine-grained PAT，權限只給「公開 repo 的 Contents: write」。
+#   不要用碰得到私有 repo 的 token —— 那等於把要保密的東西交給發布流程。
+
+env:
+  PUBLIC_REPO: your-account/formosa          # ← 改成你的公開 repo
+  PUBLIC_BRANCH: main
+  BUILT_NAME: index.html                     # 公開 repo 裡的檔名
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    # 只有這些檔案動了才需要重新發布程式碼
+    paths:
+      - 'index.html'
+      - 'build_public.js'
+      - 'vendor/**'
+
+permissions:
+  contents: read        # 只讀本 repo；寫入公開 repo 走 PAT
+
+concurrency:
+  group: publish-public
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '20'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+
+      - name: 建置公開版（移除註解）
+        run: |
+          npm install --no-audit --no-fund terser
+          node build_public.js index.html index.public.html
+
+      - name: 驗證「產出物」
+        # ★ 驗產出物而非原始碼。建置本身就是新的故障來源：
+        #   原始碼通過不代表產出物通過。失敗就中止，不發布半成品。
+        run: python3 verify_html.py index.public.html
+
+      - name: 瀏覽器回歸測試（對產出物）
+        run: |
+          npm install --no-audit --no-fund puppeteer
+          cp index.public.html _local.html
+          python3 -m http.server 8899 &
+          sleep 3
+          node test_hourly_paint.js
+          node test_rain_scale.js
+
+      - name: 推到公開 repo
+        env:
+          GH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${PUBLIC_BRANCH}" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${PUBLIC_REPO}.git" pub
+
+          # ★ 只覆蓋成品，不做 rsync --delete：
+          #   公開 repo 裡有 CNAME、robots.txt、以及抓取流程推上去的資料檔，
+          #   整個目錄同步會把它們刪掉。
+          cp index.public.html "pub/${BUILT_NAME}"
+          # 固定圖資（很少變，隨程式碼一起發布）
+          for f in town_polys.json east_asia_geo.json terrain_zones_4class.json \
+                   terrain_relief.json landslide_warning_stations.json \
+                   coast_dist_final.json town_terrain2.json; do
+            [ -f "$f" ] && cp "$f" "pub/$f" || true
+          done
+          [ -d vendor ] && mkdir -p pub/vendor && cp -r vendor/. pub/vendor/ || true
+
+          cd pub
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "無變動，不發布"; exit 0
+          fi
+          git config user.name  "formosa-bot"
+          git config user.email "formosa-bot@users.noreply.github.com"
+          git add -A
+          # ★ commit 訊息不要帶方法細節：公開 repo 的 git log 是看得到的
+          git commit -m "更新 $(date -u '+%Y-%m-%dT%H:%MZ')"
+          git push
