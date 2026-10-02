@@ -8,7 +8,9 @@
 絕不 print index.html 全文（內嵌 GeoJSON 會爆輸出）。"""
 import io, re, subprocess, sys
 
-P = 'index.html'
+# ★ 可指定檔名：建置出公開版後，必須驗「產出物」而不是原始碼。
+#   用法：python3 verify_html.py [檔名]（預設 index.html）
+P = next((a for a in sys.argv[1:] if not a.startswith('-')), 'index.html')
 s = io.open(P, encoding='utf-8').read()
 fail = []
 
@@ -44,7 +46,8 @@ MUST = ['getAccum', 'setWin', 'onSlider', '_spanAccum', '_hourlyBars', '_futuHou
         '_tempColor', '_waveColor', '_tempOf', '_waveOf', '_tempRow', '_waveRow',
         '_tempSeries', '_waveSeries', '_dayMax', '_buildWaveIndex', '_maxHourRow',
         '_longSwell', '_waveDirText', '_onshore', '_isCoastal',
-        '_nextHighTide', '_surgeRisk',
+        '_nextHighTide', '_surgeRisk', '_envHistPts', '_modeHeadRow',
+        '_blendQpf', '_skillOf', '_blendSpread', '_officialRange', 'renderBlendDetail', '_blendOverviewHtml', 'drawStnRankChart', '_scatterBase', 'drawElevRainChart', 'drawEtrPhaseChart', 'drawMarginChart', 'renderRankList', '_rankPick', 'copyRankList', 'downloadAllCsv', '_fitCanvas', '_paintGrid', '_winSrcLabel', '_hourlyAt', 'buildFuture1hBtns', 'stepHour', 'stepSlider', 'stepWin', '_marginColor', 'snapMap', 'calcEtr2MaxIn', '_hourlyColor', '_doSnap', 'toggleTimeNav', '_fillNavSelects', 'renderVerify', '_threeHourAt', '_syncMergedSecs', 'drawEtrWaterfall', '_secHint', 'drawVerifyChart', '_vfScores', '_vfSeries', '_syncCountyPickers', '_fillOneCountyPicker', '_syncNavSelects', 'onNavScale', '_fmtDayTime', '_segPeriodName', '_syncH1Label', '_syncTimeNav', 'onH1Range', 'onH1DayChange', '_coverageWarn', 'closeChartZoom', '_elevColor', '_terrainOf', '_terrainRow', 'pickCounty', 'toggleTerrainLayer', 'drawCountyTowns', '_fillCountyPicker', 'focusStation', 'toggleSidebarFull', 'toggleCtlFull', '_applyFullLayout', 'toggleStationLayer', 'renderStationLayer', '_zoomPoint', '_scatterTipHtml', '_scatterHitAt', '_bindScatterClick',
         '_buildSearchIndex', '_searchMatch', 'onSearchInput', 'onSearchPick', 'onSearchKey',
         '_logModeDistribution',
         'drawTempDayChart', 'drawTempHourChart', 'drawWaveDayChart', 'drawWaveHourChart',
@@ -71,9 +74,9 @@ for tag in ['</html>', '</body>', '<div id="map"']:
 # --- 4. 關鍵功能字串 ---
 MUST_STR = ['TOWN_GEO', 'TYPHOON_TRACK', 'DEBRIS_ALERTS', 'typhoon-panel-body',
             'typhoon-legend-wrap', 'typhoon-legend-toggle', 'TW_WARN_EXCLUDE',
-            'bTownName', 'townNameScope', 'bWind', 'bTemp', 'bWave', 'townSearch', 'searchResults', 'cv-wind-day', 'cv-wind-day-gust', 'cv-wind-day-est',
+            'bTownName', 'townNameScope', 'bWind', 'bTemp', 'bWave', 'townSearch', 'searchResults', 'mBlend', 'mJma', 'mAifs', 'mGc', 'future1h-btns', 'h1-range', 'h1-day', 'time-nav', 'nav-model', 'sec-verify', 'sec-daily', 'sec-hyeto2', 'body-daily', 'body-hyeto2', 'cv-waterfall', 'cv-verify', 'vf-scope', 'vf-days', 'vf-date', 'sbCountyPick', 'ct-metric', 'rank-to', 'nav-scale', 'nav-layer', 'rank-title', 'coverage-warn',  'sb-full', 'ctl-full', 'scatter-tip', 'bStnLayer', 'bTerrain', 'countyPick', 'cv-countytowns', 'cv-wind-day', 'cv-wind-day-gust', 'cv-wind-day-est',
             'cv-wind-hr', 'cv-wind-hr-gust', 'cv-wind-hr-est',
-            'cv-temp-day', 'cv-temp-hr', 'cv-wave-day', 'cv-wave-hr',
+            'cv-stnrank', 'cv-elevrain', 'cv-etrphase', 'cv-margin', 'cv-temp-day', 'cv-temp-hr', 'cv-wave-day', 'cv-wave-hr',
             'debris-panel-body', 'landslide-panel-body', 'typhoon-legend',
             'cust-ctrl', 'slS', 'slE', '颱風動態', 'ETR2',
             # 外援連結（漏掉會靜默消失，沒有其他檢查會抓到）
@@ -97,6 +100,22 @@ for m in re.finditer(r'\b(const|let|var)([^\sA-Za-z_$\(\[\{=/（\-])', js):
     line = js[:m.start()].count('\n') + 1
     fail.append(f'第{line}行 疑似漏空格宣告：{m.group(0)!r}')
     print(f'!! 疑似漏空格宣告（第{line}行，抽出的JS）：{m.group(0)!r}')
+
+
+# ★ 關鍵結構檢查：這些若被字串替換誤刪，語法仍正確但整張地圖會空白。
+#   實測發生過兩次（加截圖功能、移除遮罩時），故納入常態檢查。
+CRITICAL = [
+    ("createPane('seaPane')",  '海域 pane'),
+    ("createPane('townPane')", '鄉鎮色塊 pane'),
+    ('const seaLayer',         '海域底層'),
+    ('const RAIN_SCALE',       '累積雨量色階'),
+    ('const HOURLY_SCALE',     '時雨量色階'),
+    ('function renderLayer',   '圖層繪製'),
+    ('function updateInfo',    '右側面板'),
+]
+for token, label in CRITICAL:
+    if token not in s:
+        fail.append(f'缺少關鍵結構：{label}（{token}）')
 
 print(f'\n檔案 {len(s)//1024}KB、{s.count(chr(10))+1} 行')
 print('=== 全部通過 ===' if not fail else f'=== 失敗 {len(fail)} 項：{fail} ===')
