@@ -1,0 +1,82 @@
+# 加到你「抓資料」那支 workflow 的最後一個步驟（私有 formosa-core repo 裡）。
+# 這一個步驟取代原本的 publish_public.yml + push_data_step.yml 兩個檔案。
+#
+# ★ 為什麼不在 CI 建置：
+#   建置（剝註解）＋驗證＋瀏覽器測試一輪要 3–5 分鐘。前端很少改、資料逐時更新，
+#   綁在一起每月要 2,000+ 分鐘，剛好把私有 repo 的免費額度用光
+#   （2,000 分/月，且每個 job 不足一分鐘也算一分鐘）。
+#   改成：前端改動時你在本機建置並 commit 到 public/，CI 只負責複製與推送。
+#
+# ★ 本機建置（只在你改了 index.html 時才需要跑）：
+#     node build_public.js index.html public/index.html
+#     python3 verify_html.py public/index.html
+#     cp public/index.html _local.html && node test_hourly_paint.js
+#     git add public/index.html && git commit -m "更新公開版前端"
+#   驗證要對「public/index.html」跑，不是對原始碼跑 —— 建置本身就是故障來源。
+#
+# ★ 需要的 secret：PUBLISH_TOKEN
+#   fine-grained PAT，權限只給「公開 repo 的 Contents: write」。
+#   不要用碰得到私有 repo 的 token，那等於把要保密的東西交給發布流程。
+
+      - name: 發布到公開 repo
+        env:
+          GH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+          PUBLIC_REPO: your-account/formosa       # ← 改成你的公開 repo
+          PUBLIC_BRANCH: main
+        run: |
+          set -euo pipefail
+
+          # ★ 沒有建置產物就中止，不要讓公開站只更新資料卻配著不存在的前端
+          if [ ! -s public/index.html ]; then
+            echo "找不到 public/index.html —— 請先在本機建置並 commit" >&2
+            exit 1
+          fi
+
+          git clone --depth 1 --branch "${PUBLIC_BRANCH}" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${PUBLIC_REPO}.git" pub
+
+          # ── 前端成品與固定圖資 ──
+          cp public/index.html pub/index.html
+          for f in town_polys.json east_asia_geo.json town_terrain2.json \
+                   terrain_zones_4class.json terrain_relief.json \
+                   landslide_warning_stations.json coast_dist_final.json; do
+            [ -f "$f" ] && cp "$f" "pub/$f" || true
+          done
+          [ -f terrain_relief.png ] && cp terrain_relief.png pub/ || true
+          [ -d vendor ] && mkdir -p pub/vendor && cp -r vendor/. pub/vendor/ || true
+
+          # ── 每輪變動的資料 ──
+          # ★ 逐檔檢查「存在、非空、且是合法 JSON」才推。
+          #   某輪某個來源抓取失敗時，寧可讓公開版沿用上一輪的那個檔，
+          #   也不要推一個空檔或半截檔 —— 推上去就是全體使用者看到壞資料。
+          ok=0; skip=0
+          for f in data.json radar.json rain_hourly.json etr2_now.json \
+                   verify.json typhoon_now.json env_hist.json wind_hist.json \
+                   debris_geo.json landslide_geo.json forecast_log.json; do
+            if [ -s "$f" ] && python3 -c "import json,sys;json.load(open(sys.argv[1]))" "$f" 2>/dev/null; then
+              cp "$f" "pub/$f"; ok=$((ok+1))
+            else
+              [ -e "$f" ] && echo "跳過 $f（空檔或非合法 JSON）" || true
+              skip=$((skip+1))
+            fi
+          done
+          echo "資料檔：推送 ${ok} 個、跳過 ${skip} 個"
+
+          # ★ data.json 是核心，它壞掉就整站不能用，不接受沿用舊檔而靜默帶過
+          if [ ! -s pub/data.json ]; then
+            echo "pub/data.json 不存在 —— 中止發布" >&2
+            exit 1
+          fi
+
+          # ★ 不做 rsync --delete：公開 repo 裡有 CNAME、robots.txt 等
+          #   不是由這裡產生、但不該被刪的檔案。
+          cd pub
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "無變動，不發布"; exit 0
+          fi
+          git config user.name  "formosa-bot"
+          git config user.email "formosa-bot@users.noreply.github.com"
+          git add -A
+          # ★ commit 訊息不要帶方法細節：公開 repo 的 git log 是看得到的
+          git commit -m "更新 $(date -u '+%Y-%m-%dT%H:%MZ')"
+          git push
