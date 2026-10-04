@@ -1464,7 +1464,17 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
               f"station_etr2 有 {len(station_etr2)} 筆、alert_val={alert_val}")
     return enriched
 
-def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=None):
+def _cty_norm(x):
+    """縣市／鄉鎮名正規化：台↔臺 互通，去空白。
+
+    水保署與中央氣象署的行政區用字並非總是一致，一個「台東縣 vs 臺東縣」
+    就會讓整個縣對不到，而且是靜默的。
+    """
+    return (x or '').strip().replace('台', '臺')
+
+
+def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=None,
+            debris=None):
     # 建立站名→sid 索引（供改法B用官方代表站名查即時ETR2）
     # ★★ 2026-10-04 修正：原本只有「全臺站名→第一個遇到的 sid」，而且
     #   去後綴鍵是無條件 setdefault —— 這正是 line ~720 在水保署索引上修掉的
@@ -1547,9 +1557,24 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
         _designated = set()      # (縣市, 鄉鎮, 站名)：官方警戒單元指定的代表站
         _geo_block = []          # 被地理閘門擋下的跨縣市誤配（本來會灌錯值）
         _extra_rank = []         # 補進排行的非代表站（不影響鄉鎮官方 ETR2）
+        # ★★ 官方潛勢溪流（權威來源）：(縣,鄉) → [該鄉鎮的所有警戒單元]
+        #   每條都自帶 AlertValue 與 ETR2，pct 由水保署欄位直接算出，
+        #   不經任何站名比對 —— 靜態表過期或站名撞名都影響不到它。
+        _deb_by_town = {}
+        for _d in (debris or {}).values():
+            _k = (_cty_norm(_d.get('county')), _cty_norm(_d.get('town')))
+            if _k[0] and _k[1]:
+                _deb_by_town.setdefault(_k, []).append(_d)
+        if _deb_by_town:
+            print(f"  官方潛勢溪流索引：{len(_deb_by_town)} 個鄉鎮、"
+                  f"{sum(len(v) for v in _deb_by_town.values())} 個警戒單元")
+        _deb_won = 0             # 鄉鎮最高值由官方潛勢溪流提供（靜態表沒對到）
+        _deb_add = []            # 靜態表缺漏、靠官方資料補上的單元
         for key, td in town.items():
-            regions = slope_warn.get(key)
-            if not regions:
+            regions = slope_warn.get(key) or []
+            _drows = _deb_by_town.get(
+                (_cty_norm(td['county']), _cty_norm(td['township']))) or []
+            if not regions and not _drows:
                 td['etr2'] = None; td['etr2_pct'] = None
                 continue
             best_pct = None; best_etr2 = None; best_av = None
@@ -1648,6 +1673,42 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
             td['etr2_src'] = ('swcb' if (used_swcb and not used_cwa)
                               else 'mixed' if (used_swcb and used_cwa)
                               else 'cwa' if used_cwa else None)
+            # ══════════════════════════════════════════════════
+            #  併入官方潛勢溪流（權威）—— 這才是修掉寒溪s的那一步
+            #  靜態表那條路徑保留，因為它提供 CWA 自算退路（水保署掛掉時仍有值）；
+            #  但鄉鎮的最高值以官方資料為準，兩邊取聯集後取大。
+            #  依 (村里, 站名) 去重，同一個單元不會被算兩次。
+            # ══════════════════════════════════════════════════
+            _best_before = best_pct
+            for _d in _drows:
+                _dv, _da = _d.get('etr2'), _d.get('alert')
+                if _dv is None or not _da or _da <= 0: continue
+                _dp = _d.get('pct')
+                if _dp is None: _dp = round(_dv / _da, 4)
+                _sig = (_d.get('vill') or '', _d.get('station') or '')
+                if _sig not in seen:
+                    seen.add(_sig)
+                    detail.append({'village': _sig[0], 'station': _sig[1],
+                                   'alert': _da, 'etr2': _dv, 'etr2_pct': _dp,
+                                   'src': 'swcb'})
+                    _deb_add.append({'county': _c0, 'town': _t0,
+                                     'station': _sig[1], 'etr2': _dv,
+                                     'pct': _dp})
+                used_swcb = True
+                if best_pct is None or _dp > best_pct:
+                    best_pct = _dp; best_etr2 = _dv; best_av = _da
+                # 官方站也要進測站排行
+                _s3 = _pick_sid(_sig[1], _c0, _t0)
+                if _s3 and td['station_etr2'].get(_s3) is None:
+                    td['station_etr2'][_s3] = _dv
+            if best_pct is not None and best_pct != _best_before:
+                _deb_won += 1
+            td['etr2'] = best_etr2
+            td['etr2_pct'] = best_pct
+            td['etr2_alert'] = best_av
+            td['etr2_src'] = ('swcb' if (used_swcb and not used_cwa)
+                              else 'mixed' if (used_swcb and used_cwa)
+                              else 'cwa' if used_cwa else None)
             td['slope_regions'] = detail
 
             # ★★ 把「該鄉鎮內水保署有值、但不是任何警戒單元代表站」的測站
@@ -1717,6 +1778,15 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                 if (c, t, nm) not in _used_names:
                     _orphan.append({'county': c, 'town': t, 'station': nm, 'etr2': v})
         _orphan.sort(key=lambda x: -(x['etr2'] or 0))
+        if _deb_add:
+            print(f"  [稽核] 官方潛勢溪流補上靜態表缺漏的單元：{len(_deb_add)} 個"
+                  f"（其中 {_deb_won} 個鄉鎮因此提高了 ETR2%）")
+            _deb_add.sort(key=lambda x: -(x['pct'] or 0))
+            for r in _deb_add[:8]:
+                print(f"         {r['county']}{r['town']} 「{r['station']}」"
+                      f"ETR2 {r['etr2']}（{round((r['pct'] or 0)*100,1)}%）")
+            if len(_deb_add) > 8:
+                print(f"         …共 {len(_deb_add)} 個")
         if _extra_rank:
             print(f"  [稽核] 補進測站排行的非代表站：{len(_extra_rank)} 站"
                   f"（有值卻沒列入排行的情況已消除；鄉鎮官方 ETR2 不受影響）")
@@ -1736,6 +1806,7 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                            'geo_blocked': _geo_block,
                            'sid_blocked': _sid_block,
                            'added_to_ranking': _extra_rank,
+                           'from_official_streams': _deb_add,
                            'not_representative': _orphan},
                           _f, ensure_ascii=False, indent=1)
             print(f"  [稽核] 已寫 station_audit.json"
@@ -5020,7 +5091,17 @@ def main():
     stations = fetch_obs()
     history  = update_history(stations,now_tpe) if stations else \
                (json.load(open(HISTORY_FILE)) if os.path.exists(HISTORY_FILE) else {})
-    town_obs = agg_obs(stations,alert_table,history,now_tpe,slope_warn,swcb_etr2)
+    # ★★ 2026-10-05：土石流逐潛勢溪流資料提前抓，並傳進 agg_obs。
+    #   原因（寒溪s 兩次沒抓到的真正根因）：
+    #   先前鄉鎮 ETR2 是「靜態警戒區表的代表站名」→「水保署站名索引」做字串比對，
+    #   只要靜態表的站名與官方集合對不上（撞名、改名、新增單元、表過期），
+    #   那個單元就靜默消失。站名比對本身就是個會持續壞掉的介面。
+    #   但水保署同一支 API 的每一條潛勢溪流本身就帶 County/Town/AlertValue/STRT，
+    #   fetch_debris_alerts() 已逐條算好 pct —— 那就是官方鄉鎮總表的構成方式本身。
+    #   直接用它當鄉鎮 ETR2% 的權威來源，站名比對只保留給 CWA 自算退路。
+    debris_alerts = fetch_debris_alerts()
+    town_obs = agg_obs(stations,alert_table,history,now_tpe,slope_warn,swcb_etr2,
+                       debris=debris_alerts)
 
     # PoP
     pop3d, pop7d = fetch_all_pop(counties_needed)
@@ -5075,7 +5156,7 @@ def main():
     if all_stations_out:
         print(f"全臺測站清單：{len(all_stations_out)} 站（含座標與海拔）")
     fc_precip     = fetch_forecaster_precip() if CWA_API_KEY else {}
-    debris_alerts = fetch_debris_alerts()
+    # debris_alerts 已於 agg_obs 之前抓取（鄉鎮 ETR2% 的權威來源）
     # 雙軌：現況紅黃走官方發布值、未來推估自算
     official_alerts = fetch_official_alerts()
     ls_alert_vals   = fetch_ls_alert_values()
@@ -5370,6 +5451,7 @@ def main():
         })
 
     # 加入「全台所有行政區」中尚未處理的：用 all_townships.json 為基準
+    #   （ETR2 由官方潛勢溪流補，見下方 _ns_etr2）
     # 確保即使該行政區完全沒有CWA觀測站，也能用座標補上QPF預測資料
     processed = {t['county']+t['township'] for t in out_towns}
     all_towns = load_all_townships()
@@ -5392,6 +5474,33 @@ def main():
         key = at['county'] + at['township']
         if key in processed: continue
         non_static_list.append(at)
+
+    # ★★ 2026-10-05：這條補抓路徑原本一律寫 etr2=None，於是「有官方警戒單元、
+    #   但境內沒有氣象署雨量站」的鄉鎮永遠是空白 —— 跟寒溪s同一類的漏列，
+    #   只是成因不同（不是對不到站，是這個鄉鎮根本沒進 agg_obs 的 town）。
+    #   官方潛勢溪流自帶 County/Town/AlertValue/ETR2，這裡直接用。
+    _ns_deb = {}
+    for _d in (debris_alerts or {}).values():
+        _k = (_cty_norm(_d.get('county')), _cty_norm(_d.get('town')))
+        if _k[0] and _k[1]:
+            _ns_deb.setdefault(_k, []).append(_d)
+
+    def _ns_etr2(cty, twn):
+        """回傳 (etr2, pct, alert, 明細list)；沒有官方單元回 (None,None,None,[])。"""
+        rows = _ns_deb.get((_cty_norm(cty), _cty_norm(twn))) or []
+        best = (None, None, None); det = []
+        for _d in rows:
+            _v, _a = _d.get('etr2'), _d.get('alert')
+            if _v is None or not _a or _a <= 0: continue
+            _p = _d.get('pct')
+            if _p is None: _p = round(_v / _a, 4)
+            det.append({'village': _d.get('vill') or '',
+                        'station': _d.get('station') or '',
+                        'alert': _a, 'etr2': _v, 'etr2_pct': _p, 'src': 'swcb'})
+            if best[1] is None or _p > best[1]: best = (_v, _p, _a)
+        return best[0], best[1], best[2], det
+
+    _ns_filled = 0
 
     print(f"  非靜態表行政區（含完全無觀測站的）：{len(non_static_list)} 個，補抓 QPF...")
     non_static_coords = [{'lat': at['lat'], 'lng': at['lng'], 'alert_val': 0} for at in non_static_list]
@@ -5424,6 +5533,10 @@ def main():
                           'village': f"{at['county']}{at['township']}"}
                          for s in obs.get('stations', []) if s in stations]
 
+        # 官方潛勢溪流：有警戒單元就填 ETR2（本鄉鎮沒有氣象署站也能有值）
+        _ns_e2 = _ns_etr2(at['county'], at['township'])
+        if _ns_e2[0] is not None: _ns_filled += 1
+
         out_towns.append({
             'county':   at['county'], 'township': at['township'],
             'lat': avg_lat, 'lng': avg_lng,
@@ -5432,7 +5545,9 @@ def main():
             'rain_6h':   obs.get('rain_6h'),
             'rain_2d':   obs.get('rain_2d', 0.0),
             'rain_3d':   obs.get('rain_3d', 0.0),
-            'etr2':      None, 'etr2_pct': None,
+            'etr2':      _ns_e2[0], 'etr2_pct': _ns_e2[1],
+            'etr2_alert': _ns_e2[2], 'etr2_src': ('swcb' if _ns_e2[0] is not None else None),
+            'slope_regions': _ns_e2[3],
             'qpf_15d':   qpf_best_ns, 'daily_qpf': daily_ns,
             'seg_etr_pct': [None]*8,
             'qpf_24h': round(sum(qpf_best_ns[:4]),1),
@@ -5478,6 +5593,8 @@ def main():
             'daily_rain': _daily_rain_or_qpesums(obs, county, township, qp_daily),
         })
 
+    if _ns_filled:
+        print(f"  [稽核] 無氣象署測站但有官方警戒單元，已補 ETR2：{_ns_filled} 個鄉鎮")
     # ════════════════════════════════════════════════════════
     #  警戒研判（雙軌）
     #    現況紅/黃 ＝ 水保署官方發布值（權威；欄位 off_level / off_report）

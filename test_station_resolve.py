@@ -182,5 +182,87 @@ _shown = [l for l in out.split('\n') if '稽核' in l or '測站索引' in l]
 print('     稽核輸出：')
 for l in _shown: print('       ' + l.strip())
 
-print(f"\n{'FAIL '+str(len(fails)) if fails else 'ALL PASS'} / 25 項")
+print(f"\n（A–D 小結：{'FAIL '+str(len(fails)) if fails else '全過'}）")
+
+# ══════════════════════════════════════════════════════════
+#  E 官方潛勢溪流為權威來源
+#    真實根因：靜態警戒表裡「根本沒有」寒溪那個單元（表過期／單元新增），
+#    所以任何站名比對都救不回來 —— 前兩輪就是這樣失敗的。
+#    改用水保署同一支 API 的逐條潛勢溪流（自帶 County/Town/AlertValue/STRT），
+#    鄉鎮值不再經過站名比對。
+# ══════════════════════════════════════════════════════════
+print('\n── E 官方潛勢溪流（不經站名比對）──')
+
+stations_e = {
+  'YL01': _st('宜蘭縣', '大同鄉', '松羅'),
+  'YL02': _st('宜蘭縣', '大同鄉', '寒溪s'),
+  'TT01': _st('臺東縣', '延平鄉', '武陵'),
+}
+# 靜態表：大同鄉只有松羅，完全沒有寒溪（這就是真實情形）
+slope_e = {
+  '宜蘭縣大同鄉': [{'village': '松羅村', 'station': '松羅', 'alert': 100}],
+}
+F.SWCB_STN_LOC.clear(); F.SWCB_BY_LOC.clear()
+F.SWCB_STN_LOC[('宜蘭縣', '大同鄉')] = {'松羅': 31.0, '寒溪s': 46.0}
+for (c, t), d in F.SWCB_STN_LOC.items():
+    for nm, v in d.items(): F.SWCB_BY_LOC[(c, t, nm)] = v
+swcb_e = {'松羅': 31.0, '寒溪s': 46.0}
+
+# 官方潛勢溪流：寒溪那條在這裡，Town 欄位就是大同鄉
+#   注意 county 刻意寫「台東縣」用字，測 台↔臺 正規化
+debris_e = {
+  '宜縣DF001': {'county': '宜蘭縣', 'town': '大同鄉', 'vill': '松羅村',
+                'alert': 100.0, 'etr2': 31.0, 'pct': 0.31,
+                'station': '松羅', 'red': False},
+  '宜縣DF002': {'county': '宜蘭縣', 'town': '大同鄉', 'vill': '寒溪村',
+                'alert': 100.0, 'etr2': 46.0, 'pct': 0.46,
+                'station': '寒溪s', 'red': False},
+  '東縣DF003': {'county': '台東縣', 'town': '延平鄉', 'vill': '武陵村',
+                'alert': 100.0, 'etr2': 162.0, 'pct': 1.62,
+                'station': '武陵', 'red': True},
+}
+
+_buf2 = _io.StringIO()
+with _ctx.redirect_stdout(_buf2):
+    res_e = F.agg_obs(stations_e, {}, {}, now,
+                      slope_warn=slope_e, swcb_etr2=swcb_e, debris=debris_e)
+out_e = _buf2.getvalue()
+towns_e = ({t['county'] + t['township']: t for t in res_e}
+           if isinstance(res_e, list) else res_e)
+
+de = towns_e.get('宜蘭縣大同鄉') or {}
+ok(de.get('etr2') == 46.0,
+   f"E1 大同鄉 etr2 = 46（靜態表沒有寒溪，仍抓到）—— 實得 {de.get('etr2')}")
+ok(de.get('etr2_pct') == 0.46,
+   f"E2 大同鄉 etr2_pct = 46%，與水保署官方一致 —— 實得 {de.get('etr2_pct')}")
+ok(de.get('etr2_alert') == 100.0,
+   f"E3 分母取「該最高單元的官方警戒值」—— 實得 {de.get('etr2_alert')}")
+_st_e = [(d.get('village'), d.get('station')) for d in (de.get('slope_regions') or [])]
+ok(('寒溪村', '寒溪s') in _st_e,
+   f"E4 寒溪那個單元進入明細 —— 實得 {_st_e}")
+ok(sum(1 for v, n in _st_e if n == '松羅') == 1,
+   f"E5 松羅沒有被算兩次（靜態表與官方各有一筆，依(村里,站名)去重）—— 實得 {_st_e}")
+ok(de.get('etr2_src') == 'swcb',
+   f"E6 來源標為官方 swcb —— 實得 {de.get('etr2_src')}")
+
+# 台↔臺 正規化：官方寫「台東縣」，氣象署站寫「臺東縣」，必須對上
+te = towns_e.get('臺東縣延平鄉') or {}
+ok(te.get('etr2') == 162.0,
+   f"E7 台東縣↔臺東縣 用字不同仍對上 —— 實得 {te.get('etr2')}")
+
+# 官方的 162 不可外溢到宜蘭
+ok(de.get('etr2') != 162.0, 'E8 延平鄉的 162 沒有流進大同鄉')
+
+# 排行也要有寒溪s
+_se_e = de.get('station_etr2') or {}
+ok(_se_e.get('YL02') == 46.0,
+   f"E9 寒溪s 進入測站排行 —— 實得 {_se_e.get('YL02')}")
+
+ok('官方潛勢溪流' in out_e,
+   'E10 稽核把「官方補上靜態表缺漏」印出來')
+_shown_e = [l for l in out_e.split('\n') if '稽核' in l or '官方潛勢溪流' in l]
+print('     稽核輸出：')
+for l in _shown_e: print('       ' + l.strip())
+
+print(f"\n{'FAIL '+str(len(fails)) if fails else 'ALL PASS'} / 35 項")
 sys.exit(1 if fails else 0)
