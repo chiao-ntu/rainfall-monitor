@@ -1327,6 +1327,14 @@ let _cwaQpfActive = false;  // 前48h是否為CWA QPF覆蓋
 // 右側欄收合/展開
 let sidebarOpen = true;
 // 自訂色階級距編輯器（僅自訂範圍模式可用）
+// ★ 建置標記：用來確認「線上跑的是哪一版」。
+//   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
+//   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
+//   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
+const FORMOSA_BUILD = '2026-10-04T02:18Z';
+try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
+     'color:#6bc8e8;font-weight:700'); }catch(e){}
+
 const DEFAULT_RAIN_BREAKS = [5,20,40,70,130,250];
 // ★ 累積雨量色階。原本從未以 const/let 宣告（散落 42 處使用，
 //   靠隱含全域在執行期才成形），一旦在宣告前被引用就會拋
@@ -1630,8 +1638,19 @@ let _terrainImg = null;
 let _windFieldOn = false, _wfCanvas = null, _wfTimer = null, _wfParticles = [];
 // ★ 粒子數由 900 降到 420：900 顆在臺灣這個面積上過密，
 //   線條糊成一片反而看不出流向（使用者回報「很密很可怕」）。
-const WF_N = 210;   // 使用者指定再減半（420 → 210）
-const WF_LIFE = 150;   // 配合拖尾拉長（90 → 150 幀）            // 每顆粒子的壽命（幀）
+// ★ 粒子數改為「依畫布面積計算」，不再是固定值（使用者回報：
+//   「放到更大的時候整個畫面都是風場」）。固定顆數時，地圖放大／全螢幕
+//   會讓同樣的粒子鋪在不同大小的畫面上，密度跟著畫面大小跑。
+//   改成每單位面積固定一顆，不論視窗多大、地圖面板多寬，視覺密度都一致。
+const WF_AREA_PER = 6700;   // 每顆粒子分配的畫布面積（px²）
+// 上限取舊固定值 210 的一半 —— 使用者的抱怨正是「放大時整個畫面都是風場」，
+// 上限訂太高的話大畫面只會減一點點，等於沒解決那個情況。
+const WF_N_MIN = 40, WF_N_MAX = 105;
+function _wfCount(cw, ch){
+  const n = Math.round((cw * ch) / WF_AREA_PER);
+  return Math.max(WF_N_MIN, Math.min(WF_N_MAX, n));
+}
+const WF_LIFE = 300;   // 配合拖尾再拉長（150 → 300 幀）        // 每顆粒子的壽命（幀）
 const WF_INERTIA = 0.12;   // 速度鬆弛係數：約 8 幀跟上當地風（做出流體慣性）
 // ★ 海洋深色底：只換海域與地圖底色，陸地上各圖層的色階完全不動
 //   （使用者指定）—— 色階是判讀依據，不能因為換配色就改變。
@@ -2078,18 +2097,21 @@ function _wfStart(){
   const ctx = cv.getContext('2d');
   const spawn = ()=>({x: Math.random() * cv._cw, y: Math.random() * cv._ch,
                       age: Math.random() * WF_LIFE, node: null, vx: null, vy: null});
-  for(let i = 0; i < WF_N; i++) _wfParticles.push(spawn());
+  const _wfN = _wfCount(cv._cw, cv._ch);
+  for(let i = 0; i < _wfN; i++) _wfParticles.push(spawn());
 
   const step = ()=>{
     if(!_windFieldOn || !_wfCanvas) return;
     // 以半透明黑覆蓋，形成拖尾
     ctx.globalCompositeOperation = 'destination-in';
-    // ★ 拖尾拉長（使用者指定）：每幀保留 90% → 95%。
-    //   殘影衰減到 10% 所需幀數由 22 幀增為 45 幀，線條約長一倍。
-    ctx.fillStyle = 'rgba(0,0,0,0.95)';
+    // ★ 拖尾再拉長（使用者指定）：每幀保留 95% → 97.5%。
+    //   殘影衰減到 10% 所需幀數由 45 幀增為 91 幀，線條再長一倍。
+    //   線寬同時由 1.2 收到 1.0 —— 軌跡變長本身就會增加畫面上的墨量，
+    //   不收細的話「減半」的效果會被拖尾吃掉。
+    ctx.fillStyle = 'rgba(0,0,0,0.975)';
     ctx.fillRect(0, 0, cv._cw, cv._ch);
     ctx.globalCompositeOperation = 'source-over';
-    ctx.lineWidth = 1.2;
+    ctx.lineWidth = 1.0;
     _wfParticles.forEach(p=>{
       // ★ 粒子固定跟隨一個測站；重生時才重抽（每幀重抽會變雜訊）
       if(!p.node) p.node = pickNode(p.x, p.y);
@@ -2205,7 +2227,7 @@ function toggleTerrainLayer(){
 //  ★ 道路用自己的 pane（zIndex 398，townPane 395 之上），並關閉指標事件 ——
 //    Canvas 渲染下 pane 是整片元素，不關就會蓋住鄉鎮色塊，地圖點不到。
 //  ★ 道路做縮放門檻：全臺視野下 29,394 條線只會糊成一團，既看不出資訊
-//    又拖慢平移。zoom < ROAD_MIN_ZOOM 時不繪，並在按鈕上標示原因。
+//    又拖慢平移。
 // ══════════════════════════════════════════════════════════
 // ★ 不設縮放門檻（使用者明訂）：使用者不會知道自己在第幾級，寫「放大到9級」
 //   等於沒說；而且預設視野就看不到任何東西，等於這個按鈕沒作用。
@@ -2232,13 +2254,18 @@ async function _loadJsonOnce(url, label){
   if(!r.ok) throw new Error(`${label} HTTP ${r.status}`);
   return r.json();
 }
-function _layerBtnBusy(id, busy, txt){
+// ★ 按鈕文字恆定，絕不拿來顯示狀態。
+//   先前把「載入中…」「(無檔)」寫進按鈕文字，一旦進入失敗狀態文字就黏住
+//   改不回來（使用者回報）。按鈕的標籤是「這顆按鈕是什麼」，不是「現在怎麼了」
+//   —— 狀態要放在會自己消失的地方。
+let _overlayMsg = '';
+function _layerBtnBusy(id, busy){
   const b = document.getElementById(id);
   if(!b) return;
   b.disabled = !!busy;
   b.style.opacity = busy ? 0.55 : 1;
-  if(txt) b.textContent = txt;
 }
+function _setOverlayMsg(m){ _overlayMsg = m || ''; _renderOverlayLegend(); }
 
 async function toggleRoadLayer(){
   if(_roadLoading) return;
@@ -2247,7 +2274,7 @@ async function toggleRoadLayer(){
   if(b) b.classList.toggle('on', _roadOn);
   if(_roadOn && !_roadData){
     _roadLoading = true;
-    _layerBtnBusy('bRoads', true, '🛣 載入中…');
+    _layerBtnBusy('bRoads', true); _setOverlayMsg('道路圖資載入中…');
     try{
       _roadData = await _loadJsonOnce('roads_major.geojson', '道路圖資');
     }catch(e){
@@ -2255,11 +2282,12 @@ async function toggleRoadLayer(){
       console.warn('道路圖資載入失敗：', e.message);
       _roadOn = false;
       if(b) b.classList.remove('on');
-      _layerBtnBusy('bRoads', false, '🛣 道路(無檔)');
+      _layerBtnBusy('bRoads', false);
+      _setOverlayMsg('道路圖資尚未部署：缺 roads_major.geojson（可再按一次重試）');
       _roadLoading = false;
       return;
     }
-    _layerBtnBusy('bRoads', false, '🛣 道路');
+    _layerBtnBusy('bRoads', false); _setOverlayMsg('');
     _roadLoading = false;
   }
   if(_roadOn && _roadData && !_roadIndex){
@@ -2289,8 +2317,6 @@ function _roadDetail(){ return map.getZoom() >= 11; }
 
 function renderRoadLayer(){
   if(_roadLayer){ try{ map.removeLayer(_roadLayer); }catch(e){} _roadLayer = null; }
-  const b = document.getElementById('bRoads');
-  if(b) b.textContent = '🛣 道路';
   if(!_roadOn || !_roadData){ _renderOverlayLegend(); return; }
   _ensureRoadPane();
   const z = map.getZoom();
@@ -2418,6 +2444,7 @@ function _renderOverlayLegend(){
   const el = document.getElementById('overlay-legend');
   if(!el) return;
   const parts = [];
+  if(_overlayMsg) parts.push(`<div style="color:#a05020">${_overlayMsg}</div>`);
   if(_roadOn && _roadData){
     const line = (c, w, dash)=>`<span style="display:inline-block;width:20px;height:0;`
       + `border-top:${w}px ${dash ? 'dashed' : 'solid'} ${c};vertical-align:middle;`
@@ -2453,18 +2480,19 @@ async function toggleShelterLayer(){
   if(b) b.classList.toggle('on', _shelterOn);
   if(_shelterOn && !_shelterData){
     _shelterLoading = true;
-    _layerBtnBusy('bShelter', true, '🏠 載入中…');
+    _layerBtnBusy('bShelter', true); _setOverlayMsg('避難收容所載入中…');
     try{
       _shelterData = await _loadJsonOnce('shelters.geojson', '避難收容所');
     }catch(e){
       console.warn('避難收容所圖資載入失敗：', e.message);
       _shelterOn = false;
       if(b) b.classList.remove('on');
-      _layerBtnBusy('bShelter', false, '🏠 避難收容所(無檔)');
+      _layerBtnBusy('bShelter', false);
+      _setOverlayMsg('避難收容所圖資尚未部署：缺 shelters.geojson（可再按一次重試）');
       _shelterLoading = false;
       return;
     }
-    _layerBtnBusy('bShelter', false, '🏠 避難收容所');
+    _layerBtnBusy('bShelter', false); _setOverlayMsg('');
     _shelterLoading = false;
   }
   renderShelterLayer();
