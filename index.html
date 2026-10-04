@@ -250,6 +250,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#3a4a6a;color:#8aa8d8">🌊 深色海</button>
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
         style="border-color:#1a4060;color:#8ac8e8">🏷 行政區名</button>
+      <button class="b"    id="bRoads" onclick="toggleRoadLayer()"
+        style="border-color:#6a6a4a;color:#d8d0a0">🛣 道路</button>
+      <button class="b"    id="bShelter" onclick="toggleShelterLayer()"
+        style="border-color:#4a6a5a;color:#9ad8b8">🏠 避難收容所</button>
      </div>
     </div>
   </div>
@@ -2188,6 +2192,145 @@ function toggleTerrainLayer(){
   try{ renderLayer(); }catch(e){}
   try{ if(_blurOn) renderInterpolated(); }catch(e){}
   console.log('地形暈渲：已開啟（海拔灰階 × Hillshade 315°/45°）');
+}
+
+// ══════════════════════════════════════════════════════════
+//  道路／避難收容所 疊圖（選用，預設關閉）
+//  ★ 一律延遲載入：按下按鈕才 fetch。道路 5.3MB（gzip 0.7MB），
+//    若隨首頁載入會拖慢所有人，而大多數情況並不需要它。
+//  ★ 道路用自己的 pane（zIndex 398，townPane 395 之上），並關閉指標事件 ——
+//    Canvas 渲染下 pane 是整片元素，不關就會蓋住鄉鎮色塊，地圖點不到。
+//  ★ 道路做縮放門檻：全臺視野下 29,394 條線只會糊成一團，既看不出資訊
+//    又拖慢平移。zoom < ROAD_MIN_ZOOM 時不繪，並在按鈕上標示原因。
+// ══════════════════════════════════════════════════════════
+const ROAD_MIN_ZOOM = 9;
+let _roadOn = false, _roadData = null, _roadLayer = null, _roadLoading = false;
+let _shelterOn = false, _shelterData = null, _shelterLayer = null, _shelterLoading = false;
+
+function _ensureRoadPane(){
+  if(map.getPane('roadPane')) return;
+  map.createPane('roadPane');
+  const p = map.getPane('roadPane');
+  p.style.zIndex = 398;
+  p.style.pointerEvents = 'none';
+}
+async function _loadJsonOnce(url, label){
+  const r = await fetch(url + '?t=' + Date.now());
+  if(!r.ok) throw new Error(`${label} HTTP ${r.status}`);
+  return r.json();
+}
+function _layerBtnBusy(id, busy, txt){
+  const b = document.getElementById(id);
+  if(!b) return;
+  b.disabled = !!busy;
+  b.style.opacity = busy ? 0.55 : 1;
+  if(txt) b.textContent = txt;
+}
+
+async function toggleRoadLayer(){
+  if(_roadLoading) return;
+  _roadOn = !_roadOn;
+  const b = document.getElementById('bRoads');
+  if(b) b.classList.toggle('on', _roadOn);
+  if(_roadOn && !_roadData){
+    _roadLoading = true;
+    _layerBtnBusy('bRoads', true, '🛣 載入中…');
+    try{
+      _roadData = await _loadJsonOnce('roads_major.geojson', '道路圖資');
+    }catch(e){
+      // ★ 離線單檔版沒有這個檔，失敗要講清楚而不是靜默無反應
+      console.warn('道路圖資載入失敗：', e.message);
+      _roadOn = false;
+      if(b) b.classList.remove('on');
+      _layerBtnBusy('bRoads', false, '🛣 道路(無檔)');
+      _roadLoading = false;
+      return;
+    }
+    _layerBtnBusy('bRoads', false, '🛣 道路');
+    _roadLoading = false;
+  }
+  renderRoadLayer();
+}
+function renderRoadLayer(){
+  if(_roadLayer){ try{ map.removeLayer(_roadLayer); }catch(e){} _roadLayer = null; }
+  const b = document.getElementById('bRoads');
+  if(!_roadOn || !_roadData) return;
+  if(map.getZoom() < ROAD_MIN_ZOOM){
+    if(b) b.textContent = `🛣 道路(放大至${ROAD_MIN_ZOOM}級)`;
+    return;
+  }
+  if(b) b.textContent = '🛣 道路';
+  _ensureRoadPane();
+  const W = {motorway:2.2, trunk:1.9, primary:1.4,
+             motorway_link:1.1, trunk_link:1.0, primary_link:0.9};
+  _roadLayer = L.geoJSON(_roadData, {
+    pane: 'roadPane',
+    renderer: L.canvas({pane: 'roadPane', padding: 0.3}),
+    interactive: false,
+    style: f=>{
+      const p = f.properties || {};
+      const w = W[p.c] || 1.0;
+      // ★ 顏色要在「白色鄉鎮（<5mm，最常見）」和深色海兩種底上都讀得到，
+      //   故用深色而非亮色（實測亮色在白底幾乎看不見）。
+      // ★ 且必須避開 RAIN_SCALE 既有的白/青/綠/黃/紅/洋紅/粉，
+      //   否則道路會被誤讀成雨量級距 —— 橋樑用深橘棕，不與 40–70mm 的黃混淆。
+      // 橋樑在防災判讀上是關鍵（封橋、沖毀），加粗並用對比色；隧道用虛線。
+      if(p.b) return {color:'#C05000', weight:w + 0.8, opacity:0.95};
+      if(p.t) return {color:'#2E6E8E', weight:w, opacity:0.8, dashArray:'3,3'};
+      return {color:'#5A5A50', weight:w, opacity:0.6};
+    }
+  }).addTo(map);
+}
+
+async function toggleShelterLayer(){
+  if(_shelterLoading) return;
+  _shelterOn = !_shelterOn;
+  const b = document.getElementById('bShelter');
+  if(b) b.classList.toggle('on', _shelterOn);
+  if(_shelterOn && !_shelterData){
+    _shelterLoading = true;
+    _layerBtnBusy('bShelter', true, '🏠 載入中…');
+    try{
+      _shelterData = await _loadJsonOnce('shelters.geojson', '避難收容所');
+    }catch(e){
+      console.warn('避難收容所圖資載入失敗：', e.message);
+      _shelterOn = false;
+      if(b) b.classList.remove('on');
+      _layerBtnBusy('bShelter', false, '🏠 避難收容所(無檔)');
+      _shelterLoading = false;
+      return;
+    }
+    _layerBtnBusy('bShelter', false, '🏠 避難收容所');
+    _shelterLoading = false;
+  }
+  renderShelterLayer();
+}
+function renderShelterLayer(){
+  if(_shelterLayer){ try{ map.removeLayer(_shelterLayer); }catch(e){} _shelterLayer = null; }
+  if(!_shelterOn || !_shelterData) return;
+  const z = map.getZoom();
+  const rad = z >= 12 ? 6 : z >= 10 ? 4.5 : 3;
+  const HAZ = {F:'水災', D:'土石流', E:'震災', T:'海嘯'};
+  _shelterLayer = L.layerGroup().addTo(map);
+  (_shelterData.features || []).forEach(ft=>{
+    const c = ft.geometry && ft.geometry.coordinates;
+    if(!c) return;
+    const p = ft.properties || {};
+    const flags = String(p.f || '');
+    // 適用於水災或土石流者以綠色強調 —— 這套系統的情境就是這兩類
+    const rainRel = flags.includes('F') || flags.includes('D');
+    const m = L.circleMarker([c[1], c[0]], {
+      radius: rad, weight: 1, color: '#0a1a28',
+      fillColor: rainRel ? '#5ad88a' : '#8aa8c0', fillOpacity: 0.9,
+      pane: 'markerPane'
+    });
+    const hz = flags.split('').map(k=>HAZ[k]).filter(Boolean).join('、') || '—';
+    m.bindPopup(`<b>${p.n || '（無名稱）'}</b><br>`
+      + `${p.a || ''} ${p.ad || ''}<br>`
+      + `適用災害：${hz}<br>`
+      + `開設類型：${p.k || '—'}`);
+    m.addTo(_shelterLayer);
+  });
 }
 
 function toggleStationLayer(){
@@ -8047,38 +8190,36 @@ function _threeHourAt(t, h, m){
           waveDir: best.dir, waveBf: best.ws};
 }
 
+// ★★ 2026-10-04 修正（使用者回報：預測達標時間圖的 ETR2 與逐時／逐日圖差約 3 倍）
+//   舊版自成一套公式：把「未來第 1～h 小時」的雨全部加總後，整包以 W[0]=1
+//   當成「今天」計入，七日權重只套在過去的觀測日上。後果有二：
+//     ① 未來 72h 等於三天的雨全部用權重 1 計入 → 約 3 倍高估
+//     ② todayQpf 是累加量，只增不減 → 曲線永遠不會折減（雨停了還在爬）
+//   這與 _etr2HourlySeries 註解裡記載、早已修過的「差 6~8 倍」是同一個病：
+//   ETR2 另立平行實作。故本函式改為與 _etr2HourlySeries 完全相同的作法 ——
+//   以 calcEtr2AtSeg()（全系統唯一權威，含官方錨點、情境超額、
+//   qpf_blend→qpf_warn）逐段取值，再於段內線性內插。
+//   這樣地圖、面板、逐時圖、達標時間圖四者的 ETR2 必然同源。
 function _etrAtHour(t, h, qpfField){
   if(!t || !(t.alert_val > 0)) return null;
-  // ★ 逐小時累加「今天 00 時到第 h 小時」的雨量。
-  //   先前只累加「當前 6h 段內」的小時，跨段時值不會變，
-  //   於是瀑布圖每 6 小時才跳一次、折線呈階梯狀。
-  const now = new Date();
-  const nowH = now.getHours();          // 今天已過的小時數
-  const tgtH = nowH + h;                // 目標時刻距今天 00 時的小時數
-  let todayQpf = 0;
-  if(tgtH >= 0){
-    // 今天 00 時 ~ 現在：已成觀測，由 daily_rain[0] 涵蓋，不重複累加
-    // 現在 ~ 目標時刻：逐時預報累加
-    const from = Math.max(1, 1);
-    for(let hh = from; hh <= h; hh++){
-      const v = _hourlyAt(t, hh);
-      if(v && v.v != null) todayQpf += v.v;
-    }
-    // 目標在過去（h<0）：從 daily_rain[0] 扣掉尚未發生的時段
-    if(h < 0){
-      for(let hh = h + 1; hh <= 0; hh++){
-        const v = _hourlyAt(t, hh);
-        if(v && v.v != null) todayQpf -= v.v;
-      }
-    }
-  }
-  const dailyObs = t.daily_rain || [];
-  const W = (typeof ETR2_WEIGHTS !== 'undefined')
-    ? ETR2_WEIGHTS : [1, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1];
-  let etr = W[0] * Math.max(0, (dailyObs[0] || 0) + todayQpf);
-  for(let d = 1; d < W.length; d++) etr += W[d] * (dailyObs[d] || 0);
   const den = _etrDen(t);
-  return (den > 0) ? Math.round(etr / den * 1000) / 10 : null;
+  if(!(den > 0)) return null;
+  const f = qpfField || MODEL_FIELD[forecastModel] || 'qpf_best';
+  // ★ 時間原點用 SEG_EPOCH（資料日 00 時），與 _hourlyBars 一致。
+  //   不可用 new Date().getHours()（觀看者時鐘）—— 資料日不等於今日時會整個錯開，
+  //   那正是先前「昨天的紅變成今天」的同一個坑。
+  const nowH = Math.max(0, Math.min(23,
+    Math.floor((Date.now() - SEG_EPOCH().getTime()) / 3600e3)));
+  const hAbs = nowH + h;                       // 距資料日 00 時的絕對小時
+  const sg = Math.floor(hAbs / 6);
+  const fr = (hAbs - sg * 6) / 6;              // 段內進度 0~1
+  const segE = s => {
+    const v = calcEtr2AtSeg(t, s, f);
+    return (v == null || !isFinite(v)) ? 0 : v;
+  };
+  const e0 = segE(sg - 1), e1 = segE(sg);      // 由上一段 end 線性走到本段 end
+  const e = e0 + (e1 - e0) * (fr + 1/6);
+  return Math.round(Math.max(0, e / den * 100) * 10) / 10;
 }
 
 // ★★ 2026-10-02 修正（使用者回報「切圖層時各分署警戒摘要的累積雨量會變」）：
@@ -12661,6 +12802,11 @@ function _bindTownNameZoom(){
     // 測站圖層的點大小隨 zoom 變化，也要重繪
     if(_stnLayerOn){ clearTimeout(_stnTimer);
                      _stnTimer = setTimeout(renderStationLayer, 150); }
+    // 道路有縮放門檻、收容所的點大小隨 zoom 變化，兩者都要跟著重繪
+    if(_roadOn){ clearTimeout(window._roadTimer);
+                 window._roadTimer = setTimeout(renderRoadLayer, 150); }
+    if(_shelterOn){ clearTimeout(window._shTimer);
+                    window._shTimer = setTimeout(renderShelterLayer, 150); }
     if(!showTownName) return;
     clearTimeout(_tnTimer);
     _tnTimer = setTimeout(renderTownNameLayer, 150);
