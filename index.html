@@ -1334,7 +1334,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-04T13:14Z';
+const FORMOSA_BUILD = '2026-10-05T07:10Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -3997,6 +3997,29 @@ function _noRainEvidence(t){
 //   反過來用高分位數報雨量又會天天高估。一個數字同時服務兩個目的，
 //   兩邊都只能拿到次佳解。分開之後各自都能做到最好，而且各自可獨立校驗
 //   —— 量的看 MAE，警戒的看 POD／漏報率。
+// ★★ 2026-10-05：CWA 官方覆蓋分兩種語意，不可混用（後端已拆成兩張清單）。
+//   official_segs＝真實數值段（颱風格點／非PNG格點），已把 best/ecmwf/gfs
+//     覆寫成同一數值 → 融合照常加權等於自己跟自己平均，故直接採用官方值。
+//   band_segs＝常態 PNG 色帶段（類別，未覆寫任何模式）→ 融合必須維持自己的
+//     模式加權，不得以色帶取代；色帶只用於著色，累加一律改用 qpf_cwa_q。
+//   先前兩者混在 official_segs，於是色帶段把六個模式丟掉、換成一個「色帶下界
+//   被複製到窗內每個 6h 段」的加倍值（宜蘭日累積報到 320mm，CWA 上界和 180mm），
+//   而且還流進 qpf_hi/qpf_lo 的系集離散度。
+function _cwaRealSegs(t){ return new Set(t && t.official_segs ? t.official_segs : []); }
+function _cwaCoveredSegs(t){
+  return new Set([...(t && t.official_segs ? t.official_segs : []),
+                  ...(t && t.band_segs ? t.band_segs : [])]);
+}
+// 可加量陣列：色帶段＝上界÷窗段數；真值段＝原值。沒有這個欄位（舊資料）時
+// 退回 qpf_cwa，但那是加倍的，所以同時在 tooltip 可辨識（_cwaQLegacy）。
+let _cwaQLegacy = false;
+function _cwaQArr(t){
+  const q = t && t.qpf_cwa_q;
+  if(Array.isArray(q) && q.length) return q;
+  _cwaQLegacy = true;
+  return (t && t.qpf_cwa) || [];
+}
+
 function _blendQpf(t, mode){
   // ★ 自適應選用（後端逐地形判定）：哪些模式該納入、各給多少權重，
   //   由 adaptive_blend 決定。亂報的模式直接不列入，多報／少報降低權重。
@@ -4067,7 +4090,9 @@ function _blendQpf(t, mode){
   const out = [];
   // ★ 官方值覆蓋的段（CWA 判讀圖／颱風格點）：四模式已被寫成同一數值，
   //   加權等於自己跟自己平均，沒有意義。此處直接採用官方值。
-  const offSet = new Set(t.official_segs || []);
+  //   ★ 只採用「真值段」。色帶段（band_segs）不在此列：那些段模式沒被覆寫，
+  //     融合要維持自己的加權。
+  const offSet = _cwaRealSegs(t);
   for(let i = 0; i < n; i++){
     if(offSet.has(i)){
       const ov = (t.qpf_cwa || [])[i];
@@ -4109,7 +4134,9 @@ function _blendQpf(t, mode){
     });
     // ④ 分歧過大且有官方值 → 以 CWA 為準
     const lo = Math.min(...use.map(c=>c.v)), hi = Math.max(...use.map(c=>c.v));
-    const cwaV = (t.qpf_cwa || [])[i];
+    //   ★ 裁決要用可加量（色帶上界÷窗段數），不可用色帶下界原值：
+    //     後者是「類別身分」，被複製到窗內每段，當數字用會偏高一倍。
+    const cwaV = _cwaQArr(t)[i];
     if(cwaV != null && hi > 30 && hi > lo * 6){
       out.push(Math.round(cwaV * 10) / 10);
       continue;
@@ -6430,13 +6457,23 @@ function renderBlendDetail(t){
   const sp = _blendSpread(t, segFrom, segTo);
   const rg = _officialRange(t, '24h');
   let extra = '';
-  // 若本視窗落在官方值覆蓋的段，明確標示（該段不做加權）
-  const offs = new Set(t.official_segs || []);
-  let nOff = 0;
-  for(let i = Math.max(0, segFrom); i <= Math.max(0, segTo); i++) if(offs.has(i)) nOff++;
+  // ★ 兩種覆蓋要分開講，否則標示本身就是錯的：
+  //   真值段（颱風格點／非PNG格點）才是「直接採用官方值、不做加權」；
+  //   色帶段是類別，融合仍照自己的加權算，色帶只拿來著色。
+  const offs = _cwaRealSegs(t);
+  const bnds = new Set(t.band_segs || []);
+  let nOff = 0, nBnd = 0;
+  for(let i = Math.max(0, segFrom); i <= Math.max(0, segTo); i++){
+    if(offs.has(i)) nOff++;
+    else if(bnds.has(i)) nBnd++;
+  }
   if(nOff){
     extra += `<div style="margin-top:5px;color:#8ad8a0">
-      本視窗有 ${nOff} 段採用官方值（CWA 判讀圖／颱風格點），該段不做加權</div>`;
+      本視窗有 ${nOff} 段直接採用官方數值（颱風格點），該段不做加權</div>`;
+  }
+  if(nBnd){
+    extra += `<div style="margin-top:5px;color:#8ad8a0">
+      本視窗有 ${nBnd} 段有官方判讀圖色帶（類別，僅供對照），融合仍照模式加權</div>`;
   }
   if(sp && sp.level){
     extra += `<div style="margin-top:5px">模式離散：${sp.min}–${sp.max} mm
@@ -6573,8 +6610,9 @@ function getQpfArr(t, qpfField){
   //   故：官方有值的段一律用官方值（不套任何倍率），缺的段以融合值補齊
   //   —— 補的部分在 tooltip 標示，判讀時能區分官方與推估。
   if(qpfField === 'qpf_cwa' && !scn){
-    const cwa = t.qpf_cwa || [];
-    const off = new Set(t.official_segs || []);
+    //   ★ 累積／ETR2／風險一律用可加量陣列；色帶原值只供著色。
+    const cwa = _cwaQArr(t);
+    const off = _cwaCoveredSegs(t);
     if(!off.size) return cwa;
     if(!t._blendCache || t._blendKey !== ((window._dataGenAt || '') + '|' + _factorKey())){
       t._blendCache = _blendQpf(t);
@@ -6611,7 +6649,9 @@ function getQpfArr(t, qpfField){
       const a = t[MODEL_FIELD[m]];
       if(Array.isArray(a) && a.length) arrs.push(a);
     });
-    const cwaA = t.qpf_cwa;
+    //   ★ 推進系集的必須是可加量；先前推色帶下界原值（窗內重複），
+    //     把 qpf_hi/qpf_lo 的離散度一起撐大。
+    const cwaA = _cwaQArr(t);
     if(Array.isArray(cwaA) && cwaA.length) arrs.push(cwaA);
     let out;
     if(arrs.length < 2){
@@ -13976,7 +14016,8 @@ function _modeHeadRow(t){
   // ★ CWA 模式：標示本視窗有多少段是官方值、多少段以融合值補
   //   （官方只發布 48 小時內的常態 QPF，其餘段沒有官方數據）
   if(forecastModel === 'cwa'){
-    const off = new Set(t.official_segs || []);
+    //   ★ CWA 模式下「有官方資料」含真值段與色帶段兩種（後端分兩張清單）
+    const off = _cwaCoveredSegs(t);
     let nOff = 0, nAll = 0;
     for(let i = Math.max(0, segFrom); i <= Math.max(0, segTo); i++){
       nAll++; if(off.has(i)) nOff++;

@@ -883,7 +883,39 @@ def _stn_key2(n):
     return s
 
 
-def resolve_station_etr2(names, swcb_etr2, county='', town=''):
+def _swcb_name_locs(nm):
+    """該站名在水保署資料中出現過的 (縣市, 鄉鎮)。空集合＝無位置可查。"""
+    if not nm: return set()
+    out = set()
+    k = _stn_key2(nm)
+    for (c, t), d in SWCB_STN_LOC.items():
+        for pn in d:
+            if pn == nm or (k and _stn_key2(pn) == k):
+                out.add((c, t)); break
+    return out
+
+
+def _geo_ok(nm, county, town):
+    """以站名查到的 ETR2 是否與目標鄉鎮地理相符。
+
+    為什麼需要這道閘門：
+      swcb_etr2 的站名鍵「全臺唯一名稱」才建立，那條規則只擋得住
+      *同名多站*（武陵／武陵w），擋不住「名稱全臺唯一、但那個站在別縣市」。
+      靜態警戒表的代表站名未必存在於水保署回傳集合，一旦某個同名或近名的站
+      在別處，swcb_etr2.get(站名) 就把別縣市的值灌了進來 —— 與「臺中和平區
+      拿到臺東延平 162mm」完全同一個錯誤類型，只是先前沒被發現。
+    判定：
+      查不到位置（只有 STID 鍵等）→ 無法否證，放行（不動既有行為）
+      查到位置且含目標鄉鎮        → 放行
+      查到位置但全在別處          → 擋掉（跨區誤配）
+    """
+    if not county or not town: return True
+    locs = _swcb_name_locs(nm)
+    if not locs: return True
+    return (county, town) in locs
+
+
+def resolve_station_etr2(names, swcb_etr2, county='', town='', strict_geo=False):
     """依序嘗試把「官方代表站名」對到即時 ETR2 值。
 
     決策目的是「給官方未來發布紅黃的建議」，所以寧可用同鄉鎮的鄰近站
@@ -896,16 +928,28 @@ def resolve_station_etr2(names, swcb_etr2, county='', town=''):
       3 near_t  同鄉鎮內名稱相似（子字串或 difflib≥0.72）
       4 near_c  同縣市內名稱相似（同上，較寬鬆的地理範圍）
     回傳 (etr2, tier, matched_name)；全不中回 (None, '', '')。
+
+    strict_geo=True（鄉鎮官方 ETR2 用）：
+      跳過第 1、2 層 —— 那是全臺字典直查、沒有地理約束，而且呼叫端（鄉鎮聚合）
+      在呼叫本函式之前已經做過同樣的直查，重做一次只是把跨縣市誤配的風險
+      再帶進來一遍。
+      同時跳過第 4 層 near_county：鄉鎮官方 ETR2 要對外當警戒依據，拿同縣市
+      「別的鄉鎮」的站當代表站並不正確；寧可少報也不要報錯地方。
+      → 只保留第 3 層 near_town（同鄉鎮內消歧），這正是「寒溪→寒溪s」要的那層。
     """
     import difflib
     cands = [n for n in names if n]
-    # 1 精確
-    for n in cands:
-        if n in swcb_etr2: return swcb_etr2[n], 'exact', n
-    # 2 正規化
-    for n in cands:
-        k = _stn_key2(n)
-        if k and k in swcb_etr2: return swcb_etr2[k], 'norm', k
+    if not strict_geo:
+        # 1 精確（★ 加地理閘門：站名全臺唯一但站在別縣市時不可採用。
+        #   大崩那條路徑也走這裡，先前同樣沒有約束。）
+        for n in cands:
+            if n in swcb_etr2 and _geo_ok(n, county, town):
+                return swcb_etr2[n], 'exact', n
+        # 2 正規化（同上）
+        for n in cands:
+            k = _stn_key2(n)
+            if k and k in swcb_etr2 and _geo_ok(k, county, town):
+                return swcb_etr2[k], 'norm', k
 
     def _best(pool):
         """pool = {站名: ETR2}；回傳最相似者（需通過門檻）。"""
@@ -931,8 +975,8 @@ def resolve_station_etr2(names, swcb_etr2, county='', town=''):
     if county and town:
         v, sc, nm = _best(SWCB_STN_LOC.get((county, town), {}))
         if v is not None: return v, 'near_town', nm
-    # 4 同縣市
-    if county:
+    # 4 同縣市（strict_geo 下不啟用，見上方說明）
+    if county and not strict_geo:
         pool = {}
         for (c, t), d in SWCB_STN_LOC.items():
             if c == county: pool.update(d)
@@ -1422,12 +1466,55 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
 
 def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=None):
     # 建立站名→sid 索引（供改法B用官方代表站名查即時ETR2）
+    # ★★ 2026-10-04 修正：原本只有「全臺站名→第一個遇到的 sid」，而且
+    #   去後綴鍵是無條件 setdefault —— 這正是 line ~720 在水保署索引上修掉的
+    #   「兩站塌成一鍵」，在這裡卻沒修。後果有兩層，都會直接影響使用者看到的數字：
+    #     ① 1572 行的 CWA 退路會用別縣市的站去算該鄉鎮 ETR2
+    #     ② 1590 行會把官方 ETR2 掛到錯的站號上 → 前端測站排行列出錯的站
+    #   改法：以 (縣市, 鄉鎮, 站名) 為主索引；全臺站名索引保留但記錄撞名，
+    #   撞名者不得用全臺索引解析（寧可少報也不要掛錯站）。
     name2sid = {}
+    name2sid_loc = {}
+    _nm_ids = {}
     for sid, st in stations.items():
-        nm = st.get('name','').strip()
-        if nm:
-            name2sid.setdefault(nm, sid)
-            name2sid.setdefault(nm.rstrip('sSWw').strip(), sid)  # 去後綴也建索引
+        nm = st.get('name', '').strip()
+        if not nm: continue
+        _c0, _t0 = st.get('county', ''), st.get('township', '')
+        for _k in (nm, nm.rstrip('sSWw').strip()):
+            if not _k: continue
+            _nm_ids.setdefault(_k, set()).add(sid)
+            name2sid.setdefault(_k, sid)
+            if _c0 and _t0:
+                name2sid_loc.setdefault((_c0, _t0, _k), sid)
+    _nm_amb = {k for k, v in _nm_ids.items() if len(v) > 1}
+    if _nm_amb:
+        print(f"    [測站索引] 站名撞名 {len(_nm_amb)} 組，"
+              f"僅以 (縣市,鄉鎮,站名) 解析：{sorted(_nm_amb)[:6]}"
+              f"{'…' if len(_nm_amb) > 6 else ''}")
+    _sid_block = []
+
+    def _pick_sid(nm, county, township):
+        """把代表站名解析成站號，地理優先、撞名不得走全臺索引。
+
+        回傳 sid 或 None。擋掉的跨區誤配記在 _sid_block，稽核時列出。
+        """
+        for _k in (nm, _stn_key(nm)):
+            if not _k: continue
+            sid = name2sid_loc.get((county, township, _k))
+            if sid: return sid
+        for _k in (nm, _stn_key(nm)):
+            if not _k: continue
+            if _k in _nm_amb:
+                continue                      # 撞名：全臺索引不可信
+            sid = name2sid.get(_k)
+            if not sid: continue
+            _st = stations.get(sid) or {}
+            if _st.get('county') == county and _st.get('township') == township:
+                return sid
+            _sid_block.append({'county': county, 'town': township,
+                               'station': nm, 'key': _k, 'sid': sid,
+                               'sid_at': f"{_st.get('county','')}{_st.get('township','')}"})
+        return None
 
     town={}
     for sid,st in stations.items():
@@ -1452,6 +1539,14 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
     # ── ETR2 計算（改法B：逐官方警戒區用指定代表站，鎮內取最高 ETR2%）──
     if slope_warn:
         n_aligned = 0; n_swcb = 0; n_cwa = 0
+        # ★ 稽核用：記錄哪些鄉鎮的代表站是靠地理解析才對到的，
+        #   以及完全對不到的。靜默落空是這次問題的根源，必須看得見。
+        _resolved_by_tier = {}
+        _resolve_log = []
+        _miss_log = []
+        _designated = set()      # (縣市, 鄉鎮, 站名)：官方警戒單元指定的代表站
+        _geo_block = []          # 被地理閘門擋下的跨縣市誤配（本來會灌錯值）
+        _extra_rank = []         # 補進排行的非代表站（不影響鄉鎮官方 ETR2）
         for key, td in town.items():
             regions = slope_warn.get(key)
             if not regions:
@@ -1459,9 +1554,11 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                 continue
             best_pct = None; best_etr2 = None; best_av = None
             detail = []; seen = set(); used_swcb = False; used_cwa = False
+            _c0, _t0 = td['county'], td['township']
             for reg in regions:
                 stn = (reg.get('station') or '').strip()
                 if not stn: continue
+                _designated.add((td['county'], td['township'], stn))
                 av = reg.get('alert', 0) or 0
                 if isinstance(av, str):
                     import re as _re
@@ -1476,20 +1573,58 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                     for _nm in (stn, reg.get('station_norm')):
                         if _nm and (_c, _t, _nm) in SWCB_BY_LOC:
                             ev = SWCB_BY_LOC[(_c, _t, _nm)]; break
+                    # ★★ 地理閘門（2026-10-04）：下面三行是全臺站名直查，
+                    #   沒有地理約束。line ~720 的「唯一站名才建鍵」只擋得住
+                    #   同名多站，擋不住「名稱全臺唯一、但那個站在別縣市」。
+                    #   例：靜態表寫宜蘭大同鄉代表站「桃山」，而水保署集合裡
+                    #   的「桃山」在新竹五峰鄉 —— 直查就把新竹的值當成宜蘭的。
+                    #   這與武陵跨縣市錯誤同一類型，必須一起擋。
+                    for _k in (stn,
+                               reg.get('station_norm') or _stn_key(stn),
+                               _stn_key(stn)):
+                        if ev is not None or not _k: continue
+                        _cand = swcb_etr2.get(_k)
+                        if _cand is None: continue
+                        if _geo_ok(_k, _c, _t):
+                            ev = _cand
+                        else:
+                            _geo_block.append({'county': _c, 'town': _t,
+                                               'station': stn, 'key': _k,
+                                               'etr2': _cand,
+                                               'found_at': sorted(
+                                                   f'{a}{b}' for a, b
+                                                   in _swcb_name_locs(_k))})
+                    # ★★ 2026-10-04 修正（使用者回報：宜蘭大同鄉本系統 36%、
+                    #   水保署官方 46%，差在「寒溪s」沒被算進去）。
+                    #   上面三行只做字典直查。站名在全臺撞名時（寒溪/寒溪s、
+                    #   武陵/武陵w 等 6 組）刻意不建正規化鍵——那條規則本身是對的
+                    #   （避免跨縣市對錯站），但它製造了「靜默落空」：
+                    #   對不到就當作沒有這個站，鄉鎮 ETR2 因此被低估。
+                    #   對預警系統來說，低估比對錯更危險。
+                    #   改用 resolve_station_etr2()：它有地理約束（同鄉鎮→同縣市），
+                    #   在鄉鎮範圍內消歧，既不會跨區誤配，也不會靜默漏掉。
+                    #   這個函式本來就存在，只是先前只用在大崩那條路徑。
                     if ev is None:
-                        ev = swcb_etr2.get(stn)
-                    if ev is None:
-                        ev = swcb_etr2.get(reg.get('station_norm') or _stn_key(stn))
-                    if ev is None:
-                        ev = swcb_etr2.get(_stn_key(stn))
+                        _rv, _tier, _mn = resolve_station_etr2(
+                            [stn, reg.get('station_norm') or ''], swcb_etr2,
+                            county=_c, town=_t, strict_geo=True)
+                        if _rv is not None:
+                            ev = _rv
+                            _resolved_by_tier[_tier] = _resolved_by_tier.get(_tier, 0) + 1
+                            _resolve_log.append({'county': _c, 'town': _t,
+                                                 'want': stn, 'matched': _mn,
+                                                 'tier': _tier, 'etr2': _rv})
                     if ev is not None: src = 'swcb'; used_swcb = True
                 # ② 備援：以 CWA 觀測自算（該官方指定站）
                 if ev is None:
-                    sid = name2sid.get(stn) or name2sid.get(_stn_key(stn))
+                    sid = _pick_sid(stn, _c, _t)
                     if sid:
                         ev = calc_etr2(sid, history, now_tpe)
                         if ev is not None: src = 'cwa'; used_cwa = True
-                if ev is None: continue
+                if ev is None:
+                    _miss_log.append({'county': td['county'], 'town': td['township'],
+                                      'village': reg.get('village', ''), 'station': stn})
+                    continue
                 # ★分母用「該單元的官方警戒值」（與官方警戒分析總表一致）
                 pct = round(ev/av, 4) if av > 0 else None
                 sig = (reg.get('village',''), stn)
@@ -1500,7 +1635,7 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                 # ★ 同時填入測站級 ETR2。先前只有 else 分支（無對照表的退路）
                 #   會填，主路徑不填，於是每個鄉鎮的 station_etr2 都是 0 筆，
                 #   前端測站排行的 ETR2% 永遠是空的。
-                _sid = name2sid.get(stn) or name2sid.get(_stn_key(stn))
+                _sid = _pick_sid(stn, td['county'], td['township'])
                 if _sid:
                     _prev = td['station_etr2'].get(_sid)
                     if _prev is None or ev > _prev:
@@ -1514,12 +1649,100 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                               else 'mixed' if (used_swcb and used_cwa)
                               else 'cwa' if used_cwa else None)
             td['slope_regions'] = detail
+
+            # ★★ 把「該鄉鎮內水保署有值、但不是任何警戒單元代表站」的測站
+            #   也補進測站排行（使用者要求：不應出現明明有測站卻沒列入排行）。
+            #   ⚠ 只補 station_etr2（排行用），絕不動 td['etr2']／etr2_pct ——
+            #   鄉鎮 ETR2 的定義是「各官方警戒單元代表站取最高」，擅自把非代表站
+            #   納入會讓我們的數字與水保署官方總表不一致，那比漏列更嚴重。
+            for _nm, _v in (SWCB_STN_LOC.get((_c0, _t0)) or {}).items():
+                if _v is None: continue
+                _s2 = _pick_sid(_nm, _c0, _t0)
+                if not _s2: continue
+                if td['station_etr2'].get(_s2) is None:
+                    td['station_etr2'][_s2] = _v
+                    _extra_rank.append({'county': _c0, 'town': _t0,
+                                        'station': _nm, 'etr2': _v})
+
             if best_pct is not None:
                 n_aligned += 1
                 if used_swcb: n_swcb += 1
                 else: n_cwa += 1
         print(f"  鄉鎮聚合（逐官方警戒單元）：{n_aligned} 個鄉鎮有 ETR2%"
               f"（含水保署官方值 {n_swcb}、純CWA自算 {n_cwa}）")
+
+        # ══════════════════════════════════════════════════
+        #  測站涵蓋稽核（使用者指定：不可出現「明明有測站卻沒被使用」）
+        #  ★ 這段只讀不改，純粹把「看不見的落空」攤出來。
+        #    宜蘭大同鄉本系統 36%／官方 46% 的差異就是這類落空造成的。
+        # ══════════════════════════════════════════════════
+        if _resolved_by_tier:
+            print(f"  [稽核] 靠地理解析才對到的代表站：{_resolved_by_tier}")
+            for r in _resolve_log[:8]:
+                print(f"         {r['county']}{r['town']} 要「{r['want']}」"
+                      f"→ 對到「{r['matched']}」（{r['tier']}）ETR2 {r['etr2']}")
+            if len(_resolve_log) > 8:
+                print(f"         …共 {len(_resolve_log)} 筆")
+        if _geo_block:
+            print(f"  [稽核] ⚠ 擋下跨縣市誤配：{len(_geo_block)} 筆"
+                  f"（站名相同但站在別處，直查會灌錯值）")
+            for r in _geo_block[:8]:
+                print(f"         {r['county']}{r['town']} 「{r['station']}」"
+                      f"→ 鍵「{r['key']}」ETR2 {r['etr2']} 實際在 {r['found_at']}")
+            if len(_geo_block) > 8:
+                print(f"         …共 {len(_geo_block)} 筆")
+        if _sid_block:
+            print(f"  [稽核] ⚠ 擋下站號跨區誤配：{len(_sid_block)} 筆"
+                  f"（站名相同但 CWA 站在別處，會掛錯站或用錯站算 ETR2）")
+            for r in _sid_block[:8]:
+                print(f"         {r['county']}{r['town']} 「{r['station']}」"
+                      f"→ 站號 {r['sid']} 實際在 {r['sid_at']}")
+            if len(_sid_block) > 8:
+                print(f"         …共 {len(_sid_block)} 筆")
+        if _miss_log:
+            print(f"  [稽核] ⚠ 代表站完全對不到 ETR2：{len(_miss_log)} 筆"
+                  f"（這些警戒單元不會進入該鄉鎮的最大值）")
+            for r in _miss_log[:8]:
+                print(f"         {r['county']}{r['town']} {r['village']} 「{r['station']}」")
+            if len(_miss_log) > 8:
+                print(f"         …共 {len(_miss_log)} 筆")
+
+        # 水保署有值、但不屬於任何警戒單元代表站的測站（永遠不會被納入鄉鎮最大值）
+        _used_names = set(_designated)
+        for r in _resolve_log:          # 靠地理解析對到的實際站名也算已使用
+            _used_names.add((r['county'], r['town'], r['matched']))
+        _orphan = []
+        for (c, t), d in SWCB_STN_LOC.items():
+            for nm, v in d.items():
+                if (c, t, nm) not in _used_names:
+                    _orphan.append({'county': c, 'town': t, 'station': nm, 'etr2': v})
+        _orphan.sort(key=lambda x: -(x['etr2'] or 0))
+        if _extra_rank:
+            print(f"  [稽核] 補進測站排行的非代表站：{len(_extra_rank)} 站"
+                  f"（有值卻沒列入排行的情況已消除；鄉鎮官方 ETR2 不受影響）")
+        if _orphan:
+            print(f"  [稽核] 水保署有 ETR2 但非任何警戒單元代表站：{len(_orphan)} 站")
+            print(f"         （依官方定義不計入鄉鎮值，但已補進測站排行）")
+            for r in _orphan[:8]:
+                print(f"         {r['county']}{r['town']} 「{r['station']}」ETR2 {r['etr2']}")
+            if len(_orphan) > 8:
+                print(f"         …共 {len(_orphan)} 站")
+        try:
+            with open('station_audit.json', 'w', encoding='utf-8') as _f:
+                json.dump({'generated': now_tpe.isoformat(),
+                           'resolved_by_tier': _resolved_by_tier,
+                           'resolved': _resolve_log,
+                           'unmatched': _miss_log,
+                           'geo_blocked': _geo_block,
+                           'sid_blocked': _sid_block,
+                           'added_to_ranking': _extra_rank,
+                           'not_representative': _orphan},
+                          _f, ensure_ascii=False, indent=1)
+            print(f"  [稽核] 已寫 station_audit.json"
+                  f"（地理解析 {len(_resolve_log)}／對不到 {len(_miss_log)}"
+                  f"／非代表站 {len(_orphan)}）")
+        except Exception as _e:
+            print(f"  [稽核] station_audit.json 寫入失敗：{_e}")
     else:
         # 退回舊法：鎮內所有登記站取最大（相容無對照表時）
         etr2_valid = set()
@@ -4227,6 +4450,7 @@ def fetch_cwa_routine_qpf(now_tpe):
          （decode_qpf_png，樣張色表已內建）
     """
     if not CWA_API_KEY: return None
+    QPF_SEG_SPAN.clear()        # ★ 每輪重算，避免沿用上一輪的窗寬
     towns = load_all_townships()   # PNG 判讀路徑需要鄉鎮座標
     print("抓取 CWA 常態 QPF（48h逐6h，預報員修正版）...")
     known = None
@@ -4427,6 +4651,32 @@ QPF_PNG_BANDS = [
     (3,99,255, 10),     (5,155,255, 5),   (3,200,255, 2),    (156,252,255, 1),
     (194,194,194, 0.5),
 ]
+# ★★ 色帶上界（2026-10-05，使用者指定「色帶取上界」）。
+#   QPF_PNG_BANDS 的代表值是區間「下界」，那是著色用的級距身分；
+#   但把色帶當可加量累積時必須有一個數，取上界的理由：
+#     ① 24h 加總會等於 CWA 自己公告上界的和（宜蘭 110+70=180），對官方解釋得通
+#     ② 偏保守方向與地圖既有的「取窗內最高色帶防漏報」一致
+#     ③ 取下界會系統性低報，取中值說不出依據
+#   最高帶（≥300）沒有上界，就用 300 自身。
+QPF_BAND_HI = {}
+for _i, (_r, _g, _b, _lo) in enumerate(sorted(QPF_PNG_BANDS, key=lambda x: x[3])):
+    _ordered = sorted({_v for (_, _, _, _v) in QPF_PNG_BANDS})
+    _j = _ordered.index(_lo)
+    QPF_BAND_HI[_lo] = _ordered[_j + 1] if _j + 1 < len(_ordered) else _lo
+
+def qpf_band_hi(v):
+    """色帶下界 → 上界（找不到就原值回傳，絕不放大未知值）。"""
+    if v is None: return None
+    try: return QPF_BAND_HI.get(round(float(v), 1), float(v))
+    except Exception: return v
+
+# ★ 色帶窗寬側通道：start_tpe → 該色帶窗涵蓋幾個 6h 段（12h 圖=2）。
+#   為什麼用模組級 dict 而不是改 decode_qpf_png 的回傳契約：
+#   呼叫端有多處、且 fetch_cwa_routine_qpf 的 merged 是「先到先得」，
+#   用物件識別反推窗寬在「某窗只有部分段存活」時會算錯（除以 1 等於不除）。
+#   明確記錄才有唯一答案。與 SWCB_STN_LOC 同一個慣例。
+QPF_SEG_SPAN = {}
+
 # 色距容忍：相鄰級距最小色距 45（5mm↔2mm），取其一半再留餘裕 → 半徑 ≤22
 QPF_PNG_TOL = 12          # 每通道容忍（√(12²×3)≈20.8，安全落在半距內）
 QPF_PNG_WINDOW_HOURS = 12 # 定量降水預報(II) 為 12h 有效時段
@@ -4552,7 +4802,9 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns, fname='', win_seg=None, win_n
         seg_vals = dict(town_vals)
         segs = {}
         for k in range(win_nseg):
-            segs[_base00 + timedelta(hours=6*(win_seg + k))] = seg_vals
+            _st0 = _base00 + timedelta(hours=6*(win_seg + k))
+            segs[_st0] = seg_vals
+            QPF_SEG_SPAN[_st0] = win_nseg          # ★ 記錄窗寬（累積時要除）
         print(f"    明確窗位：段 {win_seg}~{win_seg+win_nseg-1}"
               f"（{_base00 + timedelta(hours=6*win_seg):%m/%d %H:%M} 起 {win_nseg} 段）")
         return segs
@@ -4588,7 +4840,9 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns, fname='', win_seg=None, win_n
                 seg_vals = dict(town_vals)
                 segs = {}
                 for k in range(n_seg):
-                    segs[base + timedelta(hours=6*k)] = seg_vals
+                    _st0 = base + timedelta(hours=6*k)
+                    segs[_st0] = seg_vals
+                    QPF_SEG_SPAN[_st0] = n_seg     # ★ 記錄窗寬（累積時要除）
                 print(f"    時間窗（檔名 {h0}-{h1}h，{win_h}h窗）："
                       f"{base.strftime('%m/%d %H:%M')} 起 {n_seg} 段（色階類別）")
                 return segs
@@ -4601,7 +4855,9 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns, fname='', win_seg=None, win_n
     seg_vals = dict(town_vals)
     segs = {}
     for k in range(n_seg):
-        segs[base + timedelta(hours=6*k)] = seg_vals
+        _st0 = base + timedelta(hours=6*k)
+        segs[_st0] = seg_vals
+        QPF_SEG_SPAN[_st0] = n_seg                 # ★ 記錄窗寬（累積時要除）
     return segs
 
 # ── 官方警特報（W-C0033-001 各縣市現行天氣警特報）───────────────────
@@ -4835,6 +5091,7 @@ def main():
     # 對齊日曆6h段：idx = (start − 今天00時TST)/6h（qpf_15d[0]=今天00-06 鐵律）
     _today00 = now_tpe.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     routine_seg_map = {}
+    routine_span = {}          # idx -> 該色帶窗涵蓋幾個 6h 段（累積時要除）
     routine_is_png = bool(routine_qpf and routine_qpf.get('png'))
     if routine_qpf:
         for _st, _vals in routine_qpf['segs'].items():
@@ -4842,6 +5099,8 @@ def main():
             _idx = int(_sec // 21600)
             if 0 <= _idx < 60 and _sec % 21600 == 0:
                 routine_seg_map[_idx] = _vals
+                # 查不到窗寬就當 1（不除）—— 寧可維持原行為，不要憑猜除法
+                routine_span[_idx] = QPF_SEG_SPAN.get(_st, 1)
         print(f"  常態QPF對齊段索引：{sorted(routine_seg_map)}"
               f"{'（PNG鄉鎮字典，近似）' if routine_is_png else ''}")
 
@@ -4943,7 +5202,10 @@ def main():
         #       絕不轉數字、絕不覆蓋任何模式（色塊判讀本質是類別，硬轉數字會失真，
         #       且會污染 best/ecmwf/hi/lo——這正是先前數據異常的主因）。
         #   qpf_cwa：CWA 模式著色用陣列（PNG 段=色階代表值；颱風段=精確值；未覆蓋=null）。
-        _cwa_by_idx = {}     # idx -> value（CWA模式著色用）
+        _cwa_by_idx = {}     # idx -> value（CWA模式著色用；色帶段=下界代表值）
+        _cwa_add = {}        # idx -> 可加量（色帶段=上界/窗段數；真值段=原值）
+        _band_idx = set()    # 色帶段（類別，未覆寫任何模式）
+        _real_idx = set()    # 真實數值段（已覆寫 best/ecmwf/gfs）
         # (A) 常態 PNG 色階（僅存 qpf_cwa，不動任何模式）
         if routine_seg_map and routine_is_png:
             _tkey = f"{county}{township}"
@@ -4952,6 +5214,14 @@ def main():
                 _v = _vals.get(_tkey)
                 if _v is not None:
                     _cwa_by_idx[_idx] = round(float(_v), 1)   # 色階代表值（僅著色）
+                    _band_idx.add(_idx)
+                    # ★★ 可加量＝色帶上界 ÷ 窗段數（使用者指定取上界）。
+                    #   先前色帶下界被複製到窗內每個 6h 段，任何累加都會重複計算：
+                    #   一天 4 段 = 2×白天帶 + 2×晚上帶，宜蘭因此報到 320mm，
+                    #   而 CWA 自己的上界和只有 180mm。
+                    _sp = max(1, int(routine_span.get(_idx, 1)))
+                    _hi = qpf_band_hi(_cwa_by_idx[_idx])
+                    _cwa_add[_idx] = round(float(_hi) / _sp, 2)
         elif routine_seg_map and not routine_is_png:
             # 常態格點（非PNG，真實數值）→ 可覆蓋模式（與颱風同性質）
             for _idx, _vals in routine_seg_map.items():
@@ -4959,6 +5229,8 @@ def main():
                 _v = _qpf_grid_at(_vals, lat, lng)
                 if _v is not None:
                     _cwa_by_idx[_idx] = round(float(_v), 1)
+                    _cwa_add[_idx] = _cwa_by_idx[_idx]   # 真實數值，直接可加
+                    _real_idx.add(_idx)
                     qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = _cwa_by_idx[_idx]
         # (B) 颱風 F-C0041 精確格點（真實數值，覆蓋模式）
         if is_typhoon and typhoon_segs:
@@ -4978,17 +5250,29 @@ def main():
                 _v = idw(lat, lng, _pts, _idx) if _pts else None
                 if _v is not None:
                     _cwa_by_idx[_idx] = _v
+                    _cwa_add[_idx] = _v                  # 真實數值，直接可加
+                    _real_idx.add(_idx); _band_idx.discard(_idx)
                     qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = _v
-        # ★ 記錄哪些段是「官方值覆蓋」：這些段四個模式被寫成同一個數值，
-        #   融合模式若照常加權會失去意義（等於自己跟自己平均），
-        #   故前端在這些段直接採用官方值並標示來源。
-        _official_segs = sorted(_cwa_by_idx.keys())
+        # ★★ 2026-10-05 修正：official_segs 原本把兩種完全不同的東西混成一張清單，
+        #   前端因此分不出來：
+        #     真值段（颱風格點／非PNG格點）—— 確實把 best/ecmwf/gfs 覆寫成同一數值，
+        #       融合照常加權等於自己跟自己平均，所以前端直接採用官方值是對的。
+        #     色帶段（常態PNG）—— 本檔明寫「絕不轉數字、絕不覆蓋任何模式」，
+        #       qpf_best 根本沒被寫。前端卻一樣直接採用，於是六個模式被丟掉、
+        #       換成一個加倍的色帶下界，而且還流進 qpf_hi/qpf_lo 的系集離散度。
+        #   故拆成兩張：official_segs 只留真值段（語意回到它原本的定義），
+        #   色帶段改走 band_segs，前端不得以它取代模式加權。
+        _official_segs = sorted(_real_idx)
+        _band_segs = sorted(_band_idx)
         qpf_cwa = []
+        qpf_cwa_q = []
         if _cwa_by_idx:
             _max_idx = max(_cwa_by_idx)
             qpf_cwa = [None] * (_max_idx + 1)
+            qpf_cwa_q = [None] * (_max_idx + 1)
             for _idx, _v in _cwa_by_idx.items():
                 qpf_cwa[_idx] = _v
+                qpf_cwa_q[_idx] = _cwa_add.get(_idx)
 
         # 預設用 best_match（CWA優先 > ECMWF > GFS=ICON 的綜合判斷已含在模式選擇邏輯中）
         qpf15d = qpf_best
@@ -5055,13 +5339,15 @@ def main():
             'maxh_hi':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'hi')[1],
             'maxh_lo':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'lo')[1],
             # 官方值覆蓋的段索引（CWA 常態圖判讀 + 颱風格點）
-            'official_segs': _official_segs,
+            'official_segs': _official_segs,      # 真實數值段（已覆寫模式）
+            'band_segs':      _band_segs,         # 色帶類別段（未覆寫模式）
             'bias_24h':  calc_bias_24h(obs.get('daily_rain', [0.0]*15), model_yday.get(f"{lat:.4f}_{lng:.4f}")),
             # 四模式昨日值（供誤差追蹤逐來源比對；前端不直接顯示）
             'model_yday': models_yday.get(f"{lat:.4f}_{lng:.4f}"),
             'qpesums_1h':  qpesums_at(qp_grid, lat, lng),
             'qpesums_24h': qp_24h.get(f"{county}{township}"),
-            'qpf_cwa':   qpf_cwa,
+            'qpf_cwa':   qpf_cwa,                 # 色帶下界（著色用，勿累加）
+            'qpf_cwa_q': qpf_cwa_q,               # 可加量（色帶上界÷窗段數）
             'qpf_1h_cwa': [],  # CWA無逐時定量降水，維持空（前端逐時圖自動退回）
             'qpf_1h':    HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
             'qpf_1h_p48': PAST48_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
@@ -5172,6 +5458,8 @@ def main():
             'qpesums_1h':  qpesums_at(qp_grid, avg_lat, avg_lng),
             'qpesums_24h': qp_24h.get(f"{at['county']}{at['township']}"),
             'qpf_cwa':   [],
+            'qpf_cwa_q': [],
+            'band_segs': [],
             'qpf_1h_cwa': [],
             'qpf_1h':    HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
             'qpf_1h_p48': PAST48_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
