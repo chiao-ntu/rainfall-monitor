@@ -2293,21 +2293,30 @@ async function toggleRoadLayer(){
   if(_roadOn && _roadData && !_roadIndex){
     _roadIndex = _buildRoadIndex();
     map.on('mousemove', _roadTip);
-    map.on('mouseout', ()=>{ if(_roadTipEl) _roadTipEl.style.display='none'; });
+    map.on('mouseout', ()=>{ if(_roadHover){ _roadHover=''; _renderOverlayLegend(); } });
   }
-  if(!_roadOn && _roadTipEl) _roadTipEl.style.display = 'none';
+  if(!_roadOn && _roadHover){ _roadHover = ''; }
   renderRoadLayer();
 }
 // 道路樣式：顏色要在「白色鄉鎮（<5mm，最常見）」和深色海兩種底上都讀得到，
 //   故用深色而非亮色（實測亮色在白底幾乎看不見）；且必須避開 RAIN_SCALE 的
 //   白/青/綠/黃/紅/洋紅/粉，否則道路會被誤讀成雨量級距。
-const ROAD_W = {motorway:2.2, trunk:1.9, primary:1.4,
-                motorway_link:1.1, trunk_link:1.0, primary_link:0.9};
-const ROAD_STYLE = {
-  bridge: {color:'#C05000', opacity:0.95, dw:0.8, label:'橋樑'},
-  tunnel: {color:'#2E6E8E', opacity:0.80, dw:0,   label:'隧道', dash:'3,3'},
-  road:   {color:'#5A5A50', opacity:0.60, dw:0,   label:'一般路段'},
+// ★ 道路「類別」改用顏色區分，不再只靠線寬 —— 使用者回報線寬差異
+//   肉眼無法立即分辨（1.4 與 2.2 px 在雨量底圖上確實看不出來）。
+//   顏色全部避開 RAIN_SCALE 的白/青/綠/黃/紅/洋紅/粉，才不會被誤讀成雨量級距。
+const ROAD_CLS = {
+  motorway:      {color:'#1F4E9C', w:2.2, label:'國道／高速公路'},
+  motorway_link: {color:'#1F4E9C', w:1.1, label:'國道連絡道'},
+  trunk:         {color:'#8A3FA0', w:2.0, label:'快速道路'},
+  trunk_link:    {color:'#8A3FA0', w:1.0, label:'快速道路連絡道'},
+  primary:       {color:'#4A4A42', w:1.5, label:'省道／主要道路'},
+  primary_link:  {color:'#4A4A42', w:0.9, label:'省道連絡道'},
 };
+// ★ 橋樑不再「換色」，改在底下墊一條橘色底襯（casing）——
+//   換色會把類別顏色吃掉，等於兩個資訊只能顯示一個。
+//   底襯是地圖學處理高架／橋梁的標準做法，兩種資訊可以同時讀到。
+const ROAD_BRIDGE_CASING = {color:'#C05000', dw:2.4, label:'橋樑（封閉／沖毀風險）'};
+const ROAD_TUNNEL_DASH = '4,3';
 function _roadKind(p){ return p.b ? 'bridge' : (p.t ? 'tunnel' : 'road'); }
 // ★ 橋樑／隧道只在「拉近到足以據此行動」時才分色。
 //   全臺尺度下國道 1/3/5 大半是高架，分色會讓整張圖變成一片橘，
@@ -2330,19 +2339,29 @@ function renderRoadLayer(){
   (_roadData.features || []).forEach(f=>{
     const p = f.properties || {};
     if(keep && !keep.has(p.c)) return;
+    if(!ROAD_CLS[p.c]) return;
     const k = (detail ? _roadKind(p) : 'road') + '|' + p.c;
     (groups[k] = groups[k] || []).push(f.geometry.coordinates);
   });
   const rend = L.canvas({pane:'roadPane', padding:0.3});
   _roadLayer = L.layerGroup();
+  const toLL = cs=>cs.map(c=>[c[1], c[0]]);
+  // 先畫所有橋樑底襯（要在主線之下），再畫主線
   Object.keys(groups).forEach(k=>{
-    const [kind, cls] = k.split('|');
-    const st = ROAD_STYLE[kind];
-    const w = (ROAD_W[cls] || 1.0) + st.dw;
+    if(k.split('|')[0] !== 'bridge') return;
+    const cls = ROAD_CLS[k.split('|')[1]];
+    L.polyline(groups[k].map(toLL), {pane:'roadPane', renderer:rend,
+      interactive:false, color:ROAD_BRIDGE_CASING.color,
+      weight: cls.w + ROAD_BRIDGE_CASING.dw, opacity:0.9}).addTo(_roadLayer);
+  });
+  Object.keys(groups).forEach(k=>{
+    const [kind, c] = k.split('|');
+    const cls = ROAD_CLS[c];
     const opt = {pane:'roadPane', renderer:rend, interactive:false,
-                 color:st.color, weight:w, opacity:st.opacity};
-    if(st.dash) opt.dashArray = st.dash;
-    L.polyline(groups[k].map(cs=>cs.map(c=>[c[1], c[0]])), opt).addTo(_roadLayer);
+                 color:cls.color, weight:cls.w,
+                 opacity: kind === 'tunnel' ? 0.75 : 0.9};
+    if(kind === 'tunnel') opt.dashArray = ROAD_TUNNEL_DASH;
+    L.polyline(groups[k].map(toLL), opt).addTo(_roadLayer);
   });
   _roadLayer.addTo(map);
   _renderOverlayLegend();
@@ -2413,30 +2432,28 @@ function _roadAt(latlng){
   }
   return (bestD <= tol) ? best : null;
 }
-let _roadTipEl = null;
+// ★ 道路資訊改寫進左下圖例框，不在游標旁另開 tooltip。
+//   游標旁已經有鄉鎮氣象 tooltip（sticky，跟著游標），再疊一個必然互相遮蓋
+//   （使用者回報）。固定在角落讀起來也比跳動的浮層穩定。
+let _roadHover = '';
 function _roadTip(ev){
-  if(!_roadOn || !_roadIndex){ if(_roadTipEl) _roadTipEl.style.display='none'; return; }
-  const p = _roadAt(ev.latlng);
-  if(!_roadTipEl){
-    _roadTipEl = document.createElement('div');
-    _roadTipEl.style.cssText = 'position:fixed;z-index:9990;background:#0a1828f2;'
-      + 'border:1px solid #6a6a4a;border-radius:5px;padding:5px 9px;font-size:11px;'
-      + 'color:#e8e8d8;pointer-events:none;max-width:260px;line-height:1.6';
-    document.body.appendChild(_roadTipEl);
+  if(!_roadOn || !_roadIndex){
+    if(_roadHover){ _roadHover=''; _renderOverlayLegend(); }
+    return;
   }
-  if(!p){ _roadTipEl.style.display = 'none'; return; }
-  const kind = _roadKind(p);
-  const st = ROAD_STYLE[kind];
-  _roadTipEl.innerHTML =
-      `<b style="color:${st.color === '#5A5A50' ? '#cfd8c0' : st.color}">${st.label}</b>`
-    + `　<span style="color:#9fc8a8">${ROAD_CLS_NAME[p.c] || p.c}</span>`
-    + (p.r ? `<br>編號：<b>${p.r}</b>` : '')
-    + (p.n ? `<br>${p.n}` : '')
-    + (kind === 'bridge' ? '<br><span style="color:#e8a860">※ 橋樑：淹水／土石流時'
-        + '為封閉與沖毀風險點</span>' : '');
-  _roadTipEl.style.display = 'block';
-  _roadTipEl.style.left = (ev.originalEvent.clientX + 14) + 'px';
-  _roadTipEl.style.top  = (ev.originalEvent.clientY - 10) + 'px';
+  const p = _roadAt(ev.latlng);
+  let h = '';
+  if(p){
+    const cls = ROAD_CLS[p.c] || {color:'#4A4A42', label:p.c};
+    const kind = _roadKind(p);
+    h = `<div style="font-weight:700;color:${cls.color}">${cls.label}</div>`
+      + (p.r ? `<div>編號 <b>${p.r}</b></div>` : '')
+      + (p.n ? `<div>${p.n}</div>` : '')
+      + (kind === 'bridge'
+          ? `<div style="color:#C05000">橋樑：淹水／土石流時為封閉與沖毀風險點</div>`
+          : kind === 'tunnel' ? '<div style="color:#667">隧道</div>' : '');
+  }
+  if(h !== _roadHover){ _roadHover = h; _renderOverlayLegend(); }
 }
 
 // 疊圖圖例（道路／收容所，各自獨立顯示）
@@ -2445,19 +2462,29 @@ function _renderOverlayLegend(){
   if(!el) return;
   const parts = [];
   if(_overlayMsg) parts.push(`<div style="color:#a05020">${_overlayMsg}</div>`);
+  // 游標所在道路：固定顯示在這裡，不跟氣象 tooltip 搶游標位置
+  if(_roadHover){
+    parts.push('<div style="border-bottom:1px solid #ccd;padding-bottom:4px;'
+      + 'margin-bottom:4px">' + _roadHover + '</div>');
+  }
   if(_roadOn && _roadData){
     const line = (c, w, dash)=>`<span style="display:inline-block;width:20px;height:0;`
       + `border-top:${w}px ${dash ? 'dashed' : 'solid'} ${c};vertical-align:middle;`
       + `margin-right:5px"></span>`;
-    // ★ 圖例只列「現在畫面上真的有的區別」。拉遠時橋樑未分色，
-    //   若仍列出橋樑那一條，圖例就是在說謊。
+    const z = map.getZoom();
+    const keep = (ROAD_CLASS_BY_ZOOM.find(r=>z < r.z) || {keep:null}).keep;
+    const rows = ['motorway','trunk','primary']
+      .filter(c=>!keep || keep.has(c))
+      .map(c=>`<div>${line(ROAD_CLS[c].color, ROAD_CLS[c].w + 0.6)}${ROAD_CLS[c].label}</div>`);
     parts.push('<div style="font-weight:700;margin-bottom:3px">道路</div>'
-      + `<div>${line(ROAD_STYLE.road.color,2)}一般路段</div>`
+      + rows.join('')
+      // ★ 圖例只列「現在畫面上真的有的區別」。拉遠時橋樑未分色，
+      //   若仍列出橋樑那一條，圖例就是在說謊。
       + (_roadDetail()
-          ? `<div>${line(ROAD_STYLE.bridge.color,3)}橋樑（封閉／沖毀風險）</div>`
-            + `<div>${line(ROAD_STYLE.tunnel.color,2,1)}隧道</div>`
+          ? `<div>${line(ROAD_BRIDGE_CASING.color,4)}${ROAD_BRIDGE_CASING.label}（墊在線下）</div>`
+            + `<div>${line('#4A4A42',2,1)}隧道（虛線）</div>`
           : '<div style="color:#667">拉近可分辨橋樑與隧道</div>')
-      + '<div style="color:#667;margin-top:2px">線寬：國道＞快速＞省道</div>');
+      + '<div style="color:#667;margin-top:2px">滑過道路可看編號與路名</div>');
   }
   if(_shelterOn && _shelterData){
     const dot = c=>`<span style="display:inline-block;width:9px;height:9px;`
@@ -2467,7 +2494,7 @@ function _renderOverlayLegend(){
       + '<div style="font-weight:700;margin-bottom:3px">避難收容所</div>'
       + `<div>${dot('#5ad88a')}適用水災／土石流</div>`
       + `<div>${dot('#8aa8c0')}其他災害類別</div>`
-      + '<div style="color:#667;margin-top:2px">點選可看地址與適用災害</div>');
+      + '<div style="color:#667;margin-top:2px">點選圓點可看地址與適用災害</div>');
   }
   el.innerHTML = parts.join('');
   el.style.display = parts.length ? 'block' : 'none';
@@ -2497,12 +2524,27 @@ async function toggleShelterLayer(){
   }
   renderShelterLayer();
 }
+// ★ 收容所必須用 SVG 渲染，不能用 canvas。
+//   本檔有一條全域規則：「除了 townPane，所有 canvas 一律 pointer-events:none」
+//   （為了避免上層 canvas 整片蓋住鄉鎮讓地圖點不到）。circleMarker 預設走
+//   canvas，於是收容所也被一起關掉 —— 這就是「點不到」的原因（實測：
+//   游標位置最上層是 townPane 的 canvas）。
+//   SVG 是逐形狀命中測試，只有圓點本身接事件，不會擋住鄉鎮，兩者可以並存。
+function _ensureShelterPane(){
+  if(map.getPane('shelterPane')) return;
+  map.createPane('shelterPane');
+  const p = map.getPane('shelterPane');
+  p.style.zIndex = 620;
+  p.style.pointerEvents = 'auto';
+}
 function renderShelterLayer(){
   if(_shelterLayer){ try{ map.removeLayer(_shelterLayer); }catch(e){} _shelterLayer = null; }
   if(!_shelterOn || !_shelterData){ _renderOverlayLegend(); return; }
+  _ensureShelterPane();
   const z = map.getZoom();
   const rad = z >= 12 ? 6 : z >= 10 ? 4.5 : 3;
   const HAZ = {F:'水災', D:'土石流', E:'震災', T:'海嘯'};
+  const srend = L.svg({pane:'shelterPane'});
   _shelterLayer = L.layerGroup().addTo(map);
   (_shelterData.features || []).forEach(ft=>{
     const c = ft.geometry && ft.geometry.coordinates;
@@ -2514,9 +2556,10 @@ function renderShelterLayer(){
     const m = L.circleMarker([c[1], c[0]], {
       radius: rad, weight: 1, color: '#0a1a28',
       fillColor: rainRel ? '#5ad88a' : '#8aa8c0', fillOpacity: 0.9,
-      pane: 'markerPane'
+      pane: 'shelterPane', renderer: srend, interactive: true
     });
     const hz = flags.split('').map(k=>HAZ[k]).filter(Boolean).join('、') || '—';
+    m.bindTooltip(p.n || '（無名稱）', {direction:'top', opacity:0.92});
     m.bindPopup(`<b>${p.n || '（無名稱）'}</b><br>`
       + `${p.a || ''} ${p.ad || ''}<br>`
       + `適用災害：${hz}<br>`
