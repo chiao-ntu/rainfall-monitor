@@ -1331,7 +1331,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-04T09:55Z';
+const FORMOSA_BUILD = '2026-10-04T12:40Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -2233,14 +2233,26 @@ function toggleTerrainLayer(){
 //   等於沒說；而且預設視野就看不到任何東西，等於這個按鈕沒作用。
 //   改為「依縮放調整內容密度」：拉遠只畫國道／快速道路（骨幹，看得出路網），
 //   拉近才加入省道與連絡道。縮放級數完全不出現在介面上。
+// ★ 公路局五種功能分類（使用者指定全部呈現）。對應 OSM：
+//   高速公路 motorway｜快速公路 trunk｜主要道路 primary
+//   ｜次要道路 secondary｜集散道路 tertiary
+//   連絡道（*_link）併入其母類別，只以較細的線寬表示。
+// ★ 依縮放決定畫到第幾級：全臺視野把八萬條全畫出來只會糊成一團，
+//   而且 16MB 的資料一次載完會卡。骨幹與細部拆成兩個檔，
+//   細部（次要／集散）要拉近才載、才畫。
 const ROAD_CLASS_BY_ZOOM = [
-  {z: 10, keep: new Set(['motorway', 'trunk'])},                       // 遠：只有骨幹
-  {z: 12, keep: new Set(['motorway', 'trunk', 'primary'])},            // 中：加省道
-  {z: 99, keep: null},                                                 // 近：全部（含連絡道）
+  {z: 9,  keep: new Set(['motorway', 'trunk'])},
+  {z: 11, keep: new Set(['motorway', 'trunk', 'primary'])},
+  {z: 13, keep: new Set(['motorway', 'trunk', 'primary', 'secondary'])},
+  {z: 99, keep: null},
 ];
+const ROAD_DETAIL_ZOOM = 12;    // 到這一級才載入／繪製次要與集散道路
 let _roadOn = false, _roadData = null, _roadLayer = null, _roadLoading = false;
 let _roadIndex = null;          // 給 tooltip 用的網格索引
+let _roadDetail2 = null, _roadDetailLoading = false;  // 次要／集散道路（另檔）
 let _shelterOn = false, _shelterData = null, _shelterLayer = null, _shelterLoading = false;
+let _shelterDrawn = 0;   // 目前視野內實際畫出的點數（全國 5,907 處需裁切）
+let _shelterBounds = null;  // 上次繪製所涵蓋的範圍（避免平移時無謂重建）
 
 function _ensureRoadPane(){
   if(map.getPane('roadPane')) return;
@@ -2290,6 +2302,23 @@ async function toggleRoadLayer(){
     _layerBtnBusy('bRoads', false); _setOverlayMsg('');
     _roadLoading = false;
   }
+  // ★ 次要／集散道路另存一檔，拉近才載（整包 16MB 一次載會卡住）
+  if(_roadOn && _roadData && !_roadDetail2 && map.getZoom() >= ROAD_DETAIL_ZOOM
+     && !_roadDetailLoading){
+    _roadDetailLoading = true;
+    _setOverlayMsg('次要／集散道路載入中…');
+    try{
+      const d = await _loadJsonOnce('roads_detail.geojson', '細部道路');
+      _roadDetail2 = d;
+      _roadData.features = _roadData.features.concat(d.features || []);
+      _roadIndex = null;                     // 索引要重建（多了五萬條）
+      _setOverlayMsg('');
+    }catch(e){
+      console.warn('細部道路載入失敗：', e.message);
+      _setOverlayMsg('次要／集散道路尚未部署：缺 roads_detail.geojson');
+    }
+    _roadDetailLoading = false;
+  }
   if(_roadOn && _roadData && !_roadIndex){
     _roadIndex = _buildRoadIndex();
     map.on('mousemove', _onRoadMove);
@@ -2308,15 +2337,13 @@ async function toggleRoadLayer(){
 //   需要寫說明就是設計失敗：改成五種互斥的線條樣式，各自在圖例佔一條。
 //   顏色全部避開 RAIN_SCALE 的白/青/綠/黃/紅/洋紅/粉，不會被誤讀成雨量。
 const ROAD_CLS = {
-  motorway:      {color:'#1F4E9C', w:2.2, label:'國道／高速公路'},
-  motorway_link: {color:'#1F4E9C', w:1.1, label:'國道連絡道'},
-  trunk:         {color:'#8A3FA0', w:2.0, label:'快速道路'},
-  trunk_link:    {color:'#8A3FA0', w:1.0, label:'快速道路連絡道'},
-  primary:       {color:'#4A4A42', w:1.5, label:'省道／主要道路'},
-  primary_link:  {color:'#4A4A42', w:0.9, label:'省道連絡道'},
+  motorway:  {color:'#1F4E9C', w:2.4, label:'高速公路（國道）'},
+  trunk:     {color:'#8A3FA0', w:2.0, label:'快速公路'},
+  primary:   {color:'#1F7A5A', w:1.6, label:'主要道路'},
+  secondary: {color:'#9A6A1F', w:1.2, label:'次要道路'},
+  tertiary:  {color:'#6A6A60', w:0.9, label:'集散道路'},
 };
 // 橋樑與隧道是「完全不同的東西」，各給一個顏色，不疊在類別色上。
-// 寬度與類別線相同 —— 加粗會讓國道高架段在全臺視野糊成一片橘。
 const ROAD_STRUCT = {
   bridge: {color:'#D2691E', label:'橋樑'},
   tunnel: {color:'#4FA3C7', label:'隧道', dash:'5,4'},
@@ -2402,9 +2429,6 @@ function _segDist(px, py, ax, ay, bx, by){
   const qx = ax + t*dx, qy = ay + t*dy;
   return Math.hypot(px - qx, py - qy);
 }
-const ROAD_CLS_NAME = {motorway:'國道／高速公路', trunk:'快速道路',
-  primary:'省道／主要道路', motorway_link:'國道連絡道',
-  trunk_link:'快速道路連絡道', primary_link:'省道連絡道'};
 function _roadAt(latlng){
   if(!_roadIndex) return null;
   const z = map.getZoom();
@@ -2438,17 +2462,20 @@ function _roadAt(latlng){
 const ROAD_OW_LBL = {F:'單向', T:'單向(反向)', B:'雙向'};
 let _roadTip = null, _lastTownTip = null;
 function _roadTipHtml(p){
-  const cls = ROAD_CLS[p.c] || {color:'#4A4A42', label:p.c};
+  const cls = ROAD_CLS[p.c] || {color:'#6A6A60', label:p.c};
   const kind = _roadKind(p);
   const st = ROAD_STRUCT[kind];
   const rows = [];
-  rows.push(`<b style="color:${(st||cls).color}">${st ? st.label + '　' : ''}${cls.label}</b>`);
+  rows.push(`<b style="color:${(st||cls).color}">${st ? st.label + '　' : ''}`
+          + `${cls.label}${p.lk ? '連絡道' : ''}</b>`);
   if(p.ref)  rows.push(`編號：<b>${p.ref}</b>`);
   if(p.name) rows.push(`名稱：${p.name}`);
   if(p.sp)   rows.push(`速限：${p.sp} km/h`);
   if(p.ow)   rows.push(`行車方向：${ROAD_OW_LBL[p.ow] || p.ow}`);
-  if(p.ly != null) rows.push(`相對層級：${p.ly > 0 ? '+' + p.ly : p.ly}`);
-  if(kind === 'bridge') rows.push('<span style="color:#e8a860">淹水／土石流時為封閉與沖毀風險點</span>');
+  // ★ 不顯示 OSM 的 layer（相對層級）：那是圖資用來標示立體交叉上下關係的
+  //   內部欄位，對判讀災害沒有意義，非專業人士只會困惑（使用者回報）。
+  if(kind === 'bridge') rows.push('<span style="color:#e8a860">橋樑：淹水／土石流時為封閉與沖毀風險點</span>');
+  if(kind === 'tunnel') rows.push('<span style="color:#8ad0e8">隧道：豪雨時注意出入口積水與邊坡</span>');
   return rows.join('<br>');
 }
 function _onRoadMove(ev){
@@ -2551,47 +2578,64 @@ function renderShelterLayer(){
   if(!_shelterOn || !_shelterData){ _renderOverlayLegend(); return; }
   const srend = _ensurePtPane('shelterPane', 620);
   const z = map.getZoom();
-  const rad = z >= 12 ? 6 : z >= 10 ? 4.5 : 3;
+  const rad = z >= 13 ? 6 : z >= 11 ? 4.5 : z >= 9 ? 3 : 2;
   _shelterLayer = L.layerGroup().addTo(map);
-  const YES = v=>String(v || '').trim() === '是';
+  // ★ 只畫目前視野內的點（外擴 30%）。全國 5,907 處若整批畫成 SVG，
+  //   全臺視野下會明顯卡頓，而且點全部疊在一起也看不出東西。
+  //   視野一動就重畫（moveend），所以不會有「看得到卻沒畫」的情況。
+  const vb = map.getBounds().pad(0.3);
+  _shelterBounds = vb;
+  const HAZ_COLOR = {水災:'#5ad88a', 土石流:'#5ad88a'};
   const mark = v=>{
     const t = String(v || '').trim();
     return t === '是' ? '<span style="color:#5ad88a">是</span>'
          : t === '否' ? '<span style="color:#8aa8c0">否</span>'
          : '<span style="color:#667">—</span>';
   };
+  let drawn = 0;
   (_shelterData.features || []).forEach(ft=>{
     const c = ft.geometry && ft.geometry.coordinates;
     if(!c) return;
+    const ll = L.latLng(c[1], c[0]);
+    if(!vb.contains(ll)) return;
     const p = ft.properties || {};
-    // 適用於水災或土石流者以綠色強調 —— 這套系統的情境就是這兩類
-    const rainRel = YES(p.flood) || YES(p.debris);
-    const m = L.circleMarker([c[1], c[0]], {
+    const haz = Array.isArray(p.haz) ? p.haz : [];
+    // 本系統的情境是降雨致災，故適用水災或土石流者以綠色強調
+    const rainRel = haz.some(h=>HAZ_COLOR[h]);
+    const m = L.circleMarker(ll, {
       radius: rad, weight: 1, color: '#0a1a28',
       fillColor: rainRel ? '#5ad88a' : '#8aa8c0', fillOpacity: 0.9,
       pane: 'shelterPane', renderer: srend, interactive: true
     });
     // ★ hover 就給出全部欄位（本系統所有 tooltip 的一致行為），
     //   不必點進去才看得到細節。點選則與右側狀態列連動。
-    m.bindTooltip(
-      `<b>${p.name || '（無名稱）'}</b>`
-      + `<span style="color:#8a9aaa;font-size:10px">　${p.area || ''}</span><br>`
-      + (p.addr ? `地址：${p.addr}<br>` : '')
-      + `開設類型：${p.kind || '—'}<br>`
-      + `<span style="color:#8a9aaa">功能</span>　收容所 ${mark(p.shelter)}`
-      + `｜避難所 ${mark(p.refuge)}｜物資點 ${mark(p.supply)}<br>`
-      + `<span style="color:#8a9aaa">適用災害</span>　水災 ${mark(p.flood)}`
-      + `｜土石流 ${mark(p.debris)}｜震災 ${mark(p.quake)}｜海嘯 ${mark(p.tsunami)}<br>`
-      // ★ 原始欄位名在 shapefile 裡被截斷成「是否適」，完整語意不明，
-      //   故照原欄位名呈現，不自行補字 —— 猜錯會誤導判讀。
-      + `<span style="color:#8a9aaa">原始欄位「是否適」</span>　${mark(p.suit)}`,
-      {direction: 'top', opacity: 0.95});
+    const rows = [];
+    rows.push(`<b>${p.name || '（無名稱）'}</b>`
+      + `<span style="color:#8a9aaa;font-size:10px">　${(p.cty||'') + (p.twn||'')}`
+      + `${p.vil ? ' ' + p.vil : ''}</span>`);
+    if(p.addr) rows.push(`地址：${p.addr}`);
+    rows.push(`適用災害：${haz.length
+      ? haz.map(h=>HAZ_COLOR[h]
+          ? `<span style="color:#5ad88a">${h}</span>` : h).join('、')
+      : '<span style="color:#667">—</span>'}`);
+    rows.push(`預計收容人數：${p.cap != null
+      ? '<b>' + p.cap + '</b> 人' : '<span style="color:#667">—</span>'}`);
+    if(p.cvil) rows.push(`預計收容村里：${p.cvil}`);
+    rows.push(`室內 ${mark(p.ind)}｜室外 ${mark(p.out)}`
+      + `｜適合避難弱者安置 ${mark(p.weak)}`);
+    if(p.mgr || p.tel){
+      rows.push(`<span style="color:#8a9aaa">管理人</span>　${p.mgr || '—'}`
+        + (p.tel ? `　${p.tel}` : ''));
+    }
+    m.bindTooltip(rows.join('<br>'), {direction:'top', opacity:0.95});
     m.on('click', ()=>{
       const tt = _townAtLatLng(c[1], c[0]);
       if(tt){ selected = tt; try{ renderLayer(); updateInfo(tt); }catch(e){} }
     });
     m.addTo(_shelterLayer);
+    drawn++;
   });
+  _shelterDrawn = drawn;
   _renderOverlayLegend();
 }
 
@@ -13097,13 +13141,29 @@ let _tnTimer = null;
 function _bindTownNameZoom(){
   if(_bindTownNameZoom.done || typeof map === 'undefined' || !map) return;
   _bindTownNameZoom.done = true;
+  // ★ 平移也要重畫疊圖：收容所與道路都只畫視野內的內容，
+  //   只掛 zoomend 的話平移出去就會看到空白。
+  map.on('moveend', ()=>{
+    if(!_shelterOn) return;
+    // ★ 上次繪製的範圍若仍涵蓋現在的視野，就不用重建。
+    //   全臺視野下所有點本來就都在範圍內，不加這個判斷會變成
+    //   每次平移都重建 5,907 個 SVG 圓點（實測 591ms，明顯頓）。
+    if(_shelterBounds && _shelterBounds.contains(map.getBounds())) return;
+    clearTimeout(window._shMoveT);
+    window._shMoveT = setTimeout(renderShelterLayer, 200);
+  });
   map.on('zoomend', ()=>{
     // 測站圖層的點大小隨 zoom 變化，也要重繪
     if(_stnLayerOn){ clearTimeout(_stnTimer);
                      _stnTimer = setTimeout(renderStationLayer, 150); }
     // 道路有縮放門檻、收容所的點大小隨 zoom 變化，兩者都要跟著重繪
     if(_roadOn){ clearTimeout(window._roadTimer);
-                 window._roadTimer = setTimeout(renderRoadLayer, 150); }
+                 window._roadTimer = setTimeout(()=>{
+                   // 拉近到需要細部道路時才補載（toggleRoadLayer 內含載入邏輯）
+                   if(!_roadDetail2 && map.getZoom() >= ROAD_DETAIL_ZOOM
+                      && !_roadDetailLoading){ _roadOn = false; toggleRoadLayer(); }
+                   else renderRoadLayer();
+                 }, 150); }
     if(_shelterOn){ clearTimeout(window._shTimer);
                     window._shTimer = setTimeout(renderShelterLayer, 150); }
     if(!showTownName) return;
