@@ -186,6 +186,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <a href="https://watch.ncdr.nat.gov.tw/watch_tracks_pro" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">颱風路徑</a>
       <a href="https://watch.ncdr.nat.gov.tw/watch_smart_map" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">SMART</a>
       <a href="https://watch.ncdr.nat.gov.tw/watch_wissdom_taiwan" target="_blank" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">WISSDOM</a>
+      <a href="https://dmap.ncdr.nat.gov.tw/1109/map/" target="_blank" rel="noopener" class="ext-btn" style="border-color:#3a8a5a;color:#7ee8a8">3D災害潛勢地圖</a>
      </div>
      <div id="ext-links-r2" style="display:flex;flex-wrap:wrap;gap:3px">
       <a href="https://fema.ardswc.gov.tw/Portal/Layout" target="_blank" class="ext-btn">FEMA</a>
@@ -4350,6 +4351,20 @@ function _hourlyColor(v){
 }
 
 const MARGIN_WARN = 90;      // ETR2% 警戒值
+// ★ 警戒門檻的單一真相。
+//   先前這個門檻散在四個地方：MARGIN_WARN、drawEtrWaterfall（預測達標時間，
+//   寫死 90 與 den*0.9）、drawCountyTowns（鄉鎮排行，寫死 90）、
+//   renderRankList（測站排行，寫死 90）。數值今天碰巧相同，但改了一處
+//   其他三處不會跟著動。在預警系統裡，兩張並看的圖採用不同警戒標準
+//   會直接造成判讀錯誤，故全部收斂到這裡。
+//   （註：drawMarginChart 已無任何呼叫點、其 canvas cv-margin 也不在 DOM 中，
+//     屬死碼；保留但不是現行路徑。）
+//   basis='pct' → 回百分比門檻；basis='mm' → 回該鄉鎮的實際雨量門檻。
+function _marginWarnOf(t, basis){
+  if(basis === 'pct') return MARGIN_WARN;
+  const den = _etrDen(t);
+  return (den > 0) ? den * MARGIN_WARN / 100 : 0;
+}
 function _marginColor(pct){
   const d = pct - MARGIN_WARN;
   if(d > 10)  return '#FF00FF';   // 紫：超過警戒 10% 以上
@@ -4410,7 +4425,8 @@ function drawEtrWaterfall(t, canvasId){
     return;
   }
 
-  const warn = (basis === 'pct') ? 90 : den * 0.9;
+  // ★ 與警戒餘裕排行共用同一個門檻來源（_marginWarnOf），不可各自寫死
+  const warn = _marginWarnOf(t, basis);
   // ★ 餘裕以「負值往上疊到 0」呈現（使用者指定）：
   //   值 = 累積 − 警戒，起點為負（還有餘裕），雨量累積把它往上推，
   //   碰到 0 就是達警戒 —— 與雨量持續累積的直覺一致。
@@ -4448,20 +4464,46 @@ function drawEtrWaterfall(t, canvasId){
   ctx.strokeStyle = '#FF4444'; ctx.lineWidth = isZoom?2.5:1.8;
   ctx.beginPath(); ctx.moveTo(pL, y0); ctx.lineTo(pL+iw, y0); ctx.stroke();
   ctx.fillStyle = '#FF6666'; ctx.textAlign = 'left';
-  ctx.fillText('0 ＝ 達警戒', pL + 3, y0 + fs + 3);
+  // ★ 門檻必須寫出實際數值。先前只標「0 ＝ 達警戒」，而縱軸畫的是
+  //   「距警戒的差值」（pct − 90），於是 ETR2 在 40% 的鄉鎮長條落在 −50，
+  //   讀者看到 −50 會誤以為警戒標準是 50% —— 使用者實際回報過這個誤讀。
+  //   把門檻值直接寫在線上，誤讀就不可能發生。
+  const _warnLbl = (basis === 'pct')
+    ? `0 ＝ 達警戒（ETR2% = ${MARGIN_WARN}%）`
+    : (isZoom
+        ? `0 ＝ 達警戒（ETR2 = ${warn.toFixed(0)}mm ＝ 警戒值 ${den.toFixed(0)}mm × ${MARGIN_WARN}%）`
+        : `0 ＝ 達警戒（ETR2 = ${warn.toFixed(0)}mm）`);
+  ctx.fillText(_warnLbl, pL + 3, y0 + fs + 3);
+  // ★ 「負＝尚有餘裕」畫在零線「下方」——那塊區域本身就是餘裕區，
+  //   說明放在它描述的位置最不會被誤讀。
+  //   先前放在頂端軸名後面，在小圖（寬約 300px）會和「現在」標籤疊字。
+  ctx.fillStyle = '#5a8aaa';
+  ctx.fillText('↓ 負值＝尚有餘裕', pL + 3, y0 + fs*2 + 6);
+  // ★ 頂端這一行由「軸名」與「現在」共用，小圖（寬約 300px）會疊字。
+  //   避讓的是軸名，不是「現在」—— 現在標籤必須貼在它那條虛線上才有意義，
+  //   軸名放哪裡都可以。先算出現在線的位置，再決定軸名靠左還是靠右。
+  const nowI = pts.findIndex(p=>p.hr >= 0);
+  const _xnNow = (nowI > 0) ? (pL + iw * nowI / pts.length) : null;
   ctx.fillStyle = '#6bc8e8';
-  ctx.fillText(basis==='pct' ? '距警戒 ETR2%' : '距警戒累積雨量', pL + 2, pT - 6);
+  const _axTitle = basis==='pct' ? '距警戒 ETR2%' : '距警戒累積雨量';
+  const _axW = ctx.measureText(_axTitle).width;
+  if(_xnNow != null && _xnNow < pL + 2 + _axW + 18){
+    ctx.textAlign = 'right';  ctx.fillText(_axTitle, CW - pR, pT - 6);
+    ctx.textAlign = 'left';
+  } else {
+    ctx.fillText(_axTitle, pL + 2, pT - 6);
+  }
 
   // 現在的位置
-  const nowI = pts.findIndex(p=>p.hr >= 0);
   if(nowI > 0){
-    const xn = pL + iw * nowI / pts.length;
+    const xn = _xnNow;
     ctx.strokeStyle = '#ffcc44'; ctx.lineWidth = isZoom?2:1.4;
     ctx.setLineDash([4,3]);
     ctx.beginPath(); ctx.moveTo(xn, pT); ctx.lineTo(xn, pT+ih); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = '#ffcc44'; ctx.textAlign = 'center';
     ctx.fillText('現在', xn, pT - 6);
+    ctx.textAlign = 'left';
   }
 
   // 瀑布長條：紅＝往警戒推進、綠＝折減回落、白＝持平
@@ -4508,21 +4550,38 @@ function drawEtrWaterfall(t, canvasId){
 
   // 摘要：何時達標
   ctx.font = `${isZoom?16:10}px sans-serif`; ctx.textAlign = 'left';
+  let _sumTxt = '';
   if(firstCross != null){
     const d = new Date(Date.now() + firstCross * 3600e3);
     ctx.fillStyle = '#FF6666';
-    ctx.fillText(`預估 ${d.getMonth()+1}/${d.getDate()} `
-      + `${String(d.getHours()).padStart(2,'0')}時 達警戒（+${firstCross}h）`,
-      pL, CH - (isZoom?16:6));
+    _sumTxt = `預估 ${d.getMonth()+1}/${d.getDate()} `
+      + `${String(d.getHours()).padStart(2,'0')}時 達警戒（+${firstCross}h）`;
   } else {
     const last = pts[pts.length-1].to;
     ctx.fillStyle = last >= warn ? '#FF6666' : '#8ad8a0';
-    ctx.fillText(last >= warn ? '期間內已超過警戒'
-      : `期間內未達警戒（最接近時還差 ${(warn - last).toFixed(0)}${basis==='pct'?'個百分點':'mm'}）`,
-      pL, CH - (isZoom?16:6));
+    _sumTxt = last >= warn ? '期間內已超過警戒'
+      : `期間內未達警戒（最接近時還差 ${(warn - last).toFixed(0)}${basis==='pct'?'個百分點':'mm'}）`;
   }
-  ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'right';
-  ctx.fillText('紅＝往警戒推進　綠＝折減回落　白＝持平', CW - pR, CH - (isZoom?16:6));
+  ctx.fillText(_sumTxt, pL, CH - (isZoom?16:6));
+  // ★ 長條配色說明與左側摘要同一行、方向相反，長文時會疊字（小圖實測）。
+  //   量過寬度再決定：放不下就移到上一行，而不是蓋掉摘要 ——
+  //   摘要（何時達警戒）是這張圖的結論，絕不能被壓住。
+  // ★ 長條配色說明與左側摘要同一行、方向相反，長文時會疊字（小圖實測）。
+  //   不能改放上一行 —— 那裡是 X 軸的日期列，換成撞日期（也實測過）。
+  //   故一律同一行，量過寬度：放不下就縮寫，再放不下就不畫。
+  //   摘要（何時達警戒）是這張圖的結論，任何情況下都不可被壓住。
+  ctx.fillStyle = '#5a7a95';
+  const _sumW = ctx.measureText(_sumTxt).width;
+  const _avail = (CW - pR) - (pL + _sumW) - 10;
+  const _legFull = '紅＝往警戒推進　綠＝折減回落　白＝持平';
+  const _legShort = '紅↑推進　綠↓折減';
+  const _legTxt = (ctx.measureText(_legFull).width <= _avail) ? _legFull
+                : (ctx.measureText(_legShort).width <= _avail) ? _legShort : '';
+  if(_legTxt){
+    ctx.textAlign = 'right';
+    ctx.fillText(_legTxt, CW - pR, CH - (isZoom?16:6));
+    ctx.textAlign = 'left';
+  }
 
   if(isZoom){
     ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
@@ -4603,8 +4662,13 @@ function drawMarginChart(t, canvasId){
   ctx.strokeStyle = '#ff4444'; ctx.lineWidth = 1.6;
   ctx.beginPath(); ctx.moveTo(X(0), pT); ctx.lineTo(X(0), pT+ih); ctx.stroke();
   ctx.fillStyle = '#5a7a95'; ctx.textAlign = 'center';
-  ctx.fillText(basis === 'mm' ? '距警戒雨量 (mm，正值＝已超過)'
-                              : '距警戒值 (ETR2%，正值＝已超過)',
+  // ★ 門檻要寫在軸上。這張圖與「預測達標時間」會被並看，兩邊都標出
+  //   同一個 90% 標準，使用者才看得出標準一致（先前只有方向說明、
+  //   沒有門檻值，於是把軸上的差值誤讀成門檻）。
+  //   mm 基礎的門檻逐鄉鎮不同，故以「各地警戒值 × 90%」表示。
+  ctx.fillText(basis === 'mm'
+      ? `距警戒雨量 (mm，正值＝已超過；門檻＝各地警戒值×${MARGIN_WARN}%)`
+      : `距警戒值 (ETR2%，正值＝已超過；門檻＝ETR2% ${MARGIN_WARN}%)`,
                pL + iw/2, CH - pB + fs*2 + 6);
 
   const ZC = {'山區':'#FF0000', '淺山區':'#FFFF00', '平地':'#00FF00', '沿海地區':'#00FFFF'};
@@ -4907,7 +4971,12 @@ function drawCountyTowns(canvasId){
                // ★ 警戒餘裕：距警戒還差多少（負值＝已超過），升冪排前
                margin_mm:['警戒餘裕累積雨量','mm'],
                margin_pct:['警戒餘裕 ETR2%','%']};
-  const [metName, unit] = MET[metric] || MET.qpf_rain;
+  const [_metName0, unit] = MET[metric] || MET.qpf_rain;
+  // ★ 警戒餘裕的門檻要寫在圖上，與「預測達標時間」標同一個數字。
+  //   先前兩張圖都只寫「警戒餘裕」而不寫門檻，使用者把達標時間圖縱軸上的
+  //   差值（−50）誤讀成「標準是 50%」，與這張圖的 90% 對不起來。
+  const metName = (metric === 'margin_pct' || metric === 'margin_mm')
+    ? `${_metName0}（門檻＝ETR2% ${MARGIN_WARN}%）` : _metName0;
 
   const rows = [];
   (TOWNSHIPS || []).forEach(t=>{
@@ -4925,7 +4994,9 @@ function drawCountyTowns(canvasId){
       // 與「觀測 ETR2%」同源（同雨量排行的處理）
       const cur = _etrForMargin(t);
       if(!(den > 0) || cur == null || !isFinite(cur)) return;
-      v = (metric === 'margin_pct') ? (90 - cur) : ((90 - cur) / 100 * den);
+      // ★ 門檻一律取 MARGIN_WARN，不可寫死 90（見 _marginWarnOf 的說明）
+      v = (metric === 'margin_pct') ? (MARGIN_WARN - cur)
+                                    : ((MARGIN_WARN - cur) / 100 * den);
     } else {
       // ★ 用排行專用取值，不受地圖當前圖層影響
       v = _accumAs(t, metric === 'qpf_etr' ? 'etr' : 'rain');
@@ -5658,11 +5729,13 @@ function renderRankList(){
     const want = (/etr/.test(metric) || isMg) ? 'etr' : 'rain';
     let items = _rankItems(want).filter(x=>!zoneF || x.zone === zoneF);
     if(isMg){
-      // 餘裕 = 90 − 目前 ETR2%；mm 版再乘該測站（或其鄉鎮）的警戒值
+      // 餘裕 = MARGIN_WARN − 目前 ETR2%；mm 版再乘該測站（或其鄉鎮）的警戒值
+      // ★ 不可寫死 90：門檻散在多處時，改一邊另一邊不會跟著動，
+      //   兩張圖並看就會出現不同的警戒標準（見 _marginWarnOf 的說明）。
       items = items.map(x=>{
         const den = (x.st && x.st.alert_val > 0) ? x.st.alert_val : _etrDen(x.t);
-        const v2 = (metric === 'margin_pct') ? (90 - x.v)
-                 : ((90 - x.v) / 100 * (den || 0));
+        const v2 = (metric === 'margin_pct') ? (MARGIN_WARN - x.v)
+                 : ((MARGIN_WARN - x.v) / 100 * (den || 0));
         return Object.assign({}, x, {v: v2});
       }).filter(x=>isFinite(x.v))
         .sort((a, b)=>a.v - b.v);       // 餘裕少者在前
@@ -5720,8 +5793,9 @@ function renderRankList(){
       //   一眼就看得出兩邊不同源。
       const cur = _etrForMargin(tt);
       if(cur == null || !isFinite(cur)) return;
-      if(metric === 'margin_pct'){ v = 90 - cur; unit = '%'; }
-      else { v = (90 - cur) / 100 * den; unit = 'mm'; }
+      // ★ 門檻取 MARGIN_WARN，不可寫死 90（見 _marginWarnOf 的說明）
+      if(metric === 'margin_pct'){ v = MARGIN_WARN - cur; unit = '%'; }
+      else { v = (MARGIN_WARN - cur) / 100 * den; unit = 'mm'; }
       // ★ k 是點選跳轉用的鍵，其他指標都有帶，先前漏掉導致 r.k 為
       //   undefined、呼叫 .replace 就整個拋錯（排行看起來「不會動」）。
       rows.push({name: tt.township || ((tt.county||'') + (tt.township||'')),
