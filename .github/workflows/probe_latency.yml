@@ -33,6 +33,12 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: '3.11'}
 
+      # ★ requests 不在標準庫，setup-python 給的是乾淨的 Python。
+      #   先前漏了這一步，probe 的 `if not requests: return []` 靜默回空，
+      #   於是「跑得很順、累積 0 筆」—— 整整幾天沒收集到任何東西。
+      - name: 安裝相依套件
+        run: pip install --quiet requests
+
       - name: 量測
         run: python probe_api_latency.py
         env:

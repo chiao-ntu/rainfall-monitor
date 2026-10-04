@@ -3,12 +3,6 @@ name: 離線單檔打包
 # 產出可完全離線使用的 formosa_offline.html，供颱風期間網路中斷時查閱。
 # ★ 刻意「不」commit 進 repo：檔案 6~12MB，每次 commit 都會讓 git 歷史暴增。
 #   改為上傳成 Actions artifact，需要時到 Actions 頁面下載即可。
-# ★ 明確宣告最小權限：這個工作只讀 repo、產出 artifact，不寫回任何東西。
-#   不寫的話會繼承 repo 預設權限（常是 read/write），等於給了它不需要的
-#   寫入能力 —— 一旦這個流程被動到，就能改到大家讀的資料。
-permissions:
-  contents: read
-
 on:
   schedule:
     - cron: '17 21 * * *'      # 每日 05:17 TST（UTC+8），避開整點壅塞
