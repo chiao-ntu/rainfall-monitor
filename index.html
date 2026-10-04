@@ -586,7 +586,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
          畫布文字沒有 subpixel antialiasing，即使把 devicePixelRatio 補好了
          也還是比旁邊的 DOM 圖例糊一截，色塊邊緣同樣會鬆掉。
          改成 HTML 之後與右下角的色階圖例同一種清晰度，且不隨縮放失真。 -->
-    <div id="wf-legend" style="display:none;background:#fff;border:1px solid #99aabb;
+    <!-- ★ order:99 把風場圖例排到這一欄的最下面（使用者指定）。
+         它的高度最長，排在其他圖例上面時會往上長、擋住地圖內容。
+         用 CSS order 而非搬動 DOM，避免動到既有的顯示／收合邏輯。 -->
+    <div id="wf-legend" style="order:99;display:none;background:#fff;border:1px solid #99aabb;
       border-radius:5px;padding:5px 8px;font-size:11px;color:#111;pointer-events:none;
       width:fit-content;box-shadow:0 1px 4px rgba(0,0,0,.3)"></div>
     <!-- 颱風動態圖例（按下颱風動態按鈕才顯示），可收合 -->
@@ -1331,7 +1334,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-04T12:40Z';
+const FORMOSA_BUILD = '2026-10-04T13:14Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -2240,13 +2243,16 @@ function toggleTerrainLayer(){
 // ★ 依縮放決定畫到第幾級：全臺視野把八萬條全畫出來只會糊成一團，
 //   而且 16MB 的資料一次載完會卡。骨幹與細部拆成兩個檔，
 //   細部（次要／集散）要拉近才載、才畫。
-const ROAD_CLASS_BY_ZOOM = [
-  {z: 9,  keep: new Set(['motorway', 'trunk'])},
-  {z: 11, keep: new Set(['motorway', 'trunk', 'primary'])},
-  {z: 13, keep: new Set(['motorway', 'trunk', 'primary', 'secondary'])},
-  {z: 99, keep: null},
-];
-const ROAD_DETAIL_ZOOM = 12;    // 到這一級才載入／繪製次要與集散道路
+// ★ 五類永遠都畫，不依縮放決定「畫哪些」——使用者兩度指出：
+//   看不到的東西＋需要解釋的圖例＝設計失敗，而且沒人知道自己在第幾級。
+//   改為線寬隨縮放縮放：拉遠時次要／集散收成細紋理（看得出路網密度），
+//   拉近才展開成可辨識的線。類別成員固定，圖例永遠為真。
+//   實測全臺視野下 80,975 條：首次繪製 475ms、平移 426ms，
+//   且鄉鎮著色完全不受影響（47ms）。
+function _roadWidthScale(){
+  const z = map.getZoom();
+  return Math.max(0.35, Math.min(1, (z - 6) / 6));
+}
 let _roadOn = false, _roadData = null, _roadLayer = null, _roadLoading = false;
 let _roadIndex = null;          // 給 tooltip 用的網格索引
 let _roadDetail2 = null, _roadDetailLoading = false;  // 次要／集散道路（另檔）
@@ -2302,16 +2308,16 @@ async function toggleRoadLayer(){
     _layerBtnBusy('bRoads', false); _setOverlayMsg('');
     _roadLoading = false;
   }
-  // ★ 次要／集散道路另存一檔，拉近才載（整包 16MB 一次載會卡住）
-  if(_roadOn && _roadData && !_roadDetail2 && map.getZoom() >= ROAD_DETAIL_ZOOM
-     && !_roadDetailLoading){
+  // ★ 次要／集散道路另存一檔（整包 16MB 一次下載太重），但一載就全載，
+  //   不綁縮放 —— 類別是否呈現不可以隨視野改變。
+  if(_roadOn && _roadData && !_roadDetail2 && !_roadDetailLoading){
     _roadDetailLoading = true;
     _setOverlayMsg('次要／集散道路載入中…');
     try{
       const d = await _loadJsonOnce('roads_detail.geojson', '細部道路');
       _roadDetail2 = d;
       _roadData.features = _roadData.features.concat(d.features || []);
-      _roadIndex = null;                     // 索引要重建（多了五萬條）
+      _roadIndex = null;
       _setOverlayMsg('');
     }catch(e){
       console.warn('細部道路載入失敗：', e.message);
@@ -2355,15 +2361,13 @@ function _roadKind(p){ return p.b ? 'bridge' : (p.t ? 'tunnel' : 'road'); }
 //   橋樑資訊是封橋判斷用的局部細節，不是全臺概覽該強調的東西。
 // ★ 橋樑／隧道一律分色，不隨縮放改變。
 //   若只在拉近時分色，圖例就得加一行「拉近可分辨…」—— 那正是要避免的補丁。
-function _roadDetail(){ return true; }
 
 function renderRoadLayer(){
   if(_roadLayer){ try{ map.removeLayer(_roadLayer); }catch(e){} _roadLayer = null; }
   if(!_roadOn || !_roadData){ _renderOverlayLegend(); return; }
   _ensureRoadPane();
   const z = map.getZoom();
-  const keep = (ROAD_CLASS_BY_ZOOM.find(r=>z < r.z) || {keep:null}).keep;
-  const detail = _roadDetail();
+  const wsc = _roadWidthScale();
 
   // ★ 把同樣式的線合併成 MultiLineString：29,123 條各自建一個 Leaflet 物件
   //   是開啟時「讀取很久」的主因（實測建層 >1.5s）。合併後只剩十餘個物件，
@@ -2371,9 +2375,8 @@ function renderRoadLayer(){
   const groups = {};
   (_roadData.features || []).forEach(f=>{
     const p = f.properties || {};
-    if(keep && !keep.has(p.c)) return;
     if(!ROAD_CLS[p.c]) return;
-    const k = (detail ? _roadKind(p) : 'road') + '|' + p.c;
+    const k = _roadKind(p) + '|' + p.c;
     (groups[k] = groups[k] || []).push(f.geometry.coordinates);
   });
   const rend = L.canvas({pane:'roadPane', padding:0.3});
@@ -2384,7 +2387,8 @@ function renderRoadLayer(){
     const cls = ROAD_CLS[c];
     const st = ROAD_STRUCT[kind];
     const opt = {pane:'roadPane', renderer:rend, interactive:false,
-                 color: st ? st.color : cls.color, weight: cls.w, opacity:0.9};
+                 color: st ? st.color : cls.color,
+                 weight: Math.max(0.3, cls.w * wsc), opacity:0.9};
     if(st && st.dash) opt.dashArray = st.dash;
     L.polyline(groups[k].map(toLL), opt).addTo(_roadLayer);
   });
@@ -2432,7 +2436,6 @@ function _segDist(px, py, ax, ay, bx, by){
 function _roadAt(latlng){
   if(!_roadIndex) return null;
   const z = map.getZoom();
-  const keep = (ROAD_CLASS_BY_ZOOM.find(r=>z < r.z) || {keep:null}).keep;
   const lon = latlng.lng, lat = latlng.lat;
   // 容忍半徑換算成度：畫面 8px
   const tol = 8 / (256 * Math.pow(2, z) / 360);
@@ -2444,7 +2447,6 @@ function _roadAt(latlng){
     for(const i of a){
       const f = _roadData.features[i];
       const p = f.properties || {};
-      if(keep && !keep.has(p.c)) continue;
       const cs = f.geometry.coordinates;
       for(let j = 1; j < cs.length; j++){
         const d = _segDist(lon, lat, cs[j-1][0], cs[j-1][1], cs[j][0], cs[j][1]);
@@ -2507,9 +2509,7 @@ function _renderOverlayLegend(){
     + `margin-right:6px"></span>`;
   if(_roadOn && _roadData){
     const z = map.getZoom();
-    const keep = (ROAD_CLASS_BY_ZOOM.find(r=>z < r.z) || {keep:null}).keep;
-    const rows = ['motorway','trunk','primary']
-      .filter(c=>!keep || keep.has(c))
+    const rows = ['motorway','trunk','primary','secondary','tertiary']
       .map(c=>`<div>${line(ROAD_CLS[c].color, ROAD_CLS[c].w + 0.8)}${ROAD_CLS[c].label}</div>`);
     // ★ 橋樑與隧道各佔一條，與類別並列 —— 不寫任何說明文字。
     rows.push(`<div>${line(ROAD_STRUCT.bridge.color, 2.6)}${ROAD_STRUCT.bridge.label}</div>`);
@@ -13158,12 +13158,7 @@ function _bindTownNameZoom(){
                      _stnTimer = setTimeout(renderStationLayer, 150); }
     // 道路有縮放門檻、收容所的點大小隨 zoom 變化，兩者都要跟著重繪
     if(_roadOn){ clearTimeout(window._roadTimer);
-                 window._roadTimer = setTimeout(()=>{
-                   // 拉近到需要細部道路時才補載（toggleRoadLayer 內含載入邏輯）
-                   if(!_roadDetail2 && map.getZoom() >= ROAD_DETAIL_ZOOM
-                      && !_roadDetailLoading){ _roadOn = false; toggleRoadLayer(); }
-                   else renderRoadLayer();
-                 }, 150); }
+                 window._roadTimer = setTimeout(renderRoadLayer, 150); }
     if(_shelterOn){ clearTimeout(window._shTimer);
                     window._shTimer = setTimeout(renderShelterLayer, 150); }
     if(!showTownName) return;
