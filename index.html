@@ -219,8 +219,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b"    id="bWind"  onclick="setMode('wind')" style="border-color:#3a8a5a;color:#7ee8a8">風力預測</button>
       <button class="b"    id="bWave"  onclick="setMode('wave')" style="border-color:#3a8a5a;color:#7ee8a8">浪高</button>
       <button class="b"    id="bTemp"  onclick="setMode('temp')" style="border-color:#3a8a5a;color:#7ee8a8">氣溫</button>
-      <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
-        style="border-color:#8a6a3a;color:#e8c87a">📍 雨量測站</button>
       <button class="b"    id="bDisaster" onclick="toggleDisasterLayer()"
         style="border-color:#cc3300;color:#ff6644">⚠ 二次災害</button>
       <button class="b"    id="bTyphoon" onclick="toggleTyphoonLayer()"
@@ -250,6 +248,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#3a4a6a;color:#8aa8d8">🌊 深色海</button>
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
         style="border-color:#1a4060;color:#8ac8e8">🏷 行政區名</button>
+      <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
+        style="border-color:#8a6a3a;color:#e8c87a">📍 雨量測站</button>
       <button class="b"    id="bRoads" onclick="toggleRoadLayer()"
         style="border-color:#6a6a4a;color:#d8d0a0">🛣 道路</button>
       <button class="b"    id="bShelter" onclick="toggleShelterLayer()"
@@ -1331,7 +1331,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-04T02:18Z';
+const FORMOSA_BUILD = '2026-10-04T09:55Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -2292,18 +2292,21 @@ async function toggleRoadLayer(){
   }
   if(_roadOn && _roadData && !_roadIndex){
     _roadIndex = _buildRoadIndex();
-    map.on('mousemove', _roadTip);
-    map.on('mouseout', ()=>{ if(_roadHover){ _roadHover=''; _renderOverlayLegend(); } });
+    map.on('mousemove', _onRoadMove);
+    map.on('mouseout', ()=>{ if(_roadTip){ map.closeTooltip(_roadTip); _roadTip = null; } });
+    map.on('tooltipopen', e=>{ if(e.tooltip !== _roadTip) _lastTownTip = e.tooltip; });
   }
-  if(!_roadOn && _roadHover){ _roadHover = ''; }
+  if(!_roadOn && _roadTip){ try{ map.closeTooltip(_roadTip); }catch(e){} _roadTip = null; }
   renderRoadLayer();
 }
 // 道路樣式：顏色要在「白色鄉鎮（<5mm，最常見）」和深色海兩種底上都讀得到，
 //   故用深色而非亮色（實測亮色在白底幾乎看不見）；且必須避開 RAIN_SCALE 的
 //   白/青/綠/黃/紅/洋紅/粉，否則道路會被誤讀成雨量級距。
-// ★ 道路「類別」改用顏色區分，不再只靠線寬 —— 使用者回報線寬差異
-//   肉眼無法立即分辨（1.4 與 2.2 px 在雨量底圖上確實看不出來）。
-//   顏色全部避開 RAIN_SCALE 的白/青/綠/黃/紅/洋紅/粉，才不會被誤讀成雨量級距。
+// ★ 一個符號 = 一個意思，圖例直接標明，不靠文字說明。
+//   先前用「線寬分類別＋橘色底襯表示橋樑」，結果類別看不出來、
+//   橋樑與隧道在圖例裡也沒有獨立條目 —— 只好在圖例下面補一行說明。
+//   需要寫說明就是設計失敗：改成五種互斥的線條樣式，各自在圖例佔一條。
+//   顏色全部避開 RAIN_SCALE 的白/青/綠/黃/紅/洋紅/粉，不會被誤讀成雨量。
 const ROAD_CLS = {
   motorway:      {color:'#1F4E9C', w:2.2, label:'國道／高速公路'},
   motorway_link: {color:'#1F4E9C', w:1.1, label:'國道連絡道'},
@@ -2312,17 +2315,20 @@ const ROAD_CLS = {
   primary:       {color:'#4A4A42', w:1.5, label:'省道／主要道路'},
   primary_link:  {color:'#4A4A42', w:0.9, label:'省道連絡道'},
 };
-// ★ 橋樑不再「換色」，改在底下墊一條橘色底襯（casing）——
-//   換色會把類別顏色吃掉，等於兩個資訊只能顯示一個。
-//   底襯是地圖學處理高架／橋梁的標準做法，兩種資訊可以同時讀到。
-const ROAD_BRIDGE_CASING = {color:'#C05000', dw:2.4, label:'橋樑（封閉／沖毀風險）'};
-const ROAD_TUNNEL_DASH = '4,3';
+// 橋樑與隧道是「完全不同的東西」，各給一個顏色，不疊在類別色上。
+// 寬度與類別線相同 —— 加粗會讓國道高架段在全臺視野糊成一片橘。
+const ROAD_STRUCT = {
+  bridge: {color:'#D2691E', label:'橋樑'},
+  tunnel: {color:'#4FA3C7', label:'隧道', dash:'5,4'},
+};
 function _roadKind(p){ return p.b ? 'bridge' : (p.t ? 'tunnel' : 'road'); }
 // ★ 橋樑／隧道只在「拉近到足以據此行動」時才分色。
 //   全臺尺度下國道 1/3/5 大半是高架，分色會讓整張圖變成一片橘，
 //   既看不出路網也和雨量搶視覺 —— 使用者原本就反映過看不懂紅黑差異。
 //   橋樑資訊是封橋判斷用的局部細節，不是全臺概覽該強調的東西。
-function _roadDetail(){ return map.getZoom() >= 11; }
+// ★ 橋樑／隧道一律分色，不隨縮放改變。
+//   若只在拉近時分色，圖例就得加一行「拉近可分辨…」—— 那正是要避免的補丁。
+function _roadDetail(){ return true; }
 
 function renderRoadLayer(){
   if(_roadLayer){ try{ map.removeLayer(_roadLayer); }catch(e){} _roadLayer = null; }
@@ -2346,21 +2352,13 @@ function renderRoadLayer(){
   const rend = L.canvas({pane:'roadPane', padding:0.3});
   _roadLayer = L.layerGroup();
   const toLL = cs=>cs.map(c=>[c[1], c[0]]);
-  // 先畫所有橋樑底襯（要在主線之下），再畫主線
-  Object.keys(groups).forEach(k=>{
-    if(k.split('|')[0] !== 'bridge') return;
-    const cls = ROAD_CLS[k.split('|')[1]];
-    L.polyline(groups[k].map(toLL), {pane:'roadPane', renderer:rend,
-      interactive:false, color:ROAD_BRIDGE_CASING.color,
-      weight: cls.w + ROAD_BRIDGE_CASING.dw, opacity:0.9}).addTo(_roadLayer);
-  });
   Object.keys(groups).forEach(k=>{
     const [kind, c] = k.split('|');
     const cls = ROAD_CLS[c];
+    const st = ROAD_STRUCT[kind];
     const opt = {pane:'roadPane', renderer:rend, interactive:false,
-                 color:cls.color, weight:cls.w,
-                 opacity: kind === 'tunnel' ? 0.75 : 0.9};
-    if(kind === 'tunnel') opt.dashArray = ROAD_TUNNEL_DASH;
+                 color: st ? st.color : cls.color, weight: cls.w, opacity:0.9};
+    if(st && st.dash) opt.dashArray = st.dash;
     L.polyline(groups[k].map(toLL), opt).addTo(_roadLayer);
   });
   _roadLayer.addTo(map);
@@ -2432,69 +2430,73 @@ function _roadAt(latlng){
   }
   return (bestD <= tol) ? best : null;
 }
-// ★ 道路資訊改寫進左下圖例框，不在游標旁另開 tooltip。
-//   游標旁已經有鄉鎮氣象 tooltip（sticky，跟著游標），再疊一個必然互相遮蓋
-//   （使用者回報）。固定在角落讀起來也比跳動的浮層穩定。
-let _roadHover = '';
-function _roadTip(ev){
-  if(!_roadOn || !_roadIndex){
-    if(_roadHover){ _roadHover=''; _renderOverlayLegend(); }
+// ★ 道路 tooltip 回到游標旁，與「二次災害高風險區」等既有圖層同一套作法
+//   （Leaflet tooltip，樣式一致）。滑到道路上時關掉鄉鎮氣象 tooltip，
+//   兩者不同時出現 —— 使用者指定。
+//   roadPane 仍維持 pointer-events:none（Canvas 整片會擋住鄉鎮），
+//   命中判定走自建的網格索引。
+const ROAD_OW_LBL = {F:'單向', T:'單向(反向)', B:'雙向'};
+let _roadTip = null, _lastTownTip = null;
+function _roadTipHtml(p){
+  const cls = ROAD_CLS[p.c] || {color:'#4A4A42', label:p.c};
+  const kind = _roadKind(p);
+  const st = ROAD_STRUCT[kind];
+  const rows = [];
+  rows.push(`<b style="color:${(st||cls).color}">${st ? st.label + '　' : ''}${cls.label}</b>`);
+  if(p.ref)  rows.push(`編號：<b>${p.ref}</b>`);
+  if(p.name) rows.push(`名稱：${p.name}`);
+  if(p.sp)   rows.push(`速限：${p.sp} km/h`);
+  if(p.ow)   rows.push(`行車方向：${ROAD_OW_LBL[p.ow] || p.ow}`);
+  if(p.ly != null) rows.push(`相對層級：${p.ly > 0 ? '+' + p.ly : p.ly}`);
+  if(kind === 'bridge') rows.push('<span style="color:#e8a860">淹水／土石流時為封閉與沖毀風險點</span>');
+  return rows.join('<br>');
+}
+function _onRoadMove(ev){
+  if(!_roadOn || !_roadIndex){ if(_roadTip){ map.closeTooltip(_roadTip); _roadTip = null; } return; }
+  const p = _roadAt(ev.latlng);
+  if(!p){
+    if(_roadTip){ map.closeTooltip(_roadTip); _roadTip = null; }
     return;
   }
-  const p = _roadAt(ev.latlng);
-  let h = '';
-  if(p){
-    const cls = ROAD_CLS[p.c] || {color:'#4A4A42', label:p.c};
-    const kind = _roadKind(p);
-    h = `<div style="font-weight:700;color:${cls.color}">${cls.label}</div>`
-      + (p.r ? `<div>編號 <b>${p.r}</b></div>` : '')
-      + (p.n ? `<div>${p.n}</div>` : '')
-      + (kind === 'bridge'
-          ? `<div style="color:#C05000">橋樑：淹水／土石流時為封閉與沖毀風險點</div>`
-          : kind === 'tunnel' ? '<div style="color:#667">隧道</div>' : '');
+  // 道路 tooltip 出現時，當下的氣象 tooltip 先不顯示（使用者指定）
+  if(_lastTownTip){ try{ map.closeTooltip(_lastTownTip); }catch(e){} }
+  if(!_roadTip){
+    _roadTip = L.tooltip({direction:'top', opacity:0.95, sticky:false,
+                          className:'road-tip'});
+    _roadTip.setContent(_roadTipHtml(p)).setLatLng(ev.latlng);
+    map.openTooltip(_roadTip);
+  } else {
+    _roadTip.setContent(_roadTipHtml(p)).setLatLng(ev.latlng);
   }
-  if(h !== _roadHover){ _roadHover = h; _renderOverlayLegend(); }
 }
 
-// 疊圖圖例（道路／收容所，各自獨立顯示）
 function _renderOverlayLegend(){
   const el = document.getElementById('overlay-legend');
   if(!el) return;
   const parts = [];
   if(_overlayMsg) parts.push(`<div style="color:#a05020">${_overlayMsg}</div>`);
-  // 游標所在道路：固定顯示在這裡，不跟氣象 tooltip 搶游標位置
-  if(_roadHover){
-    parts.push('<div style="border-bottom:1px solid #ccd;padding-bottom:4px;'
-      + 'margin-bottom:4px">' + _roadHover + '</div>');
-  }
+  const line = (c, w, dash)=>`<span style="display:inline-block;width:22px;height:0;`
+    + `border-top:${w}px ${dash ? 'dashed' : 'solid'} ${c};vertical-align:middle;`
+    + `margin-right:6px"></span>`;
   if(_roadOn && _roadData){
-    const line = (c, w, dash)=>`<span style="display:inline-block;width:20px;height:0;`
-      + `border-top:${w}px ${dash ? 'dashed' : 'solid'} ${c};vertical-align:middle;`
-      + `margin-right:5px"></span>`;
     const z = map.getZoom();
     const keep = (ROAD_CLASS_BY_ZOOM.find(r=>z < r.z) || {keep:null}).keep;
     const rows = ['motorway','trunk','primary']
       .filter(c=>!keep || keep.has(c))
-      .map(c=>`<div>${line(ROAD_CLS[c].color, ROAD_CLS[c].w + 0.6)}${ROAD_CLS[c].label}</div>`);
-    parts.push('<div style="font-weight:700;margin-bottom:3px">道路</div>'
-      + rows.join('')
-      // ★ 圖例只列「現在畫面上真的有的區別」。拉遠時橋樑未分色，
-      //   若仍列出橋樑那一條，圖例就是在說謊。
-      + (_roadDetail()
-          ? `<div>${line(ROAD_BRIDGE_CASING.color,4)}${ROAD_BRIDGE_CASING.label}（墊在線下）</div>`
-            + `<div>${line('#4A4A42',2,1)}隧道（虛線）</div>`
-          : '<div style="color:#667">拉近可分辨橋樑與隧道</div>')
-      + '<div style="color:#667;margin-top:2px">滑過道路可看編號與路名</div>');
+      .map(c=>`<div>${line(ROAD_CLS[c].color, ROAD_CLS[c].w + 0.8)}${ROAD_CLS[c].label}</div>`);
+    // ★ 橋樑與隧道各佔一條，與類別並列 —— 不寫任何說明文字。
+    rows.push(`<div>${line(ROAD_STRUCT.bridge.color, 2.6)}${ROAD_STRUCT.bridge.label}</div>`);
+    rows.push(`<div>${line(ROAD_STRUCT.tunnel.color, 2.2, 1)}${ROAD_STRUCT.tunnel.label}</div>`);
+    parts.push('<div style="font-weight:700;margin-bottom:3px">道路</div>' + rows.join(''));
   }
   if(_shelterOn && _shelterData){
     const dot = c=>`<span style="display:inline-block;width:9px;height:9px;`
       + `border-radius:50%;background:${c};border:1px solid #0a1a28;`
-      + `vertical-align:middle;margin-right:5px"></span>`;
+      + `vertical-align:middle;margin-right:6px"></span>`;
     parts.push((parts.length ? '<div style="height:6px"></div>' : '')
       + '<div style="font-weight:700;margin-bottom:3px">避難收容所</div>'
       + `<div>${dot('#5ad88a')}適用水災／土石流</div>`
-      + `<div>${dot('#8aa8c0')}其他災害類別</div>`
-      + '<div style="color:#667;margin-top:2px">點選圓點可看地址與適用災害</div>');
+      + `<div>${dot('#8aa8c0')}其他災害類別</div>`);
   }
   el.innerHTML = parts.join('');
   el.style.display = parts.length ? 'block' : 'none';
@@ -2530,40 +2532,64 @@ async function toggleShelterLayer(){
 //   canvas，於是收容所也被一起關掉 —— 這就是「點不到」的原因（實測：
 //   游標位置最上層是 townPane 的 canvas）。
 //   SVG 是逐形狀命中測試，只有圓點本身接事件，不會擋住鄉鎮，兩者可以並存。
-function _ensureShelterPane(){
-  if(map.getPane('shelterPane')) return;
-  map.createPane('shelterPane');
-  const p = map.getPane('shelterPane');
-  p.style.zIndex = 620;
-  p.style.pointerEvents = 'auto';
+// ★ 點圖層一律用 SVG，不可用 canvas。
+//   本檔有一條全域規則：「除了 townPane，所有 canvas 一律 pointer-events:none」
+//   （避免上層 canvas 整片蓋住鄉鎮讓地圖點不到）。circleMarker 預設走 canvas，
+//   於是測站與收容所的 tooltip／點選都被一起關掉 —— 這就是「測站 tooltip 不見了」
+//   與「收容所點不到」的共同根因（實測：游標落點最上層是 townPane 的 canvas）。
+//   SVG 是逐形狀命中測試，只有圓點本身接事件，不會擋住鄉鎮。
+function _ensurePtPane(name, z){
+  if(!map.getPane(name)){
+    map.createPane(name);
+    map.getPane(name).style.zIndex = z;
+  }
+  map.getPane(name).style.pointerEvents = 'auto';
+  return L.svg({pane: name});
 }
 function renderShelterLayer(){
   if(_shelterLayer){ try{ map.removeLayer(_shelterLayer); }catch(e){} _shelterLayer = null; }
   if(!_shelterOn || !_shelterData){ _renderOverlayLegend(); return; }
-  _ensureShelterPane();
+  const srend = _ensurePtPane('shelterPane', 620);
   const z = map.getZoom();
   const rad = z >= 12 ? 6 : z >= 10 ? 4.5 : 3;
-  const HAZ = {F:'水災', D:'土石流', E:'震災', T:'海嘯'};
-  const srend = L.svg({pane:'shelterPane'});
   _shelterLayer = L.layerGroup().addTo(map);
+  const YES = v=>String(v || '').trim() === '是';
+  const mark = v=>{
+    const t = String(v || '').trim();
+    return t === '是' ? '<span style="color:#5ad88a">是</span>'
+         : t === '否' ? '<span style="color:#8aa8c0">否</span>'
+         : '<span style="color:#667">—</span>';
+  };
   (_shelterData.features || []).forEach(ft=>{
     const c = ft.geometry && ft.geometry.coordinates;
     if(!c) return;
     const p = ft.properties || {};
-    const flags = String(p.f || '');
     // 適用於水災或土石流者以綠色強調 —— 這套系統的情境就是這兩類
-    const rainRel = flags.includes('F') || flags.includes('D');
+    const rainRel = YES(p.flood) || YES(p.debris);
     const m = L.circleMarker([c[1], c[0]], {
       radius: rad, weight: 1, color: '#0a1a28',
       fillColor: rainRel ? '#5ad88a' : '#8aa8c0', fillOpacity: 0.9,
       pane: 'shelterPane', renderer: srend, interactive: true
     });
-    const hz = flags.split('').map(k=>HAZ[k]).filter(Boolean).join('、') || '—';
-    m.bindTooltip(p.n || '（無名稱）', {direction:'top', opacity:0.92});
-    m.bindPopup(`<b>${p.n || '（無名稱）'}</b><br>`
-      + `${p.a || ''} ${p.ad || ''}<br>`
-      + `適用災害：${hz}<br>`
-      + `開設類型：${p.k || '—'}`);
+    // ★ hover 就給出全部欄位（本系統所有 tooltip 的一致行為），
+    //   不必點進去才看得到細節。點選則與右側狀態列連動。
+    m.bindTooltip(
+      `<b>${p.name || '（無名稱）'}</b>`
+      + `<span style="color:#8a9aaa;font-size:10px">　${p.area || ''}</span><br>`
+      + (p.addr ? `地址：${p.addr}<br>` : '')
+      + `開設類型：${p.kind || '—'}<br>`
+      + `<span style="color:#8a9aaa">功能</span>　收容所 ${mark(p.shelter)}`
+      + `｜避難所 ${mark(p.refuge)}｜物資點 ${mark(p.supply)}<br>`
+      + `<span style="color:#8a9aaa">適用災害</span>　水災 ${mark(p.flood)}`
+      + `｜土石流 ${mark(p.debris)}｜震災 ${mark(p.quake)}｜海嘯 ${mark(p.tsunami)}<br>`
+      // ★ 原始欄位名在 shapefile 裡被截斷成「是否適」，完整語意不明，
+      //   故照原欄位名呈現，不自行補字 —— 猜錯會誤導判讀。
+      + `<span style="color:#8a9aaa">原始欄位「是否適」</span>　${mark(p.suit)}`,
+      {direction: 'top', opacity: 0.95});
+    m.on('click', ()=>{
+      const tt = _townAtLatLng(c[1], c[0]);
+      if(tt){ selected = tt; try{ renderLayer(); updateInfo(tt); }catch(e){} }
+    });
     m.addTo(_shelterLayer);
   });
   _renderOverlayLegend();
@@ -2579,6 +2605,7 @@ function renderStationLayer(){
   if(_stnLayer){ try{ map.removeLayer(_stnLayer); }catch(e){} _stnLayer = null; }
   if(!_stnLayerOn) return;
   const z = map.getZoom();
+  const _stnRend = _ensurePtPane('stnPane', 615);
   _stnLayer = L.layerGroup().addTo(map);
   let n = 0, noPos = 0;
   // ★ 優先用後端輸出的完整測站清單（1300+ 站，全數有座標與海拔）。
@@ -2597,7 +2624,7 @@ function renderStationLayer(){
       const m = L.circleMarker([a.la, a.lo], {
         radius: r, color: '#0a1a28', weight: 1,
         fillColor: col, fillOpacity: v != null ? 0.92 : 0.5,
-        pane: 'markerPane'
+        pane: 'stnPane', renderer: _stnRend, interactive: true
       }).addTo(_stnLayer);
       const key = (a.c || '') + (a.t || '');
       const tt = TMAP[key];
@@ -2631,7 +2658,7 @@ function renderStationLayer(){
       const m = L.circleMarker([st.lat, st.lng], {
         radius: r, color: '#0a1a28', weight: 1,
         fillColor: col, fillOpacity: v != null ? 0.92 : 0.5,
-        pane: 'markerPane'
+        pane: 'stnPane', renderer: _stnRend, interactive: true
       }).addTo(_stnLayer);
       // ★ ETR2 與海拔可能尚未有資料：ETR2 只有官方警戒站才有，
       //   海拔需部署 station_elev.json（由 20m DTM 離線產生）。
@@ -2677,9 +2704,11 @@ function focusStation(st){
   const col = (v != null)
     ? (RAIN_SCALE.find(b=>v < b.max) || RAIN_SCALE[RAIN_SCALE.length-1]).color
     : '#9fc8e8';
+  // ★ 同樣不可用 canvas（會被全域 pointer-events 規則關掉，tooltip 失效）
+  const _fsRend = _ensurePtPane('stnPane', 615);
   _stnMarker = L.circleMarker([st.lat, st.lng], {
     radius: 7, color: '#ffff44', weight: 2, fillColor: col, fillOpacity: 0.9,
-    pane: 'markerPane'
+    pane: 'stnPane', renderer: _fsRend, interactive: true
   }).addTo(map);
   const pct = st.etr2_pct != null ? st.etr2_pct.toFixed(0) + '%' : '—';
   _stnMarker.bindTooltip(
@@ -12922,6 +12951,40 @@ function _ptRingDist(x, y, ring){
 // 形心快取：極點演算法全臺 368 個約需 3 秒，但結果只取決於靜態行政區界，
 // 算一次即可。不快取的話每次縮放重繪都要重算，會造成明顯卡頓。
 const _tcCache = new Map();
+// ★ 經緯度 → 鄉鎮（射線法逐環判定）。
+//   不用「最近質心」：行政區邊界附近會判到隔壁鄉鎮，點選後右側狀態列
+//   顯示的是錯的行政區 —— 在防災系統裡那比沒有功能更糟。
+//   找不到（海上或離島缺圖資）就回 null，呼叫端不動作。
+function _townAtLatLng(lat, lng){
+  // ★ TOWN_GEO 是 const 宣告，不會掛到 window 上 —— 用 window.TOWN_GEO
+  //   判斷會永遠是 undefined（我第一版就是這樣寫，判定全部回 null）。
+  if(typeof TOWN_GEO === 'undefined' || !TOWN_GEO || !TOWN_GEO.features) return null;
+  const inRing = (ring)=>{
+    let inside = false;
+    for(let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+      const xi = ring[i][0], yi = ring[i][1];
+      const xj = ring[j][0], yj = ring[j][1];
+      if(((yi > lat) !== (yj > lat)) &&
+         (lng < (xj - xi) * (lat - yi) / ((yj - yi) || 1e-12) + xi)) inside = !inside;
+    }
+    return inside;
+  };
+  for(const f of TOWN_GEO.features){
+    const g = f.geometry; if(!g) continue;
+    const polys = g.type === 'Polygon' ? [g.coordinates]
+                : g.type === 'MultiPolygon' ? g.coordinates : [];
+    for(const poly of polys){
+      if(!poly.length || !inRing(poly[0])) continue;
+      // 內環（孔洞）要排除
+      let hole = false;
+      for(let k = 1; k < poly.length; k++) if(inRing(poly[k])){ hole = true; break; }
+      if(hole) continue;
+      const pr = f.properties || {};
+      return TMAP[(pr.COUNTYNAME || '') + (pr.TOWNNAME || '')] || null;
+    }
+  }
+  return null;
+}
 function _townCentroid(f){
   const _ck = ((f.properties||{}).COUNTYNAME || '') + ((f.properties||{}).TOWNNAME || '');
   if(_ck && _tcCache.has(_ck)) return _tcCache.get(_ck);
