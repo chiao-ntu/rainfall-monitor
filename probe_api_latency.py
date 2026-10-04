@@ -29,6 +29,17 @@ try:
 except ImportError:
     requests = None
 
+# ★ 缺 requests 時必須大聲失敗。
+#   先前各 probe 寫 `if not requests: return []`，於是在沒有 requests 的環境
+#   （GitHub Actions 的 setup-python 是乾淨的 Python，requests 不在標準庫）
+#   會印出「累積 0 筆」而沒有任何錯誤行 —— 看起來像「API 都抓不到」，
+#   實際上是一行相依套件沒裝。診斷工具靜默產不出資料，比直接壞掉更糟。
+def _require_requests():
+    if requests is None:
+        print('!! 缺少 requests 套件，無法量測。請先執行：'
+              'pip install requests', file=sys.stderr)
+        sys.exit(2)
+
 
 def _now():
     return datetime.now(TPE)
@@ -62,7 +73,8 @@ def _parse(s):
 def probe_cwa(key):
     """CWA 自動氣象站：回報最新一筆觀測的時刻。"""
     out = []
-    if not (requests and key):
+    if not key:
+        print('   （略過 CWA：未設定 CWA_API_KEY）')
         return out
     base = 'https://opendata.cwa.gov.tw/api/v1/rest/datastore'
     targets = [
@@ -93,8 +105,6 @@ def probe_cwa(key):
 def probe_openmeteo():
     """Open-Meteo：各模式最新一報的初始時刻（run time）。"""
     out = []
-    if not requests:
-        return out
     models = ['ecmwf_ifs025', 'gfs_seamless', 'jma_seamless',
               'ecmwf_aifs025_single', 'gfs_graphcast025', 'icon_seamless']
     for m in models:
@@ -121,8 +131,6 @@ def probe_openmeteo():
 def probe_swcb():
     """水保署土石流警戒／ETR2：回報最新更新時刻。"""
     out = []
-    if not requests:
-        return out
     try:
         r = requests.get('https://246.ardswc.gov.tw/Data/JSON/Alert.json', timeout=60)
         if r.status_code == 200:
@@ -139,6 +147,7 @@ def probe_swcb():
 
 
 def collect():
+    _require_requests()
     now = _now()
     rows = []
     rows += probe_cwa(os.environ.get('CWA_API_KEY', ''))
@@ -173,7 +182,14 @@ def collect():
                   + (f"　延遲 {lag:.0f} 分" if lag is not None else "")
                   + (f"　Last-Modified {r['last_modified']}"
                      if r.get('last_modified') else ""))
-    print(f"累積 {len(log['samples'])} 筆（保留 {KEEP_DAYS} 天）")
+    print(f"本輪取得 {len(rows)} 筆，累積 {len(log['samples'])} 筆"
+          f"（保留 {KEEP_DAYS} 天）")
+    # ★ 一筆都沒產生＝量測沒有真的執行，必須讓 workflow 紅燈。
+    #   先前回 0（成功），於是連續幾天「跑得很順但什麼都沒收集到」。
+    if not rows:
+        print('!! 本輪沒有產生任何樣本 —— 量測實際上沒有執行，'
+              '請檢查相依套件與網路', file=sys.stderr)
+        return 1
     return 0
 
 
