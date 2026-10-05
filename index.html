@@ -1334,7 +1334,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-05T11:30Z';
+const FORMOSA_BUILD = '2026-10-05T21:40Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -7387,11 +7387,25 @@ function calcEtr2AtSeg(t, seg, qpfField){
     return e;
   }
 
-  // 過去：加法位移（保留 raw 的歷史形狀，於「現在」平滑接上官方錨點）
-  const raw    = _calcEtr2Raw(t, seg, qpfField);
-  const rawNow = _calcEtr2Raw(t, ns, qpfField);
-  const off    = base - rawNow;
-  return Math.max(0, raw + off);
+  // ── 過去：一律以觀測重算，不把「現在的官方落差」攤回歷史 ──
+  //  ★★ 2026-10-05 修正（使用者回報：前幾天沒下雨，但前幾天 ETR2% 很高）。
+  //  原本做法是加法位移：off = 官方錨點 − 以觀測重算的現在值，然後把 off
+  //  整個常數加到每一個過去段，用意是讓曲線在「現在」平滑接上官方值。
+  //  問題是 off 大的時候，它等於宣稱過去下了沒下過的雨：
+  //    大同鄉官方錨點 250.7mm、觀測重算的現在值約 20mm → off ≈ 230mm，
+  //    於是每個沒下雨的過去日都顯示 230/550 ≈ 42%。
+  //  而官方錨點改成「全官方警戒單元最大值」之後（58 個鄉鎮因此提高），
+  //  這個既有缺陷被放大了 —— 是我的改動把它推到看得見的程度。
+  //  過去的 ETR2 有絕對答案：就是觀測逐日雨量套官方權重算出來的值。
+  //  官方錨點是「當下狀態」，不該回頭改寫歷史。
+  //  落差本身是有用的診斷資訊（表示該鄉鎮的觀測沒涵蓋官方採用的站），
+  //  記在 t._etrGap 供判讀，但不混進數值。
+  const raw = _calcEtr2Raw(t, seg, qpfField);
+  try{
+    const rawNow = _calcEtr2Raw(t, ns, qpfField);
+    t._etrGap = Math.round((base - rawNow) * 10) / 10;
+  }catch(e){ t._etrGap = null; }
+  return Math.max(0, raw);
 }
 
 function getQpfSeg(t, seg, qpfField){

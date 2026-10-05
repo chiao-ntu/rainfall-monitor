@@ -1478,6 +1478,7 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
     """
     import re as _re
     station_etr2  = obs.get('station_etr2', {})
+    station_by_nm = obs.get('station_etr2_name', {})   # ★ 以站名為鍵（不經站號）
     station_daily = obs.get('station_daily', {})
     obs_station_ids = obs.get('stations', [])
 
@@ -1539,6 +1540,14 @@ def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
             unmatched.append(name)
 
         etr2_val = station_etr2.get(sid) if sid else None
+        # ★★ 站號查不到就以站名查。比對池只有「該鄉鎮內」的測站，代表站在
+        #   鄰近鄉鎮時站號不在池子裡（寒溪s 就是這樣一直空白）。
+        #   站名這份由 agg_obs 以靜態表的站名直接寫入，兩邊必然對得上。
+        if etr2_val is None:
+            for _nk in (name, normalize(name), _stn_key(name)):
+                if not _nk: continue
+                _v = station_by_nm.get(_nk)
+                if _v is not None: etr2_val = _v; break
         # ★ 單位是「百分比」（0~100+），不是比值。
         #   前端的排行、餘裕圖、色階都以 % 為單位；先前存成 0~1 的比值，
         #   顯示時會變成 0 或 1 這種無意義的數字。
@@ -1705,7 +1714,16 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
             town[key]={'county':st['county'],'township':st['township'],
                        'stations':[],'rain_24h':0.0,'rain_6h':0.0,
                        'rain_2d':0.0,'rain_3d':0.0,'etr2':None,
-                       'daily_rain':[0.0]*15, 'station_etr2':{}}
+                       'daily_rain':[0.0]*15, 'station_etr2':{},
+                       # ★★ 以「代表站名」為鍵的 ETR2（2026-10-05）。
+                       #   為什麼需要這一份：station_etr2 以站號為鍵，而
+                       #   enrich_stations_with_etr2() 的比對池只有「該鄉鎮內」的
+                       #   氣象署測站。代表站若在鄰近鄉鎮（30km 內，很常見），
+                       #   站號就不在它的池子裡，查不到 → 測站 ETR2% 空白。
+                       #   這正是寒溪s一直沒有 ETR2% 的原因。
+                       #   改以站名為鍵，兩邊用的是同一個東西（靜態表的站名），
+                       #   由構造上一致，不必再繞站號這一圈。
+                       'station_etr2_name':{}}
         td=town[key]; td['stations'].append(sid)
         # 雨量觀測：所有站都可以貢獻（用於顯示觀測雨量）
         td['rain_24h']=max(td['rain_24h'],st['rain_24h'])
@@ -1837,6 +1855,12 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                     _prev = td['station_etr2'].get(_sid)
                     if _prev is None or ev > _prev:
                         td['station_etr2'][_sid] = ev
+                # ★ 同時以站名為鍵（含正規化鍵），不經站號
+                for _nk in (stn, _stn_key(stn)):
+                    if not _nk: continue
+                    _p2 = td['station_etr2_name'].get(_nk)
+                    if _p2 is None or ev > _p2:
+                        td['station_etr2_name'][_nk] = ev
                 if pct is not None and (best_pct is None or pct > best_pct):
                     best_pct = pct; best_etr2 = ev; best_av = av
             td['etr2'] = best_etr2
@@ -1873,6 +1897,11 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                 _s3 = _pick_sid(_sig[1], _c0, _t0)
                 if _s3 and td['station_etr2'].get(_s3) is None:
                     td['station_etr2'][_s3] = _dv
+                for _nk in (_sig[1], _stn_key(_sig[1])):
+                    if not _nk: continue
+                    _p3 = td['station_etr2_name'].get(_nk)
+                    if _p3 is None or _dv > _p3:
+                        td['station_etr2_name'][_nk] = _dv
             if best_pct is not None and best_pct != _best_before:
                 _deb_won += 1
             td['etr2'] = best_etr2
@@ -1896,6 +1925,10 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                     td['station_etr2'][_s2] = _v
                     _extra_rank.append({'county': _c0, 'town': _t0,
                                         'station': _nm, 'etr2': _v})
+                for _nk in (_nm, _stn_key(_nm)):
+                    if not _nk: continue
+                    if td['station_etr2_name'].get(_nk) is None:
+                        td['station_etr2_name'][_nk] = _v
 
             if best_pct is not None:
                 n_aligned += 1
@@ -2013,6 +2046,8 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                 if ev is not None:
                     town[key]['etr2'] = max(town[key]['etr2'] or 0.0, ev)
                     town[key]['station_etr2'][sid] = ev
+                    for _nk in (nm, _stn_key(nm)):
+                        if _nk: town[key]['station_etr2_name'][_nk] = ev
         for key, td in town.items():
             ai = alert_table.get(key, {}); av = ai.get('alert_val', 0)
             td['etr2_pct'] = round(td['etr2']/av, 4) if td['etr2'] and av > 0 else None
