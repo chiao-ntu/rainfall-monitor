@@ -1334,7 +1334,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-05T07:10Z';
+const FORMOSA_BUILD = '2026-10-05T11:30Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -4005,6 +4005,14 @@ function _noRainEvidence(t){
 //   先前兩者混在 official_segs，於是色帶段把六個模式丟掉、換成一個「色帶下界
 //   被複製到窗內每個 6h 段」的加倍值（宜蘭日累積報到 320mm，CWA 上界和 180mm），
 //   而且還流進 qpf_hi/qpf_lo 的系集離散度。
+// ★★ CWA 在融合中的權重倍率（相對於各模式權重的平均）。
+//   1.0＝與單一模式等權；>1＝官方意見較重但不獨裁。
+//   為什麼不是 0 也不是 100%：
+//     100%（舊行為）＝色帶段把六個模式全部丟掉，而且用的是「色帶下界被複製到
+//       窗內每個 6h 段」的加倍值，累積會爆表（宜蘭日累積 320mm／官方上界和 180mm）。
+//     0%（我前一版的過度修正）＝官方定量降水預報完全不參與，那是重要依據，不該排除。
+//   正解是「參與加權、但用可加量」：既不重複計算雨量，也不丟掉官方意見。
+const CWA_BLEND_W = 1.5;
 function _cwaRealSegs(t){ return new Set(t && t.official_segs ? t.official_segs : []); }
 function _cwaCoveredSegs(t){
   return new Set([...(t && t.official_segs ? t.official_segs : []),
@@ -4116,6 +4124,16 @@ function _blendQpf(t, mode){
         ? v0 * Math.max(0.5, Math.min(cap0, s0.bias)) : v0;
       cand.push({m, v: cv, w: W[m]});
     });
+    // ★★ CWA 官方定量降水預報以「可加量」身分加入加權（不是取代模式）。
+    //   值用 qpf_cwa_q（色帶上界÷窗段數），所以不會重複計算雨量；
+    //   權重取各模式權重平均 × CWA_BLEND_W。
+    //   不做偏差校正：cwa 不在校驗的 MODELS 裡，沒有 bias 樣本，
+    //   硬套別人的係數比不套更糟。
+    const _cq = _cwaQArr(t)[i];
+    if(_cq != null && cand.length){
+      const _wAvg = cand.reduce((a, c)=>a + c.w, 0) / cand.length;
+      cand.push({m: 'cwa', v: _cq, w: _wAvg * CWA_BLEND_W});
+    }
     if(!cand.length){ out.push(null); continue; }
     const sorted = cand.map(c=>c.v).sort((a, b)=>a - b);
     const med = sorted[Math.floor(sorted.length / 2)];
@@ -4133,7 +4151,13 @@ function _blendQpf(t, mode){
       if(highs.length === 1 && c === highs[0] && !_radarHasEcho(t)) c.w *= 0.35;
     });
     // ④ 分歧過大且有官方值 → 以 CWA 為準
-    const lo = Math.min(...use.map(c=>c.v)), hi = Math.max(...use.map(c=>c.v));
+    //   ★★ 分歧只能用「各模式」之間的離散度判斷，不可把 CWA 自己算進去：
+    //     CWA 現在是加權成員，它的值會把 hi 推高，於是它製造了自己要裁決的
+    //     那個分歧 —— 自我實現，結果每次都變成 100% CWA（實測：融合直接等於
+    //     CWA 的 55mm，六個模式 4–6mm 完全失聲）。
+    const useM = use.filter(c=>c.m !== 'cwa');
+    const _dv = (useM.length ? useM : use).map(c=>c.v);
+    const lo = Math.min(..._dv), hi = Math.max(..._dv);
     //   ★ 裁決要用可加量（色帶上界÷窗段數），不可用色帶下界原值：
     //     後者是「類別身分」，被複製到窗內每段，當數字用會偏高一倍。
     const cwaV = _cwaQArr(t)[i];
@@ -6473,7 +6497,7 @@ function renderBlendDetail(t){
   }
   if(nBnd){
     extra += `<div style="margin-top:5px;color:#8ad8a0">
-      本視窗有 ${nBnd} 段有官方判讀圖色帶（類別，僅供對照），融合仍照模式加權</div>`;
+      本視窗有 ${nBnd} 段有官方判讀圖色帶，已以可加量納入融合加權（不重複計算雨量）</div>`;
   }
   if(sp && sp.level){
     extra += `<div style="margin-top:5px">模式離散：${sp.min}–${sp.max} mm

@@ -75,15 +75,48 @@ if(_EXEC) _LAUNCH.executablePath=_EXEC;
   ok(_cwaCoveredSegs(t).size === 4,
      `②但仍算「有官方資料的覆蓋段」（${_cwaCoveredSegs(t).size} 段）`);
 
-  // ── ③ 融合在色帶段必須維持模式加權，不得被色帶取代 ──
-  const bl = _blendQpf(t);
-  ok(bl[0] != null && bl[0] < 20,
-     `③融合第0段 = ${bl[0]}mm，落在六個模式的範圍（4–6），沒有被色帶 90 取代`);
-  ok(bl[0] !== 90 && bl[0] !== 55,
-     '③融合值既不是色帶下界 90、也不是可加量 55（模式加權仍有效）');
+  // ── ③ CWA 必須「參與加權」：既不取代模式，也不被排除 ──
+  //    舊行為：色帶段 = 100% CWA（丟掉六個模式，且用加倍值）→ 累積爆表
+  //    過度修正：色帶段 = 0% CWA（官方依據被排除）→ 使用者回報不可接受
+  //    正解：CWA 以可加量身分加入加權
+  //
+  //  ★ 這裡要測兩個情境，因為有一條既有規則會與之交互：
+  //    「無降雨證據剔除」（觀測與雷達都沒有雨、而某成員報 ≥30mm 且中位數 <10）
+  //    對所有成員一視同仁，CWA 也會被剔除。那是使用者自己訂的「排除亂報」
+  //    原則，不替 CWA 開後門；但必須測出來、寫清楚，不能讓它變成
+  //    「以為 CWA 參與了、其實又被排除」。
+  const tRain = Object.assign({}, t, {daily_rain:[12, 0], rain_24h:12});
+  const blR = _blendQpf(tRain);
+  ok(blR[0] !== 90,
+     `③a 有雨證據時融合不是色帶下界 90（不重複計算雨量）—— 實得 ${blR[0]}`);
+  ok(blR[0] > 6,
+     `③a 融合 ${blR[0]}mm 高於最高的模式 6mm —— CWA 確實參與加權，沒被排除`);
+  ok(blR[0] < 55,
+     `③a 但也沒有變成 CWA 獨裁（可加量 55）—— 模式仍有份量`);
+  // 權重可驗算。注意 CWA 同樣受「佐證原則」約束：它的 55 > max(50, 中位數×3)，
+  //   是唯一的高值且無雷達回波 → 權重 ×0.35。這是刻意的 —— 官方值參與加權，
+  //   但「孤高無佐證」的降權對它一樣適用，否則等於開後門。
+  const _mv = [5,6,4,5,5,5];
+  const _wc = CWA_BLEND_W * 0.35;         // 佐證原則降權後的 CWA 權重
+  const _exp = (_mv.reduce((a,b)=>a+b,0) + 55 * _wc) / (6 + _wc);
+  ok(Math.abs(blR[0] - _exp) < 1.0,
+     `③a 權重算得出來：預期 ${_exp.toFixed(1)}mm，實得 ${blR[0]}mm`+
+     `（CWA_BLEND_W=${CWA_BLEND_W}，含佐證降權 ×0.35）`);
+  // 若有第二個模式也報高，佐證成立 → CWA 不降權，融合應明顯更高
+  const tCorr = Object.assign({}, tRain, {qpf_ecmwf:[60,60,60,60]});
+  const blC = _blendQpf(tCorr);
+  ok(blC[0] > blR[0],
+     `③a 有第二個高值佐證時融合上升（${blR[0]} → ${blC[0]}mm）—— 佐證原則對 CWA 同樣生效`);
+
+  // ③b 完全無雨證據且 CWA 與模式極端分歧 → 依既有「排除亂報」原則剔除
+  const blN = _blendQpf(t);          // daily_rain 全 0、無回波
+  ok(blN[0] != null && blN[0] <= 6,
+     `③b 觀測與雷達都無雨、CWA 報 55 而模式中位數 5 → 依既有原則剔除`+
+     `（融合 ${blN[0]}mm）。這是刻意的，不替 CWA 開後門`);
 
   // ── ④ 真值段（颱風格點）行為必須保留：那是真實數值，模式確實被覆寫 ──
   const t2 = Object.assign({}, t, {
+    daily_rain:[12, 0], rain_24h:12,
     official_segs:[0,1], band_segs:[2,3],
     qpf_cwa:[88,88,50,50], qpf_cwa_q:[88,88,35,35],
     qpf_best:[88,88,5,5], qpf_ecmwf:[88,88,6,6], qpf_gfs:[88,88,4,4],
@@ -91,8 +124,9 @@ if(_EXEC) _LAUNCH.executablePath=_EXEC;
   const bl2 = _blendQpf(t2);
   ok(bl2[0] === 88,
      `④真值段仍直接採用官方值 ${bl2[0]}（不做加權）—— 原行為沒被弄壞`);
-  ok(bl2[2] != null && bl2[2] < 20,
-     `④同一鄉鎮的色帶段 ${bl2[2]}mm 仍走模式加權（兩種語意並存）`);
+  ok(bl2[2] != null && bl2[2] > 6 && bl2[2] < 55,
+     `④同一鄉鎮的色帶段 ${bl2[2]}mm 走「模式＋CWA」加權，`+
+     `既非 100% 官方也非 0%（兩種語意並存）`);
 
   // ── ⑤ 系集離散度不得被色帶撐大 ──
   const hi = getQpfArr(t, 'qpf_hi'), lo = getQpfArr(t, 'qpf_lo');

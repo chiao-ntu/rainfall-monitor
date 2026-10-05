@@ -15,6 +15,28 @@ SLOPE_WARN_FILE = "slope_warning_stations.json"  # 官方坡地警戒區→代�
 LS_WARN_FILE = "landslide_warning_stations.json"  # 官方大崩警戒區→代表站+警戒值（115年明細表）
 # 水保署土石流參考雨量站 API：直接回官方 ETR2(STRT)，涵蓋氣象署抓不到的自建站
 SWCB_RAIN_URL = "https://246.ardswc.gov.tw/webService/GetDebrisRainData.ashx"
+# ★ 定向診斷：列出這些站名／鄉鎮在官方資料中的真實內容。
+#   查個案時改這兩行就好，清空即關閉。放在這裡是因為「抓不到」這類問題
+#   一定要能看到原始資料，不能靠猜。
+def _row_pick(row, *names):
+    """從 API 回傳列取欄位，名稱容錯（含大小寫不分）。
+
+    為什麼需要：同一個檔案裡對同類 ID 曾出現 'DebrisNO' 與 'DebrisNo' 兩種拼法，
+    其中一種必然是錯的；錯的那個會讓整批資料靜默消失（回傳空字典，不報錯）。
+    外部 API 的欄位名不是我們能控制的，硬編單一拼法就是單點失效。
+    """
+    if not isinstance(row, dict): return None
+    for n in names:
+        if n in row and row[n] not in (None, ''): return row[n]
+    low = {str(k).lower(): v for k, v in row.items()}
+    for n in names:
+        v = low.get(n.lower())
+        if v not in (None, ''): return v
+    return None
+
+
+DIAG_STATION_KEYWORDS = ('寒溪',)
+DIAG_TOWNS = ('宜蘭縣大同鄉',)
 # ── 官方警戒（雙軌架構的「現況」側，權威值）──────────────
 #   現況紅/黃一律採官方發布值；系統只在「未來推估」側自行研判（明確標示推估）。
 SWCB_ALERT_URL   = "https://ls.ardswc.gov.tw/api/LandslideAlertOpenData"          # D=土石流 L=大崩
@@ -639,30 +661,78 @@ def fetch_debris_alerts():
             time.sleep(3)
     if not data: return {}
 
+    # ★★ 2026-10-05：這個函式是鄉鎮 ETR2% 的權威來源，但它比
+    #   fetch_swcb_etr2() 多依賴兩個欄位，兩個都是單點失效：
+    #     ① 原本硬要 row['DebrisNO']，拼錯就整批 continue → 回傳 {} → 靜默全失效。
+    #        本檔另一處解析同類 ID 用的是 'DebrisNo'（小寫 o），兩種拼法並存，
+    #        其中一種必然是錯的。而我們其實不需要這個 ID —— 真正用到的是
+    #        County/Town/AlertValue/STRT。要一個不需要的欄位是白送的失效點。
+    #     ② AlertValue 同理。
+    #   改法：欄位名容錯 + 不需要 ID（改以 (縣,鄉,村,站) 為鍵）+ 把每一種
+    #   被丟棄的原因統計出來。查不到欄位時直接把真實欄位名印出來 ——
+    #   不要再讓任何人（包括我）靠猜。
+    pick = _row_pick
+
+    if data and isinstance(data[0], dict):
+        print(f"    [欄位] 實際欄位名：{sorted(data[0].keys())}")
+
     out = {}
     n_red = 0
+    drop = {'no_alert': 0, 'no_station_val': 0, 'no_loc': 0}
     for row in data:
-        no = row.get('DebrisNO')
-        if not no: continue
-        av = num(row.get('AlertValue'))
-        if not av or av <= 0: continue
+        if not isinstance(row, dict): continue
+        av = num(pick(row, 'AlertValue', 'Alert', 'AlertVal', 'ALERTVALUE'))
+        if not av or av <= 0:
+            drop['no_alert'] += 1; continue
         # 兩支參考站取較高的 ETR2（保守，不漏報）
         cands = []
-        for nk, vk in [('STName1','STRT1'), ('STName2','STRT2')]:
-            v = num(row.get(vk))
-            if v is not None: cands.append((v, (row.get(nk) or '').strip()))
-        if not cands: continue
+        for nk, vk in [('STName1', 'STRT1'), ('STName2', 'STRT2')]:
+            v = num(pick(row, vk))
+            if v is not None:
+                cands.append((v, (pick(row, nk) or '').strip()))
+        if not cands:
+            drop['no_station_val'] += 1; continue
         etr2, stn = max(cands)
+        cty = (pick(row, 'County', 'CountyName') or '').strip()
+        twn = (pick(row, 'Town', 'TownName', 'Township') or '').strip()
+        if not cty or not twn:
+            drop['no_loc'] += 1
+        no = (pick(row, 'DebrisNO', 'DebrisNo', 'DebrisID', 'DF_NO') or '')
+        no = str(no).strip()
         pct = round(etr2/av, 4)
         red = etr2 >= av
         if red: n_red += 1
-        out[no] = {
-            'county': row.get('County',''), 'town': row.get('Town',''),
-            'vill': row.get('Vill',''),
+        # ★ 鍵不再依賴 ID：ID 缺失時用 (縣,鄉,村,站) 當鍵，資料不會整批消失
+        key = no or f"{cty}|{twn}|{(pick(row,'Vill','VillName') or '')}|{stn}"
+        out[key] = {
+            'county': cty, 'town': twn,
+            'vill': (pick(row, 'Vill', 'VillName') or '').strip(),
             'alert': av, 'etr2': round(etr2, 1), 'pct': pct,
-            'station': stn, 'red': red,
+            'station': stn, 'red': red, 'no': no,
         }
-    print(f"    {len(out)} 條潛勢溪流｜達紅色警戒（ETR2≥警戒值）：{n_red} 條")
+    print(f"    {len(out)} 條潛勢溪流｜達紅色警戒（ETR2≥警戒值）：{n_red} 條"
+          f"（原始 {len(data)} 筆）")
+    if any(drop.values()):
+        print(f"    [丟棄] 無警戒值 {drop['no_alert']}、無站雨量 {drop['no_station_val']}、"
+              f"無縣市鄉鎮 {drop['no_loc']}")
+    if not out and data:
+        print(f"    ⚠ 一條都沒解析出來 —— 欄位名對不上，請看上面 [欄位] 那一行")
+
+    # ── 定向診斷：使用者回報的個案（抓不到就把真相印出來，不要再猜）──
+    for _kw in DIAG_STATION_KEYWORDS:
+        _hit = [d for d in out.values() if _kw in (d['station'] or '')]
+        print(f"    [診斷] 站名含「{_kw}」：{len(_hit)} 條")
+        for d in _hit[:6]:
+            print(f"           {d['county']}{d['town']}{d['vill']} 「{d['station']}」"
+                  f"ETR2 {d['etr2']}／警戒 {d['alert']} = {round(d['pct']*100,1)}%")
+    for _tw in DIAG_TOWNS:
+        _hit = [d for d in out.values()
+                if (d['county'] + d['town']) == _tw or d['town'] in _tw]
+        print(f"    [診斷] {_tw} 的警戒單元：{len(_hit)} 條"
+              f"{'（最高 ' + str(round(max(x['pct'] for x in _hit)*100,1)) + '%）' if _hit else ''}")
+        for d in sorted(_hit, key=lambda x: -x['pct'])[:6]:
+            print(f"           {d['vill']} 「{d['station']}」ETR2 {d['etr2']}"
+                  f"／警戒 {d['alert']} = {round(d['pct']*100,1)}%")
     return out
 
 
@@ -704,12 +774,18 @@ def fetch_swcb_etr2():
     SWCB_STN_LOC.clear()
     SWCB_BY_LOC.clear()
     _name_ids = {}
+    if data and isinstance(data[0], dict):
+        print(f"    [欄位] 實際欄位名：{sorted(data[0].keys())}")
+    _n_noloc = 0
     for row in data:
-        _cty = (row.get('County') or '').strip()
-        _twn = (row.get('Town') or '').strip()
+        # ★ 欄位名容錯：County/Town 一旦對不上，SWCB_STN_LOC 會是空的，
+        #   「同鄉鎮消歧」那一層就永遠找不到站 —— 且完全不報錯。
+        _cty = (_row_pick(row, 'County', 'CountyName') or '').strip()
+        _twn = (_row_pick(row, 'Town', 'TownName', 'Township') or '').strip()
+        if not (_cty and _twn): _n_noloc += 1
         for ik, nk, vk in [('STID1','STName1','STRT1'), ('STID2','STName2','STRT2')]:
-            nm = (row.get(nk) or '').strip(); v = num(row.get(vk))
-            sid = (row.get(ik) or '').strip()
+            nm = (_row_pick(row, nk) or '').strip(); v = num(_row_pick(row, vk))
+            sid = (_row_pick(row, ik) or '').strip()
             if v is None or (not nm and not sid): continue
             if sid: st_val[sid] = v             # ★ STID 為權威鍵（唯一識別）
             if nm:
@@ -741,6 +817,9 @@ def fetch_swcb_etr2():
         if k in st_val: continue
         if len(owners) > 1: continue            # 撞名 → 不建立，寧可對不到也不對錯
         st_val[k] = st_val[next(iter(owners))]; _n_norm += 1
+    if _n_noloc:
+        print(f"    ⚠ {_n_noloc}/{len(data)} 筆取不到縣市鄉鎮 —— 位置索引會不完整，"
+              f"請看上面 [欄位] 那一行")
     print(f"    水保署ETR2：{len(data)} 條潛勢溪流、{len(st_val)} 個鍵"
           f"（STID＋唯一站名；正規化鍵 {_n_norm} 個，"
           f"同名多站 {_n_amb} 個改以 STID/地理區分）、"
