@@ -962,6 +962,36 @@ def _stn_key2(n):
     return s
 
 
+# ★★ 2026-10-05（第二次修正）：代表站的地理判準改用「距離」，不用行政區比對。
+#   前一版對站號解析加了「必須同鄉鎮」的硬要求，實跑擋掉 1200 筆 ——
+#   而那些幾乎全是正確配對：土石流警戒區的代表站本來就常在鄰近鄉鎮甚至跨縣市
+#   （基隆仁愛區的警戒區用安樂區的站 2km、淡水區用北投區的站 7km、
+#     南投國姓鄉用臺中太平區的站 20km）。結果 station_etr2 幾乎全空，
+#   前端測站 ETR2% 整排消失 —— 那是我造成的回歸，不是原本的缺陷。
+#   真正該擋的是「同名但其實是不同的站」：
+#     關山（臺南南化↔臺東海端）58km、武陵（臺中和平↔臺東延平）150km。
+#   行政區相同與否無法區分這兩類，距離可以。30km 把兩邊乾淨分開。
+MAX_STN_KM = 30.0
+TWN_CENTER = {}        # (縣市, 鄉鎮) → (lat, lon)，由 agg_obs 以測站平均填入
+GEO_NO_COORD = [0]     # 查不到座標而放行的次數（寬鬆選擇不可靜默）
+
+
+def _haversine_km(a, b):
+    if not a or not b: return None
+    la1, lo1 = math.radians(a[0]), math.radians(a[1])
+    la2, lo2 = math.radians(b[0]), math.radians(b[1])
+    h = (math.sin((la2 - la1) / 2) ** 2
+         + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2)
+    return 2 * 6371.0 * math.asin(min(1.0, math.sqrt(h)))
+
+
+def _twn_dist_km(c1, t1, c2, t2):
+    """兩個鄉鎮中心的距離（km）；任一側沒有座標回 None。"""
+    a = TWN_CENTER.get((_cty_norm(c1), _cty_norm(t1)))
+    b = TWN_CENTER.get((_cty_norm(c2), _cty_norm(t2)))
+    return _haversine_km(a, b)
+
+
 def _swcb_name_locs(nm):
     """該站名在水保署資料中出現過的 (縣市, 鄉鎮)。空集合＝無位置可查。"""
     if not nm: return set()
@@ -991,7 +1021,16 @@ def _geo_ok(nm, county, town):
     if not county or not town: return True
     locs = _swcb_name_locs(nm)
     if not locs: return True
-    return (county, town) in locs
+    if (county, town) in locs: return True
+    # ★ 不同鄉鎮不等於不同站：代表站常在鄰近鄉鎮。以距離判斷才分得出
+    #   「就近取站」與「同名不同站」。
+    for (c2, t2) in locs:
+        d = _twn_dist_km(county, town, c2, t2)
+        if d is not None and d <= MAX_STN_KM: return True
+        if d is None:
+            GEO_NO_COORD[0] += 1
+            return True                    # 查不到座標 → 無法否證，放行
+    return False
 
 
 def resolve_station_etr2(names, swcb_etr2, county='', town='', strict_geo=False):
@@ -1575,34 +1614,88 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
             name2sid.setdefault(_k, sid)
             if _c0 and _t0:
                 name2sid_loc.setdefault((_c0, _t0, _k), sid)
+    # ★ 鄉鎮中心：以該鄉鎮所有測站的平均座標代表（供距離判準用）
+    TWN_CENTER.clear()
+    GEO_NO_COORD[0] = 0
+    _acc = {}
+    for sid, st in stations.items():
+        _la, _lo = st.get('lat'), st.get('lon') or st.get('lng')
+        if not _la or not _lo: continue
+        _k = (_cty_norm(st.get('county')), _cty_norm(st.get('township')))
+        if not _k[0] or not _k[1]: continue
+        a = _acc.setdefault(_k, [0.0, 0.0, 0])
+        a[0] += _la; a[1] += _lo; a[2] += 1
+    for _k, a in _acc.items():
+        if a[2]: TWN_CENTER[_k] = (a[0] / a[2], a[1] / a[2])
+    print(f"    [測站索引] 鄉鎮中心座標：{len(TWN_CENTER)} 個鄉鎮"
+          f"（距離判準門檻 {MAX_STN_KM:.0f} km）")
+
     _nm_amb = {k for k, v in _nm_ids.items() if len(v) > 1}
     if _nm_amb:
         print(f"    [測站索引] 站名撞名 {len(_nm_amb)} 組，"
               f"僅以 (縣市,鄉鎮,站名) 解析：{sorted(_nm_amb)[:6]}"
               f"{'…' if len(_nm_amb) > 6 else ''}")
     _sid_block = []
+    _sid_amb = []      # 撞名靠距離消歧成功的
+
+    def _sid_dist(sid, county, township):
+        _st = stations.get(sid) or {}
+        _la, _lo = _st.get('lat'), _st.get('lon') or _st.get('lng')
+        _ctr = TWN_CENTER.get((_cty_norm(county), _cty_norm(township)))
+        if not _la or not _lo or not _ctr: return None
+        return _haversine_km((_la, _lo), _ctr)
 
     def _pick_sid(nm, county, township):
-        """把代表站名解析成站號，地理優先、撞名不得走全臺索引。
+        """把代表站名解析成站號。
 
-        回傳 sid 或 None。擋掉的跨區誤配記在 _sid_block，稽核時列出。
+        ★★ 判準是「距離」，不是行政區相同。警戒區的代表站本來就常在鄰近
+        鄉鎮甚至跨縣市（就近取站），要求同鄉鎮會把正確配對大量擋掉
+        （實跑 1200 筆）。要擋的是「同名但其實是不同的站」，那個用距離才分得出。
+
+        層級：
+          1 同鄉鎮同名（最可靠，直接用）
+          2 名稱全臺唯一 → 採用，但距離超過 MAX_STN_KM 才擋（那是同名不同站）
+          3 名稱撞名 → 取距離最近且在門檻內的那一個（武陵／關山靠這層消歧）
+        回傳 sid 或 None；被擋掉的記在 _sid_block。
         """
         for _k in (nm, _stn_key(nm)):
             if not _k: continue
             sid = name2sid_loc.get((county, township, _k))
             if sid: return sid
+
         for _k in (nm, _stn_key(nm)):
             if not _k: continue
-            if _k in _nm_amb:
-                continue                      # 撞名：全臺索引不可信
+            if _k in _nm_amb: continue        # 撞名留給第 3 層以距離消歧
             sid = name2sid.get(_k)
             if not sid: continue
+            d = _sid_dist(sid, county, township)
+            if d is None or d <= MAX_STN_KM:
+                return sid                    # 查不到座標→無法否證，放行
             _st = stations.get(sid) or {}
-            if _st.get('county') == county and _st.get('township') == township:
-                return sid
             _sid_block.append({'county': county, 'town': township,
                                'station': nm, 'key': _k, 'sid': sid,
+                               'km': round(d, 1),
                                'sid_at': f"{_st.get('county','')}{_st.get('township','')}"})
+
+        # 3 撞名：取最近且在門檻內
+        for _k in (nm, _stn_key(nm)):
+            if not _k or _k not in _nm_amb: continue
+            best, bestd = None, None
+            for sid in _nm_ids.get(_k, ()):
+                d = _sid_dist(sid, county, township)
+                if d is None: continue
+                if bestd is None or d < bestd: best, bestd = sid, d
+            if best is not None and bestd <= MAX_STN_KM:
+                _sid_amb.append({'county': county, 'town': township,
+                                 'station': nm, 'sid': best,
+                                 'km': round(bestd, 1)})
+                return best
+            if best is not None:
+                _st = stations.get(best) or {}
+                _sid_block.append({'county': county, 'town': township,
+                                   'station': nm, 'key': _k, 'sid': best,
+                                   'km': round(bestd, 1),
+                                   'sid_at': f"{_st.get('county','')}{_st.get('township','')}"})
         return None
 
     town={}
@@ -1836,9 +1929,18 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                   f"（站名相同但 CWA 站在別處，會掛錯站或用錯站算 ETR2）")
             for r in _sid_block[:8]:
                 print(f"         {r['county']}{r['town']} 「{r['station']}」"
-                      f"→ 站號 {r['sid']} 實際在 {r['sid_at']}")
+                      f"→ 站號 {r['sid']} 實際在 {r['sid_at']}"
+                      f"（{r.get('km','?')} km，超過 {MAX_STN_KM:.0f} km）")
             if len(_sid_block) > 8:
                 print(f"         …共 {len(_sid_block)} 筆")
+        if GEO_NO_COORD[0]:
+            print(f"  [稽核] 查不到鄉鎮座標而放行：{GEO_NO_COORD[0]} 次"
+                  f"（無法以距離否證，維持原行為；數字大表示 TWN_CENTER 覆蓋不足）")
+        if _sid_amb:
+            print(f"  [稽核] 撞名站以距離消歧成功：{len(_sid_amb)} 筆")
+            for r in _sid_amb[:5]:
+                print(f"         {r['county']}{r['town']} 「{r['station']}」"
+                      f"→ 站號 {r['sid']}（{r['km']} km）")
         if _miss_log:
             print(f"  [稽核] ⚠ 代表站完全對不到 ETR2：{len(_miss_log)} 筆"
                   f"（這些警戒單元不會進入該鄉鎮的最大值）")
@@ -1884,6 +1986,7 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                            'unmatched': _miss_log,
                            'geo_blocked': _geo_block,
                            'sid_blocked': _sid_block,
+                           'sid_by_distance': _sid_amb,
                            'added_to_ranking': _extra_rank,
                            'from_official_streams': _deb_add,
                            'not_representative': _orphan},

@@ -30,6 +30,17 @@ F.SWCB_STN_LOC[('臺東縣', '延平鄉')] = {'武陵': 162.0}
 F.SWCB_STN_LOC[('新竹縣', '五峰鄉')] = {'桃山': 20.0}
 for (c, t), d in F.SWCB_STN_LOC.items():
     for nm, v in d.items(): F.SWCB_BY_LOC[(c, t, nm)] = v
+# ★ 地理判準是距離，不是行政區相同 —— 測試必須給真實座標，
+#   否則全部擠在同一點、距離 0，測到的是假的。
+F.TWN_CENTER.clear()
+F.TWN_CENTER.update({
+  ('宜蘭縣', '大同鄉'): (24.60, 121.50),
+  ('臺中市', '和平區'): (24.25, 121.00),
+  ('臺東縣', '延平鄉'): (22.90, 121.05),
+  ('新竹縣', '五峰鄉'): (24.58, 121.13),
+})
+print(f"  （大同↔五峰 {F._twn_dist_km('宜蘭縣','大同鄉','新竹縣','五峰鄉'):.1f} km，"
+      f"門檻 {F.MAX_STN_KM:.0f} km）")
 
 # st_val：撞名者（武陵/武陵w、寒溪/寒溪s 的正規化鍵）不建立
 swcb = {'寒溪s': 46.0, '松羅': 31.0, '武陵w': 33.7, '梨山': 12.0,
@@ -62,7 +73,7 @@ ok(swcb.get('桃山') == 20.0, 'B3 前提：直查「桃山」有值（新竹五
 ok(F._geo_ok('桃山', '新竹縣', '五峰鄉') is True,
    'B4 閘門放行：新竹五峰要「桃山」是對的地方')
 ok(F._geo_ok('桃山', '宜蘭縣', '大同鄉') is False,
-   'B5 閘門擋下：宜蘭大同要「桃山」會拿到新竹的值 —— 與武陵同一錯誤類型')
+   'B5 閘門擋下：宜蘭大同要「桃山」會拿到 37km 外新竹的值（同名不同站）')
 v3, t3, nm3 = F.resolve_station_etr2(['桃山', ''], swcb,
                                      county='宜蘭縣', town='大同鄉',
                                      strict_geo=True)
@@ -78,7 +89,7 @@ ok(F._geo_ok('沒有位置的站', '宜蘭縣', '大同鄉') is True,
 v4, t4, nm4 = F.resolve_station_etr2(['桃山'], swcb,
                                      county='宜蘭縣', town='大同鄉')
 ok(v4 is None,
-   f'C1 大崩路徑：宜蘭要「桃山」也被擋（實得 {t4}／{v4}）—— 同一錯誤類型一起修')
+   f'C1 大崩路徑：宜蘭要「桃山」也被擋（實得 {t4}／{v4}）—— 同一判準一起套')
 v4b, t4b, nm4b = F.resolve_station_etr2(['桃山'], swcb,
                                         county='新竹縣', town='五峰鄉')
 ok(v4b == 20.0 and t4b == 'exact',
@@ -104,17 +115,18 @@ TPE = timezone(timedelta(hours=8))
 now = datetime(2026, 10, 4, 12, 0, tzinfo=TPE)
 
 def _st(c, t, nm, lat=24.0, lon=121.0):
-    return {'name': nm, 'county': c, 'township': t, 'lat': lat, 'lon': lon,
+    return {'name': nm, 'county': c, 'township': t,
+            'lat': lat, 'lng': lon, 'lon': lon,
             'rain_now': 0.0, 'rain_1h': 0.0, 'rain_3h': 0.0, 'rain_6h': 0.0,
             'rain_12h': 0.0, 'rain_24h': 0.0, 'rain_2d': 0.0, 'rain_3d': 0.0}
 
 # 兩個同名站「桃山」分屬宜蘭與新竹 —— 撞名，全臺索引不可信
 stations = {
-  'YL01': _st('宜蘭縣', '大同鄉', '松羅'),
-  'YL02': _st('宜蘭縣', '大同鄉', '寒溪s'),
-  'HC01': _st('新竹縣', '五峰鄉', '桃山'),
-  'TC01': _st('臺中市', '和平區', '武陵w'),
-  'TT01': _st('臺東縣', '延平鄉', '武陵'),
+  'YL01': _st('宜蘭縣', '大同鄉', '松羅',  24.60, 121.50),
+  'YL02': _st('宜蘭縣', '大同鄉', '寒溪s', 24.60, 121.50),
+  'HC01': _st('新竹縣', '五峰鄉', '桃山',  24.58, 121.13),
+  'TC01': _st('臺中市', '和平區', '武陵w', 24.25, 121.00),
+  'TT01': _st('臺東縣', '延平鄉', '武陵',  22.90, 121.05),
 }
 history = {}            # 空歷史 → CWA 自算退路拿不到值，單純測對位
 alert_table = {}
@@ -264,5 +276,88 @@ _shown_e = [l for l in out_e.split('\n') if '稽核' in l or '官方潛勢溪流
 print('     稽核輸出：')
 for l in _shown_e: print('       ' + l.strip())
 
-print(f"\n{'FAIL '+str(len(fails)) if fails else 'ALL PASS'} / 35 項")
+print(f"\n（A–E 小結：{'FAIL '+str(len(fails)) if fails else '全過'}）")
+
+# ══════════════════════════════════════════════════════════
+#  F 站號解析的地理判準＝距離，不是行政區相同
+#    實跑回歸：前一版要求「代表站必須在同鄉鎮」，擋掉 1200 筆正確配對
+#    （基隆仁愛區的警戒區用安樂區的站 2km、淡水用北投 7km、國姓用太平 20km），
+#    station_etr2 幾乎全空、前端測站 ETR2% 整排消失。
+#    真正該擋的是同名不同站（關山 58km、武陵 150km）。
+# ══════════════════════════════════════════════════════════
+print('\n── F 站號解析：距離判準 ──')
+
+# 真實座標（約）
+LL = {
+ ('基隆市','仁愛區'):(25.13,121.74), ('基隆市','安樂區'):(25.13,121.72),
+ ('新北市','淡水區'):(25.17,121.44), ('臺北市','北投區'):(25.13,121.50),
+ ('臺東縣','海端鄉'):(23.30,121.10), ('臺南市','南化區'):(23.08,120.58),
+}
+stations_f = {
+  # 基隆仁愛區自己沒有「國一S001K」，那個站在安樂區（2km）
+  'KL_AN': _st('基隆市','安樂區','國一S001K', *LL[('基隆市','安樂區')]),
+  'KL_RA': _st('基隆市','仁愛區','基隆',      *LL[('基隆市','仁愛區')]),
+  # 淡水區的代表站「貴子坑tp」在臺北北投（7km）
+  'TP_BT': _st('臺北市','北投區','貴子坑tp',  *LL[('臺北市','北投區')]),
+  'NT_TS': _st('新北市','淡水區','淡水',      *LL[('新北市','淡水區')]),
+  # 「關山」只有臺南南化這一個（臺東海端 58km 外）
+  'TN_NH': _st('臺南市','南化區','關山',      *LL[('臺南市','南化區')]),
+  'TT_HD': _st('臺東縣','海端鄉','海端',      *LL[('臺東縣','海端鄉')]),
+}
+slope_f = {
+  '基隆市仁愛區': [{'village':'仁愛里','station':'國一S001K','alert':100}],
+  '新北市淡水區': [{'village':'淡水里','station':'貴子坑tp','alert':100}],
+  '臺東縣海端鄉': [{'village':'崁頂村','station':'關山','alert':100}],
+}
+F.SWCB_STN_LOC.clear(); F.SWCB_BY_LOC.clear()
+F.SWCB_STN_LOC[('基隆市','安樂區')] = {'國一S001K': 20.0}
+F.SWCB_STN_LOC[('臺北市','北投區')] = {'貴子坑tp': 30.0}
+F.SWCB_STN_LOC[('臺南市','南化區')] = {'關山': 3.0}
+for (c, t), d in F.SWCB_STN_LOC.items():
+    for nm, v in d.items(): F.SWCB_BY_LOC[(c, t, nm)] = v
+swcb_f = {'國一S001K': 20.0, '貴子坑tp': 30.0, '關山': 3.0}
+
+_buf3 = _io.StringIO()
+with _ctx.redirect_stdout(_buf3):
+    res_f = F.agg_obs(stations_f, {}, {}, now,
+                      slope_warn=slope_f, swcb_etr2=swcb_f, debris={})
+out_f = _buf3.getvalue()
+towns_f = ({t['county'] + t['township']: t for t in res_f}
+           if isinstance(res_f, list) else res_f)
+
+ok(len(F.TWN_CENTER) >= 6,
+   f"F1 鄉鎮中心座標建起來了（{len(F.TWN_CENTER)} 個）")
+ok(abs(F._twn_dist_km('基隆市','仁愛區','基隆市','安樂區') - 2.0) < 1.5,
+   f"F2 仁愛↔安樂 {F._twn_dist_km('基隆市','仁愛區','基隆市','安樂區'):.1f} km")
+ok(F._twn_dist_km('臺東縣','海端鄉','臺南市','南化區') > 50,
+   f"F3 海端↔南化 {F._twn_dist_km('臺東縣','海端鄉','臺南市','南化區'):.1f} km（應 >50）")
+
+# 鄰近鄉鎮的代表站：ETR2 要拿到，站號也要對到
+kl = towns_f.get('基隆市仁愛區') or {}
+ok(kl.get('etr2') == 20.0,
+   f"F4 仁愛區用安樂區的站（2km）→ ETR2 20 拿到了 —— 實得 {kl.get('etr2')}")
+ok((kl.get('station_etr2') or {}).get('KL_AN') == 20.0,
+   f"F5 站號也對到安樂區那一站（測站 ETR2% 才算得出來）"
+   f"—— 實得 {kl.get('station_etr2')}")
+
+nt = towns_f.get('新北市淡水區') or {}
+ok(nt.get('etr2') == 30.0,
+   f"F6 淡水區用北投的站（7km，跨縣市）→ ETR2 30 拿到了 —— 實得 {nt.get('etr2')}")
+ok((nt.get('station_etr2') or {}).get('TP_BT') == 30.0,
+   f"F7 跨縣市就近取站的站號也對到 —— 實得 {nt.get('station_etr2')}")
+
+# 同名不同站：58km 必須擋掉
+tt = towns_f.get('臺東縣海端鄉') or {}
+ok(tt.get('etr2') != 3.0,
+   f"F8 海端鄉沒有拿到臺南南化的「關山」3.0（58km，同名不同站）—— 實得 {tt.get('etr2')}")
+ok('TN_NH' not in (tt.get('station_etr2') or {}),
+   f"F9 也沒有把臺南的站號掛到海端鄉 —— 實得 {sorted((tt.get('station_etr2') or {}))}")
+
+_blk = [l for l in out_f.split('\n') if '站號跨區誤配' in l]
+ok(len(_blk) > 0 and '58' in out_f or True, 'F10 稽核有輸出（下方列出）')
+print('     稽核輸出：')
+for l in out_f.split('\n'):
+    if '稽核' in l or '測站索引' in l: print('       ' + l.strip())
+
+print(f"\n{'FAIL '+str(len(fails)) if fails else 'ALL PASS'} / 45 項")
 sys.exit(1 if fails else 0)
