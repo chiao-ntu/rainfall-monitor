@@ -1334,7 +1334,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-06T13:10Z';
+const FORMOSA_BUILD = '2026-10-06T18:50Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -9614,32 +9614,25 @@ function _hourlyBars(t){
   let pastObsN=0;
   // 缺逐時觀測的小時：以「該日官方日觀測 × 模式時序形狀」分配補齊（總量=官方觀測，
   // 僅時間分布為近似——不是模式雨量本身），estMask 標記供繪圖以更暗色呈現
-  const p48 = t.qpf_1h_p48 || [];
-  const dayShapeSum = [0,0,0];   // 今天/昨天/前天 形狀和（僅缺觀測槽計入）
-  const dayObsCovered = [0,0,0]; // 已由逐時觀測覆蓋的量（避免與分配雙算）
-  for(let h=hFrom; h<nowH; h++){
-    const oi = 48 + (h - nowH);
-    const di = h>=0 ? 0 : (h>=-24 ? 1 : 2);
-    if(oi>=0 && oi<48 && obs[oi]!=null) dayObsCovered[di] += obs[oi];
-    else dayShapeSum[di] += (p48[Math.max(0,oi)]||0) + 0.02;   // +0.02 避免全0形狀
-  }
+  //  ★★ 2026-10-06（使用者指定：觀測值一律使用官方資料）。
+  //  原本缺逐時觀測的小時，是用「該日官方日觀測總量 × 模式逐時形狀」分配補齊。
+  //  總量是官方的沒錯，但**時間分布來自模式**（qpf_1h_p48 來自 PAST48_CACHE），
+  //  而模式的過去回算每一輪都會更新 —— 於是同一段已經過去的時間，
+  //  兩次排程畫出來的時雨量不一樣（10/4 18時：一次 27/34/62、一次 88/49/17）。
+  //  已經發生過的觀測不可能改變，所以那不是觀測，是模式形狀。
+  //  改為：沒有逐時觀測就留白。寧可圖上有缺口，也不要把模式形狀當成觀測。
+  let _nObs = 0, _nGap = 0;
   for(let h=hFrom; h<nowH+72; h++){
     if(h < nowH){
       const oi = 48 + (h - nowH);
-      const di = h>=0 ? 0 : (h>=-24 ? 1 : 2);
       const v = (oi>=0 && oi<48) ? obs[oi] : null;
-      if(v!=null){ vals.push(v); estMask.push(false); pastObsN++; }
-      else{
-        const dayObs = ((t.daily_rain||[])[di]||0);
-        const remain = Math.max(0, dayObs - dayObsCovered[di]);
-        const w = dayShapeSum[di] > 0 ? ((p48[Math.max(0,oi)]||0)+0.02)/dayShapeSum[di] : 0;
-        vals.push(Math.round(remain*w*100)/100);
-        estMask.push(true);
-      }
+      if(v!=null){ vals.push(v); estMask.push(false); pastObsN++; _nObs++; }
+      else{ vals.push(null); estMask.push(false); _nGap++; }   // 無逐時觀測＝留白
     }
     else{ vals.push(futu[h]||0); estMask.push(false); }
   }
-  return {vals, hFrom, nowIdx:48, nowH, pastObsN, estMask};
+  return {vals, hFrom, nowIdx:48, nowH, pastObsN, estMask,
+          nObs:_nObs, nGap:_nGap};
 }
 
 // ── 任意時間範圍累積（可跨「現在」，且不受逐時序列長度限制）──────
@@ -9923,9 +9916,10 @@ function _drawHourlyChart(t, canvasId, isZoom){
   ctx.fillStyle='#9fc8e8'; ctx.textAlign='left';
   const approxTag=_hourlyAvailable(t)?'':'（段內分布為近似）';
   const _bObj=_hourlyBars(t);
-  const pastTag=_bObj.pastObsN>=40?'※過去48h為QPESUMS官方觀測（暗色）'
-    :_bObj.pastObsN>0?'※過去48h：QPESUMS觀測＋缺時段以日觀測分配（最暗）'
-    :'※過去48h以官方日觀測分配呈現（逐時觀測累積中）';
+  //  ★ 標示必須說實話：缺逐時觀測的小時現在是留白，不再以模式形狀分配。
+  const pastTag=_bObj.nGap===0?'※過去48h全為官方逐時觀測'
+    :_bObj.nObs>0?`※過去48h：官方逐時觀測 ${_bObj.nObs}h，另 ${_bObj.nGap}h 無觀測（留白）`
+    :'※過去48h尚無逐時觀測（累積中）';
   ctx.fillText(`左軸：時雨量(mm/h)${approxTag}　${pastTag}`, pL, axTitleY);
   ctx.fillStyle=districtColor; ctx.textAlign='right';
   ctx.fillText('右軸：ETR2%（逐時）', pL+cw, axTitleY);
