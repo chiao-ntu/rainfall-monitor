@@ -11,7 +11,8 @@ from datetime import datetime, timezone, timedelta
 
 CWA_API_KEY  = os.environ.get("CWA_API_KEY", "")
 STATIC_FILE  = "etr2_static.json"
-ETR2_HISTORY_FILE = "etr2_history.json"   # 官方 ETR2 的逐段歷史（過去曲線的權威來源）
+ETR2_HISTORY_FILE = "etr2_history.json"   # 官方 ETR2 逐段歷史（唯一寫入者＝fetch_qpesums_hourly.py）
+ETR2_NOW_FILE     = "etr2_now.json"       # 官方鄉鎮 ETR2 現值（權威，同上腳本產出）
 SLOPE_WARN_FILE = "slope_warning_stations.json"  # 官方坡地警戒區→代表站+警戒值（改法B對齊）
 LS_WARN_FILE = "landslide_warning_stations.json"  # 官方大崩警戒區→代表站+警戒值（115年明細表）
 # 水保署土石流參考雨量站 API：直接回官方 ETR2(STRT)，涵蓋氣象署抓不到的自建站
@@ -1388,130 +1389,129 @@ def fetch_obs():
     print(f"  {len(stations)} 站，有24h雨量：{nonzero}")
     return stations
 
-def update_etr2_history(out_towns, now_tpe, seed_archive=True):
-    """記錄官方 ETR2 的逐段歷史，並回填到每個鄉鎮的 etr2_hist。
+def apply_official_etr2(out_towns, now_tpe):
+    """以水保署官方現值為準，覆寫鄉鎮 ETR2，並掛上官方歷史。
 
-    ★★ 為什麼需要這個（2026-10-06）
-      過去時段的 ETR2 曲線原本是「用我們的逐日觀測回推」。問題是官方 ETR2
-      用的代表站未必在我們的觀測集合裡 —— 南澳鄉的官方值來自西帽山（山區站，
-      非氣象署測站），我們的 daily_rain 完全沒有它的雨量。於是：
-        觀測回推 ≈ 202mm，官方 ≈ 330mm，差 128mm。
-      先前的做法是把這個落差整個加到每一個過去段（加法位移），結果是
-      沒下雨的日子也顯示 90~107%，等於宣稱下了沒下過的雨。
-      改成純觀測之後，落差變成「現在」的一道斷崖（54% → 83%）。
-      兩種都不對，因為兩種都在「重建」一個我們本來就記錄得到的東西。
-      正解：過去的官方 ETR2 就用我們自己存過的官方值。不重建、不位移、
-      與現在同一條軌道，由構造上連續。
+    ★★ 2026-10-06（使用者指定：觀測值一律用官方資料，ETR2 用水保署的，
+       沒有緩衝空間）。
 
-    歷史粒度為 6 小時段（與 ETR2 的段索引一致），同段內取最後一次寫入。
-    首次執行時可由 archive/*.json 回填（seed_archive=True）。
+    為什麼要覆寫而不是「自己算一份」：
+      同一份官方來源，本檔的 agg_obs 與 fetch_qpesums_hourly.py 的
+      write_etr2_now() 各有一套聚合實作。實跑證明兩套會給出不同答案
+      （同一時刻：南澳鄉 51% vs 82.6%）。兩套實作就是兩套錯誤機會。
+      etr2_now.json 由每 10 分鐘的腳本產出、逐官方警戒單元取指定代表站、
+      且有「超過 300% 拒寫」的防呆 —— 它是正確的那一套。
+      所以這裡直接採用它，agg_obs 的結果只當它不存在時的退路。
+
+    同時掛上 etr2_hist（官方歷史，由 fetch_qpesums_hourly.py 維護）。
+    本函式只讀不寫歷史檔 —— 一個寫入者，避免兩支程式打架。
     """
     base = now_tpe.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
 
     def seg_key(dt):
-        """把時間對到 6h 段的鍵（YYYY-MM-DDTHH，HH 取 00/06/12/18）。"""
-        return dt.replace(hour=(dt.hour // 6) * 6,
-                          minute=0, second=0, microsecond=0).strftime('%Y-%m-%dT%H')
+        return dt.replace(hour=(dt.hour // 6) * 6, minute=0, second=0,
+                          microsecond=0).strftime('%Y-%m-%dT%H')
 
-    # ★ 版本戳：鄉鎮 ETR2 的取值規則一旦改變，先前記錄的歷史就是錯的，
-    #   必須整份作廢重建 —— 否則錯誤的過去曲線會一直留著。
-    #   2026-10-06：撤回「併入所有潛勢溪流取最大」，v1 的歷史全部作廢。
-    HIST_VER = 2
+    # ── 官方現值 ──
+    off = {}
+    if os.path.exists(ETR2_NOW_FILE):
+        try:
+            with open(ETR2_NOW_FILE, encoding='utf-8') as f: _d = json.load(f)
+            off = _d.get('townships') or _d.get('towns') or \
+                  {k: v for k, v in _d.items() if isinstance(v, dict) and 'etr2' in v}
+        except Exception as e:
+            print(f"  讀取 {ETR2_NOW_FILE} 失敗：{e}")
+    n_fix, n_same, diffs = 0, 0, []
+    for t in out_towns:
+        k = f"{t.get('county','')}{t.get('township','')}"
+        o = off.get(k)
+        if not isinstance(o, dict) or o.get('etr2') is None: continue
+        mine_p, off_p = t.get('etr2_pct'), o.get('pct')
+        if mine_p is not None and off_p is not None and abs(mine_p - off_p) > 0.01:
+            diffs.append((abs(mine_p - off_p), k, mine_p, off_p,
+                          t.get('etr2'), o.get('etr2'), o.get('station')))
+            n_fix += 1
+        else:
+            n_same += 1
+        # 一律以官方為準（含分子、分母、代表站）
+        t['etr2'] = o['etr2']
+        t['etr2_pct'] = o.get('pct')
+        if o.get('alert'): t['etr2_alert'] = o['alert']
+        t['etr2_src'] = 'swcb'
+        t['etr2_station'] = o.get('station') or t.get('etr2_station')
+    if off:
+        print(f"  官方 ETR2 覆寫：{len(off)} 個鄉鎮有官方現值"
+              f"（與本檔聚合一致 {n_same}、不一致 {n_fix}）")
+        if diffs:
+            diffs.sort(reverse=True)
+            print(f"    ⚠ 不一致代表兩套聚合有一套是錯的，以官方為準。前 6 筆：")
+            for d in diffs[:6]:
+                print(f"       {d[1]}　本檔 {d[2]*100:.1f}%（{d[4]}）"
+                      f"→ 官方 {d[3]*100:.1f}%（{d[5]}，{d[6]}）")
+    else:
+        print(f"  ⚠ 沒有 {ETR2_NOW_FILE}，鄉鎮 ETR2 退回本檔自算"
+              f"（請確認 fetch_qpesums_hourly.py 有在跑）")
+
+    # ── 一致性檢查：觀測累積雨量必須與官方 ETR2 對得起來 ──
+    #   ★★ 使用者指定（2026-10-06）：「如果某地 ETR2% 只有 50%、警戒值 500，
+    #   代表前期雨量累積起來也只有 250 左右；若顯示的累積雨量對不起來，
+    #   就應該要進行確認並排除狀況。」
+    #   物理上的必然關係：ETR2 = 今日×1.0 + 昨日×0.7 + 前日×0.5 + …
+    #   所以 **ETR2 一定 ≥ 今日雨量**（權重 1.0 是最大的一項）。
+    #   今日觀測雨量若超過官方 ETR2，只有三種可能，每一種都必須查：
+    #     ① 我們的觀測對到了別的站（例如距離判準放太寬）
+    #     ② 官方 ETR2 用的代表站與我們的觀測站不同地點（山區常見）
+    #     ③ 官方值過期（ETR2 沒跟上這一輪的雨）
+    #   這裡只標示不修改 —— 觀測是 CWA 的、ETR2 是水保署的，兩邊都是官方，
+    #   我們沒有立場改任何一邊，但必須讓矛盾看得見。
+    _bad = []
+    for t in out_towns:
+        e = t.get('etr2')
+        d0 = (t.get('daily_rain') or [None])[0]
+        if e is None or d0 is None: continue
+        if d0 > e * 1.05 + 5:          # 容許捨入與時間差
+            _bad.append((d0 - e, f"{t.get('county','')}{t.get('township','')}",
+                         d0, e, t.get('etr2_pct'), t.get('etr2_station')))
+    if _bad:
+        _bad.sort(reverse=True)
+        print(f"  ⚠ 一致性：{len(_bad)} 個鄉鎮「今日觀測雨量 > 官方 ETR2」"
+              f"（物理上不可能，ETR2 必 ≥ 今日雨量）")
+        print(f"     鄉鎮              今日觀測  官方ETR2  ETR2%   官方代表站")
+        for r in _bad[:10]:
+            print(f"     {r[1]:<16} {r[2]:>7.1f} {r[3]:>8.1f} "
+                  f"{(r[4] or 0)*100:>6.1f}%  {r[5] or ''}")
+        if len(_bad) > 10:
+            print(f"     …共 {len(_bad)} 個")
+        print(f"     → 多半是我們的觀測對到了官方代表站以外的站；"
+              f"請看 station_audit.json 的 sid_blocked／sid_by_distance")
+
+    # ── 官方歷史（只讀）──
     hist = {}
     if os.path.exists(ETR2_HISTORY_FILE):
         try:
-            with open(ETR2_HISTORY_FILE, encoding='utf-8') as f: _h = json.load(f)
-            if _h.get('_ver') == HIST_VER:
-                hist = {k: v for k, v in _h.items() if not k.startswith('_')}
-            else:
-                print(f"  ETR2 歷史版本 {_h.get('_ver')} ≠ {HIST_VER}，"
-                      f"整份作廢重建（取值規則已變更，舊值不可用）")
+            with open(ETR2_HISTORY_FILE, encoding='utf-8') as f: _r = json.load(f)
+            hist = {k: v for k, v in _r.items() if not k.startswith('_')}
         except Exception as e:
-            print(f"  ETR2 歷史讀取失敗，重建：{e}"); hist = {}
-
-    # ── 回填：用 archive 快照補出歷史（只在該段還沒有值時才寫）──
-    #   ★ 回填的下限：2026-10-05 之後、修正之前的快照含錯誤的鄉鎮 ETR2
-    #     （併入了非官方代表站），不可回填。
-    SEED_SKIP_FROM = datetime(2026, 10, 5, 0)
-    SEED_SKIP_TO   = datetime(2026, 10, 6, 8)
-    n_seed = 0; n_skip = 0
-    if seed_archive and os.path.isdir('archive'):
-        import glob as _glob
-        for sp in sorted(_glob.glob(os.path.join('archive', '*.json'))):
-            bn = os.path.basename(sp).split('.')[0]
-            if len(bn) < 10 or not bn[:10].isdigit(): continue
-            try:
-                dt = datetime.strptime(bn[:10], '%Y%m%d%H')
-            except Exception:
-                continue
-            if SEED_SKIP_FROM <= dt < SEED_SKIP_TO:
-                n_skip += 1; continue
-            k = seg_key(dt)
-            try:
-                with open(sp, encoding='utf-8') as f: sd = json.load(f)
-            except Exception:
-                continue
-            for _t in (sd.get('townships') or []):
-                _e = _t.get('etr2')
-                if _e is None: continue
-                _k = f"{_t.get('county','')}{_t.get('township','')}"
-                rec = hist.setdefault(_k, {})
-                if k not in rec:
-                    rec[k] = round(float(_e), 1); n_seed += 1
-    if n_seed or n_skip:
-        print(f"  ETR2 歷史回填：由 archive 補了 {n_seed} 筆"
-              + (f"（跳過 {n_skip} 個含錯值的快照）" if n_skip else ""))
-
-    # ── 記錄本輪 ──
-    k_now = seg_key(now_tpe.replace(tzinfo=None))
-    n_rec = 0
-    for t in out_towns:
-        e = t.get('etr2')
-        if e is None: continue
-        hist.setdefault(f"{t.get('county','')}{t.get('township','')}", {})[k_now] = \
-            round(float(e), 1)
-        n_rec += 1
-
-    # ── 修剪（保留 10 天）──
-    cut = (now_tpe.replace(tzinfo=None) - timedelta(days=10)).strftime('%Y-%m-%dT%H')
-    for k in list(hist):
-        hist[k] = {d: v for d, v in hist[k].items() if d > cut}
-        if not hist[k]: del hist[k]
-    try:
-        _save = dict(hist); _save['_ver'] = HIST_VER
-        with open(ETR2_HISTORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump(_save, f, ensure_ascii=False, separators=(',', ':'))
-    except Exception as e:
-        print(f"  ETR2 歷史寫入失敗（不影響本輪）：{e}")
-
-    # ── 回填到各鄉鎮：etr2_hist[i] 對應段索引 -(N-i) .. -1 ──
-    #   前端的段索引 0 = 今日 00-06，負值往過去。給 32 段（8 天）。
-    #   ★ 必須含「今天已過的段」（索引 0~3）。那些同樣是過去，但索引非負，
-    #     只處理負值會讓今日稍早的時段掉回觀測重建，在曲線上形成一個凹陷。
-    #     故涵蓋 -NSEG .. +3，並用 etr2_hist_base 明確告訴前端零點在哪，
-    #     避免兩邊各自推算索引而錯位。
+            print(f"  讀取 {ETR2_HISTORY_FILE} 失敗：{e}")
     NSEG = 32
     n_town = 0
     for t in out_towns:
-        key = f"{t.get('county','')}{t.get('township','')}"
-        rec = hist.get(key) or {}
         t['etr2_hist_base'] = NSEG
+        rec = hist.get(f"{t.get('county','')}{t.get('township','')}") or {}
         if not rec:
             t['etr2_hist'] = None; continue
-        arr = []
-        for i in range(-NSEG, 4):
-            dt = base + timedelta(hours=6 * i)
-            arr.append(rec.get(seg_key(dt)))
+        arr = [rec.get(seg_key(base + timedelta(hours=6 * i)))
+               for i in range(-NSEG, 4)]
         t['etr2_hist'] = arr if any(v is not None for v in arr) else None
         if t['etr2_hist']: n_town += 1
     _cov = sum(1 for t in out_towns
-               if t.get('etr2_hist') and sum(1 for v in t['etr2_hist'] if v is not None) >= 8)
-    print(f"  ETR2 歷史：記錄 {n_rec} 個鄉鎮、{n_town} 個有過去值"
-          f"（其中 {_cov} 個涵蓋 ≥2 天）")
-    if n_town and _cov == 0:
-        print(f"    注意：歷史剛開始累積，過去曲線仍會退回觀測重建；"
-              f"幾輪之後才會完整")
-    return hist
+               if t.get('etr2_hist')
+               and sum(1 for v in t['etr2_hist'] if v is not None) >= 8)
+    if hist:
+        print(f"  官方 ETR2 歷史：{n_town} 個鄉鎮有過去值（{_cov} 個涵蓋 ≥2 天）")
+    else:
+        print(f"  官方 ETR2 歷史尚未累積（由 fetch_qpesums_hourly.py 產生）；"
+              f"過去時段的 ETR2% 會留白，不以觀測回推冒充")
 
 
 def update_history(stations, now_tpe):
@@ -6358,11 +6358,11 @@ def main():
         print("   （多為 CWA 開放資料暫時性故障，下次排程會自動恢復）")
         return
 
-    # ★ 官方 ETR2 歷史：過去曲線的權威來源（必須在寫檔前，才會進 data.json）
+    # ★ 官方 ETR2 為準（覆寫）＋ 掛上官方歷史。必須在寫檔前。
     try:
-        update_etr2_history(output.get('townships') or [], now_tpe)
+        apply_official_etr2(output.get('townships') or [], now_tpe)
     except Exception as _e:
-        print(f"  ETR2 歷史更新失敗（不影響本輪）：{_e}")
+        print(f"  官方 ETR2 套用失敗（不影響本輪）：{_e}")
 
     with open(OUTPUT_FILE,'w',encoding='utf-8') as f:
         json.dump(output,f,ensure_ascii=False,separators=(',',':'))

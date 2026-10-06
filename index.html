@@ -1334,7 +1334,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-06T07:20Z';
+const FORMOSA_BUILD = '2026-10-06T13:10Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -7408,27 +7408,15 @@ function calcEtr2AtSeg(t, seg, qpfField){
       return Math.max(0, _hist[idx]);
     }
   }
-  t._etrPastSrc = 'obs_recalc';
-
-  // ── 退路：以觀測重算（歷史尚未涵蓋的段）──
-  //  ★★ 2026-10-05 修正（使用者回報：前幾天沒下雨，但前幾天 ETR2% 很高）。
-  //  原本做法是加法位移：off = 官方錨點 − 以觀測重算的現在值，然後把 off
-  //  整個常數加到每一個過去段，用意是讓曲線在「現在」平滑接上官方值。
-  //  問題是 off 大的時候，它等於宣稱過去下了沒下過的雨：
-  //    大同鄉官方錨點 250.7mm、觀測重算的現在值約 20mm → off ≈ 230mm，
-  //    於是每個沒下雨的過去日都顯示 230/550 ≈ 42%。
-  //  而官方錨點改成「全官方警戒單元最大值」之後（58 個鄉鎮因此提高），
-  //  這個既有缺陷被放大了 —— 是我的改動把它推到看得見的程度。
-  //  過去的 ETR2 有絕對答案：就是觀測逐日雨量套官方權重算出來的值。
-  //  官方錨點是「當下狀態」，不該回頭改寫歷史。
-  //  落差本身是有用的診斷資訊（表示該鄉鎮的觀測沒涵蓋官方採用的站），
-  //  記在 t._etrGap 供判讀，但不混進數值。
-  const raw = _calcEtr2Raw(t, seg, qpfField);
-  try{
-    const rawNow = _calcEtr2Raw(t, ns, qpfField);
-    t._etrGap = Math.round((base - rawNow) * 10) / 10;
-  }catch(e){ t._etrGap = null; }
-  return Math.max(0, raw);
+  // ★★ 2026-10-06（使用者指定：觀測值一律使用官方資料，ETR2／ETR2% 用水保署的，
+  //   完全沒有緩衝空間）。
+  //   官方歷史還沒涵蓋到的過去段 → 回 null（留白），不以觀測回推冒充。
+  //   理由：官方 ETR2 的代表站未必在我們的觀測集合裡，回推必然失真；
+  //   先前把落差攤回過去更會憑空生出雨量（曾顯示 107%，而同時官方紅黃警報
+  //   是 0 條 —— 兩者本身就互相矛盾）。
+  //   預警系統寧可留白，也不要給一個與官方對不起來的數字。
+  t._etrPastSrc = 'none';
+  return null;
 }
 
 function getQpfSeg(t, seg, qpfField){
@@ -9786,10 +9774,12 @@ function _etr2HourlySeries(t, hFrom, hTo){
   // 先算出所需段範圍的 ETR2（mm），段索引 = floor(h/6)
   const segLo = Math.floor(hFrom/6) - 1, segHi = Math.floor(hTo/6) + 1;
   const cache = {};
+  //  ★ null 必須原樣傳下去。先前轉成 0，會讓「沒有官方值」變成「ETR2＝0」，
+  //    畫出來是一條貼地的線，看起來像「真的沒有雨」—— 那是另一種假資料。
   const segEtr = (sg)=>{
     if(cache[sg] === undefined){
       const v = calcEtr2AtSeg(t, sg, qpfField);
-      cache[sg] = (v == null || !isFinite(v)) ? 0 : v;
+      cache[sg] = (v == null || !isFinite(v)) ? null : v;
     }
     return cache[sg];
   };
@@ -9799,6 +9789,7 @@ function _etr2HourlySeries(t, hFrom, hTo){
     const sg = Math.floor(h/6);
     const fr = (h - sg*6) / 6;                 // 段內進度 0~1
     const e0 = segEtr(sg - 1), e1 = segEtr(sg); // 段end值：由上一段end線性走到本段end
+    if(e0 == null || e1 == null){ out.push(null); continue; }   // 無官方值＝留白
     const e  = e0 + (e1 - e0) * (fr + 1/6);
     out.push(Math.max(0, e/den*100));
   }
@@ -9836,7 +9827,7 @@ function _drawHourlyChart(t, canvasId, isZoom){
 
   // 逐時 ETR2%（全程 120 點）
   const etr=_etr2HourlySeries(t, hFrom, hFrom+n-1);
-  const axisMaxEtr=Math.max(ceilTo10(Math.max(...(etr||[10]), 10)), 10);
+  const axisMaxEtr=Math.max(ceilTo10(Math.max(...((etr||[]).filter(v=>v!=null).concat([10])))), 10);
 
   // 標題
   ctx.fillStyle='#d0e8ff'; ctx.font=`bold ${fs}px sans-serif`; ctx.textAlign='left';
@@ -9888,15 +9879,20 @@ function _drawHourlyChart(t, canvasId, isZoom){
     // ★ ETR2 折線改用該鄉鎮所屬分署色（原為白色）
   ctx.strokeStyle=districtColor; ctx.lineWidth=isZoom?5:3;
     ctx.beginPath();
+    //  ★ null＝沒有官方值，必須斷線留白。連成直線等於把兩端之間
+    //    不存在的資料偽造成一段平滑變化。
+    let _pen=false;
     etr.forEach((e,i)=>{
+      if(e==null){ _pen=false; return; }
       const x=pL+i*bw+bw/2;
       const y=pT+ch-ch*Math.min(e,axisMaxEtr)/axisMaxEtr;
-      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+      if(!_pen){ ctx.moveTo(x,y); _pen=true; } else ctx.lineTo(x,y);
     });
     ctx.stroke();
     if(isZoom){
       ctx.fillStyle='#FFFFFF'; ctx.font=`bold ${xFs}px sans-serif`; ctx.textAlign='center';
       for(let i=0;i<n;i+=12){
+        if(etr[i]==null) continue;        // ★ 無官方值：不畫點也不標數字
         const x=pL+i*bw+bw/2;
         const y=pT+ch-ch*Math.min(etr[i],axisMaxEtr)/axisMaxEtr;
         ctx.beginPath(); ctx.arc(x,y,7,0,Math.PI*2); ctx.fill();

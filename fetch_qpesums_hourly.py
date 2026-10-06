@@ -29,6 +29,7 @@ HOURLY_FILE   = "rain_hourly.json"
 #   本腳本本來就在抓水保署站級 STRT，只需再做「逐官方警戒單元→鄉鎮」聚合。
 #   寫獨立檔，與 radar.json 同策略：兩支 workflow 各寫各檔，永不搶寫 data.json。
 ETR2_FILE     = "etr2_now.json"
+ETR2_HIST_FILE = "etr2_history.json"   # 官方 ETR2 逐段歷史（唯一寫入者＝本腳本）
 # ── 颱風資料（每小時更新，獨立檔）──────────────────────
 #   颱風動態變化快，等主排程 6 小時才更新對應變判讀太慢。
 #   ★ 不複製一份解析程式：直接沿用 fetch_rainfall.py 的 fetch_typhoon_track /
@@ -469,6 +470,43 @@ def write_etr2_now(swcb, now_tpe):
 
     payload = {'updated': now_tpe.strftime('%Y-%m-%dT%H:%M'),
                'src': SWCB_RAIN_URL, 'townships': out, 'n': len(out)}
+    # ★★ 2026-10-06：官方 ETR2 歷史由這裡維護（每 10 分鐘一次，粒度最細），
+    #   fetch_rainfall.py 只讀不寫 —— 一個寫入者，不會兩邊打架。
+    #   為什麼要有歷史：前端「過去幾天的 ETR2%」原本用我們的逐日觀測回推，
+    #   但官方 ETR2 的代表站未必在我們的觀測集合裡，回推必然失真；
+    #   而把落差攤回過去會憑空生出雨量（曾顯示 107%）。
+    #   過去的官方值我們本來就抓得到，存下來就好，不要重建。
+    try:
+        _ver = 2        # 聚合規則變更時 +1，舊歷史整份作廢
+        _h = {}
+        if os.path.exists(ETR2_HIST_FILE):
+            try:
+                with open(ETR2_HIST_FILE, encoding='utf-8') as f: _raw = json.load(f)
+                if _raw.get('_ver') == _ver:
+                    _h = {k: v for k, v in _raw.items() if not k.startswith('_')}
+                else:
+                    print(f"    ETR2 歷史版本不符，整份重建")
+            except Exception:
+                _h = {}
+        # 以 6 小時段為鍵（與前端段索引一致），同段內取最後一次
+        _dt = now_tpe.replace(tzinfo=None)
+        _k = _dt.replace(hour=(_dt.hour // 6) * 6, minute=0, second=0,
+                         microsecond=0).strftime('%Y-%m-%dT%H')
+        for _t, _v in out.items():
+            _h.setdefault(_t, {})[_k] = _v['etr2']
+        _cut = (_dt - timedelta(days=10)).strftime('%Y-%m-%dT%H')
+        for _t in list(_h):
+            _h[_t] = {d: x for d, x in _h[_t].items() if d > _cut}
+            if not _h[_t]: del _h[_t]
+        _sv = dict(_h); _sv['_ver'] = _ver
+        with open(ETR2_HIST_FILE, 'w', encoding='utf-8') as f:
+            json.dump(_sv, f, ensure_ascii=False, separators=(',', ':'))
+        _cov = sum(1 for t in _h if len(_h[t]) >= 8)
+        print(f"    已寫 {ETR2_HIST_FILE}：{len(_h)} 鄉鎮"
+              f"（{_cov} 個涵蓋 ≥2 天）")
+    except Exception as _e:
+        print(f"    ETR2 歷史寫入失敗（不影響本輪）：{_e}")
+
     with open(ETR2_FILE, 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, separators=(',', ':'))
     top = sorted(out.items(), key=lambda kv: -kv[1]['pct'])[:3]
