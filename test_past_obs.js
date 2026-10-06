@@ -42,13 +42,18 @@ if(_EXEC) _LAUNCH.executablePath=_EXEC;
       official_segs:[], band_segs:[]};
   };
 
-  // ① 無逐時觀測的小時必須留白
+  // ① 無逐時觀測的小時：以官方日總量平均分配（不是留白、也不是模式形狀）
   const b1=_hourlyBars(mk(9));
   const past1=b1.vals.slice(0,48);
   ok(b1.nObs===28 && b1.nGap===20,
-     `①觀測 ${b1.nObs}h／無觀測 ${b1.nGap}h`);
-  ok(past1.slice(0,20).every(v=>v==null),
-     '①無逐時觀測的小時留白（不以模式形狀分配）');
+     `①逐時觀測 ${b1.nObs}h／以日總量分配 ${b1.nGap}h`);
+  ok(past1.slice(0,20).every(v=>v!=null),
+     '①官方日觀測存在就必須畫出來（不可因缺逐時觀測而整段消失）');
+  const uniq=new Set(past1.slice(0,20).map(v=>Math.round(v*100)));
+  ok(uniq.size<=2,
+     `①同一日的分配值一致（平均分配，非模式形狀；相異值 ${uniq.size} 種）`);
+  ok(b1.estMask.slice(0,20).every(m=>m===true),
+     '①分配值標記為 estMask（繪圖時以更暗色呈現，與真觀測可分辨）');
 
   // ② 模式形狀改變時，過去的長條不得跟著變 —— 這是本案的核心
   const b2=_hourlyBars(mk(99));
@@ -60,6 +65,39 @@ if(_EXEC) _LAUNCH.executablePath=_EXEC;
   // ③ 有觀測的小時必須原樣呈現，不被加工
   ok(past1[30]===(30%7) && past1[47]===(47%7),
      `③有觀測的小時原樣呈現（第30格 ${past1[30]}、第47格 ${past1[47]}）`);
+
+  // ③b 守恆：分配之後，該日的總量必須等於官方日觀測（不多不少）
+  //    這是「觀測多少就是多少」的硬性檢驗。
+  const t3=mk(9), dr=t3.daily_rain;
+  const b3=_hourlyBars(t3);
+  const nowH3=b3.nowH;
+  const sum=[0,0,0];
+  for(let h=b3.hFrom; h<nowH3; h++){
+    const i=h-b3.hFrom, di = h>=0?0:(h>=-24?1:2);
+    if(b3.vals[i]!=null) sum[di]+=b3.vals[i];
+  }
+  // 前天（di=2）在視窗內只有一部分，按可見比例分攤
+  const visFrac2=(24-nowH3)/24;
+  ok(Math.abs(sum[1]-dr[1])<0.5,
+     `③b 昨天：分配後總量 ${sum[1].toFixed(1)} ≈ 官方日觀測 ${dr[1]}`);
+  ok(Math.abs(sum[2]-dr[2]*visFrac2)<0.5,
+     `③b 前天（視窗內 ${(visFrac2*100).toFixed(0)}%）：`+
+     `${sum[2].toFixed(1)} ≈ ${(dr[2]*visFrac2).toFixed(1)}`);
+
+  // ③c 瀑布圖：沒有官方 ETR2 的時段不得由 0 線性爬升（會生出不存在的降雨）
+  const t3c=mk(9);
+  const hs=[-30,-24,-12,-6];
+  const wf=hs.map(h=>_etrAtHour(t3c,h,'qpf_best'));
+  ok(wf.every(v=>v==null),
+     `③c 無官方歷史時瀑布圖不給值（實得 ${JSON.stringify(wf)}）—— `+
+     `先前 null 被當 0，再內插到官方值，看起來像「平均增加的雨量」`);
+
+  // ③d ETR2% 一律整數
+  const H3=new Array(36).fill(null); H3[32-4]=222.5;
+  const t3d=Object.assign(mk(9),{etr2_hist:H3, etr2_hist_base:32, etr2_alert:550});
+  const p3=_etrPctAt(t3d,-4,'qpf_best');
+  ok(p3!=null && Number.isInteger(p3),
+     `③d ETR2% 為整數（222.5/550 → ${p3}，不是 40.5）`);
 
   // ④ 過去 ETR2 沒有官方歷史 → 全部 null
   const t4=mk(9);

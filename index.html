@@ -1334,7 +1334,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-07T00:40Z';
+const FORMOSA_BUILD = '2026-10-07T01:10Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -7347,7 +7347,7 @@ function _etrPctAt(t, seg, qpfField){
   const v = calcEtr2AtSeg(t, seg, qpfField);
   const d = _etrDen(t);
   if(v == null || !isFinite(v) || !(d > 0)) return null;
-  return Math.round(v / d * 1000) / 10;
+  return Math.round(v / d * 100);              // ★ ETR2% 取整數
 }
 
 function calcEtr2MaxIn(t, segA, segB, qpfField){
@@ -8623,13 +8623,18 @@ function _etrAtHour(t, h, qpfField){
   const hAbs = nowH + h;                       // 距資料日 00 時的絕對小時
   const sg = Math.floor(hAbs / 6);
   const fr = (hAbs - sg * 6) / 6;              // 段內進度 0~1
+  //  ★★ 2026-10-07：null 絕不可當成 0。
+  //    沒有官方值的段若變成 0，再與有值的段線性內插，就會從 0 一路爬到
+  //    官方值 —— 瀑布圖的每段差值（該段淨貢獻）於是生出不存在的降雨，
+  //    看起來像「近幾小時平均增加的雨量」。使用者回報的正是這個形狀。
   const segE = s => {
     const v = calcEtr2AtSeg(t, s, f);
-    return (v == null || !isFinite(v)) ? 0 : v;
+    return (v == null || !isFinite(v)) ? null : v;
   };
   const e0 = segE(sg - 1), e1 = segE(sg);      // 由上一段 end 線性走到本段 end
+  if(e0 == null || e1 == null) return null;    // 任一端沒有官方值 → 不給值
   const e = e0 + (e1 - e0) * (fr + 1/6);
-  return Math.round(Math.max(0, e / den * 100) * 10) / 10;
+  return Math.round(Math.max(0, e / den * 100));   // ★ ETR2% 取整數
 }
 
 // ★★ 2026-10-02 修正（使用者回報「切圖層時各分署警戒摘要的累積雨量會變」）：
@@ -8754,7 +8759,7 @@ function _getAccumRaw(t){
       //  ★ 整段都沒有官方值時 calcEtr2MaxIn 回 null；null/den*100 === 0，
       //    會把「沒有資料」顯示成「ETR2 = 0%」。必須保持 null。
       etrPct = (etr2 == null || !isFinite(etr2) || !(_etrDen(t) > 0))
-             ? null : Math.round(etr2/_etrDen(t)*1000)/10;
+             ? null : Math.round(etr2/_etrDen(t)*100);   // ★ 取整數
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
     return {totalRain: sp.total, etrPct, span: sp};
@@ -8774,7 +8779,7 @@ function _getAccumRaw(t){
       //  ★ 整段都沒有官方值時 calcEtr2MaxIn 回 null；null/den*100 === 0，
       //    會把「沒有資料」顯示成「ETR2 = 0%」。必須保持 null。
       etrPct = (etr2 == null || !isFinite(etr2) || !(_etrDen(t) > 0))
-             ? null : Math.round(etr2/_etrDen(t)*1000)/10;
+             ? null : Math.round(etr2/_etrDen(t)*100);   // ★ 取整數
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
     return {totalRain, etrPct};
@@ -8831,7 +8836,7 @@ function _getAccumRaw(t){
       //  ★ 整段都沒有官方值時 calcEtr2MaxIn 回 null；null/den*100 === 0，
       //    會把「沒有資料」顯示成「ETR2 = 0%」。必須保持 null。
       etrPct = (etr2 == null || !isFinite(etr2) || !(_etrDen(t) > 0))
-             ? null : Math.round(etr2/_etrDen(t)*1000)/10;
+             ? null : Math.round(etr2/_etrDen(t)*100);   // ★ 取整數
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
     return {totalRain, etrPct};
@@ -8898,11 +8903,11 @@ function getObsEtr(t){
   const den = (t.etr2_alert != null && t.etr2_alert > 0) ? t.etr2_alert
             : (t.alert_val != null && t.alert_val > 0) ? t.alert_val : null;
   if(t.etr2 != null && isFinite(t.etr2) && den) {
-    return Math.round(t.etr2 / den * 1000) / 10;
+    return Math.round(t.etr2 / den * 100);     // ★ ETR2% 取整數（與官方表一致）
   }
   // 退路：只有 etr2_pct 時才用它（後端新版已是百分比）
   const v = _asPct(t.etr2_pct);
-  return (v == null) ? null : Math.round(v * 10) / 10;
+  return (v == null) ? null : Math.round(v);
 }
 
 // ════════════════════════════════════════════════
@@ -9634,20 +9639,46 @@ function _hourlyBars(t){
   let pastObsN=0;
   // 缺逐時觀測的小時：以「該日官方日觀測 × 模式時序形狀」分配補齊（總量=官方觀測，
   // 僅時間分布為近似——不是模式雨量本身），estMask 標記供繪圖以更暗色呈現
-  //  ★★ 2026-10-06（使用者指定：觀測值一律使用官方資料）。
-  //  原本缺逐時觀測的小時，是用「該日官方日觀測總量 × 模式逐時形狀」分配補齊。
-  //  總量是官方的沒錯，但**時間分布來自模式**（qpf_1h_p48 來自 PAST48_CACHE），
-  //  而模式的過去回算每一輪都會更新 —— 於是同一段已經過去的時間，
-  //  兩次排程畫出來的時雨量不一樣（10/4 18時：一次 27/34/62、一次 88/49/17）。
-  //  已經發生過的觀測不可能改變，所以那不是觀測，是模式形狀。
-  //  改為：沒有逐時觀測就留白。寧可圖上有缺口，也不要把模式形狀當成觀測。
+  //  ★★ 2026-10-07（修正我 10-06 的過度修正）
+  //  原始問題：缺逐時觀測的小時，是用「官方日總量 × **模式**逐時形狀」補齊
+  //  （qpf_1h_p48 來自 PAST48_CACHE，每輪都會更新）。於是同一段已經過去的
+  //  時間，兩次排程畫出來不一樣（10/4 18時：27/34/62 vs 88/49/17）。
+  //  我 10-06 的做法是「沒有逐時觀測就留白」—— 那把官方日觀測總量也一起丟了，
+  //  但那份資料是存在的（地圖與逐日觀測都還看得到）。使用者指出這點，是對的。
+  //  現在的做法：
+  //    有逐時觀測 → 用逐時觀測（真值）
+  //    沒有       → 用該日官方總量「平均分配」到該日未覆蓋的小時
+  //  總量是官方的、分配不含任何模式、每一輪都一樣（不會再跳動），
+  //  並以 estMask 標記為分配值（繪圖時更暗）。
+  //  部分可見的日（視窗只涵蓋前天的一部分）按可見小時比例分攤，避免高估。
+  const _dayVis=[0,0,0], _dayCov=[0,0,0], _dayCovH=[0,0,0];
+  for(let h=hFrom; h<nowH; h++){
+    const oi = 48 + (h - nowH);
+    const di = h>=0 ? 0 : (h>=-24 ? 1 : 2);
+    _dayVis[di]++;
+    if(oi>=0 && oi<48 && obs[oi]!=null){ _dayCov[di]+=obs[oi]; _dayCovH[di]++; }
+  }
+  const _dr = t.daily_rain || [];
+  const _dayHoursFull = [Math.max(1, nowH), 24, 24];   // 該日實際涵蓋的小時數
+  const _perHour = (di)=>{
+    const unc = _dayVis[di] - _dayCovH[di];
+    if(unc <= 0) return 0;
+    const share = (_dr[di] || 0) * _dayVis[di] / _dayHoursFull[di];
+    return Math.max(0, share - _dayCov[di]) / unc;
+  };
+  const _ph = [_perHour(0), _perHour(1), _perHour(2)];
   let _nObs = 0, _nGap = 0;
   for(let h=hFrom; h<nowH+72; h++){
     if(h < nowH){
       const oi = 48 + (h - nowH);
+      const di = h>=0 ? 0 : (h>=-24 ? 1 : 2);
       const v = (oi>=0 && oi<48) ? obs[oi] : null;
       if(v!=null){ vals.push(v); estMask.push(false); pastObsN++; _nObs++; }
-      else{ vals.push(null); estMask.push(false); _nGap++; }   // 無逐時觀測＝留白
+      else{
+        // 官方日總量平均分配（不含模式；該日總量不變，故各輪結果相同）
+        vals.push(Math.round(_ph[di]*100)/100);
+        estMask.push(true); _nGap++;
+      }
     }
     else{ vals.push(futu[h]||0); estMask.push(false); }
   }
@@ -9804,7 +9835,7 @@ function _etr2HourlySeries(t, hFrom, hTo){
     const e0 = segEtr(sg - 1), e1 = segEtr(sg); // 段end值：由上一段end線性走到本段end
     if(e0 == null || e1 == null){ out.push(null); continue; }   // 無官方值＝留白
     const e  = e0 + (e1 - e0) * (fr + 1/6);
-    out.push(Math.max(0, e/den*100));
+    out.push(Math.round(Math.max(0, e/den*100)));   // ★ ETR2% 取整數（與 _etrAtHour 同）
   }
   return out;
 }
@@ -9938,8 +9969,8 @@ function _drawHourlyChart(t, canvasId, isZoom){
   const _bObj=_hourlyBars(t);
   //  ★ 標示必須說實話：缺逐時觀測的小時現在是留白，不再以模式形狀分配。
   const pastTag=_bObj.nGap===0?'※過去48h全為官方逐時觀測'
-    :_bObj.nObs>0?`※過去48h：官方逐時觀測 ${_bObj.nObs}h，另 ${_bObj.nGap}h 無觀測（留白）`
-    :'※過去48h尚無逐時觀測（累積中）';
+    :_bObj.nObs>0?`※過去48h：官方逐時觀測 ${_bObj.nObs}h，另 ${_bObj.nGap}h 以官方日總量平均分配（較暗）`
+    :'※過去48h以官方日總量平均分配（逐時觀測累積中）';
   ctx.fillText(`左軸：時雨量(mm/h)${approxTag}　${pastTag}`, pL, axTitleY);
   ctx.fillStyle=districtColor; ctx.textAlign='right';
   ctx.fillText('右軸：ETR2%（逐時）', pL+cw, axTitleY);
