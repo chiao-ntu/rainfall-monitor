@@ -1485,7 +1485,14 @@ def apply_official_etr2(out_towns, now_tpe):
         print(f"     → 多半是我們的觀測對到了官方代表站以外的站；"
               f"請看 station_audit.json 的 sid_blocked／sid_by_distance")
 
-    # ── 官方歷史（只讀）──
+    # ── 官方歷史 ──
+    #  ★★ 2026-10-07：過去的 ETR2 不需要重建，也不該留白 —— 正確的資料
+    #  一直都在 rain_hourly.json 的 swcb 區塊裡：逐小時、逐站的官方 ETR2
+    #  （由 fetch_qpesums_hourly.py 每 10 分鐘寫入，保留最多 168 小時）。
+    #  先前我讓過去段留白，是因為沒去用這份資料 —— 使用者指出
+    #  「我們已經確定過是有正確資料的，留白沒有解決問題」，那是對的。
+    #  聚合方式與 write_etr2_now()／agg_obs 完全相同：逐官方警戒單元取
+    #  其指定代表站的 ETR2，鄉鎮取百分比最高的單元。
     hist = {}
     if os.path.exists(ETR2_HISTORY_FILE):
         try:
@@ -1493,6 +1500,45 @@ def apply_official_etr2(out_towns, now_tpe):
             hist = {k: v for k, v in _r.items() if not k.startswith('_')}
         except Exception as e:
             print(f"  讀取 {ETR2_HISTORY_FILE} 失敗：{e}")
+
+    # 由 rain_hourly.json 的逐小時站級官方 ETR2 重建鄉鎮逐段歷史（較精細，優先）
+    n_hr = 0
+    try:
+        _sw = load_slope_warn() or {}
+        if _sw and os.path.exists(HOURLY_FILE):
+            with open(HOURLY_FILE, encoding='utf-8') as f: _ser = json.load(f)
+            _swcb_h = _ser.get('swcb') or {}
+            # 每個 6h 段取「段內最後一個有資料的小時」
+            _by_seg = {}
+            for _hk in sorted(_swcb_h.keys()):
+                try:
+                    _d = datetime.strptime(_hk, '%Y-%m-%dT%H')
+                except Exception:
+                    continue
+                _sk = _d.replace(hour=(_d.hour // 6) * 6).strftime('%Y-%m-%dT%H')
+                _by_seg[_sk] = _swcb_h[_hk]        # 後蓋前＝段內最後一筆
+            for _sk, _stv in _by_seg.items():
+                if not _stv: continue
+                for _town, _regs in _sw.items():
+                    _best = None
+                    for _r2 in _regs:
+                        _a = _r2.get('alert')
+                        if not _a or _a <= 0: continue
+                        _v = None
+                        for _nm in (_r2.get('station'), _r2.get('station_norm'),
+                                    _stn_key(_r2.get('station') or '')):
+                            if _nm and _nm in _stv: _v = _stv[_nm]; break
+                        if _v is None: continue
+                        _p = _v / _a
+                        if _best is None or _p > _best[1]: _best = (_v, _p)
+                    if _best is not None:
+                        hist.setdefault(_town, {})[_sk] = round(_best[0], 1)
+                        n_hr += 1
+            if n_hr:
+                print(f"  官方 ETR2 歷史：由 {HOURLY_FILE} 逐小時站值重建 {n_hr} 筆"
+                      f"（{len(_by_seg)} 個 6h 段）")
+    except Exception as e:
+        print(f"  由逐時序列重建 ETR2 歷史失敗（不影響本輪）：{e}")
     NSEG = 32
     n_town = 0
     for t in out_towns:
@@ -1874,6 +1920,7 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
         _designated = set()      # (縣市, 鄉鎮, 站名)：官方警戒單元指定的代表站
         _geo_block = []          # 被地理閘門擋下的跨縣市誤配（本來會灌錯值）
         _extra_rank = []         # 補進排行的非代表站（不影響鄉鎮官方 ETR2）
+        _cwa_only = []           # ETR2 非官方值、以 CWA 觀測自算的鄉鎮（應為 0）
         # ★★ 官方潛勢溪流（權威來源）：(縣,鄉) → [該鄉鎮的所有警戒單元]
         #   每條都自帶 AlertValue 與 ETR2，pct 由水保署欄位直接算出，
         #   不經任何站名比對 —— 靜態表過期或站名撞名都影響不到它。
@@ -2027,7 +2074,14 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
             if best_pct is not None:
                 n_aligned += 1
                 if used_swcb: n_swcb += 1
-                else: n_cwa += 1
+                else:
+                    n_cwa += 1
+                    # ★ 使用者要求知道是哪幾個：ETR2 依規定應一律來自水保署，
+                    #   這些是官方對不到代表站、退回以 CWA 觀測自算的鄉鎮。
+                    _cwa_only.append({'county': _c0, 'town': _t0,
+                                      'etr2': best_etr2, 'pct': best_pct,
+                                      'stations': sorted({d.get('station')
+                                                          for d in detail})})
         print(f"  鄉鎮聚合（逐官方警戒單元）：{n_aligned} 個鄉鎮有 ETR2%"
               f"（含水保署官方值 {n_swcb}、純CWA自算 {n_cwa}）")
 
@@ -2086,6 +2140,13 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                 if (c, t, nm) not in _used_names:
                     _orphan.append({'county': c, 'town': t, 'station': nm, 'etr2': v})
         _orphan.sort(key=lambda x: -(x['etr2'] or 0))
+        if _cwa_only:
+            print(f"  ⚠ 以 CWA 觀測自算 ETR2（非水保署官方值）：{len(_cwa_only)} 個鄉鎮")
+            print(f"     依規定 ETR2 應一律取自水保署；這些是官方對不到代表站的退路，"
+                  f"數值與官方不保證一致")
+            for r in _cwa_only:
+                print(f"     {r['county']}{r['town']}　ETR2 {r['etr2']}"
+                      f"（{round((r['pct'] or 0)*100,1)}%）　代表站 {r['stations']}")
         if _extra_rank:
             print(f"  [稽核] 補進測站排行的非代表站：{len(_extra_rank)} 站"
                   f"（有值卻沒列入排行的情況已消除；鄉鎮官方 ETR2 不受影響）")
@@ -2106,6 +2167,7 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                            'sid_blocked': _sid_block,
                            'sid_by_distance': _sid_amb,
                            'added_to_ranking': _extra_rank,
+                           'cwa_self_computed': _cwa_only,
                            'not_representative': _orphan},
                           _f, ensure_ascii=False, indent=1)
             print(f"  [稽核] 已寫 station_audit.json"

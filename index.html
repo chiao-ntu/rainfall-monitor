@@ -1334,7 +1334,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-06T18:50Z';
+const FORMOSA_BUILD = '2026-10-07T00:40Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -1437,8 +1437,8 @@ function _etrHistPeaks(){
     if(!t.alert_val || t.alert_val <= 0) return;
     let peak = -1, peakSeg = 0;
     for(let s=-28; s<=nowSeg; s++){          // 過去7天各6h段＋今天已過段
-      const p = calcEtr2AtSeg(t, s, qpfField) / _etrDen(t) * 100;
-      if(p > peak){ peak = p; peakSeg = s; }
+      const p = _etrPctAt(t, s, qpfField);
+      if(p != null && p > peak){ peak = p; peakSeg = s; }
     }
     if(peak >= 70) rows.push({county:t.county, township:t.township,
                               pct:Math.round(peak), seg:peakSeg});
@@ -1494,16 +1494,15 @@ function updateEtrAlertPanel(){
   const byDistrict = {};  // {district: {county: [{township,pct,prevPct}]}}
   TOWNSHIPS.forEach(t=>{
     if(!t.alert_val || t.alert_val <= 0) return;
-    const etr2 = calcEtr2AtSeg(t, panelSeg, qpfField);
-    const pct = Math.round(etr2 / _etrDen(t) * 100);
-    if(pct < 70) return;
+    const pct = _etrPctAt(t, panelSeg, qpfField);
+    if(pct == null || pct < 70) return;
     // 趨勢基準：檢視「現在」時用【上一輪更新的官方 ETR2】（同一資料源可比，
     //   避免當期用官方值、前期用氣象署推算值而方向矛盾）；檢視未來時段則比相鄰段。
     let prevPct;
     if(panelSeg === _nowSeg() && t.etr2_prev !== null && t.etr2_prev !== undefined){
       prevPct = Math.round(t.etr2_prev / _etrDen(t) * 100);
     } else {
-      prevPct = Math.round(calcEtr2AtSeg(t, panelSeg-1, qpfField) / _etrDen(t) * 100);
+      prevPct = _etrPctAt(t, panelSeg-1, qpfField);
     }
     const district = COUNTY_TO_DISTRICT[t.county] || '其他';
     if(!byDistrict[district]) byDistrict[district] = {};
@@ -7338,6 +7337,19 @@ const ETR2_DECAY_6H = Math.pow(0.7, 1/4);   // ≈0.9147
 //   若只取結束時刻，會出現「當天明明達標卻整片空白」的情形 ——
 //   例如早上 40%、下午升到 50%、晚上折減回 45%，取結束值會漏掉那個 50%。
 //   防災判讀要看的是「這段期間曾經到過多高」，故改取區間最大值。
+// ★★ 2026-10-07：ETR2% 的唯一取值入口。
+//   先前各處直接寫 calcEtr2AtSeg(...) / _etrDen(t) * 100，
+//   而 calcEtr2AtSeg 在「沒有官方值」時回 null —— null/den*100 === 0，
+//   於是「沒有資料」被顯示成「ETR2 = 0%」。同一份資料在逐時圖留白、
+//   在逐日圖變 0%、在排行變 0，三種結果，這就是「資料來源不統一」的來源。
+//   一律走這裡：沒有資料回 null，由呼叫端決定怎麼呈現（不得當成 0）。
+function _etrPctAt(t, seg, qpfField){
+  const v = calcEtr2AtSeg(t, seg, qpfField);
+  const d = _etrDen(t);
+  if(v == null || !isFinite(v) || !(d > 0)) return null;
+  return Math.round(v / d * 1000) / 10;
+}
+
 function calcEtr2MaxIn(t, segA, segB, qpfField){
   const a = Math.min(segA, segB), b = Math.max(segA, segB);
   let mx = null;
@@ -8739,7 +8751,10 @@ function _getAccumRaw(t){
     if(hasEtr){
       // 取視窗內最高值（見 calcEtr2MaxIn 的說明）
       const etr2 = calcEtr2MaxIn(t, segFrom, segTo, qpfField);
-      etrPct = Math.round(etr2/_etrDen(t)*1000)/10;
+      //  ★ 整段都沒有官方值時 calcEtr2MaxIn 回 null；null/den*100 === 0，
+      //    會把「沒有資料」顯示成「ETR2 = 0%」。必須保持 null。
+      etrPct = (etr2 == null || !isFinite(etr2) || !(_etrDen(t) > 0))
+             ? null : Math.round(etr2/_etrDen(t)*1000)/10;
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
     return {totalRain: sp.total, etrPct, span: sp};
@@ -8756,7 +8771,10 @@ function _getAccumRaw(t){
     if(hasEtr){
       // 取視窗內最高值（見 calcEtr2MaxIn 的說明）
       const etr2 = calcEtr2MaxIn(t, segFrom, segTo, qpfField);
-      etrPct = Math.round(etr2/_etrDen(t)*1000)/10;
+      //  ★ 整段都沒有官方值時 calcEtr2MaxIn 回 null；null/den*100 === 0，
+      //    會把「沒有資料」顯示成「ETR2 = 0%」。必須保持 null。
+      etrPct = (etr2 == null || !isFinite(etr2) || !(_etrDen(t) > 0))
+             ? null : Math.round(etr2/_etrDen(t)*1000)/10;
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
     return {totalRain, etrPct};
@@ -8810,7 +8828,10 @@ function _getAccumRaw(t){
       //   同時也讓 getAccum 與 _summaryEtr（CSV/複製，用 segTo=3）一致。
       // 取視窗內最高值（見 calcEtr2MaxIn 的說明）
       const etr2 = calcEtr2MaxIn(t, segFrom, segTo, qpfField);
-      etrPct = Math.round(etr2/_etrDen(t)*1000)/10;
+      //  ★ 整段都沒有官方值時 calcEtr2MaxIn 回 null；null/den*100 === 0，
+      //    會把「沒有資料」顯示成「ETR2 = 0%」。必須保持 null。
+      etrPct = (etr2 == null || !isFinite(etr2) || !(_etrDen(t) > 0))
+             ? null : Math.round(etr2/_etrDen(t)*1000)/10;
     }
     if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
     return {totalRain, etrPct};
@@ -8825,8 +8846,7 @@ function _getAccumRaw(t){
 
   let etrPct = null;
   if(hasEtr){
-    const etr2 = calcEtr2AtSeg(t, st, qpfField);
-    etrPct = Math.round(etr2/_etrDen(t)*1000)/10;
+    etrPct = _etrPctAt(t, st, qpfField);
   }
   if(mode==='etr') return {totalRain: etrPct, etrPct, isEtrMode:true};
 
@@ -9538,10 +9558,10 @@ function _townChartData(t, type, qpfField){
       const _dv = _ds.length===4 ? Math.round(_ds.reduce((a,b)=>a+(b||0),0)*10)/10
                                  : ((t.daily_qpf||[])[d]||0);
       rain.push(_dv);
-      let e=0;
+      let e=null;
       if(t.alert_val>0){
-        const v=calcEtr2AtSeg(t, d*4+3, qpfField);
-        e=Math.round(v/_etrDen(t)*100);
+        const _p=_etrPctAt(t, d*4+3, qpfField);
+        e=(_p==null)?null:Math.round(_p);
       }
       etr.push(e);
       labels.push(fmtDay(new Date(SEG_EPOCH().getTime()+d*86400000)));
@@ -9552,20 +9572,20 @@ function _townChartData(t, type, qpfField){
     const obs=t.daily_rain||[];
     [['前天',2],['昨天',1]].forEach(([lb,di])=>{
       rain.push(obs[di]||0); labels.push(lb);
-      let e=0;
+      let e=null;
       if(t.alert_val>0){
-        const v=calcEtr2AtSeg(t,-(di*4-3),qpfField);
-        e=Math.round(v/_etrDen(t)*100);
+        const _p=_etrPctAt(t,-(di*4-3),qpfField);
+        e=(_p==null)?null:Math.round(_p);
       }
       etr.push(e);
     });
     const qa=getQpfArr(t,qpfField);
     for(let s=0;s<8;s++){
       rain.push(qa[s]||0);
-      let e=0;
+      let e=null;
       if(t.alert_val>0){
-        const v=calcEtr2AtSeg(t,s,qpfField);
-        e=Math.round(v/_etrDen(t)*100);
+        const _p=_etrPctAt(t,s,qpfField);
+        e=(_p==null)?null:Math.round(_p);
       }
       etr.push(e);
       const d0=segTime(s), d1=segTime(s+1);
@@ -10071,7 +10091,7 @@ function drawSegs(t){
   if(!el) return;
   el.innerHTML = segs.map((v,i)=>{
     let ep = null;
-    if(t.alert_val>0){ ep = Math.round(calcEtr2AtSeg(t,i,qpfField)/_etrDen(t)*100); }
+    if(t.alert_val>0){ ep = _etrPctAt(t,i,qpfField); }
     const col = mode==='rain' ? rainColor(v) : (ep!=null ? etrColor(ep) : '#ccddee');
     const bw  = Math.round(v/maxV*100);
     const t0  = segTime(i);
@@ -11517,8 +11537,7 @@ function _summaryRain(t){
 function _summaryEtr(t){
   if(!t.alert_val || t.alert_val<=0) return null;
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
-  const e = calcEtr2AtSeg(t, segTo, qpfField);
-  return Math.round(e/_etrDen(t)*100);
+  return _etrPctAt(t, segTo, qpfField);
 }
 
 function _calcDistrictDaily(qpfField){
@@ -11982,8 +12001,7 @@ function showChartTooltip(evt, canvasId){
       let ep=null;
       if(t.alert_val>0){
         // ★ 與圖面軸值一致：今日也取日末（seg 3），不用現在值。
-        const e=calcEtr2AtSeg(t,3,qpfField);
-        ep=Math.round(e/_etrDen(t)*100);
+        ep=_etrPctAt(t,3,qpfField);
       }
       lines+=`ETR2%（預估）：${ep!=null?`<span style="color:${etrColorOf(ep)};font-weight:700">${ep}%</span>`:'<span style="color:#5a7a9a">—</span>'}<br>`;
       lines+=_etr2NowRow(t);
@@ -12002,8 +12020,7 @@ function showChartTooltip(evt, canvasId){
       const h0=k*6, h1=(k+1)*6;
       let ep=null, risk=null;
       if(t.alert_val>0){
-        const e=calcEtr2AtSeg(t,seg,qpfField);
-        ep=Math.round(e/_etrDen(t)*100);
+        ep=_etrPctAt(t,seg,qpfField);
       }
       const rr=calcRiskIndicator(t,seg);
       risk=rr.R;
@@ -12038,8 +12055,7 @@ function showChartTooltip(evt, canvasId){
       const v=qa[seg]||0;
       let ep=null, risk=null;
       if(t.alert_val>0){
-        const e=calcEtr2AtSeg(t,seg,qpfField);
-        ep=Math.round(e/_etrDen(t)*100);
+        ep=_etrPctAt(t,seg,qpfField);
       }
       const rr=calcRiskIndicator(t,seg);
       risk=rr.R;
@@ -12074,8 +12090,8 @@ function showChartTooltip(evt, canvasId){
           const _dv=_ds.length===4?_ds.reduce((a,b)=>a+(b||0),0):((t.daily_qpf||[])[dayIdx]||0);
           mxR=Math.max(mxR,Math.round(_dv*10)/10);
           if(t.alert_val>0){
-            const e=calcEtr2AtSeg(t,seg,qpfField);
-            mxE=Math.max(mxE,Math.round(e/_etrDen(t)*100));
+            const _p=_etrPctAt(t,seg,qpfField);
+            if(_p!=null) mxE=Math.max(mxE,_p);
           }
           const rr=calcRiskIndicator(t,seg);
           mxRisk=Math.max(mxRisk??0,rr.R);
@@ -12106,8 +12122,8 @@ function showChartTooltip(evt, canvasId){
         TOWNSHIPS.filter(t=>t.county===county).forEach(t=>{
           mxR=Math.max(mxR,getQpfArr(t,qpfField)[barIdx]||0);
           if(t.alert_val>0){
-            const e=calcEtr2AtSeg(t,barIdx,qpfField);
-            mxE=Math.max(mxE,Math.round(e/_etrDen(t)*100));
+            const _p=_etrPctAt(t,barIdx,qpfField);
+            if(_p!=null) mxE=Math.max(mxE,_p);
           }
           const rr=calcRiskIndicator(t,barIdx);
           mxRisk=Math.max(mxRisk??0,rr.R);
@@ -14790,8 +14806,8 @@ function copyEtrPanel(btn){
     TOWNSHIPS.forEach(t=>{
       if(!counties.includes(t.county)) return;
       if(!t.alert_val || t.alert_val <= 0) return;
-      const ep = Math.round(calcEtr2AtSeg(t, panelSeg, qpfField) / _etrDen(t) * 100);
-      if(ep < 70) return;
+      const ep = _etrPctAt(t, panelSeg, qpfField);
+      if(ep == null || ep < 70) return;
       if(!byCounty[t.county]) byCounty[t.county] = [];
       byCounty[t.county].push({name:t.township, ep});
     });
@@ -16233,9 +16249,10 @@ function calcRiskIndicator(t, seg){
   // ETR2% 路徑（需 alert_val）
   let E_now = null, E_proj = null;
   if(t.alert_val > 0){
-    E_now = Math.round(calcEtr2AtSeg(t, s, qpfField) / _etrDen(t) * 100);
+    E_now = _etrPctAt(t, s, qpfField);
     // 展望：下一段的乾/濕情境
     const eWetRaw = calcEtr2AtSeg(t, s+1, qpfField);
+    if(eWetRaw == null || !isFinite(eWetRaw)) return {E_now, E_proj: null};
     const w0 = (typeof ETR2_WEIGHTS !== 'undefined') ? ETR2_WEIGHTS[0] : 1;
     const nextRain = qa[s+1] || 0;
     const eDryRaw = Math.max(0, eWetRaw - w0 * nextRain);
