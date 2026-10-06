@@ -227,6 +227,90 @@ def main():
         for r in rows[:4]:
             print(f'        {r[0]}　etr2 {r[1]}　etr2_pct {r[2]}　sid {r[3]}')
 
+    # ── G 對照官方基準表（最硬的一條）──
+    print('\n[G] 對照水保署官方表')
+    fx = None
+    for fp in ('official_etr2_fixture.json',):
+        if os.path.exists(fp):
+            try: fx = load(fp)
+            except Exception as e: print(f'   讀取 {fp} 失敗：{e}')
+    if not fx:
+        print('   —　找不到 official_etr2_fixture.json，略過'
+              '（放進 repo 根目錄即可逐鄉鎮核對）')
+    else:
+        off = fx.get('townships') or {}
+        print(f"   基準時刻 {fx.get('asof')}　官方鄉鎮 {len(off)} 個")
+        print('   ※ ETR2 隨時間變動：只有在「系統資料時間」與基準時刻相近時，'
+              '數值差異才有意義；\n'
+              '     但「用哪一個測站」與「有沒有多出官方沒有的鄉鎮」隨時都該一致。')
+        mine = {key(t): t for t in T}
+        wrong_stn, miss, extra, diff = [], [], [], []
+        for k, o in off.items():
+            t = mine.get(k)
+            if t is None or t.get('etr2') is None:
+                miss.append((k, o['pct'], o['station'])); continue
+            # 用的是不是官方那一站
+            used = None
+            for r in (t.get('slope_regions') or []):
+                if r.get('etr2') == t.get('etr2'):
+                    used = r.get('station'); break
+            if used and used != o['station']:
+                wrong_stn.append((k, used, o['station'], t.get('etr2_pct'), o['pct']))
+            p = t.get('etr2_pct')
+            if p is not None:
+                diff.append((abs(p - o['pct']), k, p, o['pct'], used, o['station']))
+        for k, t in mine.items():
+            if t.get('etr2') is not None and k not in off:
+                extra.append((k, t.get('etr2_pct')))
+        if miss:
+            flag('high', f'G 官方有 ETR2 但我們沒有：{len(miss)} 個鄉鎮')
+            for r in miss[:8]:
+                print(f'      {r[0]}　官方 {r[1]*100:.1f}%（{r[2]}）')
+        if extra:
+            flag('high', f'G 我們有 ETR2 但不在官方 159 個警戒鄉鎮內：{len(extra)} 個')
+            for r in extra[:8]:
+                print(f'      {r[0]}　我們 {(r[1] or 0)*100:.1f}%')
+        if wrong_stn:
+            flag('high', f'G 取值用的測站與官方不符：{len(wrong_stn)} 個鄉鎮'
+                         f'（這是最嚴重的 —— 等於用了別的站的雨）')
+            print('      鄉鎮              我們用的      官方指定      我們%   官方%')
+            for r in wrong_stn[:10]:
+                print(f'      {r[0]:<16} {r[1]:<12} {r[2]:<12} '
+                      f'{(r[3] or 0)*100:5.1f}  {r[4]*100:5.1f}')
+        if not (miss or extra or wrong_stn):
+            print('   OK　鄉鎮集合與取值測站都與官方一致')
+        if diff:
+            diff.sort(reverse=True)
+            print(f'   數值差異最大的 5 個（僅供參考，須注意時間差）：')
+            for r in diff[:5]:
+                print(f'      {r[1]:<16} 我們 {r[2]*100:5.1f}%　官方 {r[3]*100:5.1f}%'
+                      f'　（我們用 {r[4]}／官方 {r[5]}）')
+
+    # ── H 測站涵蓋（使用者要求：一個都不能漏）──
+    print('\n[H] 官方測站涵蓋率')
+    if not os.path.exists('slope_warning_stations.json'):
+        print('   —　找不到 slope_warning_stations.json')
+    else:
+        try:
+            sw = load('slope_warning_stations.json')
+            want = set()
+            for k, regs in (sw.get('townships') or {}).items():
+                for r in regs:
+                    if r.get('station'): want.add((k, r['station']))
+            have = set()
+            for t in T:
+                for r in (t.get('slope_regions') or []):
+                    if r.get('station'): have.add((key(t), r['station']))
+            lack = sorted(want - have)
+            print(f'   官方警戒單元 {len(want)} 個（鄉鎮×代表站）')
+            if lack:
+                flag('high', f'H 有 {len(lack)} 個官方警戒單元沒有出現在輸出中')
+                for r in lack[:10]: print(f'      {r[0]}　「{r[1]}」')
+            else:
+                print('   OK　每個官方警戒單元都有對應輸出')
+        except Exception as e:
+            print(f'   讀取失敗：{e}')
+
     # ── F 來源清單 ──
     print('\n[F] 各數值的來源')
     src = [

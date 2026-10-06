@@ -1334,7 +1334,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-05T21:40Z';
+const FORMOSA_BUILD = '2026-10-06T07:20Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -7387,7 +7387,30 @@ function calcEtr2AtSeg(t, seg, qpfField){
     return e;
   }
 
-  // ── 過去：一律以觀測重算，不把「現在的官方落差」攤回歷史 ──
+  // ── 過去：優先用「我們自己記錄過的官方 ETR2」──
+  //  ★★ 2026-10-06：過去曲線的正確資料指向不是「用觀測回推」，而是
+  //  「當時的官方值」。官方 ETR2 的代表站未必在我們的觀測集合裡
+  //  （南澳鄉用西帽山，山區站、非氣象署測站），所以回推必然偏低：
+  //    觀測回推 ≈202mm vs 官方 ≈330mm，差 128mm。
+  //  先前把這個落差整個加到每個過去段 → 沒下雨的日子也顯示 90~107%；
+  //  改成純觀測 → 落差變成「現在」的一道斷崖（54%→83%）。
+  //  兩種都在重建一個本來就記錄得到的東西。改用後端累積的 etr2_hist，
+  //  過去與現在同一條軌道，由構造上連續，也不會憑空生出雨。
+  //  歷史還沒累積到的段才退回觀測重建（並記在 t._etrPastSrc 供判讀）。
+  //  索引零點由後端給（etr2_hist_base），兩邊不各自推算，避免錯位。
+  const _hist = t.etr2_hist;
+  const _hb = (t.etr2_hist_base != null) ? t.etr2_hist_base
+            : (Array.isArray(_hist) ? _hist.length : 0);
+  if(Array.isArray(_hist) && _hist.length){
+    const idx = _hb + seg;
+    if(idx >= 0 && idx < _hist.length && _hist[idx] != null){
+      t._etrPastSrc = 'official_hist';
+      return Math.max(0, _hist[idx]);
+    }
+  }
+  t._etrPastSrc = 'obs_recalc';
+
+  // ── 退路：以觀測重算（歷史尚未涵蓋的段）──
   //  ★★ 2026-10-05 修正（使用者回報：前幾天沒下雨，但前幾天 ETR2% 很高）。
   //  原本做法是加法位移：off = 官方錨點 − 以觀測重算的現在值，然後把 off
   //  整個常數加到每一個過去段，用意是讓曲線在「現在」平滑接上官方值。
