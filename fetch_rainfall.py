@@ -720,6 +720,26 @@ def fetch_debris_alerts():
     if not out and data:
         print(f"    ⚠ 一條都沒解析出來 —— 欄位名對不上，請看上面 [欄位] 那一行")
 
+    # ── 原始欄位傾印：STRT1/STRT2 的語意至今未確認，不可再猜 ──
+    #   懸而未決的問題：同一個站名在同一個鄉鎮出現兩個不同的值
+    #   （大同鄉「寒溪」診斷區 156.8、稽核區 128.9，後者等於三星鄉的值）。
+    #   官方表有「雨量來源」欄指定主站／備站，推測 STName1=主站、STName2=備站，
+    #   但未經證實。把原始列整列印出來，一次看清楚對應關係。
+    for _kw in DIAG_STATION_KEYWORDS:
+        _raw = [r for r in data
+                if isinstance(r, dict)
+                and (_kw in str(_row_pick(r, 'STName1') or '')
+                     or _kw in str(_row_pick(r, 'STName2') or ''))]
+        if _raw:
+            print(f"    [原始列] STName 含「{_kw}」的前 6 列：")
+            for r in _raw[:6]:
+                print(f"       {_row_pick(r,'County')}{_row_pick(r,'Town')}"
+                      f"{_row_pick(r,'Vill')}　警戒 {_row_pick(r,'AlertValue')}")
+                print(f"         ST1 {_row_pick(r,'STName1')}"
+                      f"（{_row_pick(r,'STID1')}）= {_row_pick(r,'STRT1')}"
+                      f"　｜　ST2 {_row_pick(r,'STName2')}"
+                      f"（{_row_pick(r,'STID2')}）= {_row_pick(r,'STRT2')}")
+
     # ── 定向診斷：使用者回報的個案（抓不到就把真相印出來，不要再猜）──
     for _kw in DIAG_STATION_KEYWORDS:
         _hit = [d for d in out.values() if _kw in (d['station'] or '')]
@@ -1426,16 +1446,22 @@ def apply_official_etr2(out_towns, now_tpe):
         k = f"{t.get('county','')}{t.get('township','')}"
         o = off.get(k)
         if not isinstance(o, dict) or o.get('etr2') is None: continue
-        mine_p, off_p = t.get('etr2_pct'), o.get('pct')
-        if mine_p is not None and off_p is not None and abs(mine_p - off_p) > 0.01:
-            diffs.append((abs(mine_p - off_p), k, mine_p, off_p,
+        # ★★ 單位：etr2_now.json 的 pct 是「比值」(0.358)，
+        #   而 data.json 的 etr2_pct 在組裝時（見 _pct_raw*100 那行）已轉成
+        #   「百分比」(35.8)。先前我直接把比值寫進百分比欄位 → 100 倍低報，
+        #   log 顯示為「本檔 3580.0% → 官方 35.8%」。兩邊必須換算到同一單位
+        #   才能比較，也才能覆寫。
+        off_pct = (o.get('pct') * 100) if o.get('pct') is not None else None
+        mine_p = t.get('etr2_pct')
+        if mine_p is not None and off_pct is not None and abs(mine_p - off_pct) > 1.0:
+            diffs.append((abs(mine_p - off_pct), k, mine_p, off_pct,
                           t.get('etr2'), o.get('etr2'), o.get('station')))
             n_fix += 1
         else:
             n_same += 1
         # 一律以官方為準（含分子、分母、代表站）
         t['etr2'] = o['etr2']
-        t['etr2_pct'] = o.get('pct')
+        if off_pct is not None: t['etr2_pct'] = round(off_pct, 1)
         if o.get('alert'): t['etr2_alert'] = o['alert']
         t['etr2_src'] = 'swcb'
         t['etr2_station'] = o.get('station') or t.get('etr2_station')
@@ -1446,8 +1472,8 @@ def apply_official_etr2(out_towns, now_tpe):
             diffs.sort(reverse=True)
             print(f"    ⚠ 不一致代表兩套聚合有一套是錯的，以官方為準。前 6 筆：")
             for d in diffs[:6]:
-                print(f"       {d[1]}　本檔 {d[2]*100:.1f}%（{d[4]}）"
-                      f"→ 官方 {d[3]*100:.1f}%（{d[5]}，{d[6]}）")
+                print(f"       {d[1]}　本檔 {d[2]:.1f}%（{d[4]}）"
+                      f"→ 官方 {d[3]:.1f}%（{d[5]}，{d[6]}）")
     else:
         print(f"  ⚠ 沒有 {ETR2_NOW_FILE}，鄉鎮 ETR2 退回本檔自算"
               f"（請確認 fetch_qpesums_hourly.py 有在跑）")
@@ -5731,8 +5757,13 @@ def main():
                        for i in range(8)]
 
         # S* 風險分數（各6h時段，使用3h或6h QPF + PoP）
-        # etr_pct_now = 現況ETR2%（整數%）
-        etr_pct_now = round(etr2_pct * 100, 1) if etr2_pct is not None else None
+        # etr_pct_now = 現況ETR2%（百分比，如 110 = 110%）
+        # ★★ 2026-10-07 修正：etr2_pct 在上方（_pct_raw * 100）已經轉成百分比，
+        #   這裡再乘一次 100 會變成 3580 這種值。calc_risk_score 的分級是
+        #   「<70 / 70~130 / >130」，吃到 3580 時 L = 4+(3580-130)/10 = 349，
+        #   風險分數整個被放大約 100 倍。這是既有錯誤，與這幾天的改動無關，
+        #   但影響每一個鄉鎮的風險指標，必須一起修。
+        etr_pct_now = etr2_pct
         risk_score_list = []    # 各時段的 S*
         risk_level_list = []    # 各時段的等級文字
         risk_color_list = []    # 各時段的顏色

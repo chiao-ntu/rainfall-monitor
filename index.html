@@ -1334,7 +1334,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-07T01:10Z';
+const FORMOSA_BUILD = '2026-10-07T19:30Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -5951,14 +5951,65 @@ function renderVerify(){
             要論準確度請看 ETS／SEDI 與 MAE。</div>
         </div>`;
     })()}
-    <div style="color:#5a7a95;font-size:9px;margin-top:3px">
-      ${metric === 'SEDIH40' ? '時雨量強度：只有 CWA+ECMWF／ECMWF／GFS 有最大時雨量資料'
-        : metric.startsWith('ETS') ? 'ETS 扣除隨機命中後的綜合指標，0＝與亂猜無異'
-        : metric.startsWith('SEDI') ? 'SEDI 罕見事件專用，極端門檻下仍有鑑別力'
-        : 'CSI 綜合指標，不納入正確無雨'}　偏差比 &gt;1 報太多<br>
+    <div style="color:#5a7a95;font-size:9px;margin-top:3px;line-height:1.5">
       ◆ 已納入 FORMOSA 融合（◆2＝僅 2 個地形採用）；無標記者目前未納入<br>
-      ★ FORMOSA 融合為本系統的輸出結果，與各單模式用同一套判準校驗，固定列於首行<br>
-      MAE＝平均絕對誤差（mm），越小代表雨量越貼近觀測；偏差比隨主指標的門檻變動</div>`;
+      ★ FORMOSA 融合為本系統的輸出結果，與各單模式用同一套判準校驗，固定列於首行</div>
+
+    <details style="margin-top:5px">
+      <summary style="color:#6bc8e8;font-size:10px;cursor:pointer;user-select:none">
+        指標怎麼看（判準與合併參照）</summary>
+      <div style="color:#9fc8e8;font-size:9px;line-height:1.6;margin-top:4px">
+        <div style="color:#f0c878;margin-bottom:2px">每個指標單獨看</div>
+        <table style="width:100%;border-collapse:collapse;font-size:9px">
+          <tr style="color:#6bc8e8"><th style="text-align:left;padding:1px 3px">指標</th>
+            <th style="text-align:left;padding:1px 3px">問的問題</th>
+            <th style="text-align:left;padding:1px 3px">範圍與判準</th></tr>
+          <tr><td style="padding:1px 3px">POD</td><td>實際下雨的地方，有幾成被報出來</td>
+            <td>0~1，越高越好。漏報率＝1−POD</td></tr>
+          <tr><td style="padding:1px 3px">FAR</td><td>報有雨的地方，有幾成其實沒下</td>
+            <td>0~1，越低越好</td></tr>
+          <tr><td style="padding:1px 3px">CSI</td><td>命中 ÷（命中＋漏報＋空報）</td>
+            <td>0~1。不計「正確無雨」，所以乾季不會虛高</td></tr>
+          <tr><td style="padding:1px 3px"><b>ETS</b></td><td>扣掉「隨機也會中」之後的 CSI</td>
+            <td><b>0＝與亂猜無異、負值＝比亂猜還差</b>；&gt;0.2 可用、&gt;0.4 不錯</td></tr>
+          <tr><td style="padding:1px 3px">SEDI</td><td>極端事件專用（高門檻下 CSI／ETS 會趨近 0）</td>
+            <td>0~1，越高越好</td></tr>
+          <tr><td style="padding:1px 3px">偏差比</td><td>報有雨的地點數 ÷ 實際有雨的地點數</td>
+            <td><b>1.0＝剛好</b>；&gt;1 報得太寬、&lt;1 報得太保守。<b>量的是寬窄，不是準度</b></td></tr>
+          <tr><td style="padding:1px 3px">MAE</td><td>雨量差多少（mm）</td>
+            <td>越小越貼近觀測。這才是「量」準不準</td></tr>
+        </table>
+
+        <div style="color:#f0c878;margin:5px 0 2px">合併參照才看得出真相</div>
+        <div style="margin-bottom:3px">
+          <b>POD 與 FAR 必須一起看。</b>把全臺都報有雨，POD 會接近 1、看起來很準，
+          但 FAR 也會接近 1。單看任何一個都會被包牌騙過去 ——
+          <b>偏差比就是用來抓這件事的</b>：POD 高但偏差比遠大於 1，就是報得太寬。
+        </div>
+        <div style="margin-bottom:3px">
+          <b>偏差比 ≈ 1 但 ETS 仍低或為負</b>，代表「報的量對、但報錯地方或錯時間」。
+          這種情況調整雨量大小沒有用，要查的是時空對位。
+        </div>
+        <div style="margin-bottom:3px">
+          <b>ETS 是單一最具代表性的綜合分數</b>，跨季節可比（乾季不會因為「猜沒雨」而虛高）。
+          要排名優劣看它；要知道「為什麼好／為什麼差」再回頭拆 POD、FAR、偏差比。
+        </div>
+        <div style="margin-bottom:3px">
+          <b>致災事件要看高門檻。</b>低門檻（≥10mm）準不代表大雨準。
+          主指標預設 ETS ≥80mm 就是為此；極端門檻下改看 SEDI。
+        </div>
+        <div>
+          <b>量與警戒是兩回事。</b>判斷「會不會達警戒」看 ETS／POD；
+          判斷「雨量估得準不準」看 MAE 與偏差比。兩者可以一好一壞。
+        </div>
+
+        <div style="color:#f0c878;margin:5px 0 2px">樣本數的提醒</div>
+        <div>
+          指標旁的 ◆n 與下方累積天數是信心來源。單日樣本少時數值會劇烈跳動，
+          看趨勢圖（下方）比看單日數字可靠；累積未滿 7 天的排名不宜當作結論。
+        </div>
+      </div>
+    </details>`;
   try{ drawVerifyChart(); }catch(e){ console.warn('校驗圖失敗', e); }
 }
 // 時間序列圖：各模式的 CSI 隨日期變化
