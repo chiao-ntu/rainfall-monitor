@@ -1063,9 +1063,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             <option value="ETS350">ETS ≥350mm</option>
             <option value="SEDI80">SEDI ≥80mm</option>
             <option value="SEDIH40">SEDI 時雨量 ≥40mm/h</option>
-            <option value="MAE">雨量誤差 MAE（越小越好）</option>
-            <option value="RMSE">雨量誤差 RMSE（越小越好）</option>
-            <option value="basic">相對誤差 30%（基線）</option>
+            <option value="MAE">雨量誤差 MAE 平均絕對誤差（越小越好）</option>
+            <option value="RMSE">雨量誤差 RMSE 均方根誤差（越小越好）</option>
+            <option value="basic">相對誤差 30% → 主欄顯示 CSI</option>
           </select>
           <select id="vf-days" onchange="renderVerify()"
             style="flex:0 0 auto;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
@@ -1334,7 +1334,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-07T19:30Z';
+const FORMOSA_BUILD = '2026-10-07T20:10Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -4239,12 +4239,12 @@ function _blendOverviewHtml(){
     if(!parts.length) return '';
     return `<div style="margin-bottom:3px">
       <span style="color:#9fc8e8">${z}</span>
-      <span style="color:#8a9aaa;font-size:10px">　偏差比 ${parts.join('・')}</span>
+      <span style="color:#8a9aaa;font-size:10px">　校正倍率 ${parts.join('・')}</span>
       ${bestM ? `<br><span style="font-size:10px;color:#8ad8a0">　最準：${NAMES[bestM] || bestM}
         （MAE ${bestMae.toFixed(0)}mm）</span>` : ''}</div>`;
   }).filter(Boolean);
   return `<div style="color:#9fc8e8;font-size:10px;margin-bottom:5px">
-      全臺各地形的模式表現（偏差比 &gt;1 代表模式低估）`
+      全臺各地形的模式表現（校正倍率 &gt;1 代表模式低估、要往上修）`
     + (pg && !pg.active
         ? '<br><span style="color:#e8a860">樣本未達 10 筆，仍以等權重運作</span>' : '')
     + '</div>'
@@ -5862,7 +5862,9 @@ function renderVerify(){
               + `cursor:pointer;user-select:none;${on ? 'color:#f0c878' : ''}">`
               + label + (on ? (_vfSortDesc ? ' ▼' : ' ▲') : '') + '</th>';
           };
-          const mainLbl = metric === 'basic' ? 'CSI'
+          //  ★ 欄位名要與下拉選單的用語對得起來，否則選了「相對誤差」卻看到
+          //    「CSI」，兩個名字從不同時出現，使用者無從對照。
+          const mainLbl = metric === 'basic' ? 'CSI（相對誤差30%）'
                  : metric === 'SEDIH40' ? 'SEDI ≥40mm/h'
                  : metric === 'MAE' ? 'MAE mm'
                  : metric === 'RMSE' ? 'RMSE mm'
@@ -5974,11 +5976,22 @@ function renderVerify(){
             <td><b>0＝與亂猜無異、負值＝比亂猜還差</b>；&gt;0.2 可用、&gt;0.4 不錯</td></tr>
           <tr><td style="padding:1px 3px">SEDI</td><td>極端事件專用（高門檻下 CSI／ETS 會趨近 0）</td>
             <td>0~1，越高越好</td></tr>
+          <tr><td style="padding:1px 3px">相對誤差 30%</td>
+            <td>把「預測與觀測相差 30% 以內」當作命中，再算 CSI</td>
+            <td>下拉選此項時，<b>主欄顯示的就是 CSI</b>。這是最寬鬆的基線判準</td></tr>
           <tr><td style="padding:1px 3px">偏差比</td><td>報有雨的地點數 ÷ 實際有雨的地點數</td>
             <td><b>1.0＝剛好</b>；&gt;1 報得太寬、&lt;1 報得太保守。<b>量的是寬窄，不是準度</b></td></tr>
-          <tr><td style="padding:1px 3px">MAE</td><td>雨量差多少（mm）</td>
-            <td>越小越貼近觀測。這才是「量」準不準</td></tr>
+          <tr><td style="padding:1px 3px">MAE</td><td>平均絕對誤差：每個點差幾 mm，取平均</td>
+            <td>越小越貼近觀測。<b>對大誤差不敏感</b>，代表「一般情況差多少」</td></tr>
+          <tr><td style="padding:1px 3px">RMSE</td><td>均方根誤差：先平方再平均再開根號</td>
+            <td>越小越好，單位同樣是 mm。<b>會放大少數大誤差</b>，
+              代表「有沒有偶爾錯得很離譜」</td></tr>
         </table>
+        <div style="margin-top:3px">
+          <b>MAE 與 RMSE 一起看</b>：RMSE 一定 ≥ MAE。兩者接近＝誤差平均分布；
+          <b>RMSE 遠大於 MAE＝有少數幾次錯得很大</b>，那幾次往往就是致災事件，
+          比平均誤差更值得追。
+        </div>
 
         <div style="color:#f0c878;margin:5px 0 2px">合併參照才看得出真相</div>
         <div style="margin-bottom:3px">
@@ -6001,6 +6014,42 @@ function renderVerify(){
         <div>
           <b>量與警戒是兩回事。</b>判斷「會不會達警戒」看 ETS／POD；
           判斷「雨量估得準不準」看 MAE 與偏差比。兩者可以一好一壞。
+        </div>
+
+        <div style="color:#f0c878;margin:5px 0 2px">
+          兩個面板的名詞對照（★ 最容易誤讀的一組）</div>
+        <table style="width:100%;border-collapse:collapse;font-size:9px">
+          <tr style="color:#6bc8e8">
+            <th style="text-align:left;padding:1px 3px">預報校驗（本面板）</th>
+            <th style="text-align:left;padding:1px 3px">融合校正明細</th>
+            <th style="text-align:left;padding:1px 3px">關係</th></tr>
+          <tr><td style="padding:1px 3px"><b>偏差比</b><br>
+              <span style="color:#7a94ac">報雨地點數 ÷ 實際雨點數</span></td>
+            <td style="padding:1px 3px"><b>校正倍率</b><br>
+              <span style="color:#7a94ac">觀測 ÷ 模式，直接乘回模式值</span></td>
+            <td style="padding:1px 3px;color:#e8a860"><b>方向相反，不可互相套用</b><br>
+              偏差比 &gt;1＝報太多；校正倍率 &gt;1＝模式低估、要往上修</td></tr>
+          <tr><td style="padding:1px 3px">MAE</td>
+            <td style="padding:1px 3px">MAE</td>
+            <td style="padding:1px 3px">同一個量；校正明細用它挑該地形表現最好的模式</td></tr>
+          <tr><td style="padding:1px 3px">樣本（◆n）</td>
+            <td style="padding:1px 3px">樣本數</td>
+            <td style="padding:1px 3px">同一個量；未達 10 筆時融合維持等權重</td></tr>
+          <tr><td style="padding:1px 3px">ETS／CSI／POD／FAR</td>
+            <td style="padding:1px 3px">（無對應）</td>
+            <td style="padding:1px 3px">融合權重只用 MAE 與校正倍率，不直接用技術得分</td></tr>
+        </table>
+        <div style="margin-top:3px">
+          會有兩套的原因：校驗面板問的是「<b>報得準不準</b>」（事件有無，無單位），
+          校正明細問的是「<b>雨量要乘多少才對</b>」（量的修正，倍率）。
+          兩者都叫「偏差」會互相誤導，所以校正端改稱倍率。
+        </div>
+
+        <div style="color:#f0c878;margin:5px 0 2px">哪些指標藏在下拉選單裡</div>
+        <div>
+          主欄位會隨上方「指標」下拉切換：選 <b>相對誤差 30%</b> 時主欄是 <b>CSI</b>；
+          選 <b>MAE</b>／<b>RMSE</b> 時主欄是該誤差（mm）；其餘為 ETS／SEDI。
+          POD、FAR、偏差比、MAE、樣本這五欄固定顯示，不隨下拉改變。
         </div>
 
         <div style="color:#f0c878;margin:5px 0 2px">樣本數的提醒</div>
