@@ -1334,7 +1334,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-08T21:40Z';
+const FORMOSA_BUILD = '2026-10-08T22:30Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -7470,8 +7470,18 @@ function calcEtr2MaxIn(t, segA, segB, qpfField){
 //   正解：以資料時刻為錨點段。那幾段相對於資料本來就是「未來」，
 //   走預測折減軌道，數值有依據、曲線也不會斷。
 function _etrAnchorSeg(){
-  const b = (typeof BASE_TIME !== 'undefined' && BASE_TIME) ? new Date(BASE_TIME) : new Date();
-  const ds = Math.max(0, Math.min(3, Math.floor(b.getHours() / 6)));
+  //  ★ 錨點時刻＝「t.etr2 這個值實際上是什麼時候抓到的」。
+  //    etr2_now.json（10 分鐘更新）載入後會覆寫 t.etr2，所以錨點要跟它走；
+  //    沒有它才退回 data.json 的產生時刻（BASE_TIME）。
+  //    先前只看 BASE_TIME，於是值是新的、錨點時刻是舊的，兩者不同步。
+  let ms = null;
+  const s = window.ETR2_NOW_TIME || '';
+  if(s){ const d = new Date(s); if(!isNaN(d.getTime())) ms = d.getTime(); }
+  if(ms == null && typeof BASE_TIME !== 'undefined' && BASE_TIME)
+    ms = new Date(BASE_TIME).getTime();
+  if(ms == null) ms = Date.now();
+  const ds = Math.max(0, Math.min(3,
+    Math.floor((ms - SEG_EPOCH().getTime()) / 216e5)));
   return Math.min(ds, _nowSeg());        // 不可超過觀看者的現在
 }
 
@@ -7688,16 +7698,16 @@ function _fcPeak(t, H = 90){
 }
 
 function _obsHourlyAt(t, h){
-  const H = window.RAIN_HOURLY;
-  if(!H || h >= 0) return null;
-  const key = (t.county || '') + (t.township || '');
-  const arr = H[key];
-  if(!Array.isArray(arr) || !arr.length) return null;
-  // 陣列索引對應 RAIN_HOURLY_HOURS；尾端為最近一小時
-  const idx = arr.length - 1 + (h + 1);
-  if(idx < 0 || idx >= arr.length) return null;
-  const v = arr[idx];
-  return (v == null || !isFinite(v)) ? null : v;
+  // ★★ 2026-10-08 修正：原本用 arr.length-1+(h+1) 從尾端回數，等於假設
+  //   「序列最後一筆就是現在的前一小時」。rain_hourly.json 每 10 分鐘更新，
+  //   但排程延遲或中間缺一小時，尾端就不是最近一小時 —— 於是幾小時前的
+  //   雨量被當成剛剛下的。_obsAtHour() 早就用實際時間鍵對齊了（它的註解
+  //   正是在警告這件事），這裡改為委派，兩套實作收斂成一套。
+  //   影響面：_noRainEvidence() 用它判斷「近 1~3 小時有沒有下雨」，
+  //   而那個判斷會在融合時剔除模式 —— 對錯時間等於剔錯模式。
+  if(h >= 0) return null;
+  const d = new Date(Date.now() + h * 3600e3);
+  return _obsAtHour(t, d, 'max');
 }
 // ★★ 依「實際時鐘小時」取觀測值，而不是從陣列尾端往回數。
 //   rain_hourly.json 的 hours 是升冪的時戳陣列，而且**刻意允許有缺口**
@@ -9770,7 +9780,10 @@ function _hourlyBars(t){
     const oi = 48 + (h - nowH);
     const di = h>=0 ? 0 : (h>=-24 ? 1 : 2);
     _dayVis[di]++;
-    if(oi>=0 && oi<48 && obs[oi]!=null){ _dayCov[di]+=obs[oi]; _dayCovH[di]++; }
+    //  與下方取值用同一個來源，否則「已覆蓋量」會對不上，分配量就錯了
+    let _v0 = _obsAtHour(t, new Date(SEG_EPOCH().getTime() + h * 3600e3), 'max');
+    if(_v0 == null && oi>=0 && oi<48) _v0 = obs[oi];
+    if(_v0 != null){ _dayCov[di]+=_v0; _dayCovH[di]++; }
   }
   const _dr = t.daily_rain || [];
   const _dayHoursFull = [Math.max(1, nowH), 24, 24];   // 該日實際涵蓋的小時數
@@ -9786,7 +9799,11 @@ function _hourlyBars(t){
     if(h < nowH){
       const oi = 48 + (h - nowH);
       const di = h>=0 ? 0 : (h>=-24 ? 1 : 2);
-      const v = (oi>=0 && oi<48) ? obs[oi] : null;
+      //  ★★ 2026-10-08：優先用 rain_hourly.json（每 10 分鐘更新，且以實際
+      //    時間鍵對齊）；obs_1h_p48 來自 data.json，只有主排程跑時才更新，
+      //    所以逐時觀測明明一直在更新，圖上卻停在上一輪快照。
+      let v = _obsAtHour(t, new Date(SEG_EPOCH().getTime() + h * 3600e3), 'max');
+      if(v == null) v = (oi>=0 && oi<48) ? obs[oi] : null;
       if(v!=null){ vals.push(v); estMask.push(false); pastObsN++; _nObs++; }
       else{
         // 官方日總量平均分配（不含模式；該日總量不變，故各輪結果相同）
@@ -10588,8 +10605,13 @@ async function tryLoadLive(){
             }
             t.etr2 = rec.etr2;
             if(rec.alert) t.etr2_alert = rec.alert;
-            t.etr2_pct = (rec.pct != null) ? rec.pct
-                       : (rec.alert ? rec.etr2/rec.alert : t.etr2_pct);
+            // ★★ 2026-10-08：單位！etr2_now.json 的 pct 是「比值」(0.358)，
+            //   而 data.json 的 etr2_pct 是「百分比」(35.8)。先前直接覆寫 →
+            //   10 分鐘檔一載入，etr2_pct 就變成 100 倍小。
+            //   （後端已修過同一個錯，前端這條當時沒查到。）
+            t.etr2_pct = (rec.pct != null) ? Math.round(rec.pct * 1000) / 10
+                       : (rec.alert ? Math.round(rec.etr2 / rec.alert * 1000) / 10
+                                    : t.etr2_pct);
             t.etr2_station = rec.station || t.etr2_station;
             _ne++;
           }
