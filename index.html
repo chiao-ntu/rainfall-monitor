@@ -1334,7 +1334,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-07T20:10Z';
+const FORMOSA_BUILD = '2026-10-08T21:40Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -7461,6 +7461,20 @@ function calcEtr2MaxIn(t, segA, segB, qpfField){
   return mx;
 }
 
+// ★★ 2026-10-08：ETR2 錨點屬於「資料產生時刻」，不是觀看者的現在。
+//   使用者回報逐時降雨圖中間斷掉 —— 缺口正好是「最後一次後端更新 → 現在」。
+//   成因：t.etr2（官方現值）是 data.json 產生當下抓到的，etr2_hist 也只累積
+//   到那一刻；但先前用 _nowSeg()（觀看者時鐘）當過去／未來的分界，於是
+//   資料時刻之後、觀看者現在之前的那幾段，既沒有歷史（後端還沒跑到），
+//   又被當成「過去」而不給預測值 → 整段留白。資料越舊，缺口越大。
+//   正解：以資料時刻為錨點段。那幾段相對於資料本來就是「未來」，
+//   走預測折減軌道，數值有依據、曲線也不會斷。
+function _etrAnchorSeg(){
+  const b = (typeof BASE_TIME !== 'undefined' && BASE_TIME) ? new Date(BASE_TIME) : new Date();
+  const ds = Math.max(0, Math.min(3, Math.floor(b.getHours() / 6)));
+  return Math.min(ds, _nowSeg());        // 不可超過觀看者的現在
+}
+
 function calcEtr2AtSeg(t, seg, qpfField){
   // ★★ 兩條軌道的分流點：ETR2% 是警戒側的量（土壤含水 → 坡地警戒），
   //   選 FORMOSA 時改走警戒軌道（成員的加權 85 分位數）而不是平均。
@@ -7471,7 +7485,7 @@ function calcEtr2AtSeg(t, seg, qpfField){
   if(anchor === null || anchor === undefined || !isFinite(anchor)){
     return _calcEtr2Raw(t, seg, qpfField);
   }
-  const ns = _nowSeg();
+  const ns = _etrAnchorSeg();           // ★ 以資料時刻為錨點，不用觀看者時鐘
   const qpfArr = getQpfArr(t, qpfField);
 
   // ★ 情境／倍率生效時，「已過時段」的 QPF 也代表使用者指定的雨量，

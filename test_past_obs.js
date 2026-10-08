@@ -85,12 +85,31 @@ if(_EXEC) _LAUNCH.executablePath=_EXEC;
      `${sum[2].toFixed(1)} ≈ ${(dr[2]*visFrac2).toFixed(1)}`);
 
   // ③c 瀑布圖：沒有官方 ETR2 的時段不得由 0 線性爬升（會生出不存在的降雨）
-  const t3c=mk(9);
-  const hs=[-30,-24,-12,-6];
-  const wf=hs.map(h=>_etrAtHour(t3c,h,'qpf_best'));
-  ok(wf.every(v=>v==null),
-     `③c 無官方歷史時瀑布圖不給值（實得 ${JSON.stringify(wf)}）—— `+
-     `先前 null 被當 0，再內插到官方值，看起來像「平均增加的雨量」`);
+  //    ★ 必須固定時鐘：錨點綁資料時刻後，落在資料時刻「之後」的小時本來就
+  //      該走預測軌而有值。這裡要測的是錨點「之前」且無歷史的小時。
+  (function(){
+    const _bt=BASE_TIME, _realNow=Date.now;
+    try{
+      const d=new Date(); d.setHours(21,0,0,0); BASE_TIME=d;        // 資料＝段3
+      const n=new Date(); n.setHours(21,30,0,0); Date.now=()=>n.getTime();
+      const t3c=mk(9);                                              // 無 etr2_hist
+      const hs=[-30,-24,-12,-6];                                    // 全在錨點之前
+      const wf=hs.map(h=>_etrAtHour(t3c,h,'qpf_best'));
+      ok(wf.every(v=>v==null),
+         `③c 錨點之前且無官方歷史的小時不給值（實得 ${JSON.stringify(wf)}）—— `+
+         `先前 null 被當 0，再內插到官方值，看起來像「平均增加的雨量」`);
+      // 完全沒有歷史時連錨點當下也是空的：逐時值由「相鄰兩段端點」內插，
+      // 只有一段有值無法成線。實務上後端會由 rain_hourly.json 重建歷史
+      // （log：29 個 6h 段、152 個鄉鎮涵蓋 ≥2 天），不會落在這個狀態。
+      ok(_etrAtHour(t3c,0,'qpf_best')==null,
+         '③c 完全無歷史時整條空白（逐時值需相鄰兩段才內插得出來）');
+      // 有了前一段歷史，錨點當下就有值
+      const H3c=new Array(36).fill(null); H3c[32+2]=190;
+      const t3c2=Object.assign({},t3c,{etr2_hist:H3c, etr2_hist_base:32});
+      ok(_etrAtHour(t3c2,0,'qpf_best')!=null,
+         '③c 補上前一段歷史後，錨點當下即有值');
+    } finally { BASE_TIME=_bt; Date.now=_realNow; }
+  })();
 
   // ③d ETR2% 一律整數
   const H3=new Array(36).fill(null); H3[32-4]=222.5;
@@ -107,6 +126,38 @@ if(_EXEC) _LAUNCH.executablePath=_EXEC;
   const ser=_etr2HourlySeries(t4,-48,-1);
   ok(ser.every(v=>v==null),
      `④逐時序列同樣留白（${ser.filter(v=>v==null).length}/${ser.length}）`);
+
+  // ④b 資料時刻與觀看時刻不同時，中間不得斷線
+  //    使用者回報（2026-10-08）：逐時降雨圖中間斷掉，缺口正好是
+  //    「最後一次後端更新 → 現在」。成因是錨點用 _nowSeg()（觀看者時鐘），
+  //    而 etr2_hist 只累積到資料產生時刻，於是中間那幾段兩邊都不管。
+  //    錨點必須綁資料時刻（BASE_TIME），那幾段相對於資料是「未來」，
+  //    走預測折減軌道。
+  (function(){
+    const _bt=BASE_TIME, _realNow=Date.now;
+    try{
+      const d=new Date(); d.setHours(9,30,0,0); BASE_TIME=d;      // 資料＝段1
+      const n=new Date(); n.setHours(21,17,0,0); Date.now=()=>n.getTime();  // 現在＝段3
+      ok(_nowSeg()===3 && _etrAnchorSeg()===1,
+         `④b 觀看者段 ${_nowSeg()}／資料段 ${_etrAnchorSeg()}（兩者確實不同）`);
+      const H=new Array(36).fill(null);
+      for(let i=0;i<=33;i++) H[i]=200-(32-i)*2;    // 歷史只到段 1
+      const t4b={county:'宜蘭縣',township:'南澳鄉',alert_val:400,etr2_alert:400,
+        etr2:200, etr2_hist:H, etr2_hist_base:32,
+        daily_rain:[10,30,40,0,0,0,0], rain_24h:30,
+        qpf_best:new Array(60).fill(0), qpf_warn:new Array(60).fill(0),
+        official_segs:[], band_segs:[]};
+      const ser=_etr2HourlySeries(t4b,-12,23);
+      const nulls=ser.filter(v=>v==null).length;
+      ok(nulls===0,
+         `④b 資料時刻之後到現在不留白（留白 ${nulls}/${ser.length}）`);
+      ok(calcEtr2AtSeg(t4b,1,'qpf_best')===200,
+         '④b 錨點落在資料段（段1＝官方現值 200）');
+      const s2=calcEtr2AtSeg(t4b,2,'qpf_best'), s3=calcEtr2AtSeg(t4b,3,'qpf_best');
+      ok(s2!=null && s3!=null && s2<200 && s3<s2,
+         `④b 資料時刻之後的段走預測折減（${s2.toFixed(1)} → ${s3.toFixed(1)}，遞減）`);
+    } finally { BASE_TIME=_bt; Date.now=_realNow; }
+  })();
 
   // ⑤ 有官方歷史 → 用當時的官方值，不重建
   const H=new Array(36).fill(null); H[32-8]=150; H[32-1]=200;
