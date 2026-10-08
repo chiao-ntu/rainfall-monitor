@@ -1214,7 +1214,7 @@ function showHyetograph(t, s, e){
   const n=vals.length, bw=cw/n;
   const axisMax=Math.max(ceilTo10(Math.max(...vals.map(v=>v||0))),10);
   const etr = hasAlert ? _etr2HourlySeries(pseudoT, hFrom, hFrom+n-1) : null;
-  const axisMaxEtr=Math.max(ceilTo10(Math.max(...(etr||[10]),10)),10);
+  const axisMaxEtr=_axisMaxOfNullable(etr, 10);
 
   // 左軸
   ctx.font=`${fs*0.72}px sans-serif`; ctx.textAlign='right';
@@ -1249,12 +1249,10 @@ function showHyetograph(t, s, e){
   if(etr){
     ctx.strokeStyle='#FFFFFF'; ctx.lineWidth=2;
     ctx.beginPath();
-    etr.forEach((ev,i)=>{
-      const x=pL+i*bw+bw/2;
-      const y=pT+ch-ch*Math.min(ev,axisMaxEtr)/axisMaxEtr;
-      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
-    });
-    ctx.stroke();
+    //  ★ 遇 null 斷開（先前 Math.min(null,max)＝0，會畫成貼地的假線）
+    _strokeNullableSeries(ctx, etr,
+      i => pL+i*bw+bw/2,
+      v => pT+ch-ch*Math.min(v,axisMaxEtr)/axisMaxEtr);
   }
 
   // 現在線 + X標籤（每24h）
@@ -1334,7 +1332,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-08T22:30Z';
+const FORMOSA_BUILD = '2026-10-09T07:40Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -9938,6 +9936,29 @@ function townMetrics(t, seg){
 function townToday(t){ return townMetrics(t, 3); }
 
 // 逐時 ETR2 序列（hFrom..hTo，h=距今天00的小時數，可負）——前綴和優化+觀測錨定+權重連續內插
+// ★★ 2026-10-09：可含 null 的折線畫法，三張逐時圖共用。
+//   為什麼必須共用：null 在 Math.min(null, max) 會被算成 0，於是
+//   「沒有官方值」被畫成「ETR2 ＝ 0%」—— 一條貼地的線看起來像真的降到零，
+//   比留白更危險。鄉鎮圖昨天修過，但測站圖與分署圖各有一份自己的迴圈，
+//   同樣的錯又出現兩次。收斂成一支，之後不會再有第四份。
+function _strokeNullableSeries(ctx, arr, xOf, yOf){
+  if(!Array.isArray(arr) || !arr.length) return;
+  ctx.beginPath();
+  let pen = false;
+  for(let i = 0; i < arr.length; i++){
+    const v = arr[i];
+    if(v == null || !isFinite(v)){ pen = false; continue; }   // 斷開，不連線
+    const x = xOf(i), y = yOf(v);
+    if(!pen){ ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+// 軸上限：忽略 null（null 參與 Math.max 會變成 0，把軸壓扁）
+function _axisMaxOfNullable(arr, floorV){
+  const vs = (arr || []).filter(v=>v != null && isFinite(v));
+  return Math.max(ceilTo10(Math.max(...vs.concat([floorV || 10]))), floorV || 10);
+}
+
 function _etr2HourlySeries(t, hFrom, hTo){
   if(!(t.alert_val>0)) return null;
   // ★ 資料一致性：一律以 calcEtr2AtSeg()（全系統唯一權威，含官方錨點與情境超額）
@@ -10002,7 +10023,7 @@ function _drawHourlyChart(t, canvasId, isZoom){
 
   // 逐時 ETR2%（全程 120 點）
   const etr=_etr2HourlySeries(t, hFrom, hFrom+n-1);
-  const axisMaxEtr=Math.max(ceilTo10(Math.max(...((etr||[]).filter(v=>v!=null).concat([10])))), 10);
+  const axisMaxEtr=_axisMaxOfNullable(etr, 10);
 
   // 標題
   ctx.fillStyle='#d0e8ff'; ctx.font=`bold ${fs}px sans-serif`; ctx.textAlign='left';
@@ -10053,17 +10074,10 @@ function _drawHourlyChart(t, canvasId, isZoom){
   if(etr){
     // ★ ETR2 折線改用該鄉鎮所屬分署色（原為白色）
   ctx.strokeStyle=districtColor; ctx.lineWidth=isZoom?5:3;
-    ctx.beginPath();
-    //  ★ null＝沒有官方值，必須斷線留白。連成直線等於把兩端之間
-    //    不存在的資料偽造成一段平滑變化。
-    let _pen=false;
-    etr.forEach((e,i)=>{
-      if(e==null){ _pen=false; return; }
-      const x=pL+i*bw+bw/2;
-      const y=pT+ch-ch*Math.min(e,axisMaxEtr)/axisMaxEtr;
-      if(!_pen){ ctx.moveTo(x,y); _pen=true; } else ctx.lineTo(x,y);
-    });
-    ctx.stroke();
+    //  ★ null＝沒有官方值，必須斷線留白（與測站圖、分署圖同一支）
+    _strokeNullableSeries(ctx, etr,
+      i => pL+i*bw+bw/2,
+      v => pT+ch-ch*Math.min(v,axisMaxEtr)/axisMaxEtr);
     if(isZoom){
       ctx.fillStyle='#FFFFFF'; ctx.font=`bold ${xFs}px sans-serif`; ctx.textAlign='center';
       for(let i=0;i<n;i+=12){
@@ -11891,7 +11905,10 @@ function _calcDistrictHourly(){
   DISTRICT_ORDER.forEach(district=>{
     const counties=DISTRICT_COUNTIES[district];
     const rr=new Array(n).fill(0);
-    const ee=new Array(n).fill(0);
+    //  ★★ ee 起始必須是 null 而非 0。先前 fill(0) 搭配 `if(es[h]>ee[h])`，
+    //    而 `null > 0` 為 false，於是「全署都沒有官方值」的小時永遠停在 0 ——
+    //    畫出來是一段掉到零再跳回來的線，看起來像 ETR2 真的歸零。
+    const ee=new Array(n).fill(null);
     TOWNSHIPS.forEach(t=>{
       if(!counties.includes(t.county)) return;
       const b=_hourlyBars(t);
@@ -11899,11 +11916,15 @@ function _calcDistrictHourly(){
       for(let h=0;h<n;h++){ const v=b.vals[h]||0; if(v>rr[h]) rr[h]=v; }
       if(t.alert_val>0){
         const es=_etr2HourlySeries(t, b.hFrom, b.hFrom+n-1);
-        if(es) for(let h=0;h<n;h++){ if(es[h]>ee[h]) ee[h]=es[h]; }
+        if(es) for(let h=0;h<n;h++){
+          const v=es[h];
+          if(v==null || !isFinite(v)) continue;          // 沒有值就不參與取大
+          if(ee[h]==null || v>ee[h]) ee[h]=v;
+        }
       }
     });
     rr.forEach(v=>{ if(v>gM) gM=v; });
-    ee.forEach(v=>{ if(v>gE) gE=v; });
+    ee.forEach(v=>{ if(v!=null && v>gE) gE=v; });
     rows.push(rr); etrRows.push(ee);
   });
   return {rows, etrRows, maxRain:Math.max(ceilTo10(gM+2),10),
@@ -11966,16 +11987,13 @@ function _drawDistrictHourlyChart(cv, isZoom){
 
   // 逐時 ETR2% 分署色折線（全程）
   etrRows.forEach((er,d)=>{
-    if(!er.some(v=>v>0)) return;
+    if(!er.some(v=>v!=null && v>0)) return;
     const c=DISTRICT_COLOR[DISTRICT_ORDER[d]]||'#88aacc';
     ctx.strokeStyle=c; ctx.lineWidth=isZoom?5:3;
-    ctx.beginPath();
-    er.forEach((e,i)=>{
-      const x=pL+i*grpW+grpW/2;
-      const y=pT+ch-ch*Math.min(e,maxEtr)/maxEtr;
-      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
-    });
-    ctx.stroke();
+    //  ★ 遇 null 斷開（與鄉鎮圖、測站圖同一支）
+    _strokeNullableSeries(ctx, er,
+      i => pL+i*grpW+grpW/2,
+      v => pT+ch-ch*Math.min(v,maxEtr)/maxEtr);
   });
 
   // X軸

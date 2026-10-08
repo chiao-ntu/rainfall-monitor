@@ -1576,6 +1576,27 @@ def apply_official_etr2(out_towns, now_tpe):
                for i in range(-NSEG, 4)]
         t['etr2_hist'] = arr if any(v is not None for v in arr) else None
         if t['etr2_hist']: n_town += 1
+    # ★★ 2026-10-09：逐段涵蓋率。圖上出現缺口時，必須能一眼看出是哪幾段
+    #   沒有官方歷史 —— 否則只能從圖面猜。缺口＝該段所有鄉鎮都沒有值，
+    #   成因通常是 rain_hourly.json 那幾個小時沒抓到（10 分鐘腳本失敗或
+    #   水保署 API 當時沒回）。
+    _per_seg = []
+    for i in range(-NSEG, 4):
+        _k = seg_key(base + timedelta(hours=6 * i))
+        _n = sum(1 for t in out_towns
+                 if (t.get('etr2_hist') or [None])[min(NSEG + i,
+                     len(t.get('etr2_hist') or [1]) - 1)] is not None) \
+             if any(t.get('etr2_hist') for t in out_towns) else 0
+        _per_seg.append((i, _k, _n))
+    _recent = [r for r in _per_seg if -8 <= r[0] <= 0]
+    _holes = [r for r in _recent if r[2] == 0]
+    print("  官方 ETR2 歷史逐段涵蓋（近 2 天）：")
+    print("     " + "　".join(f"{r[1][-2:]}時:{r[2]}" for r in _recent))
+    if _holes:
+        print(f"  ⚠ 有 {len(_holes)} 個 6h 段完全沒有官方歷史"
+              f"（{'、'.join(r[1] for r in _holes)}）")
+        print(f"     → 圖上這幾段會留白。成因多半是 rain_hourly.json 那幾小時"
+              f"沒抓到；等 etr2_history.json 累積足夠就會補上")
     _cov = sum(1 for t in out_towns
                if t.get('etr2_hist')
                and sum(1 for v in t['etr2_hist'] if v is not None) >= 8)
