@@ -3792,6 +3792,11 @@ FORECAST_LOG_DAYS = 7            # 每次存未來 7 個完整日曆日
 FCLOG_MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'gc',
                 'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom', 'cwa')
 FCLOG_FIELD = {'cwa': 'qpf_cwa_q'}   # 逐模式的欄位覆寫（CWA 用可加量）
+#  ★★ 2026-10-09：同一個模式在兩處叫不同名字 —— 存檔叫 'gc'（欄位 qpf_gc），
+#    校驗與前端叫 'graphcast'。目前 fclog_values_for 只被 'cwa' 用到，所以
+#    還沒出事；但哪天有人用 'graphcast' 去查存檔就會靜默拿到空的。
+#    這跟「CWA 從來沒出現在排行」是同一類缺陷（鍵名分歧），一起補掉。
+FCLOG_ALIAS = {'graphcast': 'gc'}    # 校驗／前端名 → 存檔名
 FCLOG_MIN_COV = {'cwa': 0.05}        # 逐模式的最低覆蓋率（CWA 僅部分鄉鎮有判讀）
 FCLOG_WET_MIN = 2.0              # 全島平均低於此值的日子不計型態（小雨日的型態是雜訊）
 
@@ -4184,6 +4189,7 @@ def fclog_values_for(valid_date, model):
             log = json.load(f) or {}
     except Exception:
         return {}
+    model = FCLOG_ALIAS.get(model, model)      # 鍵名分歧在這裡收斂
     towns = log.get('towns') or []
     issues = sorted(k for k, v in (log.get('issues') or {}).items()
                     if valid_date in (v or {}))

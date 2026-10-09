@@ -1341,7 +1341,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-09T12:50Z';
+const FORMOSA_BUILD = '2026-10-09T15:40Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -1651,23 +1651,24 @@ let _windFieldOn = false, _wfCanvas = null, _wfTimer = null, _wfParticles = [];
 //   「放到更大的時候整個畫面都是風場」）。固定顆數時，地圖放大／全螢幕
 //   會讓同樣的粒子鋪在不同大小的畫面上，密度跟著畫面大小跑。
 //   改成每單位面積固定一顆，不論視窗多大、地圖面板多寬，視覺密度都一致。
-const WF_AREA_PER = 6700;   // 每顆粒子分配的畫布面積（px²）
+const WF_AREA_PER = 16000;  // 每顆粒子分配的畫布面積（px²）；★ 使用者指定再疏（6700→16000）
 // 上限取舊固定值 210 的一半 —— 使用者的抱怨正是「放大時整個畫面都是風場」，
 // 上限訂太高的話大畫面只會減一點點，等於沒解決那個情況。
-const WF_N_MIN = 40, WF_N_MAX = 105;
+const WF_N_MIN = 24, WF_N_MAX = 60;   // ★ 粒子數上限下修（105→60）：軌跡 300 節，顆數要讓位給長度
 function _wfCount(cw, ch){
   const n = Math.round((cw * ch) / WF_AREA_PER);
   return Math.max(WF_N_MIN, Math.min(WF_N_MAX, n));
 }
-const WF_LIFE = 300;   // 配合拖尾再拉長（150 → 300 幀）        // 每顆粒子的壽命（幀）
+//  ★ 壽命必須明顯大於拖尾節數，否則軌跡還沒長滿粒子就死了，看起來永遠是短的
+const WF_LIFE = 900;   // 每顆粒子的壽命（幀）＝拖尾的 3 倍
 const WF_INERTIA = 0.12;   // 速度鬆弛係數：約 8 幀跟上當地風（做出流體慣性）
 //  ★★ 2026-10-09：流線尾巴長度（保留幾個位置點）與速度倍率。
 //    尾巴用「逐粒子軌跡」畫，不是畫布殘影 —— 不會在地圖上累積霧氣。
 //    速度放慢後同樣的尾巴長度會涵蓋較短的實際距離，所以 WF_TRAIL
 //    要比視覺上想要的節數再多一些。
-const WF_TRAIL = 78;       // 尾巴節數（使用者指定再長三倍：26 → 78）
-const WF_BANDS = 8;        // 軌跡分幾段著色（逐段描邊會卡，分段後描邊次數降 10 倍）
-const WF_SPEED = 0.55;     // 速度倍率（使用者指定放慢；1.0＝先前速度）
+const WF_TRAIL = 300;      // 尾巴節數（使用者指定：78 → 300）
+const WF_BANDS = 12;       // 軌跡分幾段著色；300 節用 8 段會看出階梯，12 段才平滑
+const WF_SPEED = 0.30;     // 速度倍率（使用者指定再放慢；0.55 → 0.30）
 // ★ 海洋深色底：只換海域與地圖底色，陸地上各圖層的色階完全不動
 //   （使用者指定）—— 色階是判讀依據，不能因為換配色就改變。
 //   海面上的疊圖（颱風路徑、警戒區框線）另改為亮色以維持對比。
@@ -6135,8 +6136,9 @@ function renderVerify(){
           融合明細沒有對應的技術得分欄位（<b>融合權重只用 MAE 與校正倍率</b>）。</div>
 
         <div style="color:#f0c878;margin:5px 0 2px">看排名前先確認樣本</div>
-        <div>指標旁的 ◆n 是樣本數。排行只統計「當天真的有事件」的日子，
-          所以高門檻的可用天數會比較少；未滿 7 天的排名不宜當結論。
+        <div>指標旁的 ◆n 是樣本數。排行統計<b>區間內所有天數</b>；
+          門檻型指標在完全沒超標的日子分母為 0、算不出值，所以高門檻的可用天數較少。
+          <b>同分同名次</b>，不會用排序的偶然順序製造名次差異。未滿 7 天的排名不宜當結論。
           <b>RMSE 一定 ≥ MAE</b>（均方根誤差會放大少數大誤差）；
           兩者差距大＝有幾次錯得很離譜，那幾次往往就是致災事件。</div>
       </div>
@@ -6148,47 +6150,42 @@ function renderVerify(){
 //   回答的是「為什麼需要 FORMOSA」：單一平均分數看不出
 //   「當日最佳每天換人」，必須逐日排名才顯現。
 //
-//   ★ 關鍵判準：只統計「該指標當天真的有事件」的日子。
-//     門檻型指標（ETS≥80 等）在沒有事件的日子，所有模式都是 0 命中 0 漏報，
-//     分數一樣、排名由排序穩定性決定 —— 把那些日子算進去，排行就變成雜訊。
-//     大雨模式的排行要正確，就必須把沒下大雨的日子排除。
-function _vfHasEvent(c, metric){
-  if(!c) return false;
-  if(metric === 'MAE' || metric === 'RMSE') return !!(c.amt && c.amt.n);
-  if(metric === 'SEDIH40'){
-    const h = c.hourly40;
-    return !!(h && ((h.hit || 0) + (h.miss || 0)) > 0);
-  }
-  if(metric && metric !== 'basic'){
-    const td = c['thr' + String(metric).replace(/^(ETS|SEDI)/, '')];
-    return !!(td && ((td.hit || 0) + (td.miss || 0)) > 0);
-  }
-  return ((c.hit || 0) + (c.miss || 0)) > 0;
-}
-
+//   ★ 所有天數都列入（使用者指定）。無事件日的門檻型指標本來就算不出值，
+//     會由 null 檢查自然排除，不需要另外篩選。
 function _vfRankStats(metric){
   const mt = metric || _vfMetric();
   const lowerBetter = (mt === 'MAE' || mt === 'RMSE');
   const ser = _vfSeries();
-  const rk = {}, bestCnt = {}, vals = {};
+  const rk = {}, bestCnt = {}, soleCnt = {}, vals = {};
   let nDay = 0, nSkip = 0;
   ser.forEach(d => {
     const vs = [];
     VF_MODELS.forEach(m => {
-      const c = d.raw[m];
-      if(!_vfHasEvent(c, mt)) return;             // 當天沒事件 → 不列入排名
-      const o = _vfMainOf(c, mt);
+      //  ★★ 2026-10-09：所有天數都列入統計（使用者指定），不再只取「有事件」的日子。
+      //    門檻型指標在無事件日本來就算不出值（ETS 的分母為 0 → null），
+      //    會自然被下面的 null 檢查排除；而 CSI／MAE 這類每天都有定義的
+      //    指標，先前被事件篩選擋掉，等於白白丟掉大量樣本。
+      const o = _vfMainOf(d.raw[m], mt);
       if(o.v != null && isFinite(o.v)) vs.push({m, v: o.v});
     });
     if(vs.length < 3){ nSkip++; return; }         // 參賽者太少，名次沒有意義
     nDay++;
     vs.sort((a, b) => lowerBetter ? a.v - b.v : b.v - a.v);
+    //  ★ 平手必須同名次（競賽排名）。分數相同卻給不同名次，等於用排序的
+    //    偶然順序製造名次差異 —— 那是雜訊，不是表現差異。
+    let rank = 1;
     vs.forEach((x, i) => {
-      (rk[x.m] = rk[x.m] || []).push(i + 1);
+      if(i > 0 && Math.abs(x.v - vs[i - 1].v) > 1e-9) rank = i + 1;
+      (rk[x.m] = rk[x.m] || []).push(rank);
       (vals[x.m] = vals[x.m] || []).push(x.v);
+      //  ★ 「當日最佳」含 FORMOSA（使用者指定要一起比）
+      if(rank === 1) bestCnt[x.m] = (bestCnt[x.m] || 0) + 1;
     });
-    const mem = vs.filter(x => x.m !== 'blend');  // 「當日最佳」只看單一模式
-    if(mem.length) bestCnt[mem[0].m] = (bestCnt[mem[0].m] || 0) + 1;
+    //  ★ 獨得 vs 並列必須分開。所有天數都列入後，乾日全模式同分，
+    //    每個模式都拿一次「最佳」—— 混在一起算，14 個模式全擠在
+    //    7~9 次，等於把乾日的平手當成實力差異。
+    const nTop = vs.filter(x => Math.abs(x.v - vs[0].v) <= 1e-9).length;
+    if(nTop === 1) soleCnt[vs[0].m] = (soleCnt[vs[0].m] || 0) + 1;
   });
   const rows = Object.keys(rk).map(m => {
     const r = rk[m], v = vals[m];
@@ -6205,12 +6202,16 @@ function _vfRankStats(metric){
       bestRank: Math.min(...r),
       top3: r.filter(x => x <= 3).length / r.length,
       bestDays: bestCnt[m] || 0,
+      soleDays: soleCnt[m] || 0,                  // 獨得最佳（當天沒有人跟它同分）
+      tieDays: (bestCnt[m] || 0) - (soleCnt[m] || 0),
       avgScore: v.reduce((a, b) => a + b, 0) / v.length,
     };
   }).sort((a, b) => a.avgRank - b.avgRank);
-  const champ = Object.entries(bestCnt).sort((a, b) => b[1] - a[1])[0] || null;
+  const champ = Object.entries(soleCnt).sort((a, b) => b[1] - a[1])[0] || null;
   return {rows, nDay, nSkip, lowerBetter, metric: mt,
           nBestModels: Object.keys(bestCnt).length,
+          //  融合本身不是「可挑的單一模式」，論證「事前無從挑」時要排除
+          nBestSingle: Object.keys(soleCnt).filter(m => m !== 'blend').length,
           champ: champ ? {m: champ[0], days: champ[1]} : null};
 }
 
@@ -6223,18 +6224,19 @@ function _vfRankStats(metric){
 //  ★★ 2026-10-09：移除「平均名次」長條圖。
 //    平均是統計量不是總數，用長條表示會誤導（長度代表什麼並不直覺）。
 //    改成把平均只當排序依據，圖本身呈現**分布**——各名次各幾天。
+//  ★ 標題不加括號說明（使用者指定）。括號裡的字如果是必要資訊，
+//    就該用圖例或軸標示表達；用括號補釋等於承認圖面沒講清楚。
 const _VF_RANK_VIEWS = {
-  top3: {title: '進前三次數',                   unit: '次'},
-  dist: {title: '名次分布（各名次幾天，依平均名次排序）', unit: '天'},
-  best: {title: '當日最佳次數（僅單一模式）',   unit: '次'},
+  top3: {title: '進前三次數', unit: '次'},
+  dist: {title: '名次分布',   unit: '天'},
+  best: {title: '當日最佳次數', unit: '次'},
 };
 
 function _vfRankHeader(ctx, st, CW, isZoom, view){
   const V = _VF_RANK_VIEWS[view] || _VF_RANK_VIEWS.dist;
   ctx.font = `bold ${isZoom ? 19 : 10}px sans-serif`;
   ctx.textAlign = 'left'; ctx.fillStyle = '#6bc8e8';
-  ctx.fillText(`${V.title}　${_vfMetricLabel(st.metric)}`
-    + `　（${st.nDay} 個有事件的日子${st.nSkip ? `，略過 ${st.nSkip} 日` : ''}）`,
+  ctx.fillText(`${V.title}　${_vfMetricLabel(st.metric)}　樣本 ${st.nDay} 日`,
     isZoom ? 14 : 6, isZoom ? 30 : 13);
 }
 
@@ -6255,7 +6257,8 @@ function _vfBars(ctx, rows, opt){
     ctx.textAlign = 'left';
     ctx.font = `${isB ? 'bold ' : ''}${fs}px sans-serif`;
     ctx.fillStyle = isB ? '#7ee8a8' : '#cfe4f5';
-    ctx.fillText(labelOf(r), x0 - opt.wName, y + fs * 0.35);
+    //  ★ 留一個 gap，否則標籤右緣正好落在 x0＝貼著長條
+    ctx.fillText(labelOf(r), x0 - opt.wName - gap, y + fs * 0.35);
     ctx.font = `${fs}px sans-serif`;
     // 條
     ctx.fillStyle = colorOf ? colorOf(r) : (isB ? 'rgba(126,232,168,0.85)'
@@ -6306,18 +6309,24 @@ function _drawVerifyRank(ctx, CW, CH, isZoom, view){
   const gap = isZoom ? 14 : 6;
   if(!st.nDay || !st.rows.length){
     ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom ? 18 : 11}px sans-serif`;
-    ctx.fillText(`所選區間內「${_vfMetricLabel(st.metric)}」沒有發生事件的日子，無法排名`,
+    ctx.fillText(`所選區間內「${_vfMetricLabel(st.metric)}」算不出值，無法排名`,
                  12, isZoom ? 40 : 24);
-    ctx.fillText('（門檻型指標只統計當天真的有事件的日子，避免乾日灌水）',
+    ctx.fillText('門檻型指標在完全沒有超標格點的日子分母為 0，本質上無從定義',
                  12, isZoom ? 66 : 40);
     return;
   }
   _vfRankHeader(ctx, st, CW, isZoom, view);
   const pT = isZoom ? 60 : 26, pB = isZoom ? 34 : 16;
   const ih = CH - pT - pB;
-  const MAXR = isZoom ? 14 : 8;
-  ctx.font = `bold ${fs}px sans-serif`;
-  const nameW = rs => Math.max(...rs.map(r => ctx.measureText(VF_NAME[r.m] || r.m).width));
+//  ★ 全螢幕時名額＝模式總數：名額比模式少，排最後的那個會被靜默砍掉
+  //    （實測：15 個模式配 MAXR 14，剛好砍掉樣本最少的 CWA）
+  const MAXR = isZoom ? VF_MODELS.length : 8;
+  //  ★ 量字寬必須用「實際會畫出來的字體」：FORMOSA 用粗體，
+  //    拿細體去量會短 2~4px，標籤就貼上長條（量測與繪製必須同一套字體）
+  const nameW = rs => Math.max(...rs.map(r => {
+    ctx.font = `${r.m === 'blend' ? 'bold ' : ''}${fs}px sans-serif`;
+    return ctx.measureText(VF_NAME[r.m] || r.m).width;
+  }));
   ctx.font = `${fs}px sans-serif`;
   const numW = ctx.measureText('88').width;
 
@@ -6327,24 +6336,33 @@ function _drawVerifyRank(ctx, CW, CH, isZoom, view){
     const pieR = Math.min(ih * 0.46, CW * 0.17);
     const pieX = CW - pieR - gap * 2;
     const wN = nameW(rows);
-    const x0 = Math.ceil(numW + gap * 3 + wN);
+    const x0 = Math.ceil(numW + gap * 4 + wN);
     const w = Math.max(60, pieX - pieR - gap * 3 - x0);
     const vmax = Math.max(1, ...rows.map(r => r.top3n));
     //  ★ 長條與圓餅必須同色：不同色的話扇形對不回模式，圓餅等於沒資訊
+    //  ★★ 2026-10-09：圓餅只分到第 PIE_TOP 名，其餘併成「其他」。
+    //    15 個模式畫 15 片近等分的餅：片片一樣大、調色盤只有 8 色會重複，
+    //    同一個顏色對到兩個模式 —— 圓餅不但沒資訊，還會誤導。
     const PAL = ['#6bc8e8', '#FFC14D', '#FF8C8C', '#c8a8e8',
                  '#8fb0c8', '#40d060', '#FF66CC', '#e8c86b'];
-    const colOf = (r, i) => (r.m === 'blend') ? '#7ee8a8' : PAL[i % PAL.length];
+    const PIE_TOP = 6, C_OTHER = '#3b566b';
     const _idx = new Map(rows.map((r, i) => [r.m, i]));
+    const colOf = (r, i) => (r.m === 'blend') ? '#7ee8a8'
+                          : (i >= PIE_TOP) ? C_OTHER : PAL[i % PAL.length];
     _vfBars(ctx, rows, {x0, y0: pT, w, h: ih, fs, vmax, gap, wName: wN,
       rhMax: isZoom ? 46 : 17,
       valueOf: r => r.top3n, labelOf: r => VF_NAME[r.m] || r.m,
       colorOf: r => colOf(r, _idx.get(r.m) || 0),
       fmt: v => `${v} 次`});
-    const sl = rows.map((r, i) => ({v: r.top3n, c: colOf(r, i)}));
+    const sl = rows.slice(0, PIE_TOP).map((r, i) => ({v: r.top3n, c: colOf(r, i)}));
+    const _oth = rows.slice(PIE_TOP).reduce((a, r) => a + r.top3n, 0);
+    if(_oth > 0) sl.push({v: _oth, c: C_OTHER});
     _vfPie(ctx, pieX, pT + ih / 2, pieR, sl, Math.max(8, fs - 1));
     ctx.fillStyle = '#5a88aa'; ctx.textAlign = 'center';
     ctx.font = `${Math.max(8, fs - 1)}px sans-serif`;
-    ctx.fillText('占比', pieX, pT + ih / 2 + pieR + (isZoom ? 20 : 11));
+    //  不用括號補釋：灰色代表什麼，直接寫成圖例式的標示
+    ctx.fillText(_oth > 0 ? `占比　灰＝其餘 ${rows.length - PIE_TOP} 個模式` : '占比',
+                 pieX, pT + ih / 2 + pieR + (isZoom ? 20 : 11));
     return;
   }
 
@@ -6352,8 +6370,12 @@ function _drawVerifyRank(ctx, CW, CH, isZoom, view){
   if(view === 'dist'){
     const rows = st.rows.slice(0, MAXR);
     const wN = nameW(rows);
-    const x0 = Math.ceil(numW + gap * 3 + wN);
-    const w = Math.max(60, CW - x0 - (isZoom ? 180 : 86));
+    const x0 = Math.ceil(numW + gap * 4 + wN);
+    ctx.font = `${fs}px sans-serif`;
+    //  右側文字實際量過再留，不用猜的常數（猜的常數就是裁字的來源）
+    const wR = Math.ceil(Math.max(...rows.map(r =>
+      ctx.measureText(`平均 ${r.avgRank.toFixed(1)} 名　${r.n} 日`).width))) + gap * 2;
+    const w = Math.max(60, CW - x0 - wR);
     const maxN = Math.max(1, ...rows.map(r => r.n));
     const rh = Math.min(isZoom ? 46 : 17, ih / Math.max(1, rows.length));
     //  ★ 名次色必須一眼分得出來。原本六個都是綠藍灰的近鄰色，
@@ -6370,14 +6392,21 @@ function _drawVerifyRank(ctx, CW, CH, isZoom, view){
       ctx.textAlign = 'left';
       ctx.font = `${isB ? 'bold ' : ''}${fs}px sans-serif`;
       ctx.fillStyle = isB ? '#7ee8a8' : '#cfe4f5';
-      ctx.fillText(VF_NAME[r.m] || r.m, x0 - wN, y + fs * 0.35);
+      ctx.fillText(VF_NAME[r.m] || r.m, x0 - wN - gap, y + fs * 0.35);
       ctx.font = `${fs}px sans-serif`;
+      //  ★ 第 6 名以後合併成單一段（使用者指出：都是灰色卻拆成好幾塊，
+      //    相鄰同色、數字不同，看起來像兩個不同的東西，實際是同一類）
+      const _dm = {};
+      Object.keys(r.dist).map(Number).forEach(k => {
+        const kk = Math.min(6, k);
+        _dm[kk] = (_dm[kk] || 0) + r.dist[k];
+      });
       let cx = x0;
-      Object.keys(r.dist).map(Number).sort((a, b) => a - b).forEach(k => {
-        const seg = w * r.dist[k] / maxN;
+      Object.keys(_dm).map(Number).sort((a, b) => a - b).forEach(k => {
+        const seg = w * _dm[k] / maxN;
         ctx.fillStyle = bandOf(k);
         ctx.fillRect(cx, y - rh * 0.3, seg, rh * 0.6);
-        const t = String(r.dist[k]);
+        const t = String(_dm[k]);
         if(seg > ctx.measureText(t).width + gap){
           ctx.fillStyle = '#04121c'; ctx.textAlign = 'center';
           ctx.fillText(t, cx + seg / 2, y + fs * 0.35);
@@ -6388,7 +6417,10 @@ function _drawVerifyRank(ctx, CW, CH, isZoom, view){
       ctx.strokeRect(x0, y - rh * 0.3, w, rh * 0.6);
       //  右側只放排序依據（平均名次）——否則讀者看不出列的順序是怎麼來的
       ctx.textAlign = 'left'; ctx.fillStyle = '#9fb8cc';
-      ctx.fillText(`平均 ${r.avgRank.toFixed(1)} 名`, x0 + w + gap, y + fs * 0.35);
+      //  ★ 長條長度正規化到最大天數，樣本少的模式（CWA 只有部分日子有判讀）
+      //    棒子會比較短 —— 不標樣本數會被讀成「6名以後是 0」
+      ctx.fillText(`平均 ${r.avgRank.toFixed(1)} 名　${r.n} 日`,
+                   x0 + w + gap, y + fs * 0.35);
     });
     // 名次色例
     ctx.font = `${Math.max(8, fs - 1)}px sans-serif`;
@@ -6404,27 +6436,65 @@ function _drawVerifyRank(ctx, CW, CH, isZoom, view){
     return;
   }
 
-  // ── ④ 當日最佳次數（僅單一模式；融合不是候選）─────────────
-  const rows = st.rows.filter(r => r.m !== 'blend')
-                      .sort((a, b) => b.bestDays - a.bestDays).slice(0, MAXR);
+  // ── ④ 當日最佳次數（獨得／並列分段）───────────────────
+  //  ★ FORMOSA 一起列入比較（使用者指定）。把融合排除在外，
+  //    就無法回答「融合到底有沒有比它的成分好」這個關鍵問題。
+  const rows = st.rows.slice()
+    .sort((a, b) => (b.soleDays - a.soleDays) || (b.bestDays - a.bestDays))
+    .slice(0, MAXR);
   if(!rows.length || !rows.some(r => r.bestDays > 0)){
     ctx.fillStyle = '#5a7a95'; ctx.font = `${fs}px sans-serif`;
     ctx.fillText('此區間內沒有可判定的「當日最佳」', gap, pT + 20);
     return;
   }
   const wN = nameW(rows);
-  const x0 = Math.ceil(numW + gap * 3 + wN);
-  const w = Math.max(60, CW - x0 - (isZoom ? 90 : 46));
+  const x0 = Math.ceil(numW + gap * 4 + wN);
+  ctx.font = `${fs}px sans-serif`;
+  const wR = Math.ceil(Math.max(...rows.map(r =>
+    ctx.measureText(`${r.soleDays}＋${r.tieDays} 次`).width))) + gap * 2;
+  const w = Math.max(60, CW - x0 - wR);
   const vmax = Math.max(1, ...rows.map(r => r.bestDays));
-  _vfBars(ctx, rows, {x0, y0: pT, w, h: ih, fs, vmax, gap, wName: wN,
-    rhMax: isZoom ? 46 : 17,
-    valueOf: r => r.bestDays, labelOf: r => VF_NAME[r.m] || r.m,
-    colorOf: () => 'rgba(255,193,77,0.6)',
-    fmt: v => `${v} 次`});
-  ctx.fillStyle = '#9fb8cc'; ctx.textAlign = 'left';
+  const rh = Math.min(isZoom ? 46 : 17, ih / Math.max(1, rows.length));
+  const C_SOLE = '#FFC14D', C_TIE = 'rgba(90,122,149,0.55)';
+  rows.forEach((r, i) => {
+    const y = pT + i * rh + rh / 2;
+    const isB = (r.m === 'blend');
+    ctx.textAlign = 'right'; ctx.fillStyle = isB ? '#7ee8a8' : '#7a94ac';
+    ctx.font = `${fs}px sans-serif`;
+    ctx.fillText(String(i + 1), x0 - wN - gap * 2, y + fs * 0.35);
+    ctx.textAlign = 'left';
+    ctx.font = `${isB ? 'bold ' : ''}${fs}px sans-serif`;
+    ctx.fillStyle = isB ? '#7ee8a8' : '#cfe4f5';
+    ctx.fillText(VF_NAME[r.m] || r.m, x0 - wN - gap, y + fs * 0.35);
+    ctx.font = `${fs}px sans-serif`;
+    const bs = w * r.soleDays / vmax, bt = w * r.tieDays / vmax;
+    ctx.fillStyle = C_SOLE; ctx.fillRect(x0, y - rh * 0.3, bs, rh * 0.6);
+    ctx.fillStyle = C_TIE;  ctx.fillRect(x0 + bs, y - rh * 0.3, bt, rh * 0.6);
+    //  數字標在它所代表的那一段上（標不下就不標，不另外列在旁邊）
+    [[bs, r.soleDays, x0, '#04121c'], [bt, r.tieDays, x0 + bs, '#cfe4f5']]
+      .forEach(([bw, v, bx, col]) => {
+        const t = String(v);
+        if(v > 0 && bw > ctx.measureText(t).width + gap * 2){
+          ctx.fillStyle = col; ctx.textAlign = 'center';
+          ctx.fillText(t, bx + bw / 2, y + fs * 0.35);
+        }
+      });
+    ctx.textAlign = 'left'; ctx.fillStyle = '#9fb8cc';
+    ctx.fillText(`${r.soleDays}＋${r.tieDays} 次`, x0 + w + gap, y + fs * 0.35);
+  });
+  // 圖例：兩段的意思直接畫在圖上，不寫成說明
   ctx.font = `${Math.max(8, fs - 1)}px sans-serif`;
-  ctx.fillText(`${st.nBestModels} 個模式當過「當日最佳」—— 事前無從挑，這是融合的理由`,
-               gap, CH - (isZoom ? 10 : 4));
+  const lfs = Math.max(8, fs - 1);
+  let lx = x0;
+  [[C_SOLE, '獨得最佳'], [C_TIE, '與人並列']].forEach(([c, t]) => {
+    ctx.fillStyle = c; ctx.fillRect(lx, CH - pB + (isZoom ? 4 : 2), lfs * 0.9, lfs * 0.6);
+    ctx.fillStyle = '#7a94ac'; ctx.textAlign = 'left';
+    ctx.fillText(t, lx + lfs * 1.2, CH - pB + (isZoom ? 4 : 2) + lfs * 0.6);
+    lx += lfs * 1.2 + ctx.measureText(t).width + gap * 2;
+  });
+  ctx.fillStyle = '#9fb8cc'; ctx.textAlign = 'left';
+  ctx.fillText(`${st.nBestSingle} 個單一模式獨得過「當日最佳」—— 事前無從挑，這是融合的理由`,
+               lx + gap * 2, CH - pB + (isZoom ? 4 : 2) + lfs * 0.6);
 }
 
 function drawVerifyChart(canvasId){
