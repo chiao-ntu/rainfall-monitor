@@ -69,6 +69,61 @@ ETR2_WEIGHTS = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1]  # R0~R6 固定權重
 ETR2_DECAY_6H = 0.7 ** 0.25
 
 
+#  段末非日界且無逐時資料時，當日累積量的不確定上界（mm）。
+#  小於此值就以整日量代入 —— 誤差上界即為該值本身。
+#  官方警戒單元的代表站 → CWA 站號。由 agg_obs 的 _pick_sid 解析後記下，
+#  供 apply_official_etr2 補算過去時段 —— 站號解析只有 _pick_sid 一份實作，
+#  絕不在別處重寫（它含距離門檻與撞名消歧，重寫必然分歧）。
+SWCB_UNIT_SID = {}
+
+DAILY_R0_TOL = 2.0
+
+
+def etr2_from_daily(day_rain, r0_partial=None):
+    """以官方公式由「逐日雨量」算 ETR2。
+
+        ETR2 = Σ W[i] x R[i]，W = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1]
+        R[0]＝當日（至目標時刻為止），R[1..6]＝前 1~6 日的日總量
+
+    ★★ 2026-10-09 重做。上一版（fetch_qpesums_hourly.backfill_swcb_calc）
+       用 rain_hourly.json 的逐時資料湊出 7 天日雨量，要求 168 小時、
+       每日覆蓋 ≥90%。實際排程的 log 顯示序列只有 34 小時、缺格 130 ——
+       那個條件**從部署以來一次都沒成立過**（log：「自算 vs 官方：無共同站可比對」）。
+       我驗證了公式的算術，卻沒驗證輸入在真實環境下取不取得到。
+
+       正確的來源一直都在：obs_history.json 保留 16 天的逐站日雨量，
+       由主排程維護（每輪 1362 站），而官方公式要的就是日雨量。
+       逐時資料只在「當日累積到某個時刻」這一項才需要。
+
+    參數
+      day_rain : [R0_full, R1, ..., R6] 日總量（mm）；缺值用 None
+      r0_partial : 當日累積到目標時刻的量；None 表示用整日量（適用於
+                   段末剛好是日界 24:00 的情形，此時整日量就是正確值）
+    回傳 (etr2, exact, reason)
+      exact=False 時 etr2 仍可能有用，reason 說明不確定的來源
+    """
+    W = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1]
+    if not day_rain or len(day_rain) < 7:
+        return None, False, '日雨量序列不足 7 天'
+    tail = 0.0
+    for i in range(1, 7):
+        v = day_rain[i]
+        if v is None:
+            return None, False, f'前 {i} 日無日雨量'
+        tail += W[i] * float(v)
+    d0 = day_rain[0]
+    if r0_partial is not None:
+        return round(r0_partial + tail, 1), True, ''
+    if d0 is None:
+        return None, False, '當日無日雨量'
+    d0 = float(d0)
+    #  段末不是日界、又沒有逐時資料時，當日累積落在 [0, d0] 之間。
+    #  日雨量很小的話這段不確定性可以忽略；否則不猜，交回去留白。
+    if d0 <= DAILY_R0_TOL:
+        return round(d0 + tail, 1), False, f'當日量 {d0:.1f}mm 以整日計（誤差 ≤{d0:.1f}mm）'
+    return None, False, f'當日已累積 {d0:.1f}mm 但缺逐時資料，無法定出該時刻的累積量'
+
+
 def fill_etr2_series(etr, rain, max_resid_ratio=0.25):
     """以官方遞迴式補回「兩端都有官方錨點」的內部缺口。
 
@@ -1473,7 +1528,7 @@ def fetch_obs():
     print(f"  {len(stations)} 站，有24h雨量：{nonzero}")
     return stations
 
-def apply_official_etr2(out_towns, now_tpe):
+def apply_official_etr2(out_towns, now_tpe, history=None):
     """以水保署官方現值為準，覆寫鄉鎮 ETR2，並掛上官方歷史。
 
     ★★ 2026-10-06（使用者指定：觀測值一律用官方資料，ETR2 用水保署的，
@@ -1597,6 +1652,10 @@ def apply_official_etr2(out_towns, now_tpe):
     # 由 rain_hourly.json 的逐小時站級官方 ETR2 重建鄉鎮逐段歷史（較精細，優先）
     n_hr = 0
     _fill_stat = {'filled': 0, 'refused': 0, 'gaps': 0, 'units': 0, 'norain': 0}
+    _calc_stat = {'exact': 0, 'approx': 0, 'refused': 0, 'why': {}}
+    #  base 是「今天 00:00」，不是現在 —— 用它當未來段的界線會把 06:00
+    #  之後、現在之前的段也擋掉。比較基準必須是當下時刻。
+    _now_naive = now_tpe.replace(tzinfo=None)
     try:
         _sw = load_slope_warn() or {}
         if _sw and os.path.exists(HOURLY_FILE):
@@ -1607,7 +1666,7 @@ def apply_official_etr2(out_towns, now_tpe):
             #    先前只讀 swcb，水保署 API 單獨失敗的小時就整個空白 ——
             #    而那些小時的時雨量明明抓到了。
             _swcb_h = _ser.get('swcb') or {}
-            _calc_h = _ser.get('swcb_calc') or {}
+            _calc_h = {}        # （逐時版自算已移除，見 fetch_qpesums_hourly 的說明）
             _n_api = _n_calc = 0
             _merged = {}
             for _hk in set(_swcb_h) | set(_calc_h):
@@ -1678,6 +1737,30 @@ def apply_official_etr2(out_towns, now_tpe):
                             if _nm and _nm in _rain_seg and _sk in _rain_seg[_nm]:
                                 _rv = _rain_seg[_nm][_sk]; break
                         _rn.append(_rv)
+                    #  ★★ 2026-10-09：官方 API 沒有的段，用官方公式由 obs_history
+                    #    的逐日觀測算出來。這不是估算 —— ETR2 的定義就是
+                    #    「近 7 日日雨量的官方固定權重和」，而日雨量是主排程
+                    #    每輪維護的官方觀測（16 天、1300+ 站）。
+                    #    （上一版改用逐時資料，需要 168h/每日 90% 覆蓋，
+                    #      實跑只有 34h、缺格 130，等於從未生效。）
+                    _sid = SWCB_UNIT_SID.get((_town, _r2.get('station') or ''))
+                    if _sid and history:
+                        for _i, _sk in enumerate(_segkeys):
+                            if _es[_i] is not None: continue
+                            try:
+                                _end = datetime.strptime(_sk, '%Y-%m-%dT%H') + timedelta(hours=6)
+                            except Exception:
+                                continue
+                            if _end > _now_naive:
+                                continue            # 未來段不補（只補已經過去的時刻）
+                            _v2, _ex, _why = calc_etr2_at(_sid, history, _end)
+                            if _v2 is not None:
+                                _es[_i] = _v2
+                                _calc_stat['exact' if _ex else 'approx'] += 1
+                            elif _why:
+                                _calc_stat['why'][_why.split('，')[0][:24]] = \
+                                    _calc_stat['why'].get(_why.split('，')[0][:24], 0) + 1
+                                _calc_stat['refused'] += 1
                     if not any(v is not None for v in _es):
                         continue
                     #  ★★ 2026-10-09：資料路徑**不做**遞迴補值。
@@ -1705,6 +1788,16 @@ def apply_official_etr2(out_towns, now_tpe):
             if n_hr:
                 print(f"  官方 ETR2 歷史：由 {HOURLY_FILE} 逐小時站值重建 {n_hr} 筆"
                       f"（{len(_by_seg)} 個 6h 段、{_fill_stat['units']} 個警戒單元）")
+            if _calc_stat['exact'] or _calc_stat['approx'] or _calc_stat['refused']:
+                print(f"  官方公式補算（Σ W[i]xR[i]，由 {HISTORY_FILE} 逐日官方觀測）："
+                      f"精確 {_calc_stat['exact']} 段、"
+                      f"近似 {_calc_stat['approx']} 段（當日量 ≤{DAILY_R0_TOL}mm）、"
+                      f"無法補 {_calc_stat['refused']} 段")
+                for _w, _n in sorted(_calc_stat['why'].items(), key=lambda kv: -kv[1])[:3]:
+                    print(f"     無法補的原因：{_w}　{_n} 段")
+            elif history:
+                print(f"  ⚠ 官方公式補算 0 段 —— 代表代表站站號解析或逐日歷史有問題，"
+                      f"請查 SWCB_UNIT_SID（{len(SWCB_UNIT_SID)} 筆）與 {HISTORY_FILE}")
             if _fill_stat['gaps']:
                 print(f"  ⚠ ETR2 序列仍有 {_fill_stat['gaps']} 個內部缺口"
                       f"（{_fill_stat['units']} 個警戒單元中）"
@@ -1824,6 +1917,40 @@ def calc_etr2(sid, history, now_tpe):
     dvals = get_daily_rain_array(sid, history, now_tpe, days=7)   # 含今天去重疊
     etr2 = sum(ETR2_WEIGHTS[i] * dvals[i] for i in range(7))
     return round(etr2, 1)
+
+def calc_etr2_at(sid, history, end_dt):
+    """指定時刻的 ETR2（官方公式，由 obs_history 的逐日觀測算出）。
+
+    end_dt＝該 6h 段的**結束**時刻。段末若落在 00:00，代表的是前一日的
+    24:00 —— 當日量正好是整日總量，結果精確。
+
+    ★★ 2026-10-09：為什麼改用逐日歷史
+      先前的自算走 rain_hourly.json 的逐時資料，需要 168 小時、每日覆蓋
+      ≥90%。實際 log 顯示序列只有 34 小時、缺格 130，那個條件從未成立。
+      obs_history.json 保留 16 天逐站日雨量、由主排程維護，而官方公式
+      要的本來就是日雨量 —— 逐時只在「當日累積到某時刻」這一項才需要。
+
+    ★ 缺日不得當成 0：get_daily_rain_array() 用 .get(key, 0.0)，
+      沒有紀錄的那天會被算成沒下雨，ETR2 因此被**低估**。
+      對警戒系統而言低估是危險的方向，所以這裡缺日一律回 None。
+    回傳 (etr2, exact, reason)
+    """
+    rec = (history or {}).get(sid)
+    if not rec:
+        return None, False, '無該站歷史'
+    at_midnight = (end_dt.hour == 0)
+    base = (end_dt - timedelta(days=1)).date() if at_midnight else end_dt.date()
+    days = []
+    for i in range(7):
+        d = (base - timedelta(days=i)).strftime('%Y-%m-%d')
+        v = rec.get(d)
+        days.append(None if v is None else float(v))
+    if at_midnight:
+        #  段末＝該日 24:00 → 當日累積就是整日總量，精確
+        return etr2_from_daily(days, r0_partial=days[0]) if days[0] is not None \
+               else (None, False, '當日無日雨量')
+    return etr2_from_daily(days)
+
 
 def get_daily_rain_array(sid, history, now_tpe, days=15):
     """
@@ -2192,9 +2319,13 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                                                  'want': stn, 'matched': _mn,
                                                  'tier': _tier, 'etr2': _rv})
                     if ev is not None: src = 'swcb'; used_swcb = True
+                # ★ 不論官方值有沒有，都記下該單元代表站的站號 ——
+                #   過去時段的補算需要它，而站號解析只有 _pick_sid 一份實作
+                _usid = _pick_sid(stn, _c, _t)
+                if _usid: SWCB_UNIT_SID[(_c + _t, stn)] = _usid
                 # ② 備援：以 CWA 觀測自算（該官方指定站）
                 if ev is None:
-                    sid = _pick_sid(stn, _c, _t)
+                    sid = _usid
                     if sid:
                         ev = calc_etr2(sid, history, now_tpe)
                         if ev is not None: src = 'cwa'; used_cwa = True
@@ -6625,7 +6756,7 @@ def main():
 
     # ★ 官方 ETR2 為準（覆寫）＋ 掛上官方歷史。必須在寫檔前。
     try:
-        apply_official_etr2(output.get('townships') or [], now_tpe)
+        apply_official_etr2(output.get('townships') or [], now_tpe, history)
     except Exception as _e:
         print(f"  官方 ETR2 套用失敗（不影響本輪）：{_e}")
 

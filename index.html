@@ -1339,7 +1339,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-09T18:30Z';
+const FORMOSA_BUILD = '2026-10-09T19:40Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -2109,16 +2109,14 @@ function _wfStart(){
 
   const step = ()=>{
     if(!_windFieldOn || !_wfCanvas) return;
-    // 以半透明黑覆蓋，形成拖尾
-    ctx.globalCompositeOperation = 'destination-in';
-    // ★ 拖尾再拉長（使用者指定）：每幀保留 95% → 97.5%。
-    //   殘影衰減到 10% 所需幀數由 45 幀增為 91 幀，線條再長一倍。
-    //   線寬同時由 1.2 收到 1.0 —— 軌跡變長本身就會增加畫面上的墨量，
-    //   不收細的話「減半」的效果會被拖尾吃掉。
-    ctx.fillStyle = 'rgba(0,0,0,0.975)';
-    ctx.fillRect(0, 0, cv._cw, cv._ch);
+    // ★★ 2026-10-09（使用者指定，推翻先前的拖尾設定）：
+    //   移除殘影 —— 每幀整張清空，只畫當前這一段位移。
+    //   先前用 destination-in + rgba(0,0,0,0.975) 讓舊軌跡慢慢淡出，
+    //   拖尾長度約 91 幀，蓋在地圖上會干擾底下的色塊判讀。
+    ctx.clearRect(0, 0, cv._cw, cv._ch);
     ctx.globalCompositeOperation = 'source-over';
-    ctx.lineWidth = 1.0;
+    //   沒有拖尾之後單幀墨量大減，線寬回到 1.2 才看得清楚風向
+    ctx.lineWidth = 1.2;
     _wfParticles.forEach(p=>{
       // ★ 粒子固定跟隨一個測站；重生時才重抽（每幀重抽會變雜訊）
       if(!p.node) p.node = pickNode(p.x, p.y);
@@ -6204,7 +6202,7 @@ function _drawVerifyRank(ctx, CW, CH, isZoom){
     if(CW - pL - (wStat + gap * 2) >= CW * 0.22) break;   // 橫條至少佔畫布兩成
   }
   const pR = Math.ceil(wStat + gap * 2);
-  const pT = isZoom ? 58 : 24, pB = isZoom ? 44 : 20;
+  const pT = isZoom ? 74 : 34, pB = isZoom ? 44 : 20;
   const iw = Math.max(40, CW - pL - pR), ih = CH - pT - pB;
   const rh = Math.min(isZoom ? 46 : 17, ih / Math.max(1, rows.length));
 
@@ -6213,6 +6211,15 @@ function _drawVerifyRank(ctx, CW, CH, isZoom){
   ctx.fillText(`模式排行　${_vfMetricLabel(st.metric)}　`
     + `（${st.nDay} 個有事件的日子${st.nSkip ? `，略過 ${st.nSkip} 日` : ''}）`,
     gap, isZoom ? 30 : 13);
+
+  //  ★★ 2026-10-09：補上欄位表頭與條內數值。
+  //    原本只在圖最下面寫一行「橫條＝進前三比例」，使用者看不出
+  //    橫條在表示什麼、數值是多少 —— 數字要貼在它所代表的圖形旁邊。
+  ctx.font = `${Math.max(8, fs - (isZoom ? 2 : 1))}px sans-serif`;
+  ctx.fillStyle = '#5a88aa'; ctx.textAlign = 'left';
+  ctx.fillText('模式', numW + gap, pT - (isZoom ? 10 : 5));
+  ctx.fillText('進前三比例（橫條，越長越好）', pL, pT - (isZoom ? 10 : 5));
+  ctx.fillText('統計值', pL + iw + gap, pT - (isZoom ? 10 : 5));
 
   ctx.font = `${fs}px sans-serif`;
   rows.forEach((r, i) => {
@@ -6233,6 +6240,16 @@ function _drawVerifyRank(ctx, CW, CH, isZoom){
     ctx.fillRect(pL, y - rh * 0.3, bw, rh * 0.6);
     ctx.strokeStyle = '#1a3a52'; ctx.lineWidth = 1;
     ctx.strokeRect(pL, y - rh * 0.3, iw, rh * 0.6);
+    //  數值貼在條上：夠長就放在條內右端，太短就放在條外
+    const pctTxt = `${(r.top3 * 100).toFixed(0)}%`;
+    const pw = ctx.measureText(pctTxt).width;
+    if(bw > pw + gap * 2){
+      ctx.textAlign = 'right'; ctx.fillStyle = isB ? '#06240f' : '#cfe8f7';
+      ctx.fillText(pctTxt, pL + bw - gap, y + fs * 0.35);
+    }else{
+      ctx.textAlign = 'left'; ctx.fillStyle = '#7a94ac';
+      ctx.fillText(pctTxt, pL + bw + gap * 0.6, y + fs * 0.35);
+    }
     // 右側數字
     ctx.textAlign = 'left'; ctx.fillStyle = isB ? '#7ee8a8' : '#9fb8cc';
     ctx.fillText(rTxt(r), pL + iw + gap, y + fs * 0.35);
@@ -6242,7 +6259,8 @@ function _drawVerifyRank(ctx, CW, CH, isZoom){
   ctx.textAlign = 'left'; ctx.font = `${isZoom ? 16 : 9}px sans-serif`;
   ctx.fillStyle = '#9fb8cc';
   const ch = st.champ ? `，最常是 ${VF_NAME[st.champ.m] || st.champ.m}（${st.champ.days} 天）` : '';
-  ctx.fillText(`橫條＝進前三比例　｜　「當日最佳」換過 ${st.nBestModels} 個模式${ch}`,
+  ctx.fillText(`「當日最佳」換過 ${st.nBestModels} 個模式${ch}`
+             + `　—— 事前無從挑，這是融合的理由`,
                gap, CH - (isZoom ? 14 : 6));
 }
 

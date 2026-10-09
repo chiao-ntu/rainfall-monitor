@@ -101,35 +101,43 @@ chk('D', '兩個來源都已寫入 → 不重抓' in Q,
     '只有兩個來源都齊全時才略過（而非只看小時是否存在）')
 
 # ── [E] 缺口要用資料補，不是用畫法掩蓋 ───────────────────────────
-chk('E', 'def backfill_swcb_calc' in Q,
-    '有「以官方公式自算 ETR2」的補缺機制',
-    'API 只給現在的值；過去的小時只能由官方時雨量依官方公式算出')
-chk('E', 'backfill_swcb_calc(ser, now_tpe)' in Q,
-    '補缺機制確實被呼叫')
-chk('E', "_calc_h = _ser.get('swcb_calc')" in R,
-    'fetch_rainfall 會讀取自算值（否則算了也沒人用）')
+chk('E', 'def calc_etr2_at' in R and 'def etr2_from_daily' in R,
+    '有「以官方公式補算 ETR2」的機制（calc_etr2_at）',
+    'API 只給現在的值；過去的時段要由官方日雨量依官方公式算出')
+chk('E', 'calc_etr2_at(_sid, history, _end)' in R,
+    '補算機制確實被歷史建構呼叫')
+chk('E', 'backfill_swcb_calc' not in Q,
+    '逐時版自算已移除（168h 覆蓋條件在實際排程下從未成立）',
+    '條件永遠不成立的實作等於沒修，而且是第二份實作')
+chk('E', 'HISTORY_FILE' in R and 'SWCB_UNIT_SID' in R,
+    '補算的輸入是主排程維護的 obs_history（系統真的取得得到）',
+    '★ 這條是上次的教訓：公式驗算正確，但輸入在真實環境下永遠湊不齊')
+chk('E', '官方公式補算 0 段' in R,
+    '補算 0 段時必須印出警告（沉默會讓失效的實作看起來正常）')
 chk('E', 'etr2_hist_fill' not in R,
     '不再輸出「推算值」標記（資料路徑已無推算值）',
     '虛線＋註解是用呈現手法掩蓋缺口，不是修正')
 
 # ── [F] 自算必須可驗證、且不得以 0 充數 ─────────────────────────
-chk('F', '_DAY_COV_MIN' in Q,
-    '自算有每日覆蓋率門檻（缺報的小時不當成 0）')
-chk('F', '自算 vs 官方' in Q,
-    '每輪印出「自算 vs 官方」比對，能看出對站或權重是否出問題')
+chk('F', 'DAILY_R0_TOL' in R,
+    '補算有不確定性上界（段末非日界時，當日量超過門檻就不補）',
+    '硬補等於猜當日累積到那個時刻是多少')
+chk('F', 'return None, False' in R and '無日雨量' in R,
+    '前期缺日時回 None 而非 0（缺日當 0 會低估 ETR2）')
+chk('F', '無法補' in R or '無法定出' in R,
+    '無法補算時印出原因，不是靜默跳過')
 chk('F', 'KEEP_SERIES_HOURS = 168' in Q,
-    '時雨量保留 168 小時（＝官方 7 日權重所需）')
+    '時雨量仍保留 168 小時（逐時資料對當日累積有加值）')
 
 # ── [G] 權重與常數必須單一來源 ───────────────────────────────────
-wq = re.search(r'ETR2_WEIGHTS = (\[[^\]]+\])', Q)
 wr = re.search(r'ETR2_WEIGHTS = (\[[^\]]+\])', R)
-chk('G', wq and wr and wq.group(1) == wr.group(1),
-    f'兩支腳本的 ETR2 權重一致（{wq.group(1) if wq else "?"}）',
-    '權重分歧會讓自算值與後端換算互相矛盾')
+chk('G', bool(wr) and 'ETR2_WEIGHTS' not in Q,
+    f'ETR2 權重只定義在 fetch_rainfall 一處（{wr.group(1) if wr else "?"}）',
+    '兩支腳本各定義一份，日後改一邊就會分歧')
 
 # ── [H] 修剪必須涵蓋所有 bucket ─────────────────────────────────
-chk('H', "for bucket in ('cwa', 'swcb', 'swcb_calc')" in Q,
-    '序列修剪涵蓋全部三個 bucket',
+chk('H', "for bucket in ('cwa', 'swcb')" in Q,
+    '序列修剪涵蓋全部 bucket',
     '漏掉一個會讓檔案無限長大')
 
 # ── 報表 ─────────────────────────────────────────────────────────

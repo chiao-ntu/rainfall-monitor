@@ -88,50 +88,44 @@ ser = run(datetime(2026, 10, 8, 15, 5), {}, {}, P2)
 ok(ser is None or '2026-10-08T15' not in (ser or {}).get('hours', []),
    '④兩個來源都失敗時，該小時不得被記錄為已有資料')
 
-print('\n── ⑤ 以官方公式自算 ETR2 ───────────────────────────────')
-# 造 7 天完整時雨量：第 i 天每小時 rain_per_h[i] mm
-P3 = os.path.join(tmp, 'c.json')
-H = datetime(2026, 10, 8, 23)          # 取整日，R0 覆蓋 00~23 共 24 小時
-rain_per_h = [1.0, 2.0, 0.0, 0.5, 0.0, 3.0, 1.0]     # 第 0~6 天（0＝當日）
-cwa_block = {}
-for i, rph in enumerate(rain_per_h):
-    d = (H - timedelta(days=i)).date()
-    n = 24
-    for h in range(n):
-        hk = datetime(d.year, d.month, d.day, h).strftime('%Y-%m-%dT%H')
-        cwa_block[hk] = {'寒溪': rph}
-ser3 = {'hours': sorted(cwa_block.keys()), 'cwa': cwa_block, 'swcb': {}}
-Q.backfill_swcb_calc(ser3, H)
-got = (ser3.get('swcb_calc') or {}).get(H.strftime('%Y-%m-%dT%H'), {}).get('寒溪')
-want = round(sum(Q.ETR2_WEIGHTS[i] * rain_per_h[i] * 24 for i in range(7)), 1)
-ok(got is not None, '⑤自算值有算出來')
-ok(got is not None and abs(got - want) < 0.05,
-   f'⑤自算 ETR2 = {got}（手算 Σ W[i]x{24}x日雨量 = {want}）')
-
-print('\n── ⑥ 覆蓋不足不得以 0 充數 ─────────────────────────────')
-# 把第 3 天挖掉一半小時 → 覆蓋率 50% < 90% → 必須不算
-d3 = (H - timedelta(days=3)).date()
-for h in range(12):
-    cwa_block.pop(datetime(d3.year, d3.month, d3.day, h).strftime('%Y-%m-%dT%H'), None)
-ser4 = {'hours': sorted(cwa_block.keys()), 'cwa': cwa_block, 'swcb': {}}
-Q.backfill_swcb_calc(ser4, H)
-got4 = (ser4.get('swcb_calc') or {}).get(H.strftime('%Y-%m-%dT%H'), {}).get('寒溪')
-ok(got4 is None,
-   f'⑥某一日時雨量覆蓋不足時不得自算（缺的小時若當成 0 會低估，實得 {got4}）')
-
-print('\n── ⑦ 官方值存在的小時不得被自算值覆蓋 ──────────────────')
-ser5 = {'hours': [H.strftime('%Y-%m-%dT%H')], 'cwa': cwa_block,
-        'swcb': {H.strftime('%Y-%m-%dT%H'): {'寒溪': 999.0}}}
-Q.backfill_swcb_calc(ser5, H)
-ok(ser5['swcb'][H.strftime('%Y-%m-%dT%H')]['寒溪'] == 999.0,
-   '⑦官方 API 值原封不動')
-ok(not (ser5.get('swcb_calc') or {}).get(H.strftime('%Y-%m-%dT%H')),
-   '⑦官方值已存在的小時不另外自算')
-
-print('\n── ⑧ 權重必須與 fetch_rainfall.py 同一組 ───────────────')
+print('\n── ⑤ 官方公式補算（改用 obs_history 逐日觀測）──────────')
+#  上一版的自算吃 rain_hourly 的逐時資料，需要 168h/每日 90% 覆蓋。
+#  實跑序列只有 34h、缺格 130 —— 條件從未成立。改由逐日歷史算，
+#  因為官方公式要的本來就是日雨量。
 import fetch_rainfall as F
-ok(Q.ETR2_WEIGHTS == F.ETR2_WEIGHTS,
-   f'⑧兩支腳本的 ETR2 權重一致（{Q.ETR2_WEIGHTS} vs {F.ETR2_WEIGHTS}）')
+from datetime import datetime as _dt
+W = F.ETR2_WEIGHTS
+_h = {'S1': {'2026-10-08': 30.0, '2026-10-07': 10.0, '2026-10-06': 5.0,
+             '2026-10-05': 0.0, '2026-10-04': 2.0, '2026-10-03': 0.0,
+             '2026-10-02': 1.0}}
+_d = [30.0, 10.0, 5.0, 0.0, 2.0, 0.0, 1.0]
+_want = round(sum(W[i] * _d[i] for i in range(7)), 1)
+_got, _ex, _ = F.calc_etr2_at('S1', _h, _dt(2026, 10, 9, 0))
+ok(_got == _want and _ex, f'⑤段末落在日界時精確（{_got} vs 手算 {_want}）')
+
+print('\n── ⑥ 當日量大又缺逐時 → 不得硬猜 ─────────────────────')
+_g2, _e2, _w2 = F.calc_etr2_at('S1', _h, _dt(2026, 10, 8, 18))
+ok(_g2 is None, f'⑥當日已累積 30mm 但段末非日界時不得補（實得 {_g2}）')
+_h3 = dict(_h); _h3['S1'] = dict(_h['S1']); _h3['S1']['2026-10-08'] = 1.0
+_g3, _e3, _w3 = F.calc_etr2_at('S1', _h3, _dt(2026, 10, 8, 18))
+ok(_g3 is not None and not _e3,
+   f'⑥當日量小（1mm）時可補、但標為非精確（實得 {_g3}）')
+
+print('\n── ⑦ 缺日不得當成 0（會低估 ETR2）────────────────────')
+_h4 = {'S1': {'2026-10-08': 1.0, '2026-10-07': 10.0, '2026-10-05': 0.0}}
+_g4, _, _w4 = F.calc_etr2_at('S1', _h4, _dt(2026, 10, 8, 18))
+ok(_g4 is None, f'⑦前期有缺日時不得補（缺日當 0 會低估，實得 {_g4}）')
+ok('無日雨量' in (_w4 or ''), f'⑦拒補原因要說明是哪一天缺（實得 {_w4!r}）')
+
+print('\n── ⑧ ETR2 計算只留一份實作 ─────────────────────────────')
+#  逐時版的自算已移除（168h 覆蓋條件在實際排程下從未成立）。
+#  計算應該只存在於資料取得得到的那一端。
+ok(not hasattr(Q, 'backfill_swcb_calc'),
+   '⑧逐時版自算已移除（條件從未成立的實作不可留著）')
+ok(hasattr(F, 'calc_etr2_at') and hasattr(F, 'etr2_from_daily'),
+   '⑧補算實作位於 fetch_rainfall（與 obs_history 同一側）')
+ok(F.ETR2_WEIGHTS == [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1],
+   f'⑧官方權重未被更動（{F.ETR2_WEIGHTS}）')
 
 print()
 if fails:
