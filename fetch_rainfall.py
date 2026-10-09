@@ -124,6 +124,96 @@ def etr2_from_daily(day_rain, r0_partial=None):
     return None, False, f'當日已累積 {d0:.1f}mm 但缺逐時資料，無法定出該時刻的累積量'
 
 
+def seal_etr2_series(es, segkeys, sid, history, now_naive):
+    """保證過去段不留空洞 —— 由結構決定，不是再找一個資料來源。
+
+    ★★ 2026-10-09：為什麼這次是結構性的
+      前幾輪每次都只修「這一次的成因」（API 單獨失敗、排程沒跑、
+      逐時覆蓋不足），修完下一個成因又讓同一條線斷掉。
+      使用者問「昨天跑過的流程難道又要全部走一遍」—— 那是對的。
+
+      官方 ETR2 = Σ W[i] x R[i]，R[i] 是**日**總量。
+      關鍵事實：同一天之內 R0 的權重固定 1.0，沒有日內衰減 ——
+      ETR2 在一天內只隨累積雨量單調上升。因此
+
+          ETR2(t) = R0(當日 00:00→t) + tail(前 1~6 日的加權和)
+
+      tail 在任一時刻都可由 obs_history 精確算出。未知的只有 R0(t)，
+      而 R0 在每一天都有兩個**精確錨點**：
+          00:00 → R0 = 0（當日還沒開始累積）
+          24:00 → R0 = 當日總量（obs_history 有）
+      所以任何日內缺口都被兩個精確值夾住，不是外插。
+
+    作法：已知段值換算回 R0（R0 = 值 − tail），在同一天內對 R0 線性內插，
+    再加回該段自己的 tail。跨日時 R0 歸零重算，不會把前一天的累積帶過去。
+
+    回傳 (es, n_filled, max_unc)
+      max_unc＝填補點的不確定上界（夾住它的兩個錨點之間下了多少雨）
+    """
+    rec = (history or {}).get(sid)
+    if not rec:
+        return es, 0, 0.0
+    n = len(segkeys)
+    tails, ends, days = [None] * n, [None] * n, [None] * n
+    for i, sk in enumerate(segkeys):
+        try:
+            st = datetime.strptime(sk, '%Y-%m-%dT%H')
+        except Exception:
+            continue
+        end = st + timedelta(hours=6)
+        ends[i] = end
+        #  段末落在 00:00 時，代表的是前一日的 24:00
+        d = (end - timedelta(days=1)).date() if end.hour == 0 else end.date()
+        days[i] = d
+        t = 0.0
+        ok = True
+        for k in range(1, 7):
+            v = rec.get((d - timedelta(days=k)).strftime('%Y-%m-%d'))
+            if v is None:
+                ok = False
+                break
+            t += ETR2_WEIGHTS[k] * float(v)
+        tails[i] = t if ok else None
+
+    n_filled, max_unc = 0, 0.0
+    by_day = {}
+    for i in range(n):
+        if days[i] is not None:
+            by_day.setdefault(days[i], []).append(i)
+    for d, idxs in by_day.items():
+        dt = rec.get(d.strftime('%Y-%m-%d'))
+        if dt is None:
+            continue                      # 當日總量不明 → 無法定出 24:00 錨點
+        dt = float(dt)
+        #  當日的 R0 錨點：00:00＝0、24:00＝日總量，再加上已知段值換算出的點
+        pts = [(0.0, 0.0), (24.0, dt)]
+        for i in idxs:
+            if es[i] is None or tails[i] is None or ends[i] is None:
+                continue
+            h = 24.0 if ends[i].hour == 0 else float(ends[i].hour)
+            pts.append((h, max(0.0, float(es[i]) - tails[i])))
+        pts.sort()
+        for i in idxs:
+            if es[i] is not None or tails[i] is None or ends[i] is None:
+                continue
+            if now_naive is not None and ends[i] > now_naive:
+                continue                  # 未來段不填
+            h = 24.0 if ends[i].hour == 0 else float(ends[i].hour)
+            lo = max((p for p in pts if p[0] <= h), default=None)
+            hi = min((p for p in pts if p[0] >= h), default=None)
+            if lo is None or hi is None:
+                continue
+            if hi[0] - lo[0] < 1e-9:
+                r0 = lo[1]
+            else:
+                f = (h - lo[0]) / (hi[0] - lo[0])
+                r0 = lo[1] + (hi[1] - lo[1]) * f
+            es[i] = round(max(0.0, r0) + tails[i], 1)
+            n_filled += 1
+            max_unc = max(max_unc, abs(hi[1] - lo[1]))
+    return es, n_filled, max_unc
+
+
 def fill_etr2_series(etr, rain, max_resid_ratio=0.25):
     """以官方遞迴式補回「兩端都有官方錨點」的內部缺口。
 
@@ -1652,7 +1742,7 @@ def apply_official_etr2(out_towns, now_tpe, history=None):
     # 由 rain_hourly.json 的逐小時站級官方 ETR2 重建鄉鎮逐段歷史（較精細，優先）
     n_hr = 0
     _fill_stat = {'filled': 0, 'refused': 0, 'gaps': 0, 'units': 0, 'norain': 0}
-    _calc_stat = {'exact': 0, 'approx': 0, 'refused': 0, 'why': {}}
+    _calc_stat = {'exact': 0, 'approx': 0, 'refused': 0, 'why': {}, 'sealed': 0, 'unc': 0.0}
     #  base 是「今天 00:00」，不是現在 —— 用它當未來段的界線會把 06:00
     #  之後、現在之前的段也擋掉。比較基準必須是當下時刻。
     _now_naive = now_tpe.replace(tzinfo=None)
@@ -1761,6 +1851,13 @@ def apply_official_etr2(out_towns, now_tpe, history=None):
                                 _calc_stat['why'][_why.split('，')[0][:24]] = \
                                     _calc_stat['why'].get(_why.split('，')[0][:24], 0) + 1
                                 _calc_stat['refused'] += 1
+                    #  ★ 最後封口：過去段不得留洞（見 seal_etr2_series 的說明）
+                    if _sid and history:
+                        _es, _nf, _unc = seal_etr2_series(
+                            _es, _segkeys, _sid, history, _now_naive)
+                        if _nf:
+                            _calc_stat['sealed'] += _nf
+                            _calc_stat['unc'] = max(_calc_stat['unc'], _unc)
                     if not any(v is not None for v in _es):
                         continue
                     #  ★★ 2026-10-09：資料路徑**不做**遞迴補值。
@@ -1795,6 +1892,10 @@ def apply_official_etr2(out_towns, now_tpe, history=None):
                       f"無法補 {_calc_stat['refused']} 段")
                 for _w, _n in sorted(_calc_stat['why'].items(), key=lambda kv: -kv[1])[:3]:
                     print(f"     無法補的原因：{_w}　{_n} 段")
+            if _calc_stat['sealed']:
+                print(f"  日內封口：{_calc_stat['sealed']} 段（由當日 00:00 累積＝0 與"
+                      f" 24:00＝日總量兩個精確錨點夾住內插；"
+                      f"不確定上界 {_calc_stat['unc']:.1f}mm）")
             elif history:
                 print(f"  ⚠ 官方公式補算 0 段 —— 代表代表站站號解析或逐日歷史有問題，"
                       f"請查 SWCB_UNIT_SID（{len(SWCB_UNIT_SID)} 筆）與 {HISTORY_FILE}")

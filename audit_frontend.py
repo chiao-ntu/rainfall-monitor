@@ -173,6 +173,25 @@ item('U', 'OK' if n_norm >= 3 else 'FAIL',
 item('U', 'OK' if not re.search(r'const _list = \(window\.TOWNSHIPS', text) else 'FAIL',
      '不得用 window.TOWNSHIPS（const 宣告不會掛上 window，會靜默跳過全部）')
 
+# ── [W] 風場流線 ────────────────────────────────────────────────
+section('W', '[W] 風場：流線要靠逐粒子軌跡，不是畫布殘影')
+item('W', 'OK' if 'const WF_TRAIL' in CODE else 'FAIL',
+     '尾巴長度是常數（逐粒子保留幾個位置點）')
+item('W', 'OK' if 'const WF_SPEED' in CODE else 'FAIL',
+     '速度倍率是常數（可獨立調整，不必動 px/ms 換算）')
+#  只擋「半透明黑覆蓋」這種殘影手法；destination-in 用來做裁切遮罩是合法的
+_haze = re.findall(r"destination-in'?;?\s*\n\s*ctx\.fillStyle = `?rgba\(0,0,0", CODE)
+item('W', 'OK' if not _haze else 'FAIL',
+     f'不得用半透明黑覆蓋做殘影（{len(_haze)} 處；會在地圖上累積霧氣）')
+item('W', 'OK' if 'const TY_TRAIL ' in CODE else 'FAIL',
+     '颱風粒子也改用逐粒子軌跡（同類問題一起處理）')
+item('W', 'OK' if 'p.tr.splice(0, p.tr.length - WF_TRAIL * 2)' in CODE else 'FAIL',
+     '軌跡緩衝有上限（否則長度無限成長、愈跑愈慢）')
+item('W', 'OK' if 'p.tr = null;' in CODE else 'FAIL',
+     '粒子重生時清空軌跡（否則會從舊位置拉一條線過來）')
+item('W', 'OK' if 'ctx.clearRect(0, 0, cv._cw, cv._ch)' in CODE else 'FAIL',
+     '每幀整張清空（畫布上不留任何累積）')
+
 # ── [V] 預報校驗：取值與排名必須單一來源 ──────────────────────
 section('V', '[V] 預報校驗面板')
 item('V', 'OK' if count(r'function _vfMainOf\(') == 1 else 'FAIL',
@@ -190,8 +209,18 @@ item('V', 'OK' if 'function _vfHasEvent(' in text else 'FAIL',
      '排名只統計「當天真的有事件」的日子（乾日會把排行灌成雜訊）')
 item('V', 'OK' if 'function _vfNiceRange(' in text else 'FAIL',
      '趨勢圖縱軸貼齊資料（固定 0~1 會把資料壓在底部三分之一）')
-item('V', 'OK' if 'const FORMS = [' in text else 'FAIL',
-     '排行圖欄位隨寬度精簡（避免右側文字被畫布切掉）')
+item('V', 'OK' if '_VF_RANK_VIEWS' in CODE else 'FAIL',
+     '排行拆成四張單一用途的圖（一張圖只講一件事）')
+item('V', 'OK' if 'sort((a, b) => b.top3n - a.top3n)' in CODE else 'FAIL',
+     '進前三圖依「次數」排序（排序依據必須與長條長度一致）')
+item('V', 'OK' if 'valueOf: r => r.top3n' in CODE else 'FAIL',
+     '進前三圖的長條畫「次數」而非比例（占比交給圓餅）')
+item('V', 'OK' if 'const colOf = (r, i)' in CODE and 'colorOf: r => colOf' in CODE
+     else 'FAIL', '圓餅與長條同色（不同色的話扇形對不回模式）')
+item('V', 'OK' if 'function _vfPie(' in CODE else 'FAIL',
+     '占比用圓餅呈現，不是再列一個百分比數字')
+item('V', 'OK' if 'r.dist' in CODE else 'FAIL',
+     '排名統計含名次分布（第1名幾次、第2名幾次…）')
 item('V', 'OK' if '勝過當日最佳單一模式' in text else 'FAIL',
      '趨勢圖寫出「融合 vs 最佳單一模式」的結論')
 

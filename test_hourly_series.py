@@ -117,6 +117,55 @@ _g4, _, _w4 = F.calc_etr2_at('S1', _h4, _dt(2026, 10, 8, 18))
 ok(_g4 is None, f'⑦前期有缺日時不得補（缺日當 0 會低估，實得 {_g4}）')
 ok('無日雨量' in (_w4 or ''), f'⑦拒補原因要說明是哪一天缺（實得 {_w4!r}）')
 
+print('\n── ⑦b 結構保證：日雨量齊全就不可能有洞 ────────────────')
+#  這一項不是測某個案例，是測性質：隨機挖空任意組合的段，
+#  只要 obs_history 有該日與前 6 日的日雨量，封口後過去段一律不得為 None。
+#  前幾輪每次只修「這次的成因」，下一個成因又讓線斷掉 —— 要擋的是那件事。
+import random as _rnd
+_rnd.seed(42)
+_bad, _cases = [], 0
+for _trial in range(300):
+    _base = _dt(2026, 10, 8).date()
+    _hist = {}
+    for _k in range(8):
+        _d = (_base - __import__('datetime').timedelta(days=_k)).strftime('%Y-%m-%d')
+        _hist[_d] = round(_rnd.choice([0.0, 0.0, 2.5, 18.0, 90.0]), 1)
+    _H = {'S1': _hist}
+    _segs = ['2026-10-08T00', '2026-10-08T06', '2026-10-08T12', '2026-10-08T18']
+    _tail = sum(W[k] * _hist[(_base - __import__('datetime').timedelta(days=k))
+                             .strftime('%Y-%m-%d')] for k in range(1, 7))
+    _tot = _hist[_base.strftime('%Y-%m-%d')]
+    #  隨機讓 0~3 段有官方值（R0 必須單調遞增才合物理）
+    _r0 = sorted(_rnd.uniform(0, _tot) for _ in range(4))
+    _es = [None] * 4
+    for _i in range(4):
+        if _rnd.random() < 0.45:
+            _es[_i] = round(_r0[_i] + _tail, 1)
+    _out, _nf, _u = F.seal_etr2_series(list(_es), _segs, 'S1', _H, _dt(2026, 10, 9, 12))
+    _cases += 1
+    if any(v is None for v in _out):
+        _bad.append((_es, _out))
+    #  封口值必須落在當日的物理範圍內：tail ≤ 值 ≤ tail + 當日總量
+    for _v in _out:
+        if _v is not None and not (_tail - 0.2 <= _v <= _tail + _tot + 0.2):
+            _bad.append(('out-of-range', _v, _tail, _tot))
+ok(not _bad, f'⑦b {_cases} 組隨機情境全部封口成功且落在物理範圍內'
+              + (f'（失敗例 {_bad[0]}）' if _bad else ''))
+
+#  反向：日雨量缺一天就不得硬填（寧可留白也不猜）
+_H2 = {'S1': {'2026-10-08': 10.0, '2026-10-07': 5.0, '2026-10-05': 1.0}}
+_o2, _n2, _ = F.seal_etr2_series([None] * 4, ['2026-10-08T00', '2026-10-08T06',
+                                 '2026-10-08T12', '2026-10-08T18'], 'S1', _H2,
+                                 _dt(2026, 10, 9, 12))
+ok(_n2 == 0 and all(v is None for v in _o2),
+   f'⑦b 前期日雨量缺漏時不得封口（實得 {_o2}）')
+
+#  未來段不得填
+_o3, _n3, _ = F.seal_etr2_series([None] * 4, ['2026-10-08T00', '2026-10-08T06',
+                                 '2026-10-08T12', '2026-10-08T18'], 'S1', _H,
+                                 _dt(2026, 10, 8, 9))
+ok(_o3[2] is None and _o3[3] is None, f'⑦b 未來段不得填（實得 {_o3}）')
+
 print('\n── ⑧ ETR2 計算只留一份實作 ─────────────────────────────')
 #  逐時版的自算已移除（168h 覆蓋條件在實際排程下從未成立）。
 #  計算應該只存在於資料取得得到的那一端。
@@ -133,4 +182,4 @@ if fails:
     for f in fails:
         print('  - ' + f)
     sys.exit(1)
-print('全部通過（8 組情境）')
+print('全部通過（9 組情境）')
