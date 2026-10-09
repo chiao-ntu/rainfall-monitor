@@ -1067,6 +1067,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             <option value="RMSE">雨量誤差 RMSE 均方根誤差（越小越好）</option>
             <option value="basic">相對誤差 30% → 主欄顯示 CSI</option>
           </select>
+          <select id="vf-view" onchange="renderVerify()"
+            style="flex:0 0 auto;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
+            border:1px solid #1a4060;border-radius:3px">
+            <option value="trend">逐日趨勢</option>
+            <option value="rank">模式排行</option>
+          </select>
           <select id="vf-days" onchange="renderVerify()"
             style="flex:0 0 auto;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
             border:1px solid #1a4060;border-radius:3px">
@@ -1333,7 +1339,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-09T17:40Z';
+const FORMOSA_BUILD = '2026-10-09T18:30Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -5993,42 +5999,19 @@ function renderVerify(){
       };
       const mainLbl = _vfMetricLabel(metric);
       cmp(`技術得分 ${mainLbl}`, r=>r.s.main, lowBetter, lowBetter ? 1 : 3);
-      //  ★★ 2026-10-09：名次穩定度 —— 「為什麼需要 FORMOSA」的直接答案。
-      //    融合的價值不在「某一天最強」，而在「事前無從得知該信哪個模式」：
-      //    當日最佳單一模式每天換人，但 FORMOSA 的名次穩定在前段。
-      //    只看單一平均分數看不出這件事，必須逐日排名才顯現。
+      //  ★ 名次穩定度一律走 _vfRankStats（與排行圖同一份實作）
       try{
-        const _sr = _vfSeries();
-        const _rk = {}, _bestCnt = {};
-        let _nd = 0;
-        _sr.forEach(d=>{
-          const vs = [];
-          VF_MODELS.forEach(m=>{
-            const o = _vfMainOf(d.raw[m], metric);
-            if(o.v != null && isFinite(o.v)) vs.push({m, v: o.v});
-          });
-          if(vs.length < 3) return;
-          _nd++;
-          vs.sort((a, b)=> lowBetter ? a.v - b.v : b.v - a.v);
-          vs.forEach((x, i)=>{ (_rk[x.m] = _rk[x.m] || []).push(i + 1); });
-          const _mem = vs.filter(x=>x.m !== 'blend');
-          if(_mem.length) _bestCnt[_mem[0].m] = (_bestCnt[_mem[0].m] || 0) + 1;
-        });
-        const _br = _rk['blend'] || [];
-        if(_nd >= 3 && _br.length){
-          const _avg = _br.reduce((a, b)=>a + b, 0) / _br.length;
-          const _top3 = _br.filter(x=>x <= 3).length / _br.length;
-          const _wst = Math.max(..._br);
-          const _nm = Object.keys(_bestCnt).length;
-          const _topBest = Object.entries(_bestCnt).sort((a, b)=>b[1] - a[1])[0];
-          L.push(`<div style="margin:1px 0">名次穩定度（${_nd} 天）
-            FORMOSA 平均第 <b style="color:#7ee8a8">${_avg.toFixed(1)}</b> 名
-            ｜進前三 <b>${(_top3 * 100).toFixed(0)}%</b>
-            ｜最差第 <b>${_wst}</b> 名</div>`);
+        const _st = _vfRankStats(metric);
+        const _bl = _st.rows.find(r=>r.m === 'blend');
+        if(_st.nDay >= 3 && _bl){
+          L.push(`<div style="margin:1px 0">名次穩定度（${_st.nDay} 個有事件的日子）
+            FORMOSA 平均第 <b style="color:#7ee8a8">${_bl.avgRank.toFixed(1)}</b> 名
+            ｜進前三 <b>${(_bl.top3 * 100).toFixed(0)}%</b>
+            ｜最差第 <b>${_bl.worstRank}</b> 名</div>`);
           L.push(`<div style="margin:1px 0;color:#9fb8cc">「當日最佳」換過
-            <b>${_nm}</b> 個模式`
-            + (_topBest ? `（最常是 ${VF_NAME[_topBest[0]] || _topBest[0]}，
-               ${_topBest[1]}/${_nd} 天）` : '')
+            <b>${_st.nBestModels}</b> 個模式`
+            + (_st.champ ? `（最常是 ${VF_NAME[_st.champ.m] || _st.champ.m}，
+               ${_st.champ.days}/${_st.nDay} 天）` : '')
             + ` —— 事前無從得知該信哪一個，這是融合的理由</div>`);
         }
       }catch(e){}
@@ -6063,109 +6046,206 @@ function renderVerify(){
 
     <details style="margin-top:5px">
       <summary style="color:#6bc8e8;font-size:10px;cursor:pointer;user-select:none">
-        指標怎麼看（判準與合併參照）</summary>
-      <div style="color:#9fc8e8;font-size:9px;line-height:1.6;margin-top:4px">
-        <div style="color:#f0c878;margin-bottom:2px">每個指標單獨看</div>
-        <table style="width:100%;border-collapse:collapse;font-size:9px">
-          <tr style="color:#6bc8e8"><th style="text-align:left;padding:1px 3px">指標</th>
-            <th style="text-align:left;padding:1px 3px">問的問題</th>
-            <th style="text-align:left;padding:1px 3px">範圍與判準</th></tr>
-          <tr><td style="padding:1px 3px">POD</td><td>實際下雨的地方，有幾成被報出來</td>
-            <td>0~1，越高越好。漏報率＝1−POD</td></tr>
-          <tr><td style="padding:1px 3px">FAR</td><td>報有雨的地方，有幾成其實沒下</td>
-            <td>0~1，越低越好</td></tr>
-          <tr><td style="padding:1px 3px">CSI</td><td>命中 ÷（命中＋漏報＋空報）</td>
-            <td>0~1。不計「正確無雨」，所以乾季不會虛高</td></tr>
-          <tr><td style="padding:1px 3px"><b>ETS</b></td><td>扣掉「隨機也會中」之後的 CSI</td>
-            <td><b>0＝與亂猜無異、負值＝比亂猜還差</b>；&gt;0.2 可用、&gt;0.4 不錯</td></tr>
-          <tr><td style="padding:1px 3px">SEDI</td><td>極端事件專用（高門檻下 CSI／ETS 會趨近 0）</td>
-            <td>0~1，越高越好</td></tr>
-          <tr><td style="padding:1px 3px">相對誤差 30%</td>
-            <td>把「預測與觀測相差 30% 以內」當作命中，再算 CSI</td>
-            <td>下拉選此項時，<b>主欄顯示的就是 CSI</b>。這是最寬鬆的基線判準</td></tr>
-          <tr><td style="padding:1px 3px">偏差比</td><td>報有雨的地點數 ÷ 實際有雨的地點數</td>
-            <td><b>1.0＝剛好</b>；&gt;1 報得太寬、&lt;1 報得太保守。<b>量的是寬窄，不是準度</b></td></tr>
-          <tr><td style="padding:1px 3px">MAE</td><td>平均絕對誤差：每個點差幾 mm，取平均</td>
-            <td>越小越貼近觀測。<b>對大誤差不敏感</b>，代表「一般情況差多少」</td></tr>
-          <tr><td style="padding:1px 3px">RMSE</td><td>均方根誤差：先平方再平均再開根號</td>
-            <td>越小越好，單位同樣是 mm。<b>會放大少數大誤差</b>，
-              代表「有沒有偶爾錯得很離譜」</td></tr>
-        </table>
-        <div style="margin-top:3px">
-          <b>MAE 與 RMSE 一起看</b>：RMSE 一定 ≥ MAE。兩者接近＝誤差平均分布；
-          <b>RMSE 遠大於 MAE＝有少數幾次錯得很大</b>，那幾次往往就是致災事件，
-          比平均誤差更值得追。
-        </div>
-
-        <div style="color:#f0c878;margin:5px 0 2px">合併參照才看得出真相</div>
-        <div style="margin-bottom:3px">
-          <b>POD 與 FAR 必須一起看。</b>把全臺都報有雨，POD 會接近 1、看起來很準，
-          但 FAR 也會接近 1。單看任何一個都會被包牌騙過去 ——
-          <b>偏差比就是用來抓這件事的</b>：POD 高但偏差比遠大於 1，就是報得太寬。
-        </div>
-        <div style="margin-bottom:3px">
-          <b>偏差比 ≈ 1 但 ETS 仍低或為負</b>，代表「報的量對、但報錯地方或錯時間」。
-          這種情況調整雨量大小沒有用，要查的是時空對位。
-        </div>
-        <div style="margin-bottom:3px">
-          <b>ETS 是單一最具代表性的綜合分數</b>，跨季節可比（乾季不會因為「猜沒雨」而虛高）。
-          要排名優劣看它；要知道「為什麼好／為什麼差」再回頭拆 POD、FAR、偏差比。
-        </div>
-        <div style="margin-bottom:3px">
-          <b>致災事件要看高門檻。</b>低門檻（≥10mm）準不代表大雨準。
-          主指標預設 ETS ≥80mm 就是為此；極端門檻下改看 SEDI。
-        </div>
-        <div>
-          <b>量與警戒是兩回事。</b>判斷「會不會達警戒」看 ETS／POD；
-          判斷「雨量估得準不準」看 MAE 與偏差比。兩者可以一好一壞。
-        </div>
-
-        <div style="color:#f0c878;margin:5px 0 2px">
-          兩個面板的名詞對照（★ 最容易誤讀的一組）</div>
+        指標怎麼看</summary>
+      <div style="color:#9fc8e8;font-size:9px;line-height:1.55;margin-top:4px">
+        <div style="color:#f0c878;margin-bottom:2px">想知道什麼　→　看哪個指標</div>
         <table style="width:100%;border-collapse:collapse;font-size:9px">
           <tr style="color:#6bc8e8">
-            <th style="text-align:left;padding:1px 3px">預報校驗（本面板）</th>
-            <th style="text-align:left;padding:1px 3px">融合校正明細</th>
-            <th style="text-align:left;padding:1px 3px">關係</th></tr>
-          <tr><td style="padding:1px 3px"><b>偏差比</b><br>
-              <span style="color:#7a94ac">報雨地點數 ÷ 實際雨點數</span></td>
-            <td style="padding:1px 3px"><b>校正倍率</b><br>
-              <span style="color:#7a94ac">觀測 ÷ 模式，直接乘回模式值</span></td>
-            <td style="padding:1px 3px;color:#e8a860"><b>方向相反，不可互相套用</b><br>
-              偏差比 &gt;1＝報太多；校正倍率 &gt;1＝模式低估、要往上修</td></tr>
-          <tr><td style="padding:1px 3px">MAE</td>
-            <td style="padding:1px 3px">MAE</td>
-            <td style="padding:1px 3px">同一個量；校正明細用它挑該地形表現最好的模式</td></tr>
-          <tr><td style="padding:1px 3px">樣本（◆n）</td>
-            <td style="padding:1px 3px">樣本數</td>
-            <td style="padding:1px 3px">同一個量；未達 10 筆時融合維持等權重</td></tr>
-          <tr><td style="padding:1px 3px">ETS／CSI／POD／FAR</td>
-            <td style="padding:1px 3px">（無對應）</td>
-            <td style="padding:1px 3px">融合權重只用 MAE 與校正倍率，不直接用技術得分</td></tr>
+            <th style="text-align:left;padding:1px 3px;width:44%">你想知道的事</th>
+            <th style="text-align:left;padding:1px 3px;width:26%">看這個</th>
+            <th style="text-align:left;padding:1px 3px">怎樣算好</th></tr>
+          <tr><td style="padding:1px 3px">該下雨的地方，有沒有被報出來</td>
+            <td><b>POD</b></td><td>越高越好（1−POD＝漏掉幾成）</td></tr>
+          <tr><td style="padding:1px 3px">報了雨，會不會白報一場</td>
+            <td><b>FAR</b></td><td>越低越好</td></tr>
+          <tr><td style="padding:1px 3px"><b>整體哪個模式最準</b></td>
+            <td><b style="color:#f0c878">ETS</b></td>
+            <td><b>越高越好</b>；0＝跟亂猜一樣、負值＝比亂猜還差</td></tr>
+          <tr><td style="padding:1px 3px"><b>致災等級的大雨有沒有抓到</b></td>
+            <td><b style="color:#f0c878">ETS ≥80mm</b></td>
+            <td>越高越好；低門檻準不代表大雨準</td></tr>
+          <tr><td style="padding:1px 3px">極端豪雨（門檻高到 ETS 失靈）</td>
+            <td><b>SEDI</b></td><td>越高越好（專給罕見事件用）</td></tr>
+          <tr><td style="padding:1px 3px">雨量估得準不準（差幾 mm）</td>
+            <td><b>MAE</b></td><td>越小越好</td></tr>
+          <tr><td style="padding:1px 3px">會不會偶爾錯得離譜</td>
+            <td><b>RMSE</b></td><td>越小越好；<b>比 MAE 大很多＝有幾次大失手</b></td></tr>
+          <tr><td style="padding:1px 3px">報得太寬還是太保守</td>
+            <td><b>偏差比</b></td>
+            <td><b style="color:#e8a860">越接近 1 越好</b>；
+              &gt;1 報太多、&lt;1 太保守。<b>這不是準度</b></td></tr>
         </table>
-        <div style="margin-top:3px">
-          會有兩套的原因：校驗面板問的是「<b>報得準不準</b>」（事件有無，無單位），
-          校正明細問的是「<b>雨量要乘多少才對</b>」（量的修正，倍率）。
-          兩者都叫「偏差」會互相誤導，所以校正端改稱倍率。
-        </div>
 
-        <div style="color:#f0c878;margin:5px 0 2px">哪些指標藏在下拉選單裡</div>
-        <div>
-          主欄位會隨上方「指標」下拉切換：選 <b>相對誤差 30%</b> 時主欄是 <b>CSI</b>；
-          選 <b>MAE</b>／<b>RMSE</b> 時主欄是該誤差（mm）；其餘為 ETS／SEDI。
-          POD、FAR、偏差比、MAE、樣本這五欄固定顯示，不隨下拉改變。
-        </div>
+        <div style="color:#f0c878;margin:5px 0 2px">三條必須一起看的</div>
+        <div>① <b>POD 高但偏差比 ≫1</b>＝包牌，不是準。</div>
+        <div>② <b>偏差比 ≈1 但 ETS 低</b>＝量對、地點或時間錯，調雨量沒用。</div>
+        <div>③ <b>量與警戒是兩回事</b>：會不會達警戒看 ETS／POD，雨量估得準看 MAE。</div>
 
-        <div style="color:#f0c878;margin:5px 0 2px">樣本數的提醒</div>
-        <div>
-          指標旁的 ◆n 與下方累積天數是信心來源。單日樣本少時數值會劇烈跳動，
-          看趨勢圖（下方）比看單日數字可靠；累積未滿 7 天的排名不宜當作結論。
-        </div>
+        <div style="color:#f0c878;margin:5px 0 2px">兩個面板最容易誤讀的一組</div>
+        <div><b>本面板的「偏差比」與融合明細的「校正倍率」方向相反</b>：
+          偏差比 &gt;1＝報太多；校正倍率 &gt;1＝模式低估、要往上修。不可互相套用。</div>
+
+        <div style="color:#f0c878;margin:5px 0 2px">主欄位會隨下拉改變</div>
+        <div>選 <b>相對誤差 30%</b> 時<b>主欄顯示的就是 CSI</b>；選 MAE／RMSE 時是該誤差(mm)；
+          其餘為 ETS／SEDI。POD、FAR、偏差比、MAE、樣本五欄<b>固定顯示，不隨下拉改變</b>。
+          融合明細沒有對應的技術得分欄位（<b>融合權重只用 MAE 與校正倍率</b>）。</div>
+
+        <div style="color:#f0c878;margin:5px 0 2px">看排名前先確認樣本</div>
+        <div>指標旁的 ◆n 是樣本數。排行只統計「當天真的有事件」的日子，
+          所以高門檻的可用天數會比較少；未滿 7 天的排名不宜當結論。
+          <b>RMSE 一定 ≥ MAE</b>（均方根誤差會放大少數大誤差）；
+          兩者差距大＝有幾次錯得很離譜，那幾次往往就是致災事件。</div>
       </div>
     </details>`;
   try{ drawVerifyChart(); }catch(e){ console.warn('校驗圖失敗', e); }
 }
 // 時間序列圖：各模式的 CSI 隨日期變化
+// ★★ 2026-10-09：逐日排名統計（文字結論與排行圖共用唯一實作）。
+//   回答的是「為什麼需要 FORMOSA」：單一平均分數看不出
+//   「當日最佳每天換人」，必須逐日排名才顯現。
+//
+//   ★ 關鍵判準：只統計「該指標當天真的有事件」的日子。
+//     門檻型指標（ETS≥80 等）在沒有事件的日子，所有模式都是 0 命中 0 漏報，
+//     分數一樣、排名由排序穩定性決定 —— 把那些日子算進去，排行就變成雜訊。
+//     大雨模式的排行要正確，就必須把沒下大雨的日子排除。
+function _vfHasEvent(c, metric){
+  if(!c) return false;
+  if(metric === 'MAE' || metric === 'RMSE') return !!(c.amt && c.amt.n);
+  if(metric === 'SEDIH40'){
+    const h = c.hourly40;
+    return !!(h && ((h.hit || 0) + (h.miss || 0)) > 0);
+  }
+  if(metric && metric !== 'basic'){
+    const td = c['thr' + String(metric).replace(/^(ETS|SEDI)/, '')];
+    return !!(td && ((td.hit || 0) + (td.miss || 0)) > 0);
+  }
+  return ((c.hit || 0) + (c.miss || 0)) > 0;
+}
+
+function _vfRankStats(metric){
+  const mt = metric || _vfMetric();
+  const lowerBetter = (mt === 'MAE' || mt === 'RMSE');
+  const ser = _vfSeries();
+  const rk = {}, bestCnt = {}, vals = {};
+  let nDay = 0, nSkip = 0;
+  ser.forEach(d => {
+    const vs = [];
+    VF_MODELS.forEach(m => {
+      const c = d.raw[m];
+      if(!_vfHasEvent(c, mt)) return;             // 當天沒事件 → 不列入排名
+      const o = _vfMainOf(c, mt);
+      if(o.v != null && isFinite(o.v)) vs.push({m, v: o.v});
+    });
+    if(vs.length < 3){ nSkip++; return; }         // 參賽者太少，名次沒有意義
+    nDay++;
+    vs.sort((a, b) => lowerBetter ? a.v - b.v : b.v - a.v);
+    vs.forEach((x, i) => {
+      (rk[x.m] = rk[x.m] || []).push(i + 1);
+      (vals[x.m] = vals[x.m] || []).push(x.v);
+    });
+    const mem = vs.filter(x => x.m !== 'blend');  // 「當日最佳」只看單一模式
+    if(mem.length) bestCnt[mem[0].m] = (bestCnt[mem[0].m] || 0) + 1;
+  });
+  const rows = Object.keys(rk).map(m => {
+    const r = rk[m], v = vals[m];
+    return {
+      m,
+      n: r.length,
+      avgRank: r.reduce((a, b) => a + b, 0) / r.length,
+      worstRank: Math.max(...r),
+      bestRank: Math.min(...r),
+      top3: r.filter(x => x <= 3).length / r.length,
+      bestDays: bestCnt[m] || 0,
+      avgScore: v.reduce((a, b) => a + b, 0) / v.length,
+    };
+  }).sort((a, b) => a.avgRank - b.avgRank);
+  const champ = Object.entries(bestCnt).sort((a, b) => b[1] - a[1])[0] || null;
+  return {rows, nDay, nSkip, lowerBetter, metric: mt,
+          nBestModels: Object.keys(bestCnt).length,
+          champ: champ ? {m: champ[0], days: champ[1]} : null};
+}
+
+// 模式排行圖：依「平均名次」排序，橫條長度＝進前三比例
+//   一張圖同時回答：誰平均最前、誰最常進前三、誰當日最佳次數最多、最差名次多少
+function _drawVerifyRank(ctx, CW, CH, isZoom){
+  const st = _vfRankStats();
+  const fs = isZoom ? 16 : 9;
+  if(!st.nDay || !st.rows.length){
+    ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom ? 18 : 11}px sans-serif`;
+    ctx.fillText(`所選區間內「${_vfMetricLabel(st.metric)}」沒有發生事件的日子，無法排名`,
+                 12, isZoom ? 40 : 24);
+    ctx.fillText('（門檻型指標只統計當天真的有事件的日子，避免乾日灌水）',
+                 12, isZoom ? 66 : 40);
+    return;
+  }
+  const rows = st.rows.slice(0, isZoom ? 14 : 8);
+  //  ★ 邊距用量測決定，不寫死：模式名與右側數字長度會隨指標與資料變動，
+  //    寫死就會像之前軸上限那樣把內容切掉（實測「當日最佳 N 天」整段消失）。
+  ctx.font = `bold ${fs}px sans-serif`;
+  const wName = Math.max(...rows.map(r=>ctx.measureText(VF_NAME[r.m] || r.m).width));
+  ctx.font = `${fs}px sans-serif`;
+  //  欄位隨可用寬度逐步精簡：小圖只給「平均名次＋進前三」，放大再補齊。
+  //  寧可少顯示，也不要讓文字被畫布邊緣切掉。
+  const FORMS = [
+    r => `平均 ${r.avgRank.toFixed(1)} 名　前三 ${(r.top3*100).toFixed(0)}%`
+       + `　最差 ${r.worstRank}` + (r.m !== 'blend' ? `　當日最佳 ${r.bestDays} 天` : ''),
+    r => `平均 ${r.avgRank.toFixed(1)} 名　前三 ${(r.top3*100).toFixed(0)}%`
+       + `　最差 ${r.worstRank}`,
+    r => `平均 ${r.avgRank.toFixed(1)} 名　前三 ${(r.top3*100).toFixed(0)}%`,
+    r => `平均 ${r.avgRank.toFixed(1)} 名`,
+  ];
+  const gap = isZoom ? 14 : 6;
+  const numW = ctx.measureText('88').width + gap;
+  const pL = Math.ceil(numW + wName + gap * 2);
+  let rTxt = FORMS[0], wStat = 0;
+  for(const f of FORMS){
+    wStat = Math.max(...rows.map(r=>ctx.measureText(f(r)).width));
+    rTxt = f;
+    if(CW - pL - (wStat + gap * 2) >= CW * 0.22) break;   // 橫條至少佔畫布兩成
+  }
+  const pR = Math.ceil(wStat + gap * 2);
+  const pT = isZoom ? 58 : 24, pB = isZoom ? 44 : 20;
+  const iw = Math.max(40, CW - pL - pR), ih = CH - pT - pB;
+  const rh = Math.min(isZoom ? 46 : 17, ih / Math.max(1, rows.length));
+
+  ctx.font = `bold ${isZoom ? 19 : 10}px sans-serif`;
+  ctx.textAlign = 'left'; ctx.fillStyle = '#6bc8e8';
+  ctx.fillText(`模式排行　${_vfMetricLabel(st.metric)}　`
+    + `（${st.nDay} 個有事件的日子${st.nSkip ? `，略過 ${st.nSkip} 日` : ''}）`,
+    gap, isZoom ? 30 : 13);
+
+  ctx.font = `${fs}px sans-serif`;
+  rows.forEach((r, i) => {
+    const y = pT + i * rh + rh / 2;
+    const isB = (r.m === 'blend');
+    // 名次
+    ctx.textAlign = 'right'; ctx.fillStyle = isB ? '#7ee8a8' : '#7a94ac';
+    ctx.fillText(String(i + 1), numW - gap, y + fs * 0.35);
+    // 模式名
+    ctx.textAlign = 'left';
+    ctx.fillStyle = isB ? '#7ee8a8' : '#cfe4f5';
+    ctx.font = `${isB ? 'bold ' : ''}${fs}px sans-serif`;
+    ctx.fillText(VF_NAME[r.m] || r.m, numW + gap, y + fs * 0.35);
+    ctx.font = `${fs}px sans-serif`;
+    // 進前三比例橫條
+    const bw = iw * Math.max(0, Math.min(1, r.top3));
+    ctx.fillStyle = isB ? 'rgba(126,232,168,0.85)' : 'rgba(107,200,232,0.45)';
+    ctx.fillRect(pL, y - rh * 0.3, bw, rh * 0.6);
+    ctx.strokeStyle = '#1a3a52'; ctx.lineWidth = 1;
+    ctx.strokeRect(pL, y - rh * 0.3, iw, rh * 0.6);
+    // 右側數字
+    ctx.textAlign = 'left'; ctx.fillStyle = isB ? '#7ee8a8' : '#9fb8cc';
+    ctx.fillText(rTxt(r), pL + iw + gap, y + fs * 0.35);
+  });
+
+  // 結論：當日最佳換過幾個模式
+  ctx.textAlign = 'left'; ctx.font = `${isZoom ? 16 : 9}px sans-serif`;
+  ctx.fillStyle = '#9fb8cc';
+  const ch = st.champ ? `，最常是 ${VF_NAME[st.champ.m] || st.champ.m}（${st.champ.days} 天）` : '';
+  ctx.fillText(`橫條＝進前三比例　｜　「當日最佳」換過 ${st.nBestModels} 個模式${ch}`,
+               gap, CH - (isZoom ? 14 : 6));
+}
+
 function drawVerifyChart(canvasId){
   const cv = document.getElementById(canvasId || 'cv-verify');
   if(!cv) return;
@@ -6173,6 +6253,12 @@ function drawVerifyChart(canvasId){
   const ser = _vfSeries();
   const F = _fitCanvas(cv, 300, isZoom ? 900 : 190);
   const ctx = F.ctx, CW = F.w, CH = F.h;
+  //  檢視模式：逐日趨勢 / 模式排行（同一組資料、兩種呈現）。
+  //  ★ 必須在「需至少 2 日」之前分派 —— 排行用的是逐日名次統計，
+  //    單日也有結果，不該被趨勢圖的前置條件擋掉。
+  if(((document.getElementById('vf-view') || {}).value || 'trend') === 'rank'){
+    return _drawVerifyRank(ctx, CW, CH, isZoom);
+  }
   if(ser.length < 2){
     ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
     ctx.fillText('需至少 2 日才能繪製趨勢', 12, 24);

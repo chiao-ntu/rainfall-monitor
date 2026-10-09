@@ -43,6 +43,30 @@ def count(pat):
     return len(re.findall(pat, text))
 
 
+def _js_code_only(src):
+    """只留會執行的 JS：逐行丟掉純註解行。
+
+    ★ 與 audit_backend.py 同一個教訓：掃描規則若對註解生效，就會被
+      「說明這個錯誤的註解」觸發（實測本掃描器把自己的說明判成未通過）。
+    ★ 先前用逐字元掃描處理字串與註解，但原始碼裡有單引號出現在中文註解中，
+      字串狀態會失去同步、反而漏掉整段。逐行過濾簡單且不會錯位 ——
+      本檔的註解都是整行 // 或區塊註解的續行。
+    """
+    keep = []
+    for ln in src.split(chr(10)):
+        t = ln.lstrip()
+        if t.startswith('//') or t.startswith('*') or t.startswith('/*'):
+            keep.append('')
+            continue
+        k = ln.find('//')
+        keep.append(ln[:k] if k >= 0 and ln.count('"', 0, k) % 2 == 0
+                    and ln.count("'", 0, k) % 2 == 0 else ln)
+    return chr(10).join(keep)
+
+
+CODE = _js_code_only(text)
+
+
 # ── [P] 核心概念的實作份數 ────────────────────────────────────────
 section('P', '[P] 平行實作：同一概念應只有一份實作')
 SINGLE = {
@@ -126,22 +150,18 @@ n_axtitle = count(r'_drawAxisTitles\(') - 1
 item('T', 'OK' if n_axtitle >= 3 else 'FAIL',
      f'走共用排版的軸標題：{n_axtitle} 處（應 ≥3）')
 
-# ── [F] 補值來源必須標示 ────────────────────────────────────────
-section('F', '[F] 推算值與官方實測必須分得出來')
-item('F', 'OK' if count(r'function _etr2IsFill\(') == 1 else 'FAIL',
-     '_etr2IsFill 恰好一份')
-item('F', 'OK' if count(r'function _etr2FillMaskHourly\(') == 0 else 'FAIL',
-     '逐時遮罩沒有另一份平行實作（應由 _etr2HourlySeries 的 outFill 輸出）')
-item('F', 'OK' if 'outFill' in text else 'FAIL',
-     '_etr2HourlySeries 以輸出參數回傳補值遮罩（遮罩與序列同一趟算出）')
-item('F', 'OK' if re.search(r'ctx\.setLineDash\(\[w \* 2\.2', text) else 'FAIL',
-     '折線工具會把推算段畫成虛線')
-n_fillarg = len(re.findall(r'_strokeNullableSeries\(ctx, [^;]*?,\s*(?:_etrFill|etrFill|\(fillRows\|\|\[\]\)\[d[i]?\])\)',
-                           text, re.S))
-item('F', 'OK' if n_fillarg >= 5 else 'FAIL',
-     f'傳入補值遮罩的折線呼叫：{n_fillarg} 處（五張圖都要，應 ≥5）')
-item('F', 'OK' if '虛線＝' in text else 'FAIL', '軸標題說明虛線語意')
-item('F', 'OK' if '推算' in text else 'FAIL', 'tooltip 標示推算值')
+# ── [F] 不得用呈現手法掩蓋資料缺口 ────────────────────────────
+section('F', '[F] 缺口要用資料補，不是用畫法掩蓋')
+item('F', 'OK' if count(r'function _etr2IsFill\(') == 0 else 'FAIL',
+     '沒有「推算值」標記函式（資料路徑應已無推算值）')
+item('F', 'OK' if 'setLineDash([w' not in text else 'FAIL',
+     '折線工具沒有虛線分支（虛線＋註解是掩蓋缺口，不是修正）')
+item('F', 'OK' if '虛線＝' not in text else 'FAIL',
+     '軸標題沒有虛線說明')
+item('F', 'OK' if re.search(r"e = e1; isFill = true;", text) else 'FAIL',
+     '上一段缺值時以本段官方值平直延伸（值是官方的，不得整段留白）')
+item('F', 'OK' if 'rain.push(qa[s] != null' in text else 'FAIL',
+     '雨量序列不用 ||0（缺值≠0mm）')
 
 # ── [U] 單位一致性 ──────────────────────────────────────────────
 section('U', '[U] etr2_pct 全系統只能有一種單位')
@@ -152,6 +172,28 @@ item('U', 'OK' if n_norm >= 3 else 'FAIL',
      f'正規化呼叫點：{n_norm} 處（內建資料、data.json、etr2_now 三處都要）')
 item('U', 'OK' if not re.search(r'const _list = \(window\.TOWNSHIPS', text) else 'FAIL',
      '不得用 window.TOWNSHIPS（const 宣告不會掛上 window，會靜默跳過全部）')
+
+# ── [V] 預報校驗：取值與排名必須單一來源 ──────────────────────
+section('V', '[V] 預報校驗面板')
+item('V', 'OK' if count(r'function _vfMainOf\(') == 1 else 'FAIL',
+     '主指標取值只有一份（_vfMainOf）—— 表格與圖表共用')
+item('V', 'OK' if not re.search(r'd\.scores\[m\]\.CSI', CODE) else 'FAIL',
+     '趨勢圖不得再寫死 CSI（只看程式碼，不看註解）')
+item('V', 'OK' if count(r'function _vfRankStats\(') == 1 else 'FAIL',
+     '逐日排名統計只有一份（文字結論與排行圖共用）')
+n_rank = count(r'_vfRankStats\(') - 1
+item('V', 'OK' if n_rank >= 2 else 'FAIL',
+     f'排名統計呼叫點 {n_rank} 處（文字區塊＋排行圖，應 ≥2）')
+item('V', 'OK' if count(r'function _vfMetricLabel\(') == 1 else 'FAIL',
+     '指標名稱只有一份（表頭、圖標題、說明共用）')
+item('V', 'OK' if 'function _vfHasEvent(' in text else 'FAIL',
+     '排名只統計「當天真的有事件」的日子（乾日會把排行灌成雜訊）')
+item('V', 'OK' if 'function _vfNiceRange(' in text else 'FAIL',
+     '趨勢圖縱軸貼齊資料（固定 0~1 會把資料壓在底部三分之一）')
+item('V', 'OK' if 'const FORMS = [' in text else 'FAIL',
+     '排行圖欄位隨寬度精簡（避免右側文字被畫布切掉）')
+item('V', 'OK' if '勝過當日最佳單一模式' in text else 'FAIL',
+     '趨勢圖寫出「融合 vs 最佳單一模式」的結論')
 
 # ── [C] 觀看者時鐘當原點 ────────────────────────────────────────
 section('C', '[C] Date.now() 當 h 偏移原點（僅「距現在第 h 小時」語意才正確）')
