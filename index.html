@@ -1333,7 +1333,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-09T13:50Z';
+const FORMOSA_BUILD = '2026-10-09T17:40Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -5719,6 +5719,76 @@ function _vfSedi(c){
   return Math.abs(den) > 1e-9 ? Math.round(num/den*1000)/1000 : null;
 }
 
+// ★★ 2026-10-09：主指標的唯一取值入口。
+//   先前表格走 sc.main（跟著下拉選單），圖表卻寫死 d.scores[m].CSI ——
+//   選了 SEDI、ETS 或 MAE，趨勢圖畫的還是 CSI。兩邊各一份實作，
+//   使用者看到的「現在用的是 CSI」其實是圖表忽略了選擇。
+//   本函式吃「列聯表紀錄」（逐日或彙總皆可），回傳該指標的值、樣本數、方向。
+function _vfMainOf(c, metric){
+  const NUL = {v: null, n: 0, lowerBetter: false};
+  if(!c) return NUL;
+  if(metric === 'MAE' || metric === 'RMSE'){
+    const a = c.amt;
+    if(!a || !a.n) return {v: null, n: 0, lowerBetter: true};
+    return {v: (metric === 'MAE') ? a.ae / a.n : Math.sqrt(a.se / a.n),
+            n: a.n, lowerBetter: true};
+  }
+  if(metric === 'SEDIH40'){
+    const hd = c.hourly40;
+    return {v: hd ? _vfSedi(hd) : null,
+            n: hd ? (hd.hit + hd.miss + hd['false']) : 0, lowerBetter: false};
+  }
+  if(metric && metric !== 'basic'){
+    const thr = metric.replace(/^(ETS|SEDI)/, '');
+    const td = c['thr' + thr];
+    return {v: td ? (metric.startsWith('SEDI') ? _vfSedi(td) : _vfEts(td)) : null,
+            n: td ? (td.hit + td.miss + td['false']) : 0, lowerBetter: false};
+  }
+  const sc0 = _vfScores(c);
+  return {v: sc0.CSI, n: sc0.n, lowerBetter: false};
+}
+// 指標顯示名稱的唯一來源（表頭、圖標題、說明文字共用；原本各寫一份）
+function _vfMetricLabel(metric){
+  return metric === 'basic' ? 'CSI（相對誤差30%）'
+       : metric === 'SEDIH40' ? 'SEDI ≥40mm/h'
+       : metric === 'MAE' ? 'MAE mm'
+       : metric === 'RMSE' ? 'RMSE mm'
+       : String(metric).replace(/(\d+)/, ' ≥$1mm');
+}
+// 目前選取的主指標（表格與圖表共用同一個來源）
+function _vfMetric(){
+  return (document.getElementById('vf-metric') || {}).value || 'ETS80';
+}
+// 軸範圍：資料貼齊，刻度取整。固定 0~1 會把 0.2~0.35 的資料全壓在底部 1/3。
+function _vfNiceRange(lo, hi, nDiv){
+  const d = nDiv || 4;
+  if(!isFinite(lo) || !isFinite(hi)) return {lo: 0, hi: 1, step: 0.25};
+  if(hi - lo < 1e-9){ lo -= 0.05; hi += 0.05; }
+  const pad = (hi - lo) * 0.12;
+  lo -= pad; hi += pad;
+  //  ★ 必須保證 L + step*d >= hi，否則資料會畫到圖框外（實測：FORMOSA
+  //    線的最高點被切掉）。floor 取下界後可用範圍會變少，所以級距要往上找
+  //    到真的裝得下為止，而不是只看原始跨距。
+  const NICE = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+  const raw = (hi - lo) / d;
+  let p = Math.pow(10, Math.floor(Math.log10(raw)));
+  for(let guard = 0; guard < 40; guard++){
+    for(const mlt of NICE){
+      const step = mlt * p;
+      if(step < raw * (1 - 1e-9)) continue;
+      const L = Math.floor(lo / step + 1e-9) * step;
+      //  ★ 容差要用相對值：資料在 90 附近、級距 0.06 時，絕對容差 1e-12
+      //    會被浮點誤差吃掉，判成「裝得下」然後把頂端切掉。
+      const eps = Math.max(Math.abs(hi), Math.abs(L), 1) * 1e-9;
+      if(L <= lo + eps && L + step * d >= hi - eps)
+        return {lo: L, hi: L + step * d, step};
+    }
+    p *= 10;
+  }
+  const step = raw * 1.5, L = Math.floor(lo / step) * step;
+  return {lo: L, hi: L + step * d, step};
+}
+
 function _vfScores(c){
   const h = c.hit || 0, m = c.miss || 0, f = c['false'] || 0;
   const r = (x, d)=> d ? Math.round(x / d * 1000) / 1000 : null;
@@ -5802,24 +5872,10 @@ function renderVerify(){
     // ★ 偏差比跟著主指標的門檻走：只看 ≥1mm 會把融合說成最不準
     sc.biasAt = _metricThr ? _biasAt(m, _metricThr) : sc.BIAS;
     sc.biasLbl = _metricThr ? `≥${_metricThr}mm` : '≥1mm';
-    if(metric === 'MAE' || metric === 'RMSE'){
-      const a = sc.amt;
-      sc.main = a ? (metric === 'MAE' ? a.mae : a.rmse) : null;
-      sc.mainN = a ? a.n : 0;
-      sc.lowerBetter = true;
-    } else if(metric === 'SEDIH40'){
-      // ★ 時雨量強度（僅 best/ecmwf/gfs 有 maxh，其餘模式沒有樣本）
-      const hd = (agg[m] || {}).hourly40;
-      sc.main = hd ? _vfSedi(hd) : null;
-      sc.mainN = hd ? (hd.hit + hd.miss + hd['false']) : 0;
-    } else if(metric !== 'basic'){
-      const thr = metric.replace(/^(ETS|SEDI)/, '');
-      const td = (agg[m] || {})['thr' + thr];
-      sc.main = td ? (metric.startsWith('SEDI') ? _vfSedi(td) : _vfEts(td)) : null;
-      sc.mainN = td ? (td.hit + td.miss + td['false']) : 0;
-    } else {
-      sc.main = sc.CSI; sc.mainN = sc.n;
-    }
+    //  ★ 一律走 _vfMainOf（與趨勢圖同一個入口），不在這裡再寫一份
+    const _mo = _vfMainOf(agg[m], metric);
+    sc.main = _mo.v; sc.mainN = _mo.n;
+    if(_mo.lowerBetter) sc.lowerBetter = true;
     return {m, s: sc, c: agg[m]};
   }).sort((a, b)=>{
     // ★ MAE／RMSE 是越小越好，預設改成升冪，否則最準的會排最後
@@ -5881,11 +5937,7 @@ function renderVerify(){
           };
           //  ★ 欄位名要與下拉選單的用語對得起來，否則選了「相對誤差」卻看到
           //    「CSI」，兩個名字從不同時出現，使用者無從對照。
-          const mainLbl = metric === 'basic' ? 'CSI（相對誤差30%）'
-                 : metric === 'SEDIH40' ? 'SEDI ≥40mm/h'
-                 : metric === 'MAE' ? 'MAE mm'
-                 : metric === 'RMSE' ? 'RMSE mm'
-                 : metric.replace(/(\d+)/, ' ≥$1mm');
+          const mainLbl = _vfMetricLabel(metric);
           return TH('name', '模式', 'left') + TH('POD', 'POD', 'right') + TH('FAR', 'FAR', 'right')
             + TH('main', mainLbl, 'right')
             + TH('BIAS', '偏差比' + (rows[0] ? rows[0].s.biasLbl : ''), 'right')
@@ -5939,12 +5991,47 @@ function renderVerify(){
           <b>${get(best).toFixed(dp)}</b>
           → <b style="color:${c}">${w}${win && rel ? rel : ''}</b></div>`);
       };
-      const mainLbl = metric === 'basic' ? 'CSI'
-        : metric === 'SEDIH40' ? 'SEDI ≥40mm/h'
-        : metric === 'MAE' ? 'MAE'
-        : metric === 'RMSE' ? 'RMSE'
-        : metric.replace(/(\d+)/, ' ≥$1mm');
+      const mainLbl = _vfMetricLabel(metric);
       cmp(`技術得分 ${mainLbl}`, r=>r.s.main, lowBetter, lowBetter ? 1 : 3);
+      //  ★★ 2026-10-09：名次穩定度 —— 「為什麼需要 FORMOSA」的直接答案。
+      //    融合的價值不在「某一天最強」，而在「事前無從得知該信哪個模式」：
+      //    當日最佳單一模式每天換人，但 FORMOSA 的名次穩定在前段。
+      //    只看單一平均分數看不出這件事，必須逐日排名才顯現。
+      try{
+        const _sr = _vfSeries();
+        const _rk = {}, _bestCnt = {};
+        let _nd = 0;
+        _sr.forEach(d=>{
+          const vs = [];
+          VF_MODELS.forEach(m=>{
+            const o = _vfMainOf(d.raw[m], metric);
+            if(o.v != null && isFinite(o.v)) vs.push({m, v: o.v});
+          });
+          if(vs.length < 3) return;
+          _nd++;
+          vs.sort((a, b)=> lowBetter ? a.v - b.v : b.v - a.v);
+          vs.forEach((x, i)=>{ (_rk[x.m] = _rk[x.m] || []).push(i + 1); });
+          const _mem = vs.filter(x=>x.m !== 'blend');
+          if(_mem.length) _bestCnt[_mem[0].m] = (_bestCnt[_mem[0].m] || 0) + 1;
+        });
+        const _br = _rk['blend'] || [];
+        if(_nd >= 3 && _br.length){
+          const _avg = _br.reduce((a, b)=>a + b, 0) / _br.length;
+          const _top3 = _br.filter(x=>x <= 3).length / _br.length;
+          const _wst = Math.max(..._br);
+          const _nm = Object.keys(_bestCnt).length;
+          const _topBest = Object.entries(_bestCnt).sort((a, b)=>b[1] - a[1])[0];
+          L.push(`<div style="margin:1px 0">名次穩定度（${_nd} 天）
+            FORMOSA 平均第 <b style="color:#7ee8a8">${_avg.toFixed(1)}</b> 名
+            ｜進前三 <b>${(_top3 * 100).toFixed(0)}%</b>
+            ｜最差第 <b>${_wst}</b> 名</div>`);
+          L.push(`<div style="margin:1px 0;color:#9fb8cc">「當日最佳」換過
+            <b>${_nm}</b> 個模式`
+            + (_topBest ? `（最常是 ${VF_NAME[_topBest[0]] || _topBest[0]}，
+               ${_topBest[1]}/${_nd} 天）` : '')
+            + ` —— 事前無從得知該信哪一個，這是融合的理由</div>`);
+        }
+      }catch(e){}
       if(!lowBetter)
         cmp('雨量誤差 MAE(mm)', r=>r.s.amt && r.s.amt.mae, true, 1);
       // 偏差比剖面：分門檻攤開，讓「小雨報得寬、大雨不虛胖」自己說話
@@ -6091,64 +6178,147 @@ function drawVerifyChart(canvasId){
     ctx.fillText('需至少 2 日才能繪製趨勢', 12, 24);
     return;
   }
-  const fs = isZoom ? 15 : 9;
-  const pL = isZoom ? 70 : 34, pR = isZoom ? 40 : 14;
-  const pT = isZoom ? 44 : 16, pB = isZoom ? 66 : 34;
-  const iw = CW - pL - pR, ih = CH - pT - pB;
-  const X = i => pL + iw * (ser.length === 1 ? 0.5 : i / (ser.length - 1));
-  const Y = v => pT + ih * (1 - v);           // CSI 介於 0~1
-  ctx.strokeStyle = '#12283c'; ctx.fillStyle = '#5a7a95';
-  ctx.font = `${fs}px sans-serif`; ctx.textAlign = 'right';
-  for(let v = 0; v <= 1.0001; v += 0.25){
-    ctx.beginPath(); ctx.moveTo(pL, Y(v)); ctx.lineTo(pL + iw, Y(v)); ctx.stroke();
-    ctx.fillText(v.toFixed(2), pL - 4, Y(v) + fs*0.35);
+  // ★★ 2026-10-09 重做。原本三個問題：
+  //   ① 寫死 .CSI —— 下拉選了 ETS／SEDI／MAE，圖畫的還是 CSI
+  //   ② 縱軸固定 0~1 —— 而 CSI 實際落在 0.1~0.35，資料全壓在底部三分之一
+  //   ③ 14 條線全部畫出來 —— 疊成一團，看不出誰高誰低
+  //   改法：主指標走共用入口、縱軸貼齊資料、成員收成一條帶狀範圍，
+  //   只把「FORMOSA」與「當日最佳單一模式」兩條線畫清楚 ——
+  //   因為要回答的問題是「融合有沒有比最好的單一模式更好」。
+  const metric = _vfMetric();
+  const lowerBetter = (metric === 'MAE' || metric === 'RMSE');
+  const members = VF_MODELS.filter(m => m !== 'blend');
+
+  // 逐日：成員的範圍與最佳者、FORMOSA 的值
+  const rows = ser.map(d=>{
+    const vs = [];
+    members.forEach(m=>{
+      const o = _vfMainOf(d.raw[m], metric);
+      if(o.v != null && isFinite(o.v)) vs.push({m, v: o.v});
+    });
+    const bl = _vfMainOf(d.raw['blend'], metric);
+    if(!vs.length) return {date: d.date, lo: null, hi: null, best: null, bm: null,
+                           mid: null, blend: (bl.v != null ? bl.v : null)};
+    const sorted = vs.map(x=>x.v).sort((a,b)=>a-b);
+    const best = lowerBetter ? vs.reduce((a,b)=>b.v < a.v ? b : a)
+                             : vs.reduce((a,b)=>b.v > a.v ? b : a);
+    return {date: d.date, lo: sorted[0], hi: sorted[sorted.length-1],
+            mid: sorted[Math.floor(sorted.length/2)],
+            best: best.v, bm: best.m,
+            blend: (bl.v != null && isFinite(bl.v)) ? bl.v : null};
+  });
+
+  const all = [];
+  rows.forEach(r=>['lo','hi','best','blend'].forEach(k=>{
+    if(r[k] != null && isFinite(r[k])) all.push(r[k]);
+  }));
+  if(!all.length){
+    ctx.fillStyle = '#5a7a95'; ctx.font = `${isZoom?18:11}px sans-serif`;
+    ctx.fillText('所選指標在此範圍內沒有樣本', 12, 24);
+    return;
   }
-  // X 軸日期（首末與中間）
+  const fs = isZoom ? 15 : 9;
+  const pL = isZoom ? 78 : 40, pR = isZoom ? 40 : 14;
+  const pT = isZoom ? 46 : 18, pB = isZoom ? 74 : 38;
+  const iw = CW - pL - pR, ih = CH - pT - pB;
+  const RG = _vfNiceRange(Math.min(...all), Math.max(...all), 4);
+  const X = i => pL + iw * (rows.length === 1 ? 0.5 : i / (rows.length - 1));
+  const Y = v => pT + ih * (1 - (v - RG.lo) / (RG.hi - RG.lo));
+
+  // 格線
+  ctx.strokeStyle = '#12283c'; ctx.font = `${fs}px sans-serif`; ctx.textAlign = 'right';
+  for(let k = 0; k <= 4; k++){
+    const v = RG.lo + RG.step * k;
+    ctx.beginPath(); ctx.moveTo(pL, Y(v)); ctx.lineTo(pL + iw, Y(v)); ctx.stroke();
+    ctx.fillStyle = '#5a7a95';
+    ctx.fillText(Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(2), pL - 4, Y(v) + fs*0.35);
+  }
+  // 零線（ETS 可能為負，跨零時要看得出來）
+  if(RG.lo < 0 && RG.hi > 0){
+    ctx.strokeStyle = '#3a5a72'; ctx.setLineDash([4,3]);
+    ctx.beginPath(); ctx.moveTo(pL, Y(0)); ctx.lineTo(pL + iw, Y(0)); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // X 軸日期
   ctx.textAlign = 'center';
-  const stepI = Math.max(1, Math.ceil(ser.length / (isZoom ? 12 : 5)));
-  ser.forEach((d, i)=>{
-    if(i % stepI && i !== ser.length - 1) return;
+  const stepI = Math.max(1, Math.ceil(rows.length / (isZoom ? 12 : 5)));
+  rows.forEach((d, i)=>{
+    if(i % stepI && i !== rows.length - 1) return;
     ctx.fillStyle = '#5a7a95';
     ctx.fillText(d.date.slice(5), X(i), CH - pB + fs + 2);
   });
-  // 各模式一條線（用融合明細同一組色）
-  const COL = {blend:'#7ee8a8',
-               best:'#6bc8e8', ecmwf:'#40d060', gfs:'#FFFF00', icon:'#FF8C00',
-               jma:'#FF66CC', aifs:'#c8a8e8', graphcast:'#a0d8ff'};
-  // ★ FORMOSA 最後畫、線最粗：它是基準線，要壓在其他模式之上看得清楚
-  const _order = VF_MODELS.filter(m=>m !== 'blend').concat(['blend']);
-  _order.forEach(m=>{
-    const pts = ser.map((d, i)=>({i, v: d.scores[m] && d.scores[m].CSI}))
-                   .filter(p=>p.v != null);
-    if(pts.length < 2) return;
-    ctx.strokeStyle = COL[m] || '#9fc8e8';
-    ctx.lineWidth = (m === 'blend') ? (isZoom ? 5 : 2.8) : (isZoom ? 3 : 1.6);
+
+  // ── 成員範圍帶（14 條線收成一條帶，仍看得出整體水準與離散度）──
+  const bandPts = rows.map((r,i)=>({i, lo:r.lo, hi:r.hi})).filter(p=>p.lo != null);
+  if(bandPts.length >= 2){
     ctx.beginPath();
-    pts.forEach((p, k)=> k ? ctx.lineTo(X(p.i), Y(p.v)) : ctx.moveTo(X(p.i), Y(p.v)));
-    ctx.stroke();
+    bandPts.forEach((p,k)=> k ? ctx.lineTo(X(p.i), Y(p.hi)) : ctx.moveTo(X(p.i), Y(p.hi)));
+    for(let k = bandPts.length - 1; k >= 0; k--) ctx.lineTo(X(bandPts[k].i), Y(bandPts[k].lo));
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(110,150,185,0.18)'; ctx.fill();
+  }
+  const line = (key, color, width, dash)=>{
+    const pts = rows.map((r,i)=>({i, v:r[key]})).filter(p=>p.v != null && isFinite(p.v));
+    if(pts.length < 2) return;
+    ctx.strokeStyle = color; ctx.lineWidth = width;
+    if(dash) ctx.setLineDash(dash);
+    ctx.beginPath();
+    pts.forEach((p,k)=> k ? ctx.lineTo(X(p.i), Y(p.v)) : ctx.moveTo(X(p.i), Y(p.v)));
+    ctx.stroke(); ctx.setLineDash([]);
     pts.forEach(p=>{
       ctx.beginPath(); ctx.arc(X(p.i), Y(p.v), isZoom?4:2, 0, Math.PI*2);
-      ctx.fillStyle = COL[m] || '#9fc8e8'; ctx.fill();
+      ctx.fillStyle = color; ctx.fill();
     });
+  };
+  line('mid',  '#8fb0c8', isZoom?2:1.2, [5,4]);          // 成員中位數
+  line('best', '#FFC14D', isZoom?3.5:1.8);               // 當日最佳單一模式
+  line('blend','#7ee8a8', isZoom?6:3.2);                 // FORMOSA
+
+  // ── 結論列：融合到底有沒有比最好的單一模式好 ──────────────
+  //   這是「為什麼需要 FORMOSA」的直接答案，必須寫在圖上，
+  //   而不是讓人自己從一堆線裡推。
+  let win = 0, cmp = 0, sum = 0;
+  rows.forEach(r=>{
+    if(r.blend == null || r.best == null) return;
+    cmp++;
+    if(lowerBetter ? (r.blend < r.best) : (r.blend > r.best)) win++;
+    const base = Math.abs(r.best);
+    if(base > 1e-9) sum += (lowerBetter ? (r.best - r.blend) : (r.blend - r.best)) / base;
   });
-  // 圖例
+  const gain = cmp ? (sum / cmp * 100) : null;
+  ctx.textAlign = 'left'; ctx.font = `${isZoom?16:9}px sans-serif`;
+  const cy = CH - (isZoom ? 34 : 17);
+  if(cmp){
+    const good = gain != null && gain > 0;
+    ctx.fillStyle = good ? '#7ee8a8' : '#e8a87e';
+    ctx.fillText(`FORMOSA 勝過當日最佳單一模式 ${win}/${cmp} 天`
+      + (gain != null ? `　平均增益 ${gain >= 0 ? '+' : ''}${gain.toFixed(1)}%` : ''),
+      pL, cy);
+  }else{
+    ctx.fillStyle = '#7a94ac';
+    ctx.fillText('此指標尚無足夠樣本可比較融合與單一模式', pL, cy);
+  }
+
+  // 圖例（三個項目就夠，不再列 14 個模式）
   ctx.font = `${fs}px sans-serif`;
-  const shown = VF_MODELS.filter(m=>ser.some(d=>d.scores[m]));
-  const wU = shown.map(m=>ctx.measureText(VF_NAME[m] || m).width + (isZoom?30:16));
+  const LEG = [['FORMOSA 融合', '#7ee8a8'], ['當日最佳單一模式', '#FFC14D'],
+               ['各模式中位數', '#8fb0c8'], ['各模式範圍', 'rgba(110,150,185,0.5)']];
+  const wU = LEG.map(([t])=>ctx.measureText(t).width + (isZoom?34:18));
   let lx = (CW - wU.reduce((a,b)=>a+b, 0)) / 2;
-  const ly = CH - (isZoom ? 14 : 6);
-  shown.forEach((m, i)=>{
-    ctx.fillStyle = COL[m] || '#9fc8e8';
-    ctx.fillRect(lx, ly - fs*0.75, isZoom?12:8, isZoom?3:2);
+  const ly = CH - (isZoom ? 12 : 5);
+  LEG.forEach(([t, c], i)=>{
+    ctx.fillStyle = c;
+    ctx.fillRect(lx, ly - fs*0.75, isZoom?14:9, isZoom?4:2.5);
     ctx.fillStyle = '#7a94ac'; ctx.textAlign = 'left';
-    ctx.fillText(VF_NAME[m] || m, lx + (isZoom?16:11), ly);
+    ctx.fillText(t, lx + (isZoom?18:12), ly);
     lx += wU[i];
   });
 
   if(isZoom){
     ctx.fillStyle='#6bc8e8'; ctx.font='bold 19px sans-serif'; ctx.textAlign='center';
     const scope = (document.getElementById('vf-scope') || {}).value || '全臺';
-    ctx.fillText(`${scope} 預報校驗 CSI 趨勢（門檻 ≥1mm）`, CW/2, 26);
+    ctx.fillText(`${scope} 預報校驗　${_vfMetricLabel(metric)}`
+      + (lowerBetter ? '（越低越好）' : '（越高越好）'), CW/2, 26);
   }
 }
 
