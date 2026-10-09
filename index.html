@@ -1071,9 +1071,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             style="flex:0 0 auto;font-size:11px;padding:3px;background:#061220;color:#cfe4f5;
             border:1px solid #1a4060;border-radius:3px">
             <option value="trend">逐日趨勢</option>
-            <option value="avg">平均名次排行</option>
+            <option value="dist">名次分布（依平均名次排序）</option>
             <option value="top3">進前三次數／占比</option>
-            <option value="dist">名次分布</option>
             <option value="best">當日最佳次數</option>
           </select>
           <select id="vf-days" onchange="renderVerify()"
@@ -1342,7 +1341,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-09T21:10Z';
+const FORMOSA_BUILD = '2026-10-09T12:50Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -1666,7 +1665,8 @@ const WF_INERTIA = 0.12;   // 速度鬆弛係數：約 8 幀跟上當地風（�
 //    尾巴用「逐粒子軌跡」畫，不是畫布殘影 —— 不會在地圖上累積霧氣。
 //    速度放慢後同樣的尾巴長度會涵蓋較短的實際距離，所以 WF_TRAIL
 //    要比視覺上想要的節數再多一些。
-const WF_TRAIL = 26;       // 尾巴節數（比先前殘影版的視覺長度再長一些）
+const WF_TRAIL = 78;       // 尾巴節數（使用者指定再長三倍：26 → 78）
+const WF_BANDS = 8;        // 軌跡分幾段著色（逐段描邊會卡，分段後描邊次數降 10 倍）
 const WF_SPEED = 0.55;     // 速度倍率（使用者指定放慢；1.0＝先前速度）
 // ★ 海洋深色底：只換海域與地圖底色，陸地上各圖層的色階完全不動
 //   （使用者指定）—— 色階是判讀依據，不能因為換配色就改變。
@@ -1935,6 +1935,13 @@ function _wfStart(){
       p.y = Math.random() * cv._ch;
       p.age = Math.random() * WF_LIFE;
       p.node = null;                    // 視野變了，重抽所屬測站
+      //  ★★ 2026-10-09：縮放／平移時必須一併清掉軌跡與速度。
+      //    粒子被傳送到新的隨機位置，但 p.tr 還留著舊位置 ——
+      //    下一幀就從舊位置往新位置拉出一條橫跨地圖的直線，
+      //    然後軌跡被擠出緩衝區、整條消失。
+      //    （使用者回報：縮放時粒子間連成直線並消失。）
+      p.tr = null;
+      p.vx = null; p.vy = null;         // 舊視野的速度在新比例尺下沒有意義
     }
   };
   map.on('move zoom resize', reseed);
@@ -2169,15 +2176,21 @@ function _wfStart(){
       const al = 0.25 + 0.65 * sup;                // 外推處明顯較淡
       ctx.lineWidth = (isFinite(bf0) && bf0 >= 10) ? 2.0
                     : (bf0 >= 7) ? 1.6 : 1.2;      // 強風線條略粗
-      //  沿軌跡由尾到頭漸亮：尾端幾乎透明，頭端最實，看起來才像流線
+      //  沿軌跡由尾到頭漸亮：尾端幾乎透明，頭端最實，看起來才像流線。
+      //  ★ 分成 WF_BANDS 段著色，一段一次描邊 —— 逐段描邊的話
+      //    78 節 x 數百顆粒子 x 每秒 60 幀，畫面會卡。
       const np = p.tr.length / 2;
-      for(let k = 1; k < np; k++){
-        const f = k / (np - 1 || 1);               // 0＝最舊、1＝最新
-        ctx.strokeStyle = _hexA(band.color, al * f * f);
-        ctx.beginPath();
-        ctx.moveTo(p.tr[(k - 1) * 2], p.tr[(k - 1) * 2 + 1]);
-        ctx.lineTo(p.tr[k * 2], p.tr[k * 2 + 1]);
-        ctx.stroke();
+      if(np >= 2){
+        const per = Math.max(1, Math.ceil((np - 1) / WF_BANDS));
+        for(let b0 = 1; b0 < np; b0 += per){
+          const b1 = Math.min(np - 1, b0 + per - 1);
+          const f = b1 / (np - 1);                 // 0＝最舊、1＝最新
+          ctx.strokeStyle = _hexA(band.color, al * f * f);
+          ctx.beginPath();
+          ctx.moveTo(p.tr[(b0 - 1) * 2], p.tr[(b0 - 1) * 2 + 1]);
+          for(let k = b0; k <= b1; k++) ctx.lineTo(p.tr[k * 2], p.tr[k * 2 + 1]);
+          ctx.stroke();
+        }
       }
       p.x = nx; p.y = ny; p.age++;
     });
@@ -5697,7 +5710,11 @@ function drawCountyTowns(canvasId){
 // ★ 'blend' ＝ FORMOSA 融合結果本身。後端（fetch_rainfall.py 的 MODELS）
 //   早就把它一起校驗並寫進 verify.json 了，是這裡的清單漏列，
 //   所以面板上一直看不到 —— 融合準不準沒有答案，加權調整也就無從檢討。
-const VF_MODELS = ['blend',
+//  ★★ 2026-10-09：補上 'cwa'（中央氣象署官方 QPF）。
+//    先前整個校驗與排行都看不到 CWA —— 清單裡根本沒有它。
+//    它的來源是官方 PNG 判讀，沒有「昨日回算」可抓，改由預報存檔
+//    （update_forecast_log）取當初發布的值來校驗，見後端 FCLOG_MODELS。
+const VF_MODELS = ['blend', 'cwa',
                    'best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
                    'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom'];
 // 哪些已是融合成員（表格中標示，便於分辨）
@@ -5731,7 +5748,7 @@ function _vfSortBy(k){
 const VF_NAME = {icon:'ICON', kma:'KMA 韓國', gem:'GEM 加拿大',
                  ukmo:'UK Met Office', mf:'Météo-France',
                  cma:'CMA GRAPES', bom:'BOM ACCESS',
-                 blend:'FORMOSA 融合',
+                 blend:'FORMOSA 融合', cwa:'CWA 氣象署',
                  best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
                  jma:'JMA', aifs:'EC-AIFS', graphcast:'GC-NCEP'};
 // ★ ETS：扣除隨機命中後的 CSI（乾季不虛高，跨季節可比）
@@ -6203,15 +6220,17 @@ function _vfRankStats(metric){
 //   原本一張圖混了「依平均名次排序」與「長條畫進前三比例」兩件事 ——
 //   排序依據和圖形長度不一致，比例高的不一定排前面，必然被誤解。
 //   一張圖只講一件事；數字直接標在它所代表的圖形上，不列在後面。
+//  ★★ 2026-10-09：移除「平均名次」長條圖。
+//    平均是統計量不是總數，用長條表示會誤導（長度代表什麼並不直覺）。
+//    改成把平均只當排序依據，圖本身呈現**分布**——各名次各幾天。
 const _VF_RANK_VIEWS = {
-  avg:  {title: '平均名次（越短越好）',   unit: '名'},
-  top3: {title: '進前三次數',             unit: '次'},
-  dist: {title: '名次分布（各名次次數）', unit: '次'},
-  best: {title: '當日最佳次數（僅單一模式）', unit: '次'},
+  top3: {title: '進前三次數',                   unit: '次'},
+  dist: {title: '名次分布（各名次幾天，依平均名次排序）', unit: '天'},
+  best: {title: '當日最佳次數（僅單一模式）',   unit: '次'},
 };
 
 function _vfRankHeader(ctx, st, CW, isZoom, view){
-  const V = _VF_RANK_VIEWS[view] || _VF_RANK_VIEWS.avg;
+  const V = _VF_RANK_VIEWS[view] || _VF_RANK_VIEWS.dist;
   ctx.font = `bold ${isZoom ? 19 : 10}px sans-serif`;
   ctx.textAlign = 'left'; ctx.fillStyle = '#6bc8e8';
   ctx.fillText(`${V.title}　${_vfMetricLabel(st.metric)}`
@@ -6302,20 +6321,6 @@ function _drawVerifyRank(ctx, CW, CH, isZoom, view){
   ctx.font = `${fs}px sans-serif`;
   const numW = ctx.measureText('88').width;
 
-  // ── ① 平均名次（越短越好）────────────────────────────────
-  if(view === 'avg'){
-    const rows = st.rows.slice(0, MAXR);
-    const wN = nameW(rows);
-    const x0 = Math.ceil(numW + gap * 3 + wN);
-    const w = Math.max(60, CW - x0 - (isZoom ? 90 : 46));
-    const vmax = Math.max(...rows.map(r => r.avgRank)) * 1.05;
-    _vfBars(ctx, rows, {x0, y0: pT, w, h: ih, fs, vmax, gap, wName: wN,
-      rhMax: isZoom ? 46 : 17,
-      valueOf: r => r.avgRank, labelOf: r => VF_NAME[r.m] || r.m,
-      fmt: v => `${v.toFixed(1)} 名`});
-    return;
-  }
-
   // ── ② 進前三次數（長條）＋ 占比（圓餅）──────────────────
   if(view === 'top3'){
     const rows = st.rows.slice().sort((a, b) => b.top3n - a.top3n).slice(0, MAXR);
@@ -6348,10 +6353,13 @@ function _drawVerifyRank(ctx, CW, CH, isZoom, view){
     const rows = st.rows.slice(0, MAXR);
     const wN = nameW(rows);
     const x0 = Math.ceil(numW + gap * 3 + wN);
-    const w = Math.max(60, CW - x0 - (isZoom ? 150 : 72));
+    const w = Math.max(60, CW - x0 - (isZoom ? 180 : 86));
     const maxN = Math.max(1, ...rows.map(r => r.n));
     const rh = Math.min(isZoom ? 46 : 17, ih / Math.max(1, rows.length));
-    const RC = ['#7ee8a8', '#9fe8c0', '#6bc8e8', '#8fb0c8', '#5a7a95', '#3c5a70'];
+    //  ★ 名次色必須一眼分得出來。原本六個都是綠藍灰的近鄰色，
+    //    堆疊起來根本看不出段界（使用者回報顏色太接近）。
+    //    改用色相差距大的一組：金／綠／青／紫／紅／灰藍。
+    const RC = ['#FFD24D', '#7ee8a8', '#6bc8e8', '#c88ae8', '#FF8C8C', '#52708a'];
     const bandOf = k => RC[Math.min(RC.length - 1, k - 1)];
     rows.forEach((r, i) => {
       const y = pT + i * rh + rh / 2;
@@ -6378,8 +6386,9 @@ function _drawVerifyRank(ctx, CW, CH, isZoom, view){
       });
       ctx.strokeStyle = '#1a3a52'; ctx.lineWidth = 1;
       ctx.strokeRect(x0, y - rh * 0.3, w, rh * 0.6);
+      //  右側只放排序依據（平均名次）——否則讀者看不出列的順序是怎麼來的
       ctx.textAlign = 'left'; ctx.fillStyle = '#9fb8cc';
-      ctx.fillText(`共 ${r.n} 天`, x0 + w + gap, y + fs * 0.35);
+      ctx.fillText(`平均 ${r.avgRank.toFixed(1)} 名`, x0 + w + gap, y + fs * 0.35);
     });
     // 名次色例
     ctx.font = `${Math.max(8, fs - 1)}px sans-serif`;
@@ -7983,9 +7992,29 @@ function calcEtr2AtSeg(t, seg, qpfField){
             : (Array.isArray(_hist) ? _hist.length : 0);
   if(Array.isArray(_hist) && _hist.length){
     const idx = _hb + seg;
-    if(idx >= 0 && idx < _hist.length && _hist[idx] != null){
-      t._etrPastSrc = 'official_hist';
-      return Math.max(0, _hist[idx]);
+    if(idx >= 0 && idx < _hist.length){
+      if(_hist[idx] != null){
+        t._etrPastSrc = 'official_hist';
+        return Math.max(0, _hist[idx]);
+      }
+      //  ★★ 2026-10-09 第二道防線：被前後兩個官方值夾住的洞，直接補起來。
+      //    後端已用「當日 00:00 累積＝0、24:00＝日總量」兩個精確錨點封口
+      //    （seal_etr2_series），這裡擋的是後端還沒跑到、或該站缺日雨量
+      //    的殘餘情形 —— 使用者已經回報三次同一條線斷掉，不能再賭
+      //    「這次後端一定會成功」。
+      //    兩端都是官方值 → 內插是被夾住的，不是外插。
+      //    ★ 間隔上限 5 段（≤30 小時）：日內的 ETR2 ＝ 當日累積 + 固定尾項，
+      //      線性內插站得住腳；但跨日界時尾項會跳動（R0 變成權重 0.7 的 R1），
+      //      拉太長的內插就沒有依據了。5 段剛好涵蓋「整天都沒資料、但前後
+      //      兩端有官方值」的情形，再長就留白。
+      let a = -1, b = -1;
+      for(let k = idx - 1; k >= 0; k--){ if(_hist[k] != null){ a = k; break; } }
+      for(let k = idx + 1; k < _hist.length; k++){ if(_hist[k] != null){ b = k; break; } }
+      if(a >= 0 && b >= 0 && (b - a) <= 5){
+        t._etrPastSrc = 'bounded_interp';
+        const f = (idx - a) / (b - a);
+        return Math.max(0, _hist[a] + (_hist[b] - _hist[a]) * f);
+      }
     }
   }
   // ★★ 2026-10-06（使用者指定：觀測值一律使用官方資料，ETR2／ETR2% 用水保署的，
@@ -8616,15 +8645,19 @@ function _tyPartStep(list){
       if(!p.tr) p.tr = [];
       p.tr.push(nx, ny);
       if(p.tr.length > TY_TRAIL * 2) p.tr.splice(0, p.tr.length - TY_TRAIL * 2);
-      //  由尾到頭漸亮（與地圖風場同一種畫法）
+      //  由尾到頭漸亮（與地圖風場同一種畫法，同樣分段著色避免卡頓）
       const _np = p.tr.length / 2;
-      for(let k = 1; k < _np; k++){
-        const f = k / (_np - 1 || 1);
-        ctx.strokeStyle = _hexA(bd.color, a * f * f);
-        ctx.beginPath();
-        ctx.moveTo(p.tr[(k - 1) * 2], p.tr[(k - 1) * 2 + 1]);
-        ctx.lineTo(p.tr[k * 2], p.tr[k * 2 + 1]);
-        ctx.stroke();
+      if(_np >= 2){
+        const _per = Math.max(1, Math.ceil((_np - 1) / WF_BANDS));
+        for(let b0 = 1; b0 < _np; b0 += _per){
+          const b1 = Math.min(_np - 1, b0 + _per - 1);
+          const f = b1 / (_np - 1);
+          ctx.strokeStyle = _hexA(bd.color, a * f * f);
+          ctx.beginPath();
+          ctx.moveTo(p.tr[(b0 - 1) * 2], p.tr[(b0 - 1) * 2 + 1]);
+          for(let k = b0; k <= b1; k++) ctx.lineTo(p.tr[k * 2], p.tr[k * 2 + 1]);
+          ctx.stroke();
+        }
       }
     }
     p.px = nx; p.py = ny;

@@ -131,6 +131,17 @@ chk('F', 'KEEP_SERIES_HOURS = 168' in Q,
 
 # ── [G] 權重與常數必須單一來源 ───────────────────────────────────
 wr = re.search(r'ETR2_WEIGHTS = (\[[^\]]+\])', R)
+chk('E', 'def seal_etr2_series' in R and 'seal_etr2_series(' in R,
+    'ETR2 過去段有結構性封口（當日 00:00＝0、24:00＝日總量兩個精確錨點）',
+    '前幾輪每次只修「這一次的成因」，成因會一直有新的')
+chk('E', "'cwa')" in R and 'fclog_values_for' in R,
+    'CWA 納入校驗（由預報存檔取當初發布的值）',
+    'CWA 來自官方 PNG 判讀，Open-Meteo 沒有，不能用 model_yday')
+chk('E', "FCLOG_FIELD = {'cwa': 'qpf_cwa_q'}" in R,
+    'CWA 存檔用可加量 qpf_cwa_q（色帶下界是類別身分，比不得）')
+chk('E', 'FCLOG_MIN_COV' in R,
+    'CWA 的覆蓋門檻獨立（PNG 只判讀得到部分鄉鎮，80% 門檻會讓它永遠存不進去）')
+
 chk('G', bool(wr) and 'ETR2_WEIGHTS' not in Q,
     f'ETR2 權重只定義在 fetch_rainfall 一處（{wr.group(1) if wr else "?"}）',
     '兩支腳本各定義一份，日後改一邊就會分歧')

@@ -209,8 +209,17 @@ item('V', 'OK' if 'function _vfHasEvent(' in text else 'FAIL',
      '排名只統計「當天真的有事件」的日子（乾日會把排行灌成雜訊）')
 item('V', 'OK' if 'function _vfNiceRange(' in text else 'FAIL',
      '趨勢圖縱軸貼齊資料（固定 0~1 會把資料壓在底部三分之一）')
+item('F', 'OK' if 'bounded_interp' in CODE and '(b - a) <= 5' in CODE else 'FAIL',
+     'ETR2 過去段有前端第二道防線（被官方值夾住、間隔 ≤5 段才補）',
+     '後端封口失效時線還是會斷；已回報三次，不能只靠單一道防線')
 item('V', 'OK' if '_VF_RANK_VIEWS' in CODE else 'FAIL',
-     '排行拆成四張單一用途的圖（一張圖只講一件事）')
+     '排行拆成單一用途的圖（一張圖只講一件事）')
+item('V', 'OK' if "avg:  {title" not in CODE else 'FAIL',
+     '沒有「平均名次」長條圖（平均是統計量不是總數，應以分布呈現）')
+item('V', 'OK' if "'blend', 'cwa'," in CODE else 'FAIL',
+     'CWA 納入校驗與排行清單')
+item('V', 'OK' if "'#FFD24D', '#7ee8a8', '#6bc8e8', '#c88ae8', '#FF8C8C'" in CODE
+     else 'FAIL', '名次分布用色相差距大的一組（近鄰色看不出段界）')
 item('V', 'OK' if 'sort((a, b) => b.top3n - a.top3n)' in CODE else 'FAIL',
      '進前三圖依「次數」排序（排序依據必須與長條長度一致）')
 item('V', 'OK' if 'valueOf: r => r.top3n' in CODE else 'FAIL',

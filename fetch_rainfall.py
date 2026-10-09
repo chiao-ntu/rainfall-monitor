@@ -3782,8 +3782,17 @@ VERIFY_KEEP_DAYS = 60            # 保留 60 天，供選日期回溯
 FORECAST_LOG_FILE = "forecast_log.json"
 FORECAST_LOG_KEEP = 12           # 保留 12 天的發布（足夠比對 D+7 與相鄰報次）
 FORECAST_LOG_DAYS = 7            # 每次存未來 7 個完整日曆日
+#  ★★ 2026-10-09：補上 'cwa'（中央氣象署官方 QPF）。
+#    CWA 的值來自官方 PNG 判讀，Open-Meteo 沒有它，所以沒有「昨日回算」
+#    可抓 —— 先前整個校驗與排行因此完全看不到 CWA。
+#    改由預報存檔取當初發布的值來校驗：這其實是更正確的驗證方式
+#    （驗的是「當時真的發布了什麼」，不是事後重抓）。
+#    ★ 用 qpf_cwa_q（可加量）不是 qpf_cwa（色帶下界）——
+#      後者是類別身分，拿去跟觀測量比會系統性低估。
 FCLOG_MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'gc',
-                'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom')
+                'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom', 'cwa')
+FCLOG_FIELD = {'cwa': 'qpf_cwa_q'}   # 逐模式的欄位覆寫（CWA 用可加量）
+FCLOG_MIN_COV = {'cwa': 0.05}        # 逐模式的最低覆蓋率（CWA 僅部分鄉鎮有判讀）
 FCLOG_WET_MIN = 2.0              # 全島平均低於此值的日子不計型態（小雨日的型態是雜訊）
 
 
@@ -3832,7 +3841,9 @@ def update_forecast_log(out_towns, base_dt, now_tpe):
         segs = day_segs[d]
         per_model = {}
         for m in FCLOG_MODELS:
-            fld = 'qpf_' + m
+            #  ★ CWA 要用可加量 qpf_cwa_q（色帶上界÷窗段數），
+            #    不是 qpf_cwa（色帶下界＝類別身分，拿去跟觀測量比會低估）
+            fld = FCLOG_FIELD.get(m, 'qpf_' + m)
             vec = []
             okn = 0
             for t in out_towns:
@@ -3842,7 +3853,10 @@ def update_forecast_log(out_towns, base_dt, now_tpe):
                     vec.append(round(v, 1)); okn += 1
                 else:
                     vec.append(None)
-            if okn >= len(out_towns) * 0.8:      # 太多缺值就不存這個模式
+            #  ★ CWA 來自官方 PNG 判讀，只涵蓋判讀得到的鄉鎮（實測 32~49/368），
+            #    用 80% 門檻會讓它永遠存不進去 —— 那正是它從來沒出現在
+            #    任何排行的原因之一。改為逐模式門檻，樣本少就讓樣本數去說。
+            if okn >= len(out_towns) * FCLOG_MIN_COV.get(m, 0.8):
                 per_model[m] = vec
         if per_model:
             rec[d] = per_model
@@ -4153,6 +4167,37 @@ def _fcst_max_hourly_yday(t, model):
     return max(vals) if vals else None
 
 
+def fclog_values_for(valid_date, model):
+    """從預報存檔取「當初發布、對 valid_date 的預報」逐鄉鎮值。
+
+    ★★ 2026-10-09：CWA 的校驗來源。
+      其他模式用 model_yday（向 Open-Meteo 重抓昨日預報），但 CWA 的值
+      來自官方 PNG 判讀，Open-Meteo 沒有它 —— 先前整個校驗與排行
+      因此完全看不到 CWA（VF_MODELS 與 MODELS 都沒列它）。
+      改用預報存檔：驗的是「當時真的發布了什麼」，比事後重抓更正確。
+    回傳 {鄉鎮鍵: 日雨量}；沒有資料回 {}。
+    """
+    if not os.path.exists(FORECAST_LOG_FILE):
+        return {}
+    try:
+        with open(FORECAST_LOG_FILE, encoding='utf-8') as f:
+            log = json.load(f) or {}
+    except Exception:
+        return {}
+    towns = log.get('towns') or []
+    issues = sorted(k for k, v in (log.get('issues') or {}).items()
+                    if valid_date in (v or {}))
+    if not towns or not issues:
+        return {}
+    #  取最接近有效日的那一報（lead time 最短＝最公平的比較基準）
+    for ik in reversed(issues):
+        arr = (log['issues'][ik][valid_date] or {}).get(model)
+        if arr and len(arr) == len(towns):
+            return {towns[i]: arr[i] for i in range(len(towns))
+                    if arr[i] is not None}
+    return {}
+
+
 def update_verify(out_towns, zones, now_tpe, hourly_ser=None, prev_weights=None,
                   prev_skill=None):
     """逐日校驗：以 1mm 有效降水為門檻，比對昨日各模式與實際觀測。
@@ -4177,7 +4222,15 @@ def update_verify(out_towns, zones, now_tpe, hourly_ser=None, prev_weights=None,
     # ★ 校驗涵蓋所有模式（含僅校驗者）；融合加權另在 update_model_skill 處理
     MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
               'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom',
-              'blend')          # ★ 融合結果本身也要被校驗          # ★ 融合結果本身也要被校驗
+              'blend',          # ★ 融合結果本身也要被校驗
+              'cwa')            # ★ 中央氣象署官方 QPF（由預報存檔取值）
+    _yday = (now_tpe - timedelta(days=1)).strftime('%Y-%m-%d')
+    _cwa_yday = fclog_values_for(_yday, 'cwa')
+    if _cwa_yday:
+        print(f"    CWA 校驗取自預報存檔：{len(_cwa_yday)} 個鄉鎮有當初發布的值")
+    else:
+        print(f"    ⚠ CWA 無當初發布的值可校驗（預報存檔尚未累積到 {_yday}；"
+              f"部署後才開始累積，不會回溯）")
     day = {}
     n_used = 0
     for t in out_towns:
@@ -4194,6 +4247,7 @@ def update_verify(out_towns, zones, now_tpe, hourly_ser=None, prev_weights=None,
         _obs_mh = _obs_max_hourly_yday(hourly_ser, _stn_names, now_tpe)
         for m in MODELS:
             mv = (_blend_yday(t, zone, prev_weights, prev_skill) if m == 'blend'
+                  else _cwa_yday.get(key) if m == 'cwa'
                   else (t.get('model_yday') or {}).get(m))
             if mv is None:
                 continue
