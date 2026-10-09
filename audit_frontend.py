@@ -126,6 +126,33 @@ n_axtitle = count(r'_drawAxisTitles\(') - 1
 item('T', 'OK' if n_axtitle >= 3 else 'FAIL',
      f'走共用排版的軸標題：{n_axtitle} 處（應 ≥3）')
 
+# ── [F] 補值來源必須標示 ────────────────────────────────────────
+section('F', '[F] 推算值與官方實測必須分得出來')
+item('F', 'OK' if count(r'function _etr2IsFill\(') == 1 else 'FAIL',
+     '_etr2IsFill 恰好一份')
+item('F', 'OK' if count(r'function _etr2FillMaskHourly\(') == 0 else 'FAIL',
+     '逐時遮罩沒有另一份平行實作（應由 _etr2HourlySeries 的 outFill 輸出）')
+item('F', 'OK' if 'outFill' in text else 'FAIL',
+     '_etr2HourlySeries 以輸出參數回傳補值遮罩（遮罩與序列同一趟算出）')
+item('F', 'OK' if re.search(r'ctx\.setLineDash\(\[w \* 2\.2', text) else 'FAIL',
+     '折線工具會把推算段畫成虛線')
+n_fillarg = len(re.findall(r'_strokeNullableSeries\(ctx, [^;]*?,\s*(?:_etrFill|etrFill|\(fillRows\|\|\[\]\)\[d[i]?\])\)',
+                           text, re.S))
+item('F', 'OK' if n_fillarg >= 5 else 'FAIL',
+     f'傳入補值遮罩的折線呼叫：{n_fillarg} 處（五張圖都要，應 ≥5）')
+item('F', 'OK' if '虛線＝' in text else 'FAIL', '軸標題說明虛線語意')
+item('F', 'OK' if '推算' in text else 'FAIL', 'tooltip 標示推算值')
+
+# ── [U] 單位一致性 ──────────────────────────────────────────────
+section('U', '[U] etr2_pct 全系統只能有一種單位')
+item('U', 'OK' if count(r'function _normalizeEtrPct\(') == 1 else 'FAIL',
+     '_normalizeEtrPct 恰好一份（由 ETR2/警戒值 現算，不靠數值大小猜單位）')
+n_norm = count(r'_normalizeEtrPct\(\)') - 1
+item('U', 'OK' if n_norm >= 3 else 'FAIL',
+     f'正規化呼叫點：{n_norm} 處（內建資料、data.json、etr2_now 三處都要）')
+item('U', 'OK' if not re.search(r'const _list = \(window\.TOWNSHIPS', text) else 'FAIL',
+     '不得用 window.TOWNSHIPS（const 宣告不會掛上 window，會靜默跳過全部）')
+
 # ── [C] 觀看者時鐘當原點 ────────────────────────────────────────
 section('C', '[C] Date.now() 當 h 偏移原點（僅「距現在第 h 小時」語意才正確）')
 funcs = [(i + 1, m.group(1)) for i, L in enumerate(lines)
