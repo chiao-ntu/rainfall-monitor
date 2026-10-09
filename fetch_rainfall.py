@@ -1593,7 +1593,6 @@ def apply_official_etr2(out_towns, now_tpe):
 
     NSEG = 32
     _segkeys = [seg_key(base + timedelta(hours=6 * i)) for i in range(-NSEG, 4)]
-    fillmap = {}        # town -> {segkey: True}（補值標記，供前端以不同樣式呈現）
 
     # 由 rain_hourly.json 的逐小時站級官方 ETR2 重建鄉鎮逐段歷史（較精細，優先）
     n_hr = 0
@@ -1602,16 +1601,37 @@ def apply_official_etr2(out_towns, now_tpe):
         _sw = load_slope_warn() or {}
         if _sw and os.path.exists(HOURLY_FILE):
             with open(HOURLY_FILE, encoding='utf-8') as f: _ser = json.load(f)
+            #  ★★ 2026-10-09：官方 API 值（swcb）優先，缺的小時以官方公式自算值
+            #    （swcb_calc）遞補。自算值＝官方權重 Σ W[i]xR[i] 套在官方 CWA
+            #    時雨量上，是 ETR2 的定義本身，不是估算。
+            #    先前只讀 swcb，水保署 API 單獨失敗的小時就整個空白 ——
+            #    而那些小時的時雨量明明抓到了。
             _swcb_h = _ser.get('swcb') or {}
+            _calc_h = _ser.get('swcb_calc') or {}
+            _n_api = _n_calc = 0
+            _merged = {}
+            for _hk in set(_swcb_h) | set(_calc_h):
+                _row = dict(_calc_h.get(_hk) or {})
+                _src = {k: 'calc' for k in _row}
+                for _k, _v in (_swcb_h.get(_hk) or {}).items():
+                    _row[_k] = _v; _src[_k] = 'api'
+                if _row:
+                    _merged[_hk] = (_row, _src)
             # 每個 6h 段取「段內最後一個有資料的小時」
-            _by_seg = {}
-            for _hk in sorted(_swcb_h.keys()):
+            _by_seg, _src_seg = {}, {}
+            for _hk in sorted(_merged.keys()):
                 try:
                     _d = datetime.strptime(_hk, '%Y-%m-%dT%H')
                 except Exception:
                     continue
                 _sk = _d.replace(hour=(_d.hour // 6) * 6).strftime('%Y-%m-%dT%H')
-                _by_seg[_sk] = _swcb_h[_hk]        # 後蓋前＝段內最後一筆
+                _by_seg[_sk], _src_seg[_sk] = _merged[_hk]   # 後蓋前＝段內最後一筆
+            for _sk, _sm in _src_seg.items():
+                _n_api  += sum(1 for v in _sm.values() if v == 'api')
+                _n_calc += sum(1 for v in _sm.values() if v == 'calc')
+            if _n_calc:
+                print(f"  ETR2 來源：官方 API {_n_api} 筆、官方公式自算 {_n_calc} 筆"
+                      f"（自算＝Σ W[i]xR[i] 套在官方時雨量上，非估算）")
 
             #  ★★ 2026-10-09：逐站、逐 6h 段的觀測雨量 —— ETR2 補值遞迴的輸入。
             #    要求該段 6 小時至少有 5 小時有值，否則段總量會低估，
@@ -1660,33 +1680,38 @@ def apply_official_etr2(out_towns, now_tpe):
                         _rn.append(_rv)
                     if not any(v is not None for v in _es):
                         continue
-                    _fl, _mk, _inf = fill_etr2_series(_es, _rn)
+                    #  ★★ 2026-10-09：資料路徑**不做**遞迴補值。
+                    #    使用者：「有數據就要如實彙整，不應該出現空白，
+                    #    也不應該用虛線加註說明的方式處理。」
+                    #    缺口的正解是把 ETR2 算出來（官方公式套官方時雨量，
+                    #    見 fetch_qpesums_hourly.backfill_swcb_calc），
+                    #    不是在兩個錨點之間內插一條看起來合理的線。
+                    #    遞迴式在這裡只用來「檢查」—— 官方值彼此是否符合
+                    #    衰減律，不符合代表對站或資料有問題，印出來讓人看見。
                     _fill_stat['units'] += 1
-                    _fill_stat['filled'] += _inf['filled']
-                    _fill_stat['gaps'] += _inf['gaps']
-                    _fill_stat['norain'] += _inf['norain']
-                    _fill_stat['refused'] += len(_inf['refused'])
+                    _chk = fill_etr2_series(_es, _rn)[2]
+                    _fill_stat['gaps'] += _chk['gaps']
+                    _fill_stat['refused'] += len(_chk['refused'])
                     for _i, _sk in enumerate(_segkeys):
-                        if _fl[_i] is None: continue
-                        _p = _fl[_i] / _a
+                        if _es[_i] is None: continue
+                        _p = _es[_i] / _a
                         _cur = _agg.setdefault(_town, {}).get(_sk)
                         if _cur is None or _p > _cur[0]:
-                            _agg[_town][_sk] = (_p, _fl[_i], _mk[_i])
+                            _agg[_town][_sk] = (_p, _es[_i], False)
             for _town, _m in _agg.items():
                 for _sk, (_p, _v, _isf) in _m.items():
                     hist.setdefault(_town, {})[_sk] = round(_v, 1)
-                    if _isf: fillmap.setdefault(_town, {})[_sk] = True
                     n_hr += 1
             if n_hr:
                 print(f"  官方 ETR2 歷史：由 {HOURLY_FILE} 逐小時站值重建 {n_hr} 筆"
                       f"（{len(_by_seg)} 個 6h 段、{_fill_stat['units']} 個警戒單元）")
             if _fill_stat['gaps']:
-                print(f"  ETR2 缺口補值（官方遞迴式 E(s+1)=E(s)x0.7^(1/4)+R）："
-                      f"補 {_fill_stat['filled']} 段 / {_fill_stat['gaps']} 個內部缺口"
-                      f"；拒補 {_fill_stat['refused']} 個（殘差過大，寧可留白）")
-                if _fill_stat['norain']:
-                    print(f"     其中 {_fill_stat['norain']} 段無逐時雨量可用，"
-                          f"以 0 代入後由殘差吸收（已標記為補值）")
+                print(f"  ⚠ ETR2 序列仍有 {_fill_stat['gaps']} 個內部缺口"
+                      f"（{_fill_stat['units']} 個警戒單元中）"
+                      f" → 代表那些小時連時雨量都不足以自算，須查 10 分鐘排程")
+            if _fill_stat['refused']:
+                print(f"  ⚠ {_fill_stat['refused']} 個缺口兩端的官方值不符合衰減律"
+                      f"（E(s+1) 應 ≈ E(s)x0.7^(1/4)+R）→ 對站或資料可能有問題")
     except Exception as e:
         print(f"  由逐時序列重建 ETR2 歷史失敗（不影響本輪）：{e}")
     n_town = 0
@@ -1695,17 +1720,12 @@ def apply_official_etr2(out_towns, now_tpe):
         _tk = f"{t.get('county','')}{t.get('township','')}"
         rec = hist.get(_tk) or {}
         if not rec:
-            t['etr2_hist'] = None; t['etr2_hist_fill'] = None; continue
-        _fm = fillmap.get(_tk) or {}
-        arr, fil = [], []
-        for i in range(-NSEG, 4):
-            _k = seg_key(base + timedelta(hours=6 * i))
-            arr.append(rec.get(_k))
-            fil.append(bool(_fm.get(_k)))
+            t['etr2_hist'] = None; continue
+        arr = [rec.get(seg_key(base + timedelta(hours=6 * i)))
+               for i in range(-NSEG, 4)]
         t['etr2_hist'] = arr if any(v is not None for v in arr) else None
-        #  ★ 補值標記必須隨值一起送到前端：圖上要畫得出「這段是推算的」，
-        #    否則補出來的線和官方實測看起來一樣，就變成另一種假資料。
-        t['etr2_hist_fill'] = fil if (t['etr2_hist'] and any(fil)) else None
+        #  ★ 不再輸出 etr2_hist_fill：資料路徑已無推算值，
+        #    每一段都是官方 API 值或官方公式自算值，兩者同等權威。
         if t['etr2_hist']: n_town += 1
     # ★★ 2026-10-09：逐段涵蓋率。圖上出現缺口時，必須能一眼看出是哪幾段
     #   沒有官方歷史 —— 否則只能從圖面猜。缺口＝該段所有鄉鎮都沒有值，

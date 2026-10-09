@@ -154,19 +154,33 @@ if (_EXEC) _LAUNCH.executablePath = _EXEC;
     });
     inv('P4 歷史值不得為 0（0 與「無值」必須分得開）', b4, n4, '0 會被畫成貼地的假線');
 
-    // P5 補值標記長度必須與歷史序列一致
+    // P5 有時雨量卻沒有 ETR2 —— 本次事故（2026-10-09）的直接偵測
+    //    兩者同一支腳本、同一個檔案寫入。雨量進得來、ETR2 進不來，
+    //    代表水保署 API 單獨失敗卻被記成成功，或自算補缺沒有生效。
     let b5 = [], n5 = 0;
     pool.forEach(t => {
-      if (!Array.isArray(t.etr2_hist_fill)) return;
-      n5++;
-      if (!Array.isArray(t.etr2_hist) || t.etr2_hist.length !== t.etr2_hist_fill.length)
-        b5.push(`${t.county}${t.township} 長度不符`);
-      else t.etr2_hist_fill.forEach((f, i) => {
-        if (f && t.etr2_hist[i] == null)
-          b5.push(`${t.county}${t.township} 索引${i} 標為補值但值是 null`);
-      });
+      const h = t.etr2_hist, hb = t.etr2_hist_base;
+      if (!Array.isArray(h) || hb == null) return;
+      const bars = _hourlyBars(t);
+      for (let i = 0; i < h.length; i++) {
+        const seg = i - hb;
+        if (seg > 0) continue;                       // 只看過去段
+        // 該段 6 小時內是否有官方時雨量
+        let hasRain = false;
+        for (let k = 0; k < 6; k++) {
+          const hh = seg * 6 + k;
+          const idx = hh - bars.hFrom;
+          if (idx >= 0 && idx < bars.vals.length
+              && !(bars.estMask || [])[idx] && bars.vals[idx] != null) { hasRain = true; break; }
+        }
+        if (!hasRain) continue;
+        n5++;
+        if (h[i] == null)
+          b5.push(`${t.county}${t.township} 段${seg}：有官方時雨量但無 ETR2`);
+      }
     });
-    inv('P5 補值標記與歷史序列對齊', b5, n5, '標記錯位會讓實測被畫成虛線');
+    inv('P5 有時雨量的時段就必須有 ETR2', b5, n5,
+        '兩者同一支腳本寫入；雨量有、ETR2 沒有＝部分失敗被記成成功');
 
     // ── 4) 分署聚合 vs 成員鄉鎮 ─────────────────────────────
     let b6 = [], n6 = 0;

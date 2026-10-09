@@ -587,9 +587,18 @@ def update_env_history(now_tpe):
         if sg.get('dir') is not None:    rec['dir'] = sg['dir']
         if sg.get('period') is not None: rec['period'] = sg['period']
 
-    if not snap:
+    if not snap and not hist['hours'].get(hkey):
         print("    本時無可存的氣溫/浪高值")
         return
+    #  ★★ 2026-10-09：同一小時必須「逐欄合併」，不可整包覆寫。
+    #    與 rain_hourly 的事故同一類：本輪只抓到部分欄位時，
+    #    整包覆寫會把前一輪已經抓到的值洗掉；而這些歷史檔每 10 分鐘寫一次，
+    #    一小時有 6 次機會，任何一次部分失敗都不該讓該小時倒退。
+    _prev = hist['hours'].get(hkey) or {}
+    for _k, _v in list(snap.items()):
+        _m = dict(_prev.get(_k) or {}); _m.update(_v); snap[_k] = _m
+    for _k, _v in _prev.items():
+        if _k not in snap: snap[_k] = _v
     hist['hours'][hkey] = snap
 
     # 滾動保留 72 小時
@@ -653,9 +662,18 @@ def update_wind_history(now_tpe):
             if best.get('ws') is not None: rec['ws'] = best['ws']
             if best.get('bf') is not None: rec['bf'] = best['bf']
             if rec: snap[cty + twn] = rec
-    if not snap:
+    if not snap and not hist['hours'].get(hkey):
         print("    本時無可存的風力值")
         return
+    #  ★★ 2026-10-09：同一小時必須「逐欄合併」，不可整包覆寫。
+    #    與 rain_hourly 的事故同一類：本輪只抓到部分欄位時，
+    #    整包覆寫會把前一輪已經抓到的值洗掉；而這些歷史檔每 10 分鐘寫一次，
+    #    一小時有 6 次機會，任何一次部分失敗都不該讓該小時倒退。
+    _prev = hist['hours'].get(hkey) or {}
+    for _k, _v in list(snap.items()):
+        _m = dict(_prev.get(_k) or {}); _m.update(_v); snap[_k] = _m
+    for _k, _v in _prev.items():
+        if _k not in snap: snap[_k] = _v
     hist['hours'][hkey] = snap
 
     # 滾動保留 72 小時
@@ -714,6 +732,140 @@ def write_typhoon_now(now_tpe):
           f"{len(warn)} 份警報單")
 
 
+#  官方 ETR2 權重（R0＝當日，R1~R6＝前 6 日）。與 fetch_rainfall.py 同一組，
+#  來源為水保署官方警戒雨量表。KEEP_SERIES_HOURS=168 正是為此而設。
+ETR2_WEIGHTS = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1]
+_DAY_COV_MIN = 0.9          # 每一日需有的時雨量覆蓋率，低於此不自算
+
+
+def _daily_from_hourly(ser, hour_key):
+    """由 cwa 時雨量彙整出「每站 x 近 7 日」的日雨量與覆蓋率。
+
+    回傳 {站名: [(R0,cov0), (R1,cov1), ... (R6,cov6)]}，R0＝hour_key 當日
+    00 時起至 hour_key 為止的累積。缺報的小時不當成 0 —— 覆蓋率不足就不自算。
+    """
+    try:
+        H = datetime.strptime(hour_key, '%Y-%m-%dT%H')
+    except Exception:
+        return {}
+    cwa = ser.get('cwa') or {}
+    # 每一日的時段範圍與應有小時數
+    spans = []
+    for i in range(7):
+        d = (H - timedelta(days=i)).date()
+        n_exp = (H.hour + 1) if i == 0 else 24
+        spans.append((d, n_exp))
+    acc = {}
+    for i, (d, n_exp) in enumerate(spans):
+        for h in range(n_exp):
+            hk = datetime(d.year, d.month, d.day, h).strftime('%Y-%m-%dT%H')
+            row = cwa.get(hk)
+            if not isinstance(row, dict):
+                continue
+            for st, v in row.items():
+                try:
+                    f = float(v)
+                except (TypeError, ValueError):
+                    continue
+                a = acc.setdefault(st, [[0.0, 0] for _ in range(7)])
+                a[i][0] += max(0.0, f)
+                a[i][1] += 1
+    out = {}
+    for st, days in acc.items():
+        out[st] = [(days[i][0], days[i][1] / spans[i][1] if spans[i][1] else 0.0)
+                   for i in range(7)]
+    return out
+
+
+def _etr2_from_daily(days):
+    """ETR2 = Σ W[i] x R[i]。任一日覆蓋率不足就回 None（不以 0 充數）。"""
+    if not days or len(days) < 7:
+        return None
+    tot = 0.0
+    for i in range(7):
+        r, cov = days[i]
+        if cov < _DAY_COV_MIN:
+            return None
+        tot += ETR2_WEIGHTS[i] * r
+    return round(tot, 1)
+
+
+def backfill_swcb_calc(ser, now_tpe):
+    """以官方公式自算 ETR2，補上水保署 API 缺漏的小時。
+
+    ★★ 2026-10-09：為什麼這不是「估算」
+      ETR2（前期有效雨量）的定義就是「近 7 日日雨量的官方固定權重和」，
+      W = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1]，R0 為當日。
+      把**官方權重**套在**官方 CWA 時雨量**上，得到的就是官方 ETR2 本身，
+      不是近似、不是內插。前提只有一個：該站那 7 天的時雨量要齊全
+      （每日覆蓋率 ≥90%，缺報的小時不當成 0）。
+
+      使用者：「有數據就要如實彙整，不應該出現空白。」
+      時雨量進得來、ETR2 進不來時，資料其實是有的 —— 缺的只是把它算出來。
+
+    自我驗證：同一小時若官方值與自算值都有，逐站比對並印出差異統計。
+    兩者應該要很接近；若系統性偏離，代表對站或權重有問題，必須看 log 察覺。
+    """
+    hours = ser.get('hours') or []
+    if not hours:
+        return
+    ser.setdefault('swcb_calc', {})
+    miss = [h for h in hours if not (ser.get('swcb') or {}).get(h)]
+    # 驗證樣本：取最近一個「官方值存在」的小時做對照
+    probe = next((h for h in reversed(hours) if (ser.get('swcb') or {}).get(h)), None)
+
+    n_filled, n_station = 0, 0
+    for hk in miss:
+        if ser['swcb_calc'].get(hk):
+            continue                                   # 已自算過，不重算
+        daily = _daily_from_hourly(ser, hk)
+        row = {}
+        for st, days in daily.items():
+            v = _etr2_from_daily(days)
+            if v is not None:
+                row[st] = v
+        if row:
+            ser['swcb_calc'][hk] = row
+            n_filled += 1; n_station += len(row)
+    # 修剪：與主序列同步
+    ser['swcb_calc'] = {h: v for h, v in ser['swcb_calc'].items() if h in set(hours)}
+
+    if n_filled:
+        print(f"    自算 ETR2 補缺：{n_filled} 個小時、平均 {n_station // max(1, n_filled)} 站"
+              f"（官方公式 Σ W[i]xR[i]，官方時雨量）")
+    if miss and not n_filled:
+        print(f"    ⚠ 有 {len(miss)} 小時缺官方 ETR2，但時雨量覆蓋不足 7 日，無法自算"
+              f"（序列需累積滿 {KEEP_SERIES_HOURS}h）")
+
+    # ── 自我驗證：官方 vs 自算 ───────────────────────────────
+    if probe:
+        off = ser['swcb'][probe]
+        daily = _daily_from_hourly(ser, probe)
+        diffs = []
+        for st, days in daily.items():
+            if st not in off:
+                continue
+            v = _etr2_from_daily(days)
+            if v is None:
+                continue
+            try:
+                o = float(off[st])
+            except (TypeError, ValueError):
+                continue
+            diffs.append((abs(v - o), st, o, v))
+        if diffs:
+            diffs.sort()
+            med = diffs[len(diffs) // 2][0]
+            worst = diffs[-3:][::-1]
+            print(f"    自算 vs 官方（{probe}）：{len(diffs)} 站比對，中位差 {med:.1f} mm")
+            if med > 15:
+                print(f"       ★ 中位差偏大，對站或權重可能有問題。"
+                      f"最大差：" + "、".join(f"{s} 官方{o:.0f}/自算{c:.0f}"
+                                              for _, s, o, c in worst))
+        else:
+            print(f"    自算 vs 官方：無共同站可比對（時雨量覆蓋不足或站名對不上）")
+
+
 def update_hourly_series(now_tpe):
     """把本小時的 CWA 時雨量與水保署 ETR2 併入 rain_hourly.json 滾動序列。
 
@@ -737,28 +889,72 @@ def update_hourly_series(now_tpe):
         except Exception as e:
             print(f"    既有 {HOURLY_FILE} 讀取失敗，重建序列：{e}")
 
-    if hour_key in ser.get('hours', []):
-        print(f"    {hour_key} 已存在 → 不覆寫（同小時重跑）")
+    # ★★ 2026-10-09 根本修正：兩個來源必須**各自**判定成敗、各自補寫。
+    #
+    #   原本的邏輯有兩層缺陷，合起來造成「時雨量有、ETR2 空白」：
+    #     (1) `if not cwa and not swcb` —— 只有兩個都失敗才算失敗。
+    #         水保署 API 單獨失敗時，仍會寫入 ser['swcb'][hour_key] = {}，
+    #         把「抓不到」記錄成「這小時沒有 ETR2」。
+    #     (2) `if hour_key in ser['hours']: 不覆寫` —— 整個小時直接跳過。
+    #         腳本每 10 分鐘跑一次，一小時有 6 次機會，但第一次跑若水保署失敗，
+    #         後面 5 次全部因為「已存在」而不再嘗試 → 那一小時永久沒有 ETR2。
+    #
+    #   新規則：
+    #     - 已經有值的來源不重抓、不覆寫（保留原本「不污染同小時」的用意）
+    #     - 缺的來源每一輪都重試，直到該小時被修剪掉為止
+    #     - 抓不到就讓鍵不存在，絕不寫空字典（空字典會被下游當成「查過，沒有」）
+    _hc = ser['cwa'].get(hour_key)
+    _hs = ser['swcb'].get(hour_key)
+    need_cwa  = not (isinstance(_hc, dict) and _hc)
+    need_swcb = not (isinstance(_hs, dict) and _hs)
+    if not need_cwa and not need_swcb:
+        print(f"    {hour_key} 兩個來源都已寫入 → 不重抓")
     else:
-        cwa  = fetch_cwa_hourly()
-        swcb = fetch_swcb_hourly()
-        if not cwa and not swcb:
-            print("    兩個來源都失敗 → 本小時不寫入（序列留空格，判定端會回『資料不足』）")
-            return
-        ser['cwa'][hour_key]  = {k: v['r1'] for k, v in cwa.items() if v.get('r1') is not None}
-        ser['swcb'][hour_key] = swcb
-        # 同一次 API 結果順便產出鄉鎮級官方 ETR2 現值（不另外發請求）
-        write_etr2_now(swcb, now_tpe)
+        if not need_cwa or not need_swcb:
+            print(f"    {hour_key} 補抓缺漏來源："
+                  f"{'CWA時雨量 ' if need_cwa else ''}{'水保署ETR2' if need_swcb else ''}")
+        cwa  = fetch_cwa_hourly()  if need_cwa  else {}
+        swcb = fetch_swcb_hourly() if need_swcb else {}
+        wrote = []
+        if need_cwa:
+            _row = {k: v['r1'] for k, v in cwa.items() if v.get('r1') is not None}
+            if _row:
+                ser['cwa'][hour_key] = _row; wrote.append(f'CWA {len(_row)} 站')
+            else:
+                ser['cwa'].pop(hour_key, None)      # 不留空字典，下一輪再試
+        if need_swcb:
+            if swcb:
+                ser['swcb'][hour_key] = swcb; wrote.append(f'水保署 {len(swcb)} 站')
+                # 同一次 API 結果順便產出鄉鎮級官方 ETR2 現值（不另外發請求）
+                write_etr2_now(swcb, now_tpe)
+            else:
+                ser['swcb'].pop(hour_key, None)     # 不留空字典，下一輪再試
+        if wrote:
+            ser['hours'] = sorted(set(ser['hours']) | {hour_key})
+            print(f"    本輪寫入：{'、'.join(wrote)}")
+        # 仍然缺的來源要講出來，不能靜悄悄
+        _still = []
+        if not ser['cwa'].get(hour_key):  _still.append('CWA時雨量')
+        if not ser['swcb'].get(hour_key): _still.append('水保署ETR2')
+        if _still:
+            print(f"    ⚠ {hour_key} 仍缺：{'、'.join(_still)}"
+                  f"（本小時後續每 10 分鐘會再試）")
 
-        ser['hours'] = sorted(set(ser['hours']) | {hour_key})
+    #  ★ 以官方公式自算，補上水保署 API 缺漏的小時（含過去 —— API 只給現在，
+    #    過去的小時補抓不回來，只能由官方時雨量依官方公式算出）
+    try:
+        backfill_swcb_calc(ser, now_tpe)
+    except Exception as e:
+        print(f"    自算 ETR2 補缺失敗（不影響本輪）：{e}")
 
     # 修剪：只留最近 KEEP_SERIES_HOURS 小時
     cutoff = (now_tpe - timedelta(hours=KEEP_SERIES_HOURS)).strftime('%Y-%m-%dT%H')
     keep = [h for h in ser['hours'] if h >= cutoff]
     dropped = len(ser['hours']) - len(keep)
     ser['hours'] = keep
-    for bucket in ('cwa', 'swcb'):
-        ser[bucket] = {h: v for h, v in ser[bucket].items() if h in keep}
+    for bucket in ('cwa', 'swcb', 'swcb_calc'):
+        if bucket in ser:
+            ser[bucket] = {h: v for h, v in ser[bucket].items() if h in keep}
     ser['updated'] = now_tpe.strftime('%Y-%m-%dT%H:%M')
     ser['keep_hours'] = KEEP_SERIES_HOURS
 

@@ -1214,8 +1214,7 @@ function showHyetograph(t, s, e){
   const n=vals.length, bw=cw/n;
   //  ★ 本圖為 3 等分刻度，上限必須可被 3 整除，否則出現 3/7/10 這種跳動刻度
   const axisMax=_axisMaxOfNullable(vals, 10, 3);
-  const _etrFill = [];
-  const etr = hasAlert ? _etr2HourlySeries(pseudoT, hFrom, hFrom+n-1, _etrFill) : null;
+  const etr = hasAlert ? _etr2HourlySeries(pseudoT, hFrom, hFrom+n-1) : null;
   const axisMaxEtr=_axisMaxOfNullable(etr, 10, 3);
 
   // 左軸
@@ -1254,8 +1253,7 @@ function showHyetograph(t, s, e){
     //  ★ 遇 null 斷開（先前 Math.min(null,max)＝0，會畫成貼地的假線）
     _strokeNullableSeries(ctx, etr,
       i => pL+i*bw+bw/2,
-      v => pT+ch-ch*Math.min(v,axisMaxEtr)/axisMaxEtr,
-      _etrFill);
+      v => pT+ch-ch*Math.min(v,axisMaxEtr)/axisMaxEtr);
   }
 
   // 現在線 + X標籤（每24h）
@@ -1335,7 +1333,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-09T11:05Z';
+const FORMOSA_BUILD = '2026-10-09T13:50Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -9732,7 +9730,7 @@ function _townChartGeom(W,H,isZoom,nItems){
 function _townChartData(t, type, qpfField){
   if(type==='daily'){
     const nDays=16;
-    const rain=[], etr=[], etrFill=[], labels=[];
+    const rain=[], etr=[], labels=[];
     const _qa = getQpfArr(t, qpfField);
     for(let d=0;d<nDays;d++){
       // 模式感知日和（4段/日）；資料尾端超出段陣列時退 daily_qpf（舊資料相容）
@@ -9746,12 +9744,11 @@ function _townChartData(t, type, qpfField){
         e=(_p==null)?null:Math.round(_p);
       }
       etr.push(e);
-      etrFill.push(_etr2IsFill(t, d*4+3));   // ★ 該段是否為遞迴式補回的推算值
       labels.push(fmtDay(new Date(SEG_EPOCH().getTime()+d*86400000)));
     }
-    return {rain, etr, etrFill, labels, nItems:nDays};
+    return {rain, etr, labels, nItems:nDays};
   } else {
-    const rain=[], etr=[], etrFill=[], labels=[];
+    const rain=[], etr=[], labels=[];
     const obs=t.daily_rain||[];
     [['前天',2],['昨天',1]].forEach(([lb,di])=>{
       rain.push(obs[di]||0); labels.push(lb);
@@ -9761,7 +9758,6 @@ function _townChartData(t, type, qpfField){
         e=(_p==null)?null:Math.round(_p);
       }
       etr.push(e);
-      etrFill.push(_etr2IsFill(t, -(di*4-3)));
     });
     const qa=getQpfArr(t,qpfField);
     for(let s=0;s<8;s++){
@@ -9774,11 +9770,10 @@ function _townChartData(t, type, qpfField){
         e=(_p==null)?null:Math.round(_p);
       }
       etr.push(e);
-      etrFill.push(_etr2IsFill(t, s));
       const d0=segTime(s), d1=segTime(s+1);
       labels.push(`${d0.getMonth()+1}/${d0.getDate()} ${String(d0.getHours()).padStart(2,'0')}-${d1.getHours()===0?24:d1.getHours()}時`);
     }
-    return {rain, etr, etrFill, labels, nItems:10, splitAfter:2};
+    return {rain, etr, labels, nItems:10, splitAfter:2};
   }
 }
 
@@ -10001,46 +9996,18 @@ function townToday(t){ return townMetrics(t, 3); }
 //   「沒有官方值」被畫成「ETR2 ＝ 0%」—— 一條貼地的線看起來像真的降到零，
 //   比留白更危險。鄉鎮圖昨天修過，但測站圖與分署圖各有一份自己的迴圈，
 //   同樣的錯又出現兩次。收斂成一支，之後不會再有第四份。
-//   fillMask（選填）：該點是否為後端補回的推算值。給了就分兩種筆觸畫
-//   —— 官方實測實線、推算虛線。兩者必須一眼分得出來。
-function _strokeNullableSeries(ctx, arr, xOf, yOf, fillMask){
+function _strokeNullableSeries(ctx, arr, xOf, yOf){
   if(!Array.isArray(arr) || !arr.length) return;
-  const hasMask = Array.isArray(fillMask) && fillMask.length === arr.length
-                  && fillMask.some(Boolean);
-  if(!hasMask){
-    ctx.beginPath();
-    let pen = false;
-    for(let i = 0; i < arr.length; i++){
-      const v = arr[i];
-      if(v == null || !isFinite(v)){ pen = false; continue; }   // 斷開，不連線
-      const x = xOf(i), y = yOf(v);
-      if(!pen){ ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    return;
+  ctx.beginPath();
+  let pen = false;
+  for(let i = 0; i < arr.length; i++){
+    const v = arr[i];
+    if(v == null || !isFinite(v)){ pen = false; continue; }   // 斷開，不連線
+    const x = xOf(i), y = yOf(v);
+    if(!pen){ ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
   }
-  // 逐線段分類（i-1→i 任一端是補值就算推算段），分兩趟畫。
-  // 逐段 moveTo/lineTo 而非單一路徑：換筆觸的交界才不會出現視覺斷點。
-  const isFillSeg = i => !!fillMask[i] || !!fillMask[i - 1];
-  const pass = (wantFill)=>{
-    ctx.beginPath();
-    for(let i = 1; i < arr.length; i++){
-      const a = arr[i - 1], b = arr[i];
-      if(a == null || b == null || !isFinite(a) || !isFinite(b)) continue;
-      if(isFillSeg(i) !== wantFill) continue;
-      ctx.moveTo(xOf(i - 1), yOf(a));
-      ctx.lineTo(xOf(i), yOf(b));
-    }
-    ctx.stroke();
-  };
-  const _dash = ctx.getLineDash ? ctx.getLineDash() : [];
-  pass(false);                                   // 官方實測：實線
-  const w = ctx.lineWidth || 2;
-  ctx.setLineDash([w * 2.2, w * 1.8]);
-  pass(true);                                    // 遞迴式推算：虛線
-  ctx.setLineDash(_dash || []);
+  ctx.stroke();
 }
-// 軸上限：忽略 null（null 參與 Math.max 會變成 0，把軸壓扁）
 function _axisMaxOfNullable(arr, floorV, nDiv){
   const vs = (arr || []).filter(v=>v != null && isFinite(v));
   return _niceAxisMax(Math.max(...vs.concat([floorV || 10])), nDiv || 4, floorV || 10);
@@ -10168,25 +10135,8 @@ function _gateByCoverage(vals, cnts){
   return vals.map((v, i)=> (cnts[i] >= need ? v : null));
 }
 
-// ── 補值標記 ─────────────────────────────────────────────────────
-// ★★ 2026-10-09：後端 fill_etr2_series() 以官方遞迴式
-//   E(s+1) = E(s) x 0.7^(1/4) + R(s+1) 補回「兩端都有官方錨點」的內部缺口，
-//   並以 etr2_hist_fill 逐段標記。前端必須畫得出差別 ——
-//   補值與官方實測長得一模一樣的話，就只是把留白換成另一種假資料。
-//   呈現方式：補值區段畫虛線，tooltip 標「推算」，軸標題說明來源。
-function _etr2IsFill(t, seg){
-  const m = t && t.etr2_hist_fill;
-  if(!Array.isArray(m) || !m.length) return false;
-  const hb = (t.etr2_hist_base != null) ? t.etr2_hist_base : 0;
-  const i = hb + seg;
-  return (i >= 0 && i < m.length) ? !!m[i] : false;
-}
-// （逐時補值遮罩原本是另一份實作，已收斂為 _etr2HourlySeries 的 outFill 輸出參數
-//   —— 遮罩必須與序列同一趟算出來，分兩份遲早會對不上。）
-
-//   outFill（選填陣列）：同步輸出「該小時是否為推算值」的遮罩。
-//     用輸出參數而不是改回傳型別 —— 本函式有多個呼叫點，改回傳型別
-//     必須同時掃過全部呼叫點，否則就是上次「改了定義沒掃呼叫點」的重演。
+// ── ETR2 逐時序列 ───────────────────────────────────────────────
+//   outFill（選填陣列）：保留輸出參數介面，目前無呼叫端使用。
 function _etr2HourlySeries(t, hFrom, hTo, outFill){
   if(!(t.alert_val>0)) return null;
   // ★ 資料一致性：一律以 calcEtr2AtSeg()（全系統唯一權威，含官方錨點與情境超額）
@@ -10222,12 +10172,12 @@ function _etr2HourlySeries(t, hFrom, hTo, outFill){
       //    但本段的值是官方的 —— 不知道的只有「段內怎麼變化」，不是「值是多少」。
       //    留白等於宣稱連值都不知道，與地圖、排行、面板顯示的數字互相矛盾
       //    （稽核實測：地圖顯示 148%，逐時圖同一時刻空白）。
-      //    作法：以本段官方值畫成平直線，並標為推算（虛線）——
-      //    值是官方的，只有段內形狀不明，這才是誠實的呈現。
+      //    作法：以本段官方值畫成平直線 —— 值是官方的，
+      //    不知道的只有段內怎麼變化，不是值本身。
       e = e1; isFill = true;
     }else{
       e = e0 + (e1 - e0) * (fr + 1/6);
-      isFill = _etr2IsFill(t, sg - 1) || _etr2IsFill(t, sg);
+      isFill = false;
     }
     out.push(Math.round(Math.max(0, e/den*100)));   // ★ ETR2% 取整數（與 _etrAtHour 同）
     if(outFill) outFill.push(isFill);
@@ -10265,8 +10215,7 @@ function _drawHourlyChart(t, canvasId, isZoom){
   const districtColor=getDistrictColor(t.county);
 
   // 逐時 ETR2%（全程 120 點）
-  const _etrFill=[];
-  const etr=_etr2HourlySeries(t, hFrom, hFrom+n-1, _etrFill);
+  const etr=_etr2HourlySeries(t, hFrom, hFrom+n-1);
   //  ★ 登記幾何與本次實際使用的資料，供 tooltip 讀取（不再各寫一份座標）
   _registerChartGeom(canvasId, {kind:'hourly', pL, pR, itemW:bw, nItems:n,
                                 hFrom, nowIdx, vals, etr, town:t});
@@ -10324,8 +10273,7 @@ function _drawHourlyChart(t, canvasId, isZoom){
     //  ★ null＝沒有官方值，必須斷線留白（與測站圖、分署圖同一支）
     _strokeNullableSeries(ctx, etr,
       i => pL+i*bw+bw/2,
-      v => pT+ch-ch*Math.min(v,axisMaxEtr)/axisMaxEtr,
-      _etrFill);
+      v => pT+ch-ch*Math.min(v,axisMaxEtr)/axisMaxEtr);
     if(isZoom){
       ctx.fillStyle='#FFFFFF'; ctx.font=`bold ${xFs}px sans-serif`; ctx.textAlign='center';
       for(let i=0;i<n;i+=12){
@@ -10358,7 +10306,7 @@ function _drawHourlyChart(t, canvasId, isZoom){
     :'※過去48h以官方日總量平均分配（逐時觀測累積中）';
   //  ★ 量測後再排版，左字串變長時不會與右標題疊字
   _drawAxisTitles(ctx, `左軸：時雨量(mm/h)${approxTag}　${pastTag}`,
-                  '右軸：ETR2%（逐時；虛線＝補缺推算）', pL, pL+cw, axTitleY, axFs,
+                  '右軸：ETR2%（逐時）', pL, pL+cw, axTitleY, axFs,
                   '#9fc8e8', districtColor);
 
   // 現在線（槽48）
@@ -10383,7 +10331,7 @@ function _drawTownChart(t, canvasId, isZoom, type){
   const ctx=cv.getContext('2d');
   const qpfField=MODEL_FIELD[forecastModel]||'qpf_best';
   const data=_townChartData(t,type,qpfField);
-  const {rain,etr,etrFill,labels,nItems,splitAfter}=data;
+  const {rain,etr,labels,nItems,splitAfter}=data;
   const g=_townChartGeom(W,H,isZoom,nItems);
   //  ★ 登記幾何（tooltip 原本寫死 pL=34/72，與本圖的 52/210 不符）
   _registerChartGeom(canvasId, {kind:'town-'+type, pL:g.pL, pR:g.pR,
@@ -10471,7 +10419,7 @@ function _drawTownChart(t, canvasId, isZoom, type){
   ctx.strokeStyle=districtColor;ctx.lineWidth=isZoom?6:1.6;
   const _yEtr = v => pT+ch*(1-Math.min(v,axisMaxEtr)/axisMaxEtr);
   const _xEtr = i => pL+i*itemW+itemW/2;
-  _strokeNullableSeries(ctx, etr, _xEtr, _yEtr, etrFill);
+  _strokeNullableSeries(ctx, etr, _xEtr, _yEtr);
   etr.forEach((v,i)=>{
     if(v==null || !isFinite(v)) return;          // 無值不畫節點、不標數字
     const x=_xEtr(i),y=_yEtr(v);
@@ -11980,16 +11928,16 @@ function _summaryEtr(t){
 
 function _calcDistrictDaily(qpfField){
   const nDays=16;
-  const rainRows=[],etrRows=[],fillRows=[];
+  const rainRows=[],etrRows=[];
   let gMR=0,gME=10;
   DISTRICT_ORDER.forEach(district=>{
     const counties=DISTRICT_COUNTIES[district];
-    const rr=[],er=[],cv=[],fv=[];
+    const rr=[],er=[],cv=[];
     for(let d=0;d<nDays;d++){
       //  ★★ 2026-10-09：mxE 起始必須是 null。原本 mxE=0 時，整個分署都沒有
       //    官方 ETR2 的那一天會推入 0 —— 與 _calcDistrictHourly 的 fill(0)
       //    是同一個錯，只是換了形狀（折線一樣會貼到圖底）。
-      let mxR=0,mxE=null,nE=0,mxF=false;
+      let mxR=0,mxE=null,nE=0;
       TOWNSHIPS.filter(t=>counties.includes(t.county)).forEach(t=>{
         // ★ 一律經 townMetrics（單一計算層），不自行組雨量／ETR2 邏輯
         const m=townMetrics(t,d*4+3);
@@ -11997,16 +11945,16 @@ function _calcDistrictDaily(qpfField){
           mxR=Math.max(mxR, m.dayRain||0);
           if(m.etrPct!=null){
             const _v=Math.round(m.etrPct); nE++;
-            if(mxE==null || _v>mxE){ mxE=_v; mxF=_etr2IsFill(t, d*4+3); }
+            if(mxE==null || _v>mxE) mxE=_v;
           }
         }
       });
-      rr.push(mxR);er.push(mxE);cv.push(nE);fv.push(mxF);gMR=Math.max(gMR,mxR);
+      rr.push(mxR);er.push(mxE);cv.push(nE);gMR=Math.max(gMR,mxR);
       if(mxE!=null) gME=Math.max(gME,mxE);
     }
-    rainRows.push(rr);etrRows.push(_gateByCoverage(er,cv));fillRows.push(fv);
+    rainRows.push(rr);etrRows.push(_gateByCoverage(er,cv));
   });
-  return {rainRows,etrRows,fillRows,nDays,
+  return {rainRows,etrRows,nDays,
           maxRain:_niceAxisMax(gMR+5,4,10),maxEtr:_niceAxisMax(gME+10,4,20)};
 }
 
@@ -12018,13 +11966,13 @@ function _calcDistrictDaily(qpfField){
 //     就是因為兩邊各有一份對版面的假設，滑鼠位置對到了別的時間。
 function _calcDistrictHyeto(qpfField){
   const nBars=8;
-  const rainRows=[],etrRows=[],fillRows=[];
+  const rainRows=[],etrRows=[];
   let gMR=0,gME=10;
   DISTRICT_ORDER.forEach(district=>{
     const counties=DISTRICT_COUNTIES[district];
-    const rr=[],er=[],cv=[],fv=[];
+    const rr=[],er=[],cv=[];
     for(let s=0;s<nBars;s++){
-      let mxR=0,mxE=null,nE=0,mxF=false;   // ★ 同 _calcDistrictDaily：起始 null，不是 0
+      let mxR=0,mxE=null,nE=0;      // ★ 同 _calcDistrictDaily：起始 null，不是 0
       TOWNSHIPS.filter(t=>counties.includes(t.county)).forEach(t=>{
         // ★ 一律經 townMetrics（單一計算層）
         const m=townMetrics(t,s);
@@ -12032,21 +11980,21 @@ function _calcDistrictHyeto(qpfField){
           mxR=Math.max(mxR, m.segRain||0);
           if(m.etrPct!=null){
             const _v=Math.round(m.etrPct); nE++;
-            if(mxE==null || _v>mxE){ mxE=_v; mxF=_etr2IsFill(t, s); }
+            if(mxE==null || _v>mxE) mxE=_v;
           }
         }
       });
-      rr.push(mxR);er.push(mxE);cv.push(nE);fv.push(mxF);gMR=Math.max(gMR,mxR);
+      rr.push(mxR);er.push(mxE);cv.push(nE);gMR=Math.max(gMR,mxR);
       if(mxE!=null) gME=Math.max(gME,mxE);
     }
-    rainRows.push(rr);etrRows.push(_gateByCoverage(er,cv));fillRows.push(fv);
+    rainRows.push(rr);etrRows.push(_gateByCoverage(er,cv));
   });
-  return {rainRows,etrRows,fillRows,nBars,
+  return {rainRows,etrRows,nBars,
           maxRain:_niceAxisMax(gMR+5,4,10),maxEtr:_niceAxisMax(gME+10,4,20)};
 }
 
 function _drawDistrictChart(ctx,W,H,isZoom,type,data,canvasId){
-  const {rainRows,etrRows,fillRows}=data;
+  const {rainRows,etrRows}=data;
   const nItems=type==='daily'?data.nDays:data.nBars;
   const nD=DISTRICT_ORDER.length;
   const fs=isZoom?54:12;
@@ -12063,7 +12011,7 @@ function _drawDistrictChart(ctx,W,H,isZoom,type,data,canvasId){
   const axisMaxEtr =_niceAxisMax(data.maxEtrRaw !=null?data.maxEtrRaw :data.maxEtr , 4, 10);
   //  ★ 登記幾何（tooltip 原本寫死 pL=34/72，與本圖的 46/170 不符）
   _registerChartGeom(canvasId, {kind:'district-'+type, pL, pR, itemW, nItems,
-                                rainRows, etrRows, fillRows});
+                                rainRows, etrRows});
 
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle=type==='daily'?'#060f18':'#040c14';ctx.fillRect(0,0,W,H);
@@ -12102,7 +12050,7 @@ function _drawDistrictChart(ctx,W,H,isZoom,type,data,canvasId){
   const axTitleY=pT+ch+xLabelH+axTitleH*0.75;
   ctx.font=`${axFs}px sans-serif`;
   _drawAxisTitles(ctx, '左軸：累積雨量(mm，署內鄉鎮最大)',
-                  '右軸：ETR2%（署內最大；虛線＝補缺推算，覆蓋不足留白）',
+                  '右軸：ETR2%（署內最大）',
                   pL, W-pR, axTitleY, axFs, '#9fc8e8', '#e8e8e8');
 
   // 長條圖（雨量，分署色）
@@ -12124,7 +12072,7 @@ function _drawDistrictChart(ctx,W,H,isZoom,type,data,canvasId){
     ctx.strokeStyle=color;ctx.lineWidth=isZoom?4.5:1.2;
     const _xE = i => pL+i*itemW+itemW/2;
     const _yE = v => pT+ch*(1-Math.min(v,axisMaxEtr)/axisMaxEtr);
-    _strokeNullableSeries(ctx, etrRows[di], _xE, _yE, (fillRows||[])[di]);
+    _strokeNullableSeries(ctx, etrRows[di], _xE, _yE);
     // 節點（分署色+白邊利辨識）
     etrRows[di].forEach((v,i)=>{
       if(v==null || !isFinite(v)) return;        // 無值不畫節點
@@ -12178,7 +12126,7 @@ function drawAllDistrictHyetoChart(targetId){
 
 // 各分署逐時聚合（-48h~+72h；各署各小時取鄉鎮最大值）
 function _calcDistrictHourly(){
-  const rows=[], etrRows=[], covRows=[], fillRows=[]; let gM=0, gE=10;
+  const rows=[], etrRows=[], covRows=[]; let gM=0, gE=10;
   let hFrom=null, nowIdx=48, n=120;
   DISTRICT_ORDER.forEach(district=>{
     const counties=DISTRICT_COUNTIES[district];
@@ -12189,7 +12137,6 @@ function _calcDistrictHourly(){
     const ee=new Array(n).fill(null);
     //  ★ 同步記錄每小時「有官方值的鄉鎮數」，供覆蓋率閘門判定聚合是否具代表性
     const cnt=new Array(n).fill(0);
-    const ff=new Array(n).fill(false);     // 該小時的最大值是否來自補值
 
     TOWNSHIPS.forEach(t=>{
       if(!counties.includes(t.county)) return;
@@ -12197,15 +12144,14 @@ function _calcDistrictHourly(){
       if(hFrom===null){ hFrom=b.hFrom; nowIdx=b.nowIdx; }
       for(let h=0;h<n;h++){ const v=b.vals[h]||0; if(v>rr[h]) rr[h]=v; }
       if(t.alert_val>0){
-        const fm=[];
-        const es=_etr2HourlySeries(t, b.hFrom, b.hFrom+n-1, fm);
+        const es=_etr2HourlySeries(t, b.hFrom, b.hFrom+n-1);
         if(es) for(let h=0;h<n;h++){
           const v=es[h];
           if(v==null || !isFinite(v)) continue;          // 沒有值就不參與取大
           cnt[h]++;
           //  ★ 記住「產生這個最大值的鄉鎮，其值是官方實測還是遞迴補值」，
           //    分署折線才畫得出實線／虛線的差別
-          if(ee[h]==null || v>ee[h]){ ee[h]=v; ff[h]=!!(fm && fm[h]); }
+          if(ee[h]==null || v>ee[h]) ee[h]=v;
         }
       }
     });
@@ -12213,9 +12159,9 @@ function _calcDistrictHourly(){
     const eg=_gateByCoverage(ee, cnt);
     rr.forEach(v=>{ if(v>gM) gM=v; });
     eg.forEach(v=>{ if(v!=null && v>gE) gE=v; });
-    rows.push(rr); etrRows.push(eg); covRows.push(cnt); fillRows.push(ff);
+    rows.push(rr); etrRows.push(eg); covRows.push(cnt);
   });
-  return {rows, etrRows, covRows, fillRows,
+  return {rows, etrRows, covRows,
           maxRain:_niceAxisMax(gM+2, 4, 10),
           maxEtr:_niceAxisMax(gE+10, 4, 20), hFrom:hFrom??-48, nowIdx, n};
 }
@@ -12235,14 +12181,13 @@ function _drawDistrictHourlyChart(cv, isZoom){
   const pL=isZoom?170:100, pR=isZoom?160:96, pT=isZoom?130:56;
   const pB=xLabelH+axTitleH+legendH+(isZoom?30:6);
   const cw=W-pL-pR, ch=H-pT-pB;
-  const {rows, etrRows, covRows, fillRows, maxRain, maxEtr, hFrom, nowIdx, n}=_calcDistrictHourly();
+  const {rows, etrRows, covRows, maxRain, maxEtr, hFrom, nowIdx, n}=_calcDistrictHourly();
   const nD=DISTRICT_ORDER.length;
   const grpW=cw/n, barW=grpW/nD;
   //  ★ 登記幾何。本畫布（cv-all-hyeto）早已從 8 格組體圖改為 120 格逐時圖，
   //    但 tooltip 仍以 8 格換算 —— 滑鼠位置對到的是完全不同的時間。
   _registerChartGeom(cv && cv.id, {kind:'district-hourly', pL, pR, itemW:grpW,
-                                   nItems:n, hFrom, nowIdx, rows, etrRows, covRows,
-                                   fillRows});
+                                   nItems:n, hFrom, nowIdx, rows, etrRows, covRows});
 
   // 標題
   ctx.fillStyle='#d0e8ff'; ctx.font=`bold ${fs}px sans-serif`; ctx.textAlign='left';
@@ -12287,8 +12232,7 @@ function _drawDistrictHourlyChart(cv, isZoom){
     //  ★ 遇 null 斷開（與鄉鎮圖、測站圖同一支）
     _strokeNullableSeries(ctx, er,
       i => pL+i*grpW+grpW/2,
-      v => pT+ch-ch*Math.min(v,maxEtr)/maxEtr,
-      (fillRows||[])[d]);
+      v => pT+ch-ch*Math.min(v,maxEtr)/maxEtr);
   });
 
   // X軸
@@ -12304,7 +12248,7 @@ function _drawDistrictHourlyChart(cv, isZoom){
   ctx.font=`${axFs}px sans-serif`;
   _drawAxisTitles(ctx,
     '左軸：時雨量(mm/h，署內鄉鎮最大)　※過去48h為官方觀測（QPESUMS逐時/日觀測分配，暗色）',
-    '右軸：ETR2%（逐時，署內最大；虛線＝官方遞迴式補缺，覆蓋不足留白）',
+    '右軸：ETR2%（逐時，署內最大）',
     pL, pL+cw, axTitleY, axFs, '#9fc8e8', '#e8e8e8');
 
   // 圖例
@@ -12446,8 +12390,6 @@ function showChartTooltip(evt, canvasId){
       (t.alert_val>0
         ? (ep!=null
             ? `ETR2%：<span style="color:${etrColorOf(ep)};font-weight:700">${ep}%</span>`
-              + (_etr2IsFill(t, Math.floor((_G.hFrom+i)/6))
-                 ? ' <span style="color:#c8a060;font-size:9px">推算（官方遞迴式補缺）</span>' : '')
             : 'ETR2%：<span style="color:#88a">—（無官方值）</span>')
         : ''));
     return;
@@ -12471,8 +12413,6 @@ function showChartTooltip(evt, canvasId){
         `<b>${rv!=null?Math.round(rv*10)/10:0}mm</b>`+
         (ev!=null
           ? ` <span style="color:${etrColorOf(ev)}">${ev}%</span>`
-            + (((_G.fillRows||[])[di]||[])[i]
-               ? ' <span style="color:#c8a060;font-size:9px">推算</span>' : '')
           : ` <span style="color:#88a;font-size:9px">ETR2 覆蓋不足${cn!=null?`（${cn}站）`:''}</span>`)+
         '<br>';
     });
