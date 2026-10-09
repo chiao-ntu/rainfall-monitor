@@ -53,8 +53,10 @@ if(_EXEC) _LAUNCH.executablePath=_EXEC;
   // ── ② 軸上限忽略 null ──
   ok(_axisMaxOfNullable([null,null,35,null],10)>=40,
      `②軸上限由實際值決定（實得 ${_axisMaxOfNullable([null,null,35,null],10)}）`);
-  ok(_axisMaxOfNullable([null,null,null],10)===10,
-     '②全 null 時回下限，不會變成 0 把軸壓扁');
+  //  原斷言鎖死 ===10，但軸上限之後必須可被刻度數整除（否則出現 13%/38% 這種刻度），
+  //  10 以 4 等分取整後是 12。本項要擋的是「塌成 0 把軸壓扁」，改以此表達。
+  ok(_axisMaxOfNullable([null,null,null],10)>=10,
+     `②全 null 時回下限，不會變成 0 把軸壓扁（實得 ${_axisMaxOfNullable([null,null,null],10)}）`);
 
   // ── ③ 分署聚合：全署無值的小時必須是 null，不是 0 ──
   const _real=_etr2HourlySeries;
