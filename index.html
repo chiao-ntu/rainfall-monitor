@@ -1374,7 +1374,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-11T05:00Z';
+const FORMOSA_BUILD = '2026-10-11T05:30Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -2918,47 +2918,6 @@ function showNoData(msg){
 }
 function hideNoData(){
   document.getElementById('no-data-msg').style.display = 'none';
-}
-
-//  ★★ 合成資料被排除時必須讓使用者看見。沉默是這次事故能持續這麼久的
-//    原因 —— 假資料在 log 與畫面上都看不出來。這條橫幅點了才消失。
-function _showSyntheticNotice(){
-  const nSus = Object.keys(_FAKE_SUSPECT || {}).length;
-  if((!_FAKE_BLOCK || !_FAKE_BLOCK.size) && !nSus) return;
-  let el = document.getElementById('synthetic-notice');
-  if(!el){
-    el = document.createElement('div');
-    el.id = 'synthetic-notice';
-    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);'
-      + 'bottom:14px;z-index:4000;max-width:min(680px,94vw);cursor:pointer;'
-      + 'background:rgba(60,18,18,.97);border:1px solid #a04040;border-radius:6px;'
-      + 'padding:9px 13px;font-size:12px;color:#ffd8d8;line-height:1.7;'
-      + 'box-shadow:0 4px 18px rgba(0,0,0,.6)';
-    el.title = '點一下關閉';
-    el.onclick = ()=>{ el.remove(); };
-    document.body.appendChild(el);
-  }
-  let html = '';
-  if(_FAKE_BLOCK && _FAKE_BLOCK.size){
-    html += '<b>⚠ 偵測到非真實預報，已排除出 FORMOSA 融合</b>'
-      + '<div style="margin-top:3px">這些模式的數值與鄉鎮警戒值相關，'
-      + '不是氣象預報。地圖上仍可單獨檢視，但不列入融合與校驗排行。</div>'
-      + '<div style="margin-top:4px">'
-      + Array.from(_FAKE_BLOCK).map(m=>
-          `<div>・<b>${MODEL_LABEL[m] || m}</b>　${_FAKE_WHY[m] || ''}</div>`).join('')
-      + '</div>';
-  }
-  if(nSus){
-    html += (html ? '<div style="margin-top:7px"></div>' : '')
-      + '<b>總量異常（未排除，需人工判斷）</b>'
-      + '<div style="margin-top:3px">可能是真的極端事件，也可能是資料出錯。'
-      + '系統不自動排除 —— 把真的極端預報消音，是防災系統最不該做的事。</div>'
-      + '<div style="margin-top:4px">'
-      + Object.keys(_FAKE_SUSPECT).map(m=>
-          `<div>・<b>${MODEL_LABEL[m] || m}</b>　${_FAKE_SUSPECT[m]}</div>`).join('')
-      + '</div>';
-  }
-  el.innerHTML = html + '<div style="margin-top:4px;color:#e0a0a0">點一下關閉</div>';
 }
 
 function fmtDT(d){ return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}時`; }
@@ -11379,15 +11338,23 @@ async function tryLoadLive(){
       const _fk = detectSynthetic(TOWNSHIPS);
       _FAKE_BLOCK = _fk.blocked; _FAKE_WHY = _fk.why;
       _FAKE_SUSPECT = _fk.suspect || {};
+      //  ★ 只寫 console，不跳任何提示視窗（使用者指定）。
+      //    理由成立：跳窗對使用者是多餘的 —— 被排除的模式本來就不會
+      //    出現在融合明細裡，點到它時「此模式目前無資料」也已經會顯示。
+      //    對外彈紅色警告只會讓人對整個系統失去信任。
+      //    維運要查就看 console 或 window.FORMOSA_DATA_GUARD。
       if(Object.keys(_FAKE_SUSPECT).length){
-        console.warn('⚠ 總量異常（未排除，請人工判斷是真的極端事件還是資料出錯）：'
+        console.warn('總量異常（未排除，需人工判斷是真的極端事件還是資料出錯）：'
           + Object.keys(_FAKE_SUSPECT).map(m=>`${MODEL_LABEL[m]||m}：${_FAKE_SUSPECT[m]}`).join('；'));
       }
-      if(_FAKE_BLOCK.size || Object.keys(_FAKE_SUSPECT).length){
-        console.warn('⚠ 本輪判定為合成資料、已排除出融合：'
+      if(_FAKE_BLOCK.size){
+        console.warn('判定為合成資料、已排除出融合：'
           + Array.from(_FAKE_BLOCK).map(m=>`${MODEL_LABEL[m]||m}（${_fk.why[m]}）`).join('；'));
-        try{ _showSyntheticNotice(); }catch(e){}
       }
+      //  供維運查核（不顯示在畫面上）
+      window.FORMOSA_DATA_GUARD = {excluded: Array.from(_FAKE_BLOCK),
+                                   why: _fk.why, suspect: _FAKE_SUSPECT,
+                                   totals: _fk.totals};
     }catch(e){ console.warn('合成資料偵測失敗', e); }
     try{
       const _zs = Object.keys(window.ADAPTIVE_BLEND);
