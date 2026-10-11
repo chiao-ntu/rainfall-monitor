@@ -1320,6 +1320,19 @@ const MODEL_FIELD = {
   blend: 'qpf_blend',   // 融合（CMPF）：由 _blendQpf 動態計算，非後端欄位
   fc:    'qpf_fc',      // FORMOSA-customise：使用者自選的模式與權重（_fcQpf 計算）
 };
+// ★★ 2026-10-11：模式顯示名的唯一來源。
+//   原本散在七個地方各寫一份，其中「無資料提示」那份只列了 6 個模式 ——
+//   於是選到 ICON 而它沒資料時，提示直接印出內部代號「icon」。
+//   各處仍可覆寫自己的用字（長短不同），但不得再有漏列的模式。
+//   gc 與 graphcast 是同一個模式在前端／後端的兩個鍵，兩個都要在。
+const MODEL_LABEL = {
+  blend:'FORMOSA', fc:'F-c', cwa:'CWA 官方',
+  best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS', jma:'JMA',
+  aifs:'EC-AIFS', gc:'GC-NCEP', graphcast:'GC-NCEP',
+  icon:'ICON', kma:'KMA 韓國', gem:'GEM 加拿大', ukmo:'UK Met Office',
+  mf:'Météo-France', cma:'CMA GRAPES', bom:'BOM ACCESS',
+  hi:'強降雨', lo:'弱降雨',
+};
 // ★ AI 模式清單：對超出訓練分布的極端降雨傾向低估，
 //   融合時的偏差校正上限放寬（物理模式 2.0、AI 模式 3.0）。
 const AI_MODELS = new Set(['aifs', 'gc']);
@@ -1341,7 +1354,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-09T15:40Z';
+const FORMOSA_BUILD = '2026-10-11T03:10Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -4287,8 +4300,7 @@ function _blendOverviewHtml(){
          + '樣本數達 10 筆以上才會啟用差異化權重。<br>'
          + '</div>';
   }
-  const NAMES = {best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS', jma:'JMA',
-                 aifs:'EC-AIFS', gc:'GC-NCEP'};
+  const NAMES = MODEL_LABEL;
   const rows = zones.sort().map(z=>{
     const mm = sk[z] || {};
     // 取該地形表現最好（MAE 最小）的模式
@@ -4716,10 +4728,9 @@ function _coverageWarn(){
   }
   if(!n || got > 0) return null;              // 有任一筆有值就不提示
 
-  const nm = {best:'CWA+ECMWF', ecmwf:'ECMWF IFS HRES', gfs:'NOAA GFS',
-               jma:'JMA', aifs:'EC-AIFS', blend:'FORMOSA',
-              gc:'GC-NCEP', cwa:'CWA 官方', hi:'強降雨', lo:'弱降雨'
-             }[forecastModel] || forecastModel;
+  //  這裡用較長的全名（提示句子裡要看得懂），其餘沿用唯一來源
+  const nm = ({ecmwf:'ECMWF IFS HRES', gfs:'NOAA GFS'}[forecastModel]
+              || MODEL_LABEL[forecastModel] || forecastModel);
   const layer = {rain:'累積雨量', etr:'ETR2%', risk:'風險指標', warn:'警特報',
                  wind:'風力', temp:'氣溫', wave:'浪高'}[mode] || mode;
   // 找出該模式最後一個有資料的時段，提示到哪一天為止
@@ -4801,8 +4812,7 @@ function _winSrcLabel(){
     return `（+${h}h 逐時${native ? '・IFS HRES 原生' : '・段內平均'}）`;
   }
   if(winKey.startsWith('past')) return '（氣象署觀測）';
-  const mn = {blend:'FORMOSA', best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
-              hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'}[forecastModel] || '';
+  const mn = MODEL_LABEL[forecastModel] || '';
   if(winKey === 'today') return `（今日＝觀測＋${mn}預測）`;
   return `（${mn} 預測）`;
 }
@@ -5746,12 +5756,9 @@ function _vfSortBy(k){
   else { _vfSortKey = k; _vfSortDesc = (k !== 'FAR'); }   // FAR 越低越好，預設升冪
   renderVerify();
 }
-const VF_NAME = {icon:'ICON', kma:'KMA 韓國', gem:'GEM 加拿大',
-                 ukmo:'UK Met Office', mf:'Météo-France',
-                 cma:'CMA GRAPES', bom:'BOM ACCESS',
-                 blend:'FORMOSA 融合', cwa:'CWA 氣象署',
-                 best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS',
-                 jma:'JMA', aifs:'EC-AIFS', graphcast:'GC-NCEP'};
+//  校驗面板用較正式的稱呼（要標出是誰發布的），其餘沿用唯一來源
+const VF_NAME = Object.assign({}, MODEL_LABEL,
+  {blend:'FORMOSA 融合', cwa:'CWA 氣象署'});
 // ★ ETS：扣除隨機命中後的 CSI（乾季不虛高，跨季節可比）
 function _vfEts(c){
   const h = c.hit||0, m = c.miss||0, f = c['false']||0, n0 = h+m+f+(c.correct_neg||0);
@@ -7084,8 +7091,7 @@ function renderBlendDetail(t){
   }
   const wSum = avail.reduce((a,m)=>a + ws[m], 0) || 1;
 
-  const NAMES = {best:'CWA+ECMWF', ecmwf:'ECMWF', gfs:'GFS', jma:'JMA',
-                 aifs:'EC-AIFS', gc:'GC-NCEP'};
+  const NAMES = MODEL_LABEL;
   avail.forEach(m=>{
     const s = sks[m];
     const pct = (ws[m] / wSum * 100).toFixed(0);
@@ -7656,9 +7662,7 @@ function scnApplyAndClose(){
   }
 }
 
-const SCN_MODEL_LABEL = {'':'沿用上方', blend:'FORMOSA', best:'CWA+ECMWF',
-  ecmwf:'ECMWF', gfs:'GFS', jma:'JMA',
-  aifs:'EC-AIFS', gc:'GC-NCEP', hi:'強降雨', lo:'弱降雨', cwa:'CWA官方'};
+const SCN_MODEL_LABEL = Object.assign({'':'沿用上方'}, MODEL_LABEL);
 
 // TOWN_ZONE 未產生時，_townZone() 退路只會回「山區／平地」，
 // 因此「淺山區／沿海地區」兩列目前對不到任何鄉鎮——在 UI 上標記出來，
@@ -9507,7 +9511,14 @@ function _getAccumRaw(t){
       qPast += (sB <= nowH + 1) ? v : v * ((nowH + 1) - sA) / 6;
     }
     const pastPart = Math.max(obsToday, Math.round(qPast*10)/10);
-    const totalRain = (forecastModel==='cwa' && qpfArr.length===0) ? null   // 純CWA無資料就是無資料
+    //  ★★ 2026-10-11：原本只有 CWA 被允許「沒資料就是沒資料」。
+    //    任何模式本輪都可能抓不到（後端已改為抓不到回空陣列，不再偽造），
+    //    守門必須對所有模式一視同仁 —— 否則缺資料的模式會顯示成
+    //    「預報 0mm」，那是在替模式發明一個它沒說過的預報。
+    //    （今日已過時段有觀測可用，所以只有「完全沒有觀測也沒有預報」才算無資料。）
+    const _noFc = !qpfArr.some(v=>v != null);
+    const _noObs = !(t.daily_rain && t.daily_rain[0] != null);
+    const totalRain = (_noFc && (_noObs || forecastModel === 'cwa')) ? null
       : Math.round((pastPart + rest)*10)/10;
     let etrPct = null;
     if(hasEtr){
@@ -9531,10 +9542,18 @@ function _getAccumRaw(t){
 
   // ── 未來6h段／逐日／自訂範圍：用 QPF 累加 ──
   const qpfArr = getQpfArr(t, qpfField);
-  let total = 0;
+  let total = 0, _nVal = 0;
   const sf = Math.max(0, segFrom), st = Math.max(0, segTo);
-  for(let s=sf; s<=st; s++) total += qpfArr[s]||0;
-  total = Math.round(total*10)/10;
+  //  ★★ 2026-10-11：視窗內一個值都沒有時必須回 null。
+  //    原本 `total += qpfArr[s]||0` 會把「這個模式本輪沒抓到」
+  //    算成「預報 0mm」，地圖就畫成一片「確定不會下雨」。
+  //    真正預報 0.0 的段仍計入（_nVal 會 +1），不會被誤判成無資料。
+  for(let s=sf; s<=st; s++){
+    const _v = qpfArr[s];
+    if(_v == null) continue;
+    total += _v; _nVal++;
+  }
+  total = _nVal ? Math.round(total*10)/10 : null;
 
   let etrPct = null;
   if(hasEtr){
@@ -10432,6 +10451,9 @@ function _spanAccum(t, sf, st){
   const qa = getQpfArr(t, qpfField);
   const dr = t.daily_rain || [];
   let obs = 0, fc = 0, approxDays = 0, coarseSegs = 0, hasNull = false;
+  //  ★ 實際取到幾個值。一個都沒有時 total 必須是 null ——
+  //    回 0 等於宣告「這段不會下雨」，但其實是沒有資料。
+  let nVal = 0;
 
   for(let s = sf; s <= st; s++){
     const hA = s*6, hB = s*6 + 6;
@@ -10441,6 +10463,7 @@ function _spanAccum(t, sf, st){
       const v = bars.vals[h - hFrom];
       hourCovered++;
       if(v == null){ hasNull = true; continue; }
+      nVal++;
       if(h < nowH) obs += v; else fc += v;
     }
     if(hourCovered === 6) continue;             // 本段已由逐時完全覆蓋
@@ -10450,7 +10473,7 @@ function _spanAccum(t, sf, st){
       // B. 未來超出逐時視窗 → 用 6h 段 QPF，按未覆蓋小時比例取用
       const v = qa[s];
       if(v == null){ hasNull = true; }
-      else { fc += v * (restH/6); coarseSegs++; }
+      else { fc += v * (restH/6); coarseSegs++; nVal++; }
     }else if(hA < hFrom){
       // C. 過去超出逐時視窗 → 用日觀測分攤（僅分攤未被逐時覆蓋的小時）
       const ovA = hA, ovB = Math.min(hB, hFrom);
@@ -10461,13 +10484,13 @@ function _spanAccum(t, sf, st){
         const dv = dr[d];
         if(dv == null){ hasNull = true; continue; }
         obs += dv * ((b - a) / 24);
-        approxDays++;
+        approxDays++; nVal++;
       }
     }
   }
-  return {total: Math.round((obs+fc)*10)/10,
+  return {total: nVal ? Math.round((obs+fc)*10)/10 : null,
           obs: Math.round(obs*10)/10, fc: Math.round(fc*10)/10,
-          approxDays, coarseSegs, hasNull};
+          approxDays, coarseSegs, hasNull, nVal};
 }
 
 // ══════════════════════════════════════════════════════════
@@ -12022,14 +12045,17 @@ function stepWin(delta){
 // 收合／展開地圖時段列
 // ★ 時段列的三個下拉：模式、時間尺度、圖層。
 //   看地圖時不必回到上方控制列即可切換，三者與上方按鈕雙向同步。
-const NAV_MODEL_LABEL = {
-  // 融合校正
-  blend:'FORMOSA', fc:'F-c', best:'CWA+ECMWF', hi:'強降雨', lo:'弱降雨',
-  // 傳統物理（CWA 在前，其餘依近期校驗表現排序）
-  cwa:'CWA', jma:'JMA', ukmo:'UKMO', mf:'Météo-France', gfs:'GFS', ecmwf:'ECMWF',
-  gem:'GEM', icon:'ICON', kma:'KMA', bom:'BOM', cma:'CMA',
-  // AI
-  aifs:'EC-AIFS', gc:'GC-NCEP'};
+//  ★ 下拉空間窄，用短名；鍵的順序就是下拉的排列順序，故逐一列出。
+//    名稱本身沿用唯一來源 MODEL_LABEL，只覆寫需要縮短的那幾個 ——
+//    這樣新增模式時不會再出現「某一份漏列」。
+const NAV_MODEL_SHORT = {cwa:'CWA', ukmo:'UKMO', gem:'GEM', kma:'KMA',
+                         bom:'BOM', cma:'CMA'};
+const NAV_MODEL_LABEL = Object.fromEntries(
+  // 融合校正 → 傳統物理（CWA 在前，其餘依近期校驗表現排序）→ AI
+  ['blend', 'fc', 'best', 'hi', 'lo',
+   'cwa', 'jma', 'ukmo', 'mf', 'gfs', 'ecmwf',
+   'gem', 'icon', 'kma', 'bom', 'cma',
+   'aifs', 'gc'].map(k => [k, NAV_MODEL_SHORT[k] || MODEL_LABEL[k] || k]));
 function _fillNavSelects(){
   const ms = document.getElementById('nav-model');
   if(ms && !ms.options.length){

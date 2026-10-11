@@ -4556,6 +4556,17 @@ PATTERN_FAR_MAX = 0.75     # 誤報率上限：超過視為包牌
 PATTERN_ETS_MIN = 0.05     # ETS 下限：低於此與亂猜無異
 PATTERN_MIN_FC = 8         # 預報有雨次數門檻（算誤報率所需）
 PATTERN_MIN_OB = 5         # 實際有雨次數門檻（算 ETS 所需）
+# ★★ 2026-10-11：觀測涵蓋率門檻。
+#   同一地形裡，「實際有雨次數」ob 不該隨模式而變 —— 觀測又不會因為
+#   換個模式就改變。實測 2026-10-11：山區各模式 ob=49，gem 只有 2；
+#   平地各模式 ob=19，gem 是 0。因為 gem 抓取常失敗，它只在少數幾天
+#   有資料，於是：
+#     ① 它的分數是在一個又小又不具代表性的子集上算的；
+#     ② fc/ob 達不到上面兩道門檻 → 包牌與 ETS 篩選對它完全失效；
+#     ③ 偏差比在那個小子集上剛好漂亮 → 拿到全場最高權重 1.2。
+#   「資料愈少愈不會被擋，還愈受信任」是完全顛倒的。
+#   改以同地形的 ob 最大值為基準，涵蓋率不足者視為無從評比。
+PATTERN_MIN_OBCOV = 0.6
 
 
 def zone_pattern_skill(vf, now_tpe, days=PATTERN_DAYS):
@@ -4628,7 +4639,20 @@ def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
 
     for zone, mmap in skill_summary.items():
         picks, excluded, detail = {}, [], []
+        #  ★ 「沒有可比的紀錄」與「有紀錄但表現差」必須分開。
+        #    退回相對最佳時只能從後者挑 —— 前者根本沒有分數可排，
+        #    撈回來等於把剛剛判定無從評比的模式當成最佳。
+        #    （實測：不分開的話，淺山區會把剛以「觀測涵蓋不足」排除的
+        #      gem 又當成「相對最佳#1」撈回去。）
+        nodata = set()
+        #  同地形的觀測事件數基準（觀測與模式無關，各模式應該一致）
+        _obmax = max([((pattern or {}).get(zone) or {}).get(_m, {}).get('ob') or 0
+                      for _m in (mmap or {})] or [0])
         for m, v0 in (mmap or {}).items():
+            #  ★ 融合不能是自己的成分（自我遞迴）。前端因為沒有 qpf_blend
+            #    這個後端欄位而默默丟掉它，等於「採用 N 個模式」灌水。
+            if m == 'blend':
+                continue
             if m in ADAPT_BLOCK:
                 excluded.append(m)
                 detail.append(f'{m}=使用者排除')
@@ -4666,7 +4690,7 @@ def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
                     picks[m] = 0.6
                     detail.append(f'{m}={why}，核心保留')
                 else:
-                    excluded.append(m)
+                    excluded.append(m); nodata.add(m)
                     detail.append(f'{m}={why}，暫不納入')
                 continue
             if mae is not None and mae > ADAPT_MAE_CAP:
@@ -4678,6 +4702,18 @@ def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
             #   「雨下在哪裡」對不對。先看誤報率與 ETS，不及格直接排除。
             P = ((pattern or {}).get(zone) or {}).get(m) or {}
             pf, pe = P.get('far'), P.get('ets')
+            #  ★ 觀測涵蓋率不足 → 這個模式的分數與同儕不是在同一組樣本上算的，
+            #    不可比；而且兩道型態篩選也會因樣本不足而失效。視為無從評比。
+            _ob = P.get('ob') or 0
+            if _obmax >= PATTERN_MIN_OB and _ob < _obmax * PATTERN_MIN_OBCOV:
+                _why = f'觀測涵蓋不足({_ob}/{_obmax} 天，多半是抓取失敗)'
+                if m in ADAPT_CORE:
+                    picks[m] = 0.6
+                    detail.append(f'{m}={_why}，核心保留')
+                else:
+                    excluded.append(m); nodata.add(m)
+                    detail.append(f'{m}={_why}，不納入')
+                continue
             if P.get('fc', 0) >= PATTERN_MIN_FC and pf is not None and pf >= PATTERN_FAR_MAX:
                 excluded.append(m)
                 detail.append(f'{m}=包牌(誤報率{pf:.2f})')
@@ -4711,11 +4747,14 @@ def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
         #   取前三名並依名次給遞減權重。
         #   理由：沒有模式達標時，使用者仍需要一個預報；此時最合理的
         #   選擇是「錯得最少的那幾個」，而不是全部平均。
-        if not picks:
+        #  ★ 成員少於 2 個就不是「融合」了。原本只有「一個都不剩」才退回
+        #    相對最佳三名；但剩 1 個時整個地形等於單一模式在決定警戒，
+        #    卻仍掛著 FORMOSA 融合的名字。
+        if len(picks) < 2:
             import math as _m
             cand = []
             for m, v0 in (mmap or {}).items():
-                if m in ADAPT_BLOCK:
+                if m in ADAPT_BLOCK or m == 'blend' or m in nodata:
                     continue
                 v = (v0 or {}).get('decay') or (v0 or {}).get('short') or {}
                 b = v.get('bias')
@@ -4726,12 +4765,18 @@ def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
                 score = abs(_m.log(b)) + (mae or 50) / 100.0
                 cand.append((score, m, b, mae))
             cand.sort()
-            for rank, (sc, m, b, mae) in enumerate(cand[:3]):
-                picks[m] = round([0.6, 0.4, 0.25][rank], 3)
+            #  已達標的那一個保留原權重，只補到 2 個以上 ——
+            #  不可把達標模式的權重一起洗成 0.6/0.4/0.25
+            _fill = [c for c in cand if c[1] not in picks]
+            for rank, (sc, m, b, mae) in enumerate(_fill):
+                if len(picks) >= max(2, min(3, len(cand))):
+                    break
+                picks[m] = round([0.6, 0.4, 0.25][min(rank, 2)], 3)
                 detail.append(f'{m}=相對最佳#{rank+1}({b:.2f})')
             if picks:
-                excluded = [m for m in (mmap or {}) if m not in picks]
-                detail.append('無模式達標→取相對最佳三名')
+                excluded = [m for m in (mmap or {})
+                            if m not in picks and m != 'blend']
+                detail.append('達標模式不足 2 個→取相對最佳三名')
             else:
                 picks = {m: 1.0 for m in (mmap or {})}
                 detail.append('無任何可用樣本→等權重')
@@ -5594,12 +5639,97 @@ def qpf_band_hi(v):
     try: return QPF_BAND_HI.get(round(float(v), 1), float(v))
     except Exception: return v
 
+def cwa_overlay(tkey, lat, lng, nseg, routine_seg_map, routine_is_png,
+                routine_span, typhoon_segs, now_tpe, today00):
+    """CWA 官方 QPF 疊合 → (qpf_cwa, qpf_cwa_q, official_segs, band_segs, overwrites)
+
+    ★★ 2026-10-11：抽成共用函式。
+      原本只有「靜態表 159 個鄉鎮」那條分支做這件事，另外 209 個鄉鎮
+      的 qpf_cwa／qpf_cwa_q／band_segs 一律寫死成 []。
+      但 PNG 判讀本來就讀了全部 368 個鄉鎮 —— 官方預報讀進來了，卻在
+      輸出時對 57% 的地圖整個丟掉。使用者回報「CWA 的最終裁量沒有啟動」，
+      這是其中一半的原因：那些鄉鎮的融合裡根本沒有 CWA 這一票。
+      兩份各自實作本身就是問題（改一邊就會分歧），所以合成一份。
+
+    回傳的 overwrites 是 [(idx, value)]：真值段（颱風格點／非 PNG 格點）
+    才需要覆寫 best/ecmwf/gfs；色帶段絕不覆寫任何模式。
+    """
+    by_idx, add, band_idx, real_idx, overwrites = {}, {}, set(), set(), []
+    # (A) 常態 PNG 色階（類別，僅供著色；可加量另計，絕不覆寫模式）
+    if routine_seg_map and routine_is_png:
+        for idx, vals in routine_seg_map.items():
+            if not (0 <= idx < nseg):
+                continue
+            v = vals.get(tkey)
+            if v is None:
+                continue
+            by_idx[idx] = round(float(v), 1)
+            band_idx.add(idx)
+            #  可加量＝色帶上界 ÷ 窗段數（色帶下界被複製到窗內每段會重複計算）
+            sp = max(1, int((routine_span or {}).get(idx, 1)))
+            add[idx] = round(float(qpf_band_hi(by_idx[idx])) / sp, 2)
+    elif routine_seg_map and not routine_is_png:
+        # 常態格點（非 PNG，真實數值）→ 可覆寫模式
+        for idx, vals in routine_seg_map.items():
+            if not (0 <= idx < nseg):
+                continue
+            v = _qpf_grid_at(vals, lat, lng)
+            if v is None:
+                continue
+            by_idx[idx] = round(float(v), 1)
+            add[idx] = by_idx[idx]
+            real_idx.add(idx)
+            overwrites.append((idx, by_idx[idx]))
+    # (B) 颱風 F-C0041 精確格點（真實數值，覆寫模式）
+    if typhoon_segs:
+        cur_seg = now_tpe.hour // 6
+        for i, seg in enumerate(typhoon_segs):
+            idx = None
+            sts = seg.get("start") or ""
+            if sts:
+                try:
+                    sd = datetime.fromisoformat(sts.replace('Z', '')).replace(tzinfo=None)
+                    s2 = (sd - today00).total_seconds()
+                    if s2 % 21600 == 0:
+                        idx = int(s2 // 21600)
+                except Exception:
+                    idx = None
+            if idx is None:
+                idx = cur_seg + i
+            if not (0 <= idx < nseg):
+                continue
+            pts = [(p[0], p[1], p[2]) for p in seg["points"]]
+            v = idw(lat, lng, pts, idx) if pts else None
+            if v is None:
+                continue
+            by_idx[idx] = v
+            add[idx] = v
+            real_idx.add(idx)
+            band_idx.discard(idx)
+            overwrites.append((idx, v))
+    qpf_cwa, qpf_cwa_q = [], []
+    if by_idx:
+        mx = max(by_idx)
+        qpf_cwa = [None] * (mx + 1)
+        qpf_cwa_q = [None] * (mx + 1)
+        for idx, v in by_idx.items():
+            qpf_cwa[idx] = v
+            qpf_cwa_q[idx] = add.get(idx)
+    return qpf_cwa, qpf_cwa_q, sorted(real_idx), sorted(band_idx), overwrites
+
+
 # ★ 色帶窗寬側通道：start_tpe → 該色帶窗涵蓋幾個 6h 段（12h 圖=2）。
 #   為什麼用模組級 dict 而不是改 decode_qpf_png 的回傳契約：
 #   呼叫端有多處、且 fetch_cwa_routine_qpf 的 merged 是「先到先得」，
 #   用物件識別反推窗寬在「某窗只有部分段存活」時會算錯（除以 1 等於不除）。
 #   明確記錄才有唯一答案。與 SWCB_STN_LOC 同一個慣例。
 QPF_SEG_SPAN = {}
+
+# ★★ 抓不到資料的模式計數（model_key → 幾個鄉鎮沒有值）。
+#   必須印出來：原本抓不到是用亂數偽造，所以 log 完全看不出有東西壞掉 ——
+#   ICON／KMA／CMA 從來沒被抓取過，卻在 log 裡一聲不響地「有預報」。
+#   沉默的退路是這次事故的放大器，改成有缺就講。
+_QPF_MISS = {}
 
 # 色距容忍：相鄰級距最小色距 45（5mm↔2mm），取其一半再留餘裕 → 半徑 ≤22
 QPF_PNG_TOL = 12          # 每通道容忍（√(12²×3)≈20.8，安全落在半距內）
@@ -6106,118 +6236,91 @@ def main():
         om_key = f"{lat:.4f}_{lng:.4f}"
 
         def get_qpf_model(model_key):
-            """取特定模式的60個6h QPF，若無則備援"""
+            """取特定模式的 64 個 6h QPF；**抓不到就回空陣列**。
+
+            ★★★ 2026-10-11 重大修正（使用者回報「gem 像包牌、到處都在下雨」）
+              原本抓不到時會用亂數偽造一整條雨量序列：
+                  base = 警戒值/20 × U(0.3,1.2)
+                  每段 = base × exp(-i//4×0.06) × U(0.4,1.8)
+              造成的實際後果（由 2026-10-11 07:30 的 data.json 量到）：
+                · ICON／KMA／CMA 根本沒被抓取，159 個有警戒值的鄉鎮**全部**是偽造值；
+                  GEM 抓取失敗（3/3 逾時）時同樣偽造。
+                · 偽造值 16 天全臺總量 12.4 萬 mm，真實模式只有 0～3,827 mm（差 35 倍）。
+                · 偽造值與鄉鎮警戒值正相關（r=+0.36~+0.50），真實模式為負（-0.05~-0.24）；
+                  最大值／警戒值 0.100~0.103，緊貼偽造公式的理論上限 0.108。
+                  也就是說「警戒值愈高的山區鄉鎮，被灌愈多假雨」。
+                · 這些假資料直接進入前端融合（gem 在三個地形都拿到最高權重 1.2），
+                  所以預報到處有雨而實際無雨。
+              防災系統不得在任何情況下編造觀測或預報。抓不到就是沒有，
+              下游（融合、系集離散度、前端）本來就會跳過空陣列。
+            """
             segs = om_all.get(model_key, {}).get(om_key, [])
             if not segs:
-                import random; random.seed(int(alert_v+lat*100+hash(model_key)%100))
-                base = alert_v/20*random.uniform(0.3,1.2)
-                segs = [round(max(0,base*math.exp(-i//4*0.06)*random.uniform(0.4,1.8)),1)
-                        for i in range(64)]
+                _QPF_MISS[model_key] = _QPF_MISS.get(model_key, 0) + 1
+                return []
             return segs[:64]
 
         def get_max_hourly_model(model_key):
-            """取特定模式的60個6h段內最大單一小時雨量（供強度分級用）"""
+            """取特定模式的 64 個 6h 段內最大時雨量；**抓不到就回空陣列**。
+
+            ★ 原本回 [0.0]*64 —— 那是「沒資料」被寫成「確定沒有大雨」，
+              與上面的偽造是同一類錯誤（只是方向相反）。強度分級會因此
+              把缺資料的模式當成確定不會有強降雨。
+            """
             arr = om_max_hourly_all.get(model_key, {}).get(om_key, [])
-            return arr[:64] if arr else [0.0]*64
+            return arr[:64] if arr else []
 
         # 各模式的完整15天QPF（依優先序：CWA > ECMWF > GFS/ICON）
         qpf_best  = get_qpf_model('best_match')
         qpf_ecmwf = get_qpf_model('ecmwf_ifs')
         qpf_gfs   = get_qpf_model('gfs_seamless')
+        #  ★ qpf_best 是全檔的基準序列（daily／qpf_24h／風險分數／系集都用它）。
+        #    它空掉會讓整個鄉鎮失去預報，所以**在真實模式之間**依序退回；
+        #    全部都沒有時留 None，不以 0 充數（0 是「確定不下雨」的宣告）。
+        if not qpf_best:
+            for _alt in (qpf_ecmwf, qpf_gfs):
+                if _alt:
+                    qpf_best = list(_alt)
+                    break
+        if not qpf_best:
+            qpf_best = [None] * 64
+            _QPF_MISS['__base__'] = _QPF_MISS.get('__base__', 0) + 1
 
         # 各模式對應的「最大時雨量」（強度分級用，不做累積換算）
         maxh_best  = get_max_hourly_model('best_match')
         maxh_ecmwf = get_max_hourly_model('ecmwf_ifs025')
         maxh_gfs   = get_max_hourly_model('gfs_seamless')
 
-        # CWA 官方 QPF 覆蓋：
+        # CWA 官方 QPF 疊合（共用 cwa_overlay，與非靜態表鄉鎮同一份實作）：
         #   (A) 颱風 F-C0041＝精確格點數值 → 覆蓋各模式（真實數值，有意義）。
         #   (B) 常態 PNG＝定量降水預報圖「色階類別」→ 僅供 CWA 模式著色，
-        #       絕不轉數字、絕不覆蓋任何模式（色塊判讀本質是類別，硬轉數字會失真，
-        #       且會污染 best/ecmwf/hi/lo——這正是先前數據異常的主因）。
-        #   qpf_cwa：CWA 模式著色用陣列（PNG 段=色階代表值；颱風段=精確值；未覆蓋=null）。
-        _cwa_by_idx = {}     # idx -> value（CWA模式著色用；色帶段=下界代表值）
-        _cwa_add = {}        # idx -> 可加量（色帶段=上界/窗段數；真值段=原值）
-        _band_idx = set()    # 色帶段（類別，未覆寫任何模式）
-        _real_idx = set()    # 真實數值段（已覆寫 best/ecmwf/gfs）
-        # (A) 常態 PNG 色階（僅存 qpf_cwa，不動任何模式）
-        if routine_seg_map and routine_is_png:
-            _tkey = f"{county}{township}"
-            for _idx, _vals in routine_seg_map.items():
-                if not (0 <= _idx < len(qpf_best)): continue
-                _v = _vals.get(_tkey)
-                if _v is not None:
-                    _cwa_by_idx[_idx] = round(float(_v), 1)   # 色階代表值（僅著色）
-                    _band_idx.add(_idx)
-                    # ★★ 可加量＝色帶上界 ÷ 窗段數（使用者指定取上界）。
-                    #   先前色帶下界被複製到窗內每個 6h 段，任何累加都會重複計算：
-                    #   一天 4 段 = 2×白天帶 + 2×晚上帶，宜蘭因此報到 320mm，
-                    #   而 CWA 自己的上界和只有 180mm。
-                    _sp = max(1, int(routine_span.get(_idx, 1)))
-                    _hi = qpf_band_hi(_cwa_by_idx[_idx])
-                    _cwa_add[_idx] = round(float(_hi) / _sp, 2)
-        elif routine_seg_map and not routine_is_png:
-            # 常態格點（非PNG，真實數值）→ 可覆蓋模式（與颱風同性質）
-            for _idx, _vals in routine_seg_map.items():
-                if not (0 <= _idx < len(qpf_best)): continue
-                _v = _qpf_grid_at(_vals, lat, lng)
-                if _v is not None:
-                    _cwa_by_idx[_idx] = round(float(_v), 1)
-                    _cwa_add[_idx] = _cwa_by_idx[_idx]   # 真實數值，直接可加
-                    _real_idx.add(_idx)
-                    qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = _cwa_by_idx[_idx]
-        # (B) 颱風 F-C0041 精確格點（真實數值，覆蓋模式）
-        if is_typhoon and typhoon_segs:
-            _cur_seg = now_tpe.hour // 6
-            for _i, _seg in enumerate(typhoon_segs):
-                _idx = None
-                _sts = _seg.get("start") or ""
-                if _sts:
-                    try:
-                        _sd = datetime.fromisoformat(_sts.replace('Z','')).replace(tzinfo=None)
-                        _s2 = (_sd - _today00).total_seconds()
-                        if _s2 % 21600 == 0: _idx = int(_s2 // 21600)
-                    except Exception: _idx = None
-                if _idx is None: _idx = _cur_seg + _i
-                if not (0 <= _idx < len(qpf_best)): continue
-                _pts = [(p[0],p[1],p[2]) for p in _seg["points"]]
-                _v = idw(lat, lng, _pts, _idx) if _pts else None
-                if _v is not None:
-                    _cwa_by_idx[_idx] = _v
-                    _cwa_add[_idx] = _v                  # 真實數值，直接可加
-                    _real_idx.add(_idx); _band_idx.discard(_idx)
-                    qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = _v
-        # ★★ 2026-10-05 修正：official_segs 原本把兩種完全不同的東西混成一張清單，
-        #   前端因此分不出來：
-        #     真值段（颱風格點／非PNG格點）—— 確實把 best/ecmwf/gfs 覆寫成同一數值，
-        #       融合照常加權等於自己跟自己平均，所以前端直接採用官方值是對的。
-        #     色帶段（常態PNG）—— 本檔明寫「絕不轉數字、絕不覆蓋任何模式」，
-        #       qpf_best 根本沒被寫。前端卻一樣直接採用，於是六個模式被丟掉、
-        #       換成一個加倍的色帶下界，而且還流進 qpf_hi/qpf_lo 的系集離散度。
-        #   故拆成兩張：official_segs 只留真值段（語意回到它原本的定義），
-        #   色帶段改走 band_segs，前端不得以它取代模式加權。
-        _official_segs = sorted(_real_idx)
-        _band_segs = sorted(_band_idx)
-        qpf_cwa = []
-        qpf_cwa_q = []
-        if _cwa_by_idx:
-            _max_idx = max(_cwa_by_idx)
-            qpf_cwa = [None] * (_max_idx + 1)
-            qpf_cwa_q = [None] * (_max_idx + 1)
-            for _idx, _v in _cwa_by_idx.items():
-                qpf_cwa[_idx] = _v
-                qpf_cwa_q[_idx] = _cwa_add.get(_idx)
+        #       絕不轉數字、絕不覆蓋任何模式（色塊判讀本質是類別，硬轉數字會失真）。
+        #   official_segs 只放真值段、band_segs 放色帶段 —— 前端不得以色帶取代模式加權。
+        (qpf_cwa, qpf_cwa_q, _official_segs, _band_segs,
+         _cwa_ow) = cwa_overlay(f"{county}{township}", lat, lng, len(qpf_best),
+                                routine_seg_map, routine_is_png, routine_span,
+                                typhoon_segs if is_typhoon else None,
+                                now_tpe, _today00)
+        for _idx, _v in _cwa_ow:
+            qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = _v
 
         # 預設用 best_match（CWA優先 > ECMWF > GFS=ICON 的綜合判斷已含在模式選擇邏輯中）
         qpf15d = qpf_best
-        daily  = [round(sum(qpf15d[i*4:(i+1)*4]),1) for i in range(16)]
+        #  ★ 全段皆 None（完全沒有預報）時回 None，不回 0 ——
+        #    0 會被前端與警戒邏輯讀成「預報不會下雨」。
+        def _dsum(seq):
+            vv = [v for v in seq if v is not None]
+            return round(sum(vv), 1) if vv else None
+        daily  = [_dsum(qpf15d[i*4:(i+1)*4]) for i in range(16)]
 
         # PoP 序列（28個6h時段=7天）
         pop_6h = get_pop_6h_series(township, pop3d, pop7d, base_dt, num_segs=28,
                                    county=county)
 
         # ETR2%各6h
-        seg_etr_pct = [round(min(qpf15d[i]/alert_6h*100,300),1) if alert_6h>0 else None
+        seg_etr_pct = [round(min(qpf15d[i]/alert_6h*100,300),1)
+                       if (alert_6h > 0 and i < len(qpf15d)
+                           and qpf15d[i] is not None) else None
                        for i in range(8)]
 
         # S* 風險分數（各6h時段，使用3h或6h QPF + PoP）
@@ -6232,8 +6335,10 @@ def main():
         risk_level_list = []    # 各時段的等級文字
         risk_color_list = []    # 各時段的顏色
         for i, pp in enumerate(pop_6h):
-            qpf_seg = qpf15d[i] if i < len(qpf15d) else 0.0
-            score = calc_risk_score(etr_pct_now, qpf_seg, pp, n_hours=6)
+            qpf_seg = qpf15d[i] if i < len(qpf15d) else None
+            #  沒有預報就算不出風險分數（填 0 等於宣告「不會下雨」）
+            score = (None if qpf_seg is None
+                     else calc_risk_score(etr_pct_now, qpf_seg, pp, n_hours=6))
             level, color = get_risk_level(score)
             risk_score_list.append(score)
             risk_level_list.append(level)
@@ -6250,8 +6355,8 @@ def main():
             'slope_regions':slope_regions,
             'qpf_15d':qpf15d,'daily_qpf':daily,
             'seg_etr_pct':seg_etr_pct,
-            'qpf_24h':round(sum(qpf_best[:4]),1),
-            'qpf_48h':round(sum(qpf_best[:8]),1),
+            'qpf_24h': _dsum(qpf_best[:4]),
+            'qpf_48h': _dsum(qpf_best[:8]),
             'pop_6h':pop_6h,
             'risk_score': risk_score_list,
             'risk_level': risk_level_list,
@@ -6375,17 +6480,46 @@ def main():
         om_key = f"{avg_lat:.4f}_{avg_lng:.4f}"
         obs = town_obs.get(key, {})  # 可能完全沒有觀測資料
 
+        #  ★ 與靜態表鄉鎮同一條規則：抓不到回空陣列，不以 0 充數。
+        #    原本回 [0.0]*64 —— 209 個非靜態鄉鎮因此對每個沒抓到的模式
+        #    都送出一票「確定不下雨」，在融合裡會把真實的雨量預報稀釋掉。
         def get_ns_qpf(model_key):
             segs = non_static_om.get(model_key, {}).get(om_key, [])
-            return segs[:64] if segs else [0.0]*64
+            if not segs:
+                _QPF_MISS[model_key] = _QPF_MISS.get(model_key, 0) + 1
+                return []
+            return segs[:64]
         def get_ns_maxh(model_key):
             arr = non_static_maxh.get(model_key, {}).get(om_key, [])
-            return arr[:64] if arr else [0.0]*64
+            return arr[:64] if arr else []
 
         qpf_best_ns  = get_ns_qpf('best_match')
         qpf_ecmwf_ns = get_ns_qpf('ecmwf_ifs025')
         qpf_gfs_ns   = get_ns_qpf('gfs_seamless')
-        daily_ns = [round(sum(qpf_best_ns[d*4:(d+1)*4]),1) for d in range(16)]
+        if not qpf_best_ns:
+            for _alt in (qpf_ecmwf_ns, qpf_gfs_ns):
+                if _alt:
+                    qpf_best_ns = list(_alt)
+                    break
+        if not qpf_best_ns:
+            qpf_best_ns = [None] * 64
+            _QPF_MISS['__base__'] = _QPF_MISS.get('__base__', 0) + 1
+        #  ★ CWA 官方疊合：與靜態表鄉鎮走同一份實作。
+        #    原本這 209 個鄉鎮一律寫死 []，等於官方預報對 57% 的地圖沒作用。
+        (qpf_cwa_ns, qpf_cwa_q_ns, _off_segs_ns, _band_segs_ns,
+         _cwa_ow_ns) = cwa_overlay(f"{at['county']}{at['township']}",
+                                   avg_lat, avg_lng, len(qpf_best_ns),
+                                   routine_seg_map, routine_is_png, routine_span,
+                                   typhoon_segs if is_typhoon else None,
+                                   now_tpe, _today00)
+        for _idx, _v in _cwa_ow_ns:
+            for _arr2 in (qpf_best_ns, qpf_ecmwf_ns, qpf_gfs_ns):
+                if _idx < len(_arr2):
+                    _arr2[_idx] = _v
+        def _dsum_ns(seq):
+            vv = [v for v in seq if v is not None]
+            return round(sum(vv), 1) if vv else None
+        daily_ns = [_dsum_ns(qpf_best_ns[d*4:(d+1)*4]) for d in range(16)]
 
         station_list = [{'name': stations[s]['name'], 'alert_val': None,
                           'village': f"{at['county']}{at['township']}"}
@@ -6409,8 +6543,8 @@ def main():
             'slope_regions': _ns_e2[3],
             'qpf_15d':   qpf_best_ns, 'daily_qpf': daily_ns,
             'seg_etr_pct': [None]*8,
-            'qpf_24h': round(sum(qpf_best_ns[:4]),1),
-            'qpf_48h': round(sum(qpf_best_ns[:8]),1),
+            'qpf_24h': _dsum_ns(qpf_best_ns[:4]),
+            'qpf_48h': _dsum_ns(qpf_best_ns[:8]),
             'pop_6h':   [None]*28,
             'risk_score': [None]*28, 'risk_level': [None]*28,
             'obs_6h':   [0.0]*8,
@@ -6431,9 +6565,10 @@ def main():
             'bias_24h':  None,
             'qpesums_1h':  qpesums_at(qp_grid, avg_lat, avg_lng),
             'qpesums_24h': qp_24h.get(f"{at['county']}{at['township']}"),
-            'qpf_cwa':   [],
-            'qpf_cwa_q': [],
-            'band_segs': [],
+            'qpf_cwa':   qpf_cwa_ns,
+            'qpf_cwa_q': qpf_cwa_q_ns,
+            'official_segs': _off_segs_ns,
+            'band_segs': _band_segs_ns,
             'qpf_1h_cwa': [],
             'qpf_1h':    HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
             'qpf_1h_p48': PAST48_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
@@ -6830,13 +6965,48 @@ def main():
             for _z, _mm in sorted(output['model_skill'].items()):
                 _parts = []
                 for _m, _sp in sorted(_mm.items()):
-                    _s = _sp.get('short') or _sp.get('long')
+                    #  ★★ 2026-10-11：必須印出「實際用來定權重的那一份」。
+                    #    build_adaptive_blend 用 decay（衰減加權），這裡原本印
+                    #    short（7 天窗），兩者差距可以很大 —— 2026-10-11 的 gem
+                    #    是 short 0.20 / decay 0.88，log 顯示它多報 5 倍，
+                    #    權重卻按「準」給到全場最高 1.2。
+                    #    log 與決策用不同的數字，等於權重無法稽核。
+                    _s = _sp.get('decay') or _sp.get('short') or _sp.get('long')
                     if _s:
-                        _parts.append(f"{_m} 偏差{_s['bias']:.2f}/MAE{_s['mae']:.0f}")
+                        _w7 = _sp.get('short') or {}
+                        _alt = (f"／7天{_w7['bias']:.2f}"
+                                if _w7.get('bias') is not None
+                                and abs(_w7['bias'] - _s['bias']) > 0.3 else '')
+                        _parts.append(f"{_m} 偏差{_s['bias']:.2f}{_alt}"
+                                      f"/MAE{_s['mae']:.0f}/n{_s.get('n', 0)}")
                 if _parts:
-                    print(f"    {_z}：{'、'.join(_parts)}")
+                    print(f"    {_z}（偏差比＝衰減加權，即定權重所用；"
+                          f"與 7 天窗差 >0.3 時並列）：{'、'.join(_parts)}")
     except Exception as _e:
         print(f"  誤差追蹤失敗（不影響其他）：{_e}")
+
+    # ★ 模式缺資料一覽（抓不到就是沒有，不再偽造；此處必須讓它可見）
+    if _QPF_MISS:
+        _nt = len(out_towns) or 1
+        #  ★ 分兩類，不可混為一談：
+        #    本輪未排程 —— B 組輪流抓（ICON/KMA/CMA/BOM），這是設計，不是故障。
+        #    抓取失敗 —— 排程要抓卻沒拿到，那才是要追的。
+        _sched, _unsched = [], []
+        for _mk, _c in sorted(_QPF_MISS.items(), key=lambda x: -x[1]):
+            if _mk == '__base__':
+                print(f'  ★★ 基準序列（best/ecmwf/gfs 全無）：{_c} 個鄉鎮完全沒有預報')
+            elif _mk in OM_MODELS:
+                _sched.append((_mk, _c))
+            else:
+                _unsched.append((_mk, _c))
+        if _sched:
+            print('  ⚠ 排程要抓卻失敗（已留空，不偽造、不以 0 充數）：')
+            for _mk, _c in _sched:
+                print(f'     {_mk}：{_c} 個鄉鎮 / {_nt}（{_c/_nt:.0%}）')
+        if _unsched:
+            print('  · 本輪未排程（B 組輪流抓，非故障）：'
+                  + '、'.join(f'{_mk}×{_c}' for _mk, _c in _unsched))
+    output['qpf_missing'] = dict(_QPF_MISS)
 
     output['ens_active'] = len(ens_ratios) > 0  # 系集比值是否成功抓取
     # 全臺偏差比摘要（模式昨日≥10mm的鄉鎮之中位數）
