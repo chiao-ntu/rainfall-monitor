@@ -1336,6 +1336,26 @@ const MODEL_LABEL = {
 // ★ AI 模式清單：對超出訓練分布的極端降雨傾向低估，
 //   融合時的偏差校正上限放寬（物理模式 2.0、AI 模式 3.0）。
 const AI_MODELS = new Set(['aifs', 'gc']);
+
+// ★★★ 2026-10-11：偏差校正要分量級。
+//   校正倍率 = Σ觀測 ÷ Σ模式，是在「有雨量體積」的視窗上估出來的
+//   （衰減加權還刻意依雨量加權，所以幾乎完全由大雨事件決定）。
+//   把它無差別地套在毛毛雨上沒有依據 —— 實測 2026-10-11（乾日）：
+//     平地   0.40mm → 0.80mm（1.97x），跨過 1mm 的鄉鎮 49 → 82
+//     淺山區 0.45mm → 0.93mm（2.08x），跨過 1mm 的鄉鎮 52 → 98
+//   校驗門檻就是 1mm，所以這一步**自己製造了一半的誤報**，
+//   融合的誤報率 0.902 因此比它的每一個成員都高。
+//   做法：量小不校正、量大照舊全額校正（致災尺度的上修必須保留，
+//   那才是這個校正存在的理由）。中間線性過渡。
+const BIAS_TAPER_LO = 1.0;    // mm/6h 以下：不校正（≈日 4mm）
+const BIAS_TAPER_HI = 7.5;    // mm/6h 以上：全額校正（≈日 30mm，連續降雨仍完整上修）
+function biasFactor(v0, bias, n, isAI){
+  if(!(bias > 0) || !(n >= 10) || v0 == null) return 1;
+  const full = Math.max(0.5, Math.min(isAI ? 3.0 : 2.0, bias));
+  const w = Math.max(0, Math.min(1,
+    (Math.abs(v0) - BIAS_TAPER_LO) / (BIAS_TAPER_HI - BIAS_TAPER_LO)));
+  return 1 + (full - 1) * w;
+}
 // ★ 模式說明一律留空（使用者指定）：按鈕名稱本身已足夠辨識，
 //   控制列不顯示任何說明文字。
 const MODEL_NOTE = {};
@@ -1354,7 +1374,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-10-11T03:10Z';
+const FORMOSA_BUILD = '2026-10-11T05:00Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -2900,6 +2920,47 @@ function hideNoData(){
   document.getElementById('no-data-msg').style.display = 'none';
 }
 
+//  ★★ 合成資料被排除時必須讓使用者看見。沉默是這次事故能持續這麼久的
+//    原因 —— 假資料在 log 與畫面上都看不出來。這條橫幅點了才消失。
+function _showSyntheticNotice(){
+  const nSus = Object.keys(_FAKE_SUSPECT || {}).length;
+  if((!_FAKE_BLOCK || !_FAKE_BLOCK.size) && !nSus) return;
+  let el = document.getElementById('synthetic-notice');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'synthetic-notice';
+    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);'
+      + 'bottom:14px;z-index:4000;max-width:min(680px,94vw);cursor:pointer;'
+      + 'background:rgba(60,18,18,.97);border:1px solid #a04040;border-radius:6px;'
+      + 'padding:9px 13px;font-size:12px;color:#ffd8d8;line-height:1.7;'
+      + 'box-shadow:0 4px 18px rgba(0,0,0,.6)';
+    el.title = '點一下關閉';
+    el.onclick = ()=>{ el.remove(); };
+    document.body.appendChild(el);
+  }
+  let html = '';
+  if(_FAKE_BLOCK && _FAKE_BLOCK.size){
+    html += '<b>⚠ 偵測到非真實預報，已排除出 FORMOSA 融合</b>'
+      + '<div style="margin-top:3px">這些模式的數值與鄉鎮警戒值相關，'
+      + '不是氣象預報。地圖上仍可單獨檢視，但不列入融合與校驗排行。</div>'
+      + '<div style="margin-top:4px">'
+      + Array.from(_FAKE_BLOCK).map(m=>
+          `<div>・<b>${MODEL_LABEL[m] || m}</b>　${_FAKE_WHY[m] || ''}</div>`).join('')
+      + '</div>';
+  }
+  if(nSus){
+    html += (html ? '<div style="margin-top:7px"></div>' : '')
+      + '<b>總量異常（未排除，需人工判斷）</b>'
+      + '<div style="margin-top:3px">可能是真的極端事件，也可能是資料出錯。'
+      + '系統不自動排除 —— 把真的極端預報消音，是防災系統最不該做的事。</div>'
+      + '<div style="margin-top:4px">'
+      + Object.keys(_FAKE_SUSPECT).map(m=>
+          `<div>・<b>${MODEL_LABEL[m] || m}</b>　${_FAKE_SUSPECT[m]}</div>`).join('')
+      + '</div>';
+  }
+  el.innerHTML = html + '<div style="margin-top:4px;color:#e0a0a0">點一下關閉</div>';
+}
+
 function fmtDT(d){ return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}時`; }
 const WEEKDAY_ZH = ['日','一','二','三','四','五','六'];
 function fmtDay(d){ return `${d.getMonth()+1}/${d.getDate()}(${WEEKDAY_ZH[d.getDay()]})`; }
@@ -3618,7 +3679,7 @@ function _fcDefault(){
     out[z] = {};
     FC_MODELS.forEach(([m])=>{
       const w = ab[_FC_SK[m] || m];
-      out[z][m] = (w != null && !BLEND_BLOCK.has(m)) ? Math.round(w * 100) / 100 : 0;
+      out[z][m] = (w != null && !blendExcluded(m)) ? Math.round(w * 100) / 100 : 0;
     });
   });
   return out;
@@ -3899,7 +3960,8 @@ function _extremeFlag(t, seg){
   });
   // 被排除的模式另記（它們不進融合，但報出極端值仍值得知道）
   const blocked = [];
-  Array.from(BLEND_BLOCK).forEach(m=>{
+  //  被排除的模式含「本輪量測判定為合成資料」的那些
+  Array.from(new Set([...BLEND_BLOCK, ..._FAKE_BLOCK])).forEach(m=>{
     const k = KEY[m] || m;
     const a = t[MODEL_FIELD[k]];
     if(!Array.isArray(a)) return;
@@ -4102,17 +4164,22 @@ function _blendQpf(t, mode){
   //   不必等後端重跑出新的 data.json（舊 data.json 可能仍含 CMA）。
   const _ab0 = ((window.ADAPTIVE_BLEND || {})[_zone] || {}).models || null;
   const _ab = _ab0 ? Object.fromEntries(Object.entries(_ab0)
-    .filter(([m])=>!BLEND_BLOCK.has(m))) : null;
+    .filter(([m])=>!blendExcluded(m))) : null;
   const arrs = {}, sk = {};
   // ★ 有自適應選用時，候選名單改用「後端選中的模式」而非固定的
   //   BLEND_MODELS —— 否則 UKMO、Météo-France 即使被選入，
   //   前端也不會去讀它們的 QPF。
   //   後端的鍵與前端 MODEL_FIELD 的鍵一致（graphcast 對應 gc）。
   const _KEYMAP = {graphcast: 'gc'};
-  const _cand = _ab
+  //  ★ 退路 BLEND_MODELS 也必須過濾 —— 沒有 adaptive_blend 時（舊 data.json
+  //    或後端尚未產出）走的就是這條，不過濾等於排除清單在那條路徑上失效。
+  const _cand = (_ab
     ? Object.keys(_ab).map(k=>_KEYMAP[k] || k).filter(k=>MODEL_FIELD[k])
-    : BLEND_MODELS;
+    : BLEND_MODELS).filter(k=>!blendExcluded(k));
   _cand.forEach(m=>{
+    //  ★ 最後一道：取陣列的那一刻再擋一次。前面任何一條路徑漏掉，
+    //    合成資料都不會因此進到加權裡。
+    if(blendExcluded(m)) return;
     const a = t[MODEL_FIELD[m]];
     if(Array.isArray(a) && a.length){ arrs[m] = a; sk[m] = _skillOf(t, m); }
   });
@@ -4184,9 +4251,9 @@ function _blendQpf(t, mode){
       const v0 = arrs[m][i];
       if(v0 == null) return;
       const s0 = sk[m];
-      const cap0 = AI_MODELS.has(m) ? 3.0 : 2.0;
-      const cv = (s0 && s0.bias && s0.n >= 10)
-        ? v0 * Math.max(0.5, Math.min(cap0, s0.bias)) : v0;
+      //  ★ 分量級校正（見 biasFactor）：毛毛雨不放大、大雨照舊全額上修
+      const cv = v0 * biasFactor(v0, s0 && s0.bias, s0 && s0.n,
+                                 AI_MODELS.has(m));
       cand.push({m, v: cv, w: W[m]});
     });
     // ★★ CWA 官方定量降水預報以「可加量」身分加入加權（不是取代模式）。
@@ -5738,6 +5805,116 @@ const VF_CORE = new Set(['best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast']);
 //   ICON：跨地形總檢已判定整體亂報，這裡同步排除以求立即見效；
 //   等後端的自動判定累積穩定後可以移除，結果不變。
 const BLEND_BLOCK = new Set(['cma', 'icon']);
+
+// ★★★ 2026-10-11：合成資料偵測（前端自己的保險，不依賴後端告知）
+//   後端曾在抓取失敗時用亂數依「警戒值」偽造整條雨量序列。後端已改掉，
+//   但 data.json 是每輪重新產生的 —— 部署 index.html 的當下，線上那份
+//   data.json 可能仍是舊後端產的（裡面的 adaptive_blend 也還列著 gem）。
+//   更重要的是：這類錯誤未來還會以別的形式出現（換人改、換支腳本）。
+//   所以判準不能是「後端說哪個模式不能用」，必須是「從資料本身看得出來
+//   這不是預報」。以下兩個特徵都是偽造公式的必然結果，真實模式做不到：
+//
+//     base = 警戒值/20 × U(0.3,1.2)；每段 = base × exp(-i//4×0.06) × U(0.4,1.8)
+//
+//   ① 值與鄉鎮警戒值正相關，且**每一個**鄉鎮的最大值都 ≤ 警戒值×0.108
+//      （公式的硬上限）。真實模式在濕日一定會有鄉鎮突破這條線。
+//   ② 在「沒有警戒值」的鄉鎮全部恰好是 0，在「有警戒值」的鄉鎮全部 >0。
+//      真實天氣不會剛好沿著行政/地質資料的有無切一刀。
+//   兩個特徵各自成立就足以判定（① 需要母體，② 更便宜也更銳利）。
+const FAKE_CEIL_RATIO = 0.1081;   // 警戒值 × 此值＝偽造公式的理論上限
+const FAKE_CORR_MIN   = 0.25;     // 實測：偽造 +0.36~+0.50、真實 -0.24~-0.05
+const FAKE_MED_MIN    = 0.01;     // 乾日全為 0 時不判（沒東西可判）
+let _FAKE_BLOCK = new Set();      // 本輪判定為合成資料的模式（前端自行量測）
+let _FAKE_WHY = {};
+let _FAKE_SUSPECT = {};           // 總量離譜但未排除者（需人工判斷）
+
+function _corrXY(xs, ys){
+  const n = xs.length;
+  if(n < 20) return 0;
+  const mx = xs.reduce((a,b)=>a+b,0)/n, my = ys.reduce((a,b)=>a+b,0)/n;
+  let sxy=0, sxx=0, syy=0;
+  for(let i=0;i<n;i++){ const a=xs[i]-mx, b=ys[i]-my; sxy+=a*b; sxx+=a*a; syy+=b*b; }
+  return (sxx>0 && syy>0) ? sxy/Math.sqrt(sxx*syy) : 0;
+}
+
+//  回傳 {blocked:Set, why:{模式:原因}}；只看前 8 段（48 小時，決策區間）
+function detectSynthetic(towns){
+  const blocked = new Set(), why = {};
+  const keys = Object.keys(MODEL_FIELD).filter(k=>
+    !['blend','fc','hi','lo','cwa'].includes(k));     // 這些不是單一模式
+  keys.forEach(k=>{
+    const f = MODEL_FIELD[k];
+    const av=[], mn=[], rat=[];
+    let nWithAlert=0, posWithAlert=0, nNoAlert=0, zeroNoAlert=0;
+    (towns||[]).forEach(t=>{
+      const a = t[f];
+      if(!Array.isArray(a) || a.length < 8) return;
+      const vals = a.slice(0,8).filter(v=>v != null);
+      if(!vals.length) return;
+      const mx = Math.max(...a.filter(v=>v != null));
+      const sum = vals.reduce((x,y)=>x+y,0);
+      if(t.alert_val > 0){
+        nWithAlert++; if(sum > 0) posWithAlert++;
+        av.push(t.alert_val); mn.push(sum/vals.length); rat.push(mx/t.alert_val);
+      }else{
+        nNoAlert++; if(mx === 0) zeroNoAlert++;
+      }
+    });
+    if(nWithAlert < 20) return;
+    // ① 與警戒值正相關 ＋ 全部貼在公式上限底下 ＋ 普遍有雨
+    const rs = rat.slice().sort((x,y)=>x-y);
+    const med = rs[Math.floor(rs.length/2)];
+    const r = _corrXY(av, mn);
+    if(r > FAKE_CORR_MIN && med > FAKE_MED_MIN
+       && rat.every(x=>x <= FAKE_CEIL_RATIO)){
+      blocked.add(k);
+      why[k] = `與警戒值相關 ${r.toFixed(2)}、最大值全數 ≤ 警戒值×${FAKE_CEIL_RATIO}`;
+      return;
+    }
+    // ② 沿「有無警戒值」切一刀：有的全部有雨、沒有的全部恰為 0
+    if(nNoAlert >= 20 && nWithAlert >= 20
+       && posWithAlert === nWithAlert && zeroNoAlert === nNoAlert && med > FAKE_MED_MIN){
+      blocked.add(k);
+      why[k] = `${nWithAlert} 個有警戒值的鄉鎮全部有雨、${nNoAlert} 個沒有警戒值的全部恰為 0`;
+    }
+  });
+  //  ③ 總量離譜（只示警，不排除）
+  //    偽造資料的全臺總量是真實模式的 35 倍 —— 任何「單位錯、索引錯、
+  //    資料來源換掉」的意外都會長成這個樣子，而且不需要知道是什麼錯。
+  //    但**不能自動排除**：某個模式單獨報出颱風、別人沒報，長得一模一樣，
+  //    把它消音正是防災系統最不該做的事。離群的處理交給既有的佐證原則
+  //    （降權不歸零），這裡只負責讓人看見。
+  const tot = {};
+  keys.forEach(k=>{
+    const f = MODEL_FIELD[k];
+    let sum = 0, n = 0;
+    (towns||[]).forEach(t=>{
+      const a = t[f];
+      if(!Array.isArray(a) || a.length < 8) return;
+      a.slice(0,8).forEach(v=>{ if(v != null){ sum += v; n++; } });
+    });
+    if(n) tot[k] = sum;
+  });
+  const tv = Object.values(tot).filter(v=>v > 0).sort((a,b)=>a-b);
+  const suspect = {};
+  if(tv.length >= 4){
+    const med = tv[Math.floor(tv.length/2)];
+    Object.keys(tot).forEach(k=>{
+      if(med > 0 && tot[k] > med * 8 && tot[k] > 2000 && !blocked.has(k)){
+        suspect[k] = `全臺 48h 總量 ${Math.round(tot[k])}mm，`
+                   + `是各模式中位數（${Math.round(med)}mm）的 ${(tot[k]/med).toFixed(0)} 倍`;
+      }
+    });
+  }
+  return {blocked, why, suspect, totals: tot};
+}
+
+//  ★ 唯一的「這個模式能不能進融合」判準。所有地方都必須走這裡 ——
+//    靜態排除清單與本輪量測到的合成資料，兩者缺一不可。
+function blendExcluded(m){
+  const k = (m === 'graphcast') ? 'gc' : m;
+  return BLEND_BLOCK.has(k) || _FAKE_BLOCK.has(k);
+}
 const _VF_KEY = {gc: 'graphcast'};
 function _vfBlendZones(m){
   if(m === 'blend') return 0;          // 融合本身不是成員，不掛 ◆
@@ -5745,7 +5922,7 @@ function _vfBlendZones(m){
   const zs = Object.keys(ab);
   if(!zs.length) return VF_CORE.has(m) ? -1 : 0;     // -1＝無自適應資料、沿用核心
   const k = _VF_KEY[m] || m;
-  if(BLEND_BLOCK.has(k)) return 0;
+  if(blendExcluded(k)) return 0;
   return zs.filter(z=>((ab[z] || {}).models || {})[k] != null).length;
 }
 const VF_IN_BLEND = { has: m => _vfBlendZones(m) !== 0 };
@@ -11195,6 +11372,23 @@ async function tryLoadLive(){
     // 自適應融合：逐地形的模式選用與權重（後端每輪重算）
     window.ADAPTIVE_BLEND = d.adaptive_blend || {};
     window.PATTERN_SKILL = d.pattern_skill || {};   // F-c 自動權重用（誤報率、ETS）
+    //  ★★ 合成資料偵測：在任何計算之前先跑，判定結果供融合、排行、
+    //    F-c 共用。這是前端自己的保險 —— 線上的 data.json 可能還是舊
+    //    後端產的（偽造值 ＋ adaptive_blend 仍列著那些模式）。
+    try{
+      const _fk = detectSynthetic(TOWNSHIPS);
+      _FAKE_BLOCK = _fk.blocked; _FAKE_WHY = _fk.why;
+      _FAKE_SUSPECT = _fk.suspect || {};
+      if(Object.keys(_FAKE_SUSPECT).length){
+        console.warn('⚠ 總量異常（未排除，請人工判斷是真的極端事件還是資料出錯）：'
+          + Object.keys(_FAKE_SUSPECT).map(m=>`${MODEL_LABEL[m]||m}：${_FAKE_SUSPECT[m]}`).join('；'));
+      }
+      if(_FAKE_BLOCK.size || Object.keys(_FAKE_SUSPECT).length){
+        console.warn('⚠ 本輪判定為合成資料、已排除出融合：'
+          + Array.from(_FAKE_BLOCK).map(m=>`${MODEL_LABEL[m]||m}（${_fk.why[m]}）`).join('；'));
+        try{ _showSyntheticNotice(); }catch(e){}
+      }
+    }catch(e){ console.warn('合成資料偵測失敗', e); }
     try{
       const _zs = Object.keys(window.ADAPTIVE_BLEND);
       if(_zs.length) console.log('自適應融合載入：' + _zs.map(z=>

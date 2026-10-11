@@ -4365,6 +4365,26 @@ def update_verify(out_towns, zones, now_tpe, hourly_ser=None, prev_weights=None,
 AI_YDAY_TAGS = ('aifs', 'graphcast')
 
 
+# ★★★ 2026-10-11：偏差校正分量級（與前端 index.html 的 biasFactor 同一條公式）。
+#   校正倍率＝Σ觀測÷Σ模式，是在有雨量體積的視窗上估的（衰減加權還依雨量加權，
+#   等於由大雨事件決定）。無差別套用在毛毛雨上沒有依據，而且校驗門檻正好是
+#   1mm —— 實測乾日會把跨過 1mm 的鄉鎮從 49 個變成 82 個，融合的誤報率
+#   因此比它的每一個成員都高。量小不校正、量大照舊全額上修。
+BIAS_TAPER_LO = 1.0     # mm/6h 以下不校正（≈日 4mm）
+BIAS_TAPER_HI = 7.5     # mm/6h 以上全額校正（≈日 30mm，連續降雨仍完整上修）
+
+
+def bias_factor(v0, bias, n, is_ai=False, span=1):
+    """span＝這個值涵蓋幾個 6h 段（日累積用 4）。門檻依 span 等比放大，
+    否則用 6h 的 2/10mm 去判日累積，等於幾乎每天都全額校正。"""
+    if not bias or not n or n < 10 or v0 is None:
+        return 1.0
+    full = max(0.5, min(3.0 if is_ai else 2.0, bias))
+    lo, hi = BIAS_TAPER_LO * span, BIAS_TAPER_HI * span
+    w = max(0.0, min(1.0, (abs(v0) - lo) / (hi - lo)))
+    return 1.0 + (full - 1.0) * w
+
+
 def _blend_yday(t, zone, weights, prev_skill=None):
     """昨日的 FORMOSA 融合值 —— 必須與實際播出的那一套邏輯一致。
 
@@ -4410,8 +4430,9 @@ def _blend_yday(t, zone, weights, prev_skill=None):
         sv = sv.get('decay') or sv.get('short') or {}
         b, n = sv.get('bias'), sv.get('n')
         if b and n and n >= 10:
-            cap = 3.0 if m in AI_YDAY_TAGS else 2.0
-            v *= max(0.5, min(cap, b))
+            #  ★ 分量級校正，與前端 biasFactor 同一條公式。
+            #    model_yday 是日累積 → span=4（4 個 6h 段）。
+            v *= bias_factor(v, b, n, m in AI_YDAY_TAGS, span=4)
         vals[m] = v
     if not vals:
         return None
