@@ -41,23 +41,40 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      # ★ 2026-11-08：公開 repo 尚未設定（仍是範本值）或缺 PUBLISH_TOKEN 時整支跳過、不算失敗。
+      #   本支在每次上傳 index.html 時觸發；未設定就失敗，每次上傳都會收到一封失敗通知。
+      - name: 檢查公開 repo 是否已設定
+        id: chk
+        env:
+          GH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ] || [ "${PUBLIC_REPO#your-account/}" != "${PUBLIC_REPO}" ]; then
+            echo "::notice::公開 repo 尚未設定（PUBLIC_REPO=${PUBLIC_REPO}），本次跳過發布"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
+        if: steps.chk.outputs.skip != '1'
       - uses: actions/setup-node@v4
+        if: steps.chk.outputs.skip != '1'
         with: {node-version: '20'}
       - uses: actions/setup-python@v5
+        if: steps.chk.outputs.skip != '1'
         with: {python-version: '3.11'}
 
       - name: 建置公開版（移除註解）
+        if: steps.chk.outputs.skip != '1'
         run: |
           npm install --no-audit --no-fund terser
           node build_public.js index.html index.public.html
 
       - name: 驗證「產出物」
+        if: steps.chk.outputs.skip != '1'
         # ★ 驗產出物而非原始碼。建置本身就是新的故障來源：
         #   原始碼通過不代表產出物通過。失敗就中止，不發布半成品。
         run: python3 verify_html.py index.public.html
 
       - name: 瀏覽器回歸測試（對產出物）
+        if: steps.chk.outputs.skip != '1'
         run: |
           npm install --no-audit --no-fund puppeteer
           cp index.public.html _local.html
@@ -67,6 +84,7 @@ jobs:
           node test_rain_scale.js
 
       - name: 推到公開 repo
+        if: steps.chk.outputs.skip != '1'
         env:
           GH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
         run: |

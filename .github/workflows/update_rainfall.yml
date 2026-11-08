@@ -78,6 +78,7 @@ jobs:
 
           # 快照（archive/ 由 fetch_rainfall 自行輪替與清理）
           [ -d archive ] && git add -A archive
+          [ -d cwa_qpf_src ] && git add -A cwa_qpf_src   # 判讀所用的氣象署定量降水預報原圖（每輪覆蓋，供比對）
 
           if git diff --cached --quiet; then
             echo "無變更，跳過 commit"
