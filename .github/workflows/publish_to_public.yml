@@ -24,7 +24,10 @@ on:
   # 抓資料那支跑完就發布。名稱必須與該 workflow 的 `name:` 完全一致；
   # 填錯不會報錯，只是永遠不觸發 —— 所以下面另外保留 schedule 當後備。
   workflow_run:
-    workflows: ["資料更新"]                 # ← 改成你抓資料那支的 name
+    # ★ 2026-11-08 修正：原本填「資料更新」，與實際名稱不符 → 從未觸發，
+    #   公開端只靠下面受 GitHub 節流的 schedule，延遲可達數小時。
+    #   check_workflows.py 會檢查這裡每個名稱都對得上既有 workflow 的 name:。
+    workflows: ["降雨監測主排程", "QPESUMS 每小時累積"]
     types: [completed]
   schedule:
     - cron: '41 * * * *'                   # 後備：每小時一次，避開整點壅塞
@@ -51,6 +54,14 @@ jobs:
           GH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
         run: |
           set -euo pipefail
+
+          # ★ 2026-11-08：公開 repo 尚未設定（仍是範本值）或缺 PUBLISH_TOKEN 時直接跳過、不算失敗。
+          #   workflow_run 名稱修正後本支會跟著每次資料更新觸發（最密每 10 分鐘），
+          #   若未設定就失敗，會每 10 分鐘寄一封失敗通知。
+          if [ -z "${GH_TOKEN:-}" ] || [ "${PUBLIC_REPO#your-account/}" != "${PUBLIC_REPO}" ]; then
+            echo "::notice::公開 repo 尚未設定（PUBLIC_REPO=${PUBLIC_REPO}，PUBLISH_TOKEN $([ -n "${GH_TOKEN:-}" ] && echo 已設 || echo 未設)），本次跳過發布"
+            exit 0
+          fi
 
           # 前端成品：有 public/index.html 就用它（已剝註解的版本），
           # 沒有就用 index.html 原檔 —— 先做 repo 拆分、之後再加剝註解，
