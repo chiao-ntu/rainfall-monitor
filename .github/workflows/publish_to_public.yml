@@ -68,10 +68,15 @@ jobs:
           for f in town_polys.json east_asia_geo.json town_terrain2.json \
                    terrain_zones_4class.json terrain_relief.json terrain_relief.png \
                    landslide_warning_stations.json coast_dist_final.json \
-                   roads_major.geojson shelters.geojson robots.txt; do
+                   roads_major.geojson roads_detail.geojson shelters.geojson \
+                   transport.json schools.json robots.txt; do
             [ -f "$f" ] && cp "$f" "pub/$f" || true
           done
           [ -d vendor ] && mkdir -p pub/vendor && cp -r vendor/. pub/vendor/ || true
+          # ★ 2026-11-08：村里界（分縣市檔）與 AR6 危害度疊圖是資料夾
+          for d in villages ar6; do
+            [ -d "$d" ] && mkdir -p "pub/$d" && cp -r "$d/." "pub/$d/" || true
+          done
 
           # ── 每輪變動的資料 ──
           # ★ 逐檔檢查「存在、非空、且是合法 JSON」才推。某輪某來源抓取失敗時，
@@ -80,7 +85,7 @@ jobs:
           ok=0; skip=0
           for f in data.json radar.json rain_hourly.json etr2_now.json \
                    verify.json typhoon_now.json env_hist.json wind_hist.json \
-                   debris_geo.json landslide_geo.json forecast_log.json; do
+                   debris_geo.json landslide_geo.json forecast_log.json multity.json; do
             if [ -s "$f" ] && python3 -c "import json,sys;json.load(open(sys.argv[1]))" "$f" 2>/dev/null; then
               cp "$f" "pub/$f"; ok=$((ok+1))
             else
