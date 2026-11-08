@@ -46,7 +46,7 @@ const puppeteer=require('puppeteer');
     setModel('cwa'); setWin('fut6_2');
     const h=_modeHeadRow(t);
     ok(/時報/.test(h), 'CWA 模式鄉鎮標頭列出報別');
-    ok(/採用/.test(document.getElementById('mCwa').title), 'CWA 按鈕滑過說明列出報別');
+    ok(!document.getElementById('mCwa').title && !document.getElementById('mCwaf').title, 'CWA／CWA+F 按鈕不加 tooltip（使用者明訂）');
     setModel('blend');
   }
   _cwaIssuedMs=save;

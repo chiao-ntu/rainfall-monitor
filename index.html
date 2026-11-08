@@ -60,6 +60,8 @@ body.panel-full canvas{ max-width:1100px }
 .dd-h{color:#7ee8a8;font-weight:700;margin:4px 0 2px}
 .vill-lbl span{font-size:10px;color:#222;white-space:nowrap;text-shadow:0 0 2px #fff,0 0 2px #fff,0 0 1px #fff;
   transform:translate(-50%,-50%);display:inline-block}
+.leaflet-tooltip.tr-tip{white-space:normal;width:340px;line-height:1.4;font-size:11px}
+.tr-tip .ex{display:grid;grid-template-columns:auto 1fr;column-gap:6px;padding-left:4px}
 .tr-badge span{display:block;border-radius:50%;color:#fff;text-align:center;font-weight:700;
   border:1.5px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.55),0 1px 3px rgba(0,0,0,.45);box-sizing:border-box}
 .b{padding:3px 9px;font-size:10px;border:1px solid #1e3a5a;background:#0d2035;color:#5a90b8;cursor:pointer;border-radius:3px;transition:all .12s;white-space:nowrap}
@@ -417,10 +419,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <button class="b model-btn hi-btn"    id="mHi"    onclick="setModel('hi')">強降雨</button>
       <button class="b model-btn lo-btn"    id="mLo"    onclick="setModel('lo')">弱降雨</button>
       <span style="color:#4a6a8a;font-size:10px;margin:0 3px">｜傳統物理</span>
-      <button class="b model-btn"    id="mCwa"   onclick="setModel('cwa')"
-        title="只呈現氣象署官方定量降水預報；官方未發布的時段顯示無資料">CWA</button>
-      <button class="b model-btn"    id="mCwaf"  onclick="setModel('cwaf')"
-        title="官方有發布的時段用氣象署值，其餘時段以 FORMOSA 補齊">CWA+F</button>
+      <button class="b model-btn"    id="mCwa"   onclick="setModel('cwa')">CWA</button>
+      <button class="b model-btn"    id="mCwaf"  onclick="setModel('cwaf')">CWA+F</button>
       <button class="b model-btn"    id="mJma"   onclick="setModel('jma')">JMA</button>
       <button class="b model-btn" id="mUkmo" onclick="setModel('ukmo')">UKMO</button>
       <button class="b model-btn" id="mMf"   onclick="setModel('mf')">Météo-France</button>
@@ -1398,7 +1398,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-11-08T14:30Z';
+const FORMOSA_BUILD = '2026-11-08T15:30Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -2909,6 +2909,46 @@ async function _trSet(k, v){
   const b = document.getElementById('bTrans'); if(b) b.classList.toggle('on', any);
 }
 function _trLineColor(f){ return f.c || TR_NO_OFFICIAL; }
+// ★ 2026-11-08 點位 tooltip：把圖資裡有的細部資訊全部帶出（使用者指定）。
+//   捷運站：所屬路線（官方路線色）、站碼、站址、電話、各出入口位置（官方 ADDRESS 欄＝出口所在路口／地標）
+//   臺鐵站：所屬路線、地址、電話；碼頭：類別（商港／漁港…）、地址、電話；機場、高鐵站：地址、電話
+function _trChipTxt(c, txt){
+  return `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${c};`
+    + `margin:0 3px -1px 0;box-shadow:0 0 0 1px rgba(255,255,255,.4)"></span>${txt}`;
+}
+function _trPointTip(k, f, LC){
+  const row = (lbl, v)=> v ? `<div><span style="color:#8a9aaa">${lbl}</span>　${v}</div>` : '';
+  let h = `<div style="font-weight:700;margin-bottom:2px">${f.n}</div>`;
+  if(k === 'st_mrt'){
+    h += row('系統', (f.sys || []).join('／'));
+    h += row('路線', (f.ln || []).map(n=>_trChipTxt(LC[n] || TR_NO_OFFICIAL, n)).join('　'));
+    h += row('站碼', (f.code || []).join('、'));
+    h += row('站址', f.a) + row('電話', f.tel);
+    const ex = f.ex || [];
+    if(ex.length){
+      const withAddr = ex.filter(e=>e[1]);
+      h += `<div style="color:#8a9aaa;margin-top:3px">出入口（${ex.length} 處）</div>`;
+      // 與站址同縣市區的前綴省略（臺北車站 20 個出口都寫「臺北市中正區…」，只留路段）
+      const pre = ((f.a || '').match(/^(.{2,3}[縣市].{1,4}?[鄉鎮市區])/) || [])[1] || '';
+      const ad = a => (pre && a.startsWith(pre)) ? a.slice(pre.length) : a;
+      h += withAddr.length
+        ? '<div class="ex">' + withAddr.map(e=>`<span>${e[0] === '—' ? '出入口' : e[0] + ' 號'}</span><span>${ad(e[1])}</span>`).join('') + '</div>'
+          + (withAddr.length < ex.length
+             ? `<div style="padding-left:6px;color:#8a9aaa">其餘 ${ex.length - withAddr.length} 處圖資未記載位置：`
+               + ex.filter(e=>!e[1]).map(e=>e[0]).join('、') + '</div>' : '')
+        : `<div style="padding-left:6px">${ex.map(e=>e[0] === '—' ? '出入口' : e[0] + ' 號').join('、')}`
+          + `<span style="color:#8a9aaa">（圖資未記載各出口位置）</span></div>`;
+    }
+  }else if(k === 'st_tra'){
+    h += row('路線', (f.ln || []).map(n=>n.replace(/^臺鐵/, '')).join('、'));
+    h += row('地址', f.a) + row('電話', f.tel);
+  }else if(k === 'port'){
+    h += row('類別', f.k) + row('地址', f.a) + row('電話', f.tel);
+  }else{
+    h += row('地址', f.a) + row('電話', f.tel);
+  }
+  return h;
+}
 function renderTransLayer(){
   [_tr.line, _tr.pt].forEach(l=>{ if(l) try{ map.removeLayer(l); }catch(e){} });
   _tr.line = _tr.pt = null;
@@ -2927,11 +2967,11 @@ function renderTransLayer(){
     });
     const opt = {renderer:rend, interactive:false, opacity:0.95};
     if(st.casing){
-      const all = [].concat(...byC.values());
+      const all = [].concat(...[...byC].filter(([c])=>c !== TR_NO_OFFICIAL).map(([, v])=>v));
       L.polyline(all, Object.assign({}, opt, {color:st.casing, weight:st.casingW})).addTo(_tr.line);
     }
     byC.forEach((ls, c)=>{
-      const unnamed = (c === TR_NO_OFFICIAL && (k === 'mrt' || k === 'lrt'));
+      const unnamed = (c === TR_NO_OFFICIAL && (k === 'mrt' || k === 'lrt'));   // 機廠軌道
       L.polyline(ls, Object.assign({}, opt, {color:c, weight: unnamed ? st.w*0.6 : st.w})).addTo(_tr.line);
       if(st.inner) L.polyline(ls, Object.assign({}, opt, {color:st.inner, weight:st.innerW,
                                      dashArray:st.dash || null})).addTo(_tr.line);
@@ -2950,13 +2990,7 @@ function renderTransLayer(){
       const ll = L.latLng(f.c[1], f.c[0]);
       if(!vb.contains(ll)) return;
       const ln = f.ln || [];
-      const chips = ln.map(n=>`<span style="display:inline-block;width:10px;height:10px;border-radius:2px;`
-        + `background:${LC[n] || TR_NO_OFFICIAL};margin:0 3px -1px 0"></span>${n}`).join('　');
-      const tip = `<b>${f.n}</b>`
-        + (f.sys && f.sys.length ? `<br><span style="color:#8a9aaa">${f.sys.join('／')}</span>` : '')
-        + (chips ? `<br>${chips}` : '')
-        + (f.a ? `<br>地址：${f.a}` : '') + (f.tel ? `<br>電話：${f.tel}` : '')
-        + (f.exits ? `<br>站體／出入口點位 ${f.exits} 處` : '');
+      const tip = _trPointTip(k, f, LC);
       let m;
       if(st.glyph){
         const px = Math.round(18 * sc);
@@ -2971,9 +3005,9 @@ function renderTransLayer(){
               fillColor: multi ? '#ffffff' : (LC[ln[0]] || TR_NO_OFFICIAL), fillOpacity:1});
       }else{
         m = L.circleMarker(ll, {pane:'transPtPane', renderer:prend, radius:st.r*sc, weight:st.w,
-              color:st.stroke, fillColor:st.fill, fillOpacity:1});
+              color: f.op === 'forest' ? TR_NO_OFFICIAL : st.stroke, fillColor:st.fill, fillOpacity:1});
       }
-      m.bindTooltip(tip, {direction:'top', opacity:0.95}).addTo(_tr.pt);
+      m.bindTooltip(tip, {direction:'auto', opacity:0.95, className:'tr-tip'}).addTo(_tr.pt);
     });
   });
   _tr.pt.addTo(map);
@@ -2997,10 +3031,10 @@ function _transLegendHtml(){
     (_tr.data[k] || []).forEach(f=>{
       if(!f.l.some(l=>l.some(p=>vb.contains([p[1], p[0]])))) return;
       const c = _trLineColor(f);
-      let n = f.n || '其他軌道（圖資未標路線名稱）';
-      if(k === 'rail') n = (c === TR_NO_OFFICIAL) ? '阿里山林鐵／未標名段（查無官方路線色）' : '臺鐵';
-      if(k === 'hsr') n = '高鐵';
-      if(k === 'lrt' && /^淡海輕軌/.test(n)) n = '淡海輕軌';
+      let n = f.n + (f.term ? `（${f.term}）` : '');
+      if(f.depot) n = '機廠軌道';
+      if(k === 'rail') n = (c === TR_NO_OFFICIAL) ? '阿里山林業鐵路（查無官方路線色）' : '臺鐵（含站場、側線）';
+      if(k === 'hsr') n = '高鐵（南港－左營）';
       if(!seen.has(n)) seen.set(n, c);
     });
     if(!seen.size) return;
@@ -3072,7 +3106,11 @@ function renderFacLayer(){
       if(!vb.contains(ll)) return;
       L.circleMarker(ll, {pane:'facPtPane', renderer:prend, radius: z >= 14 ? 5 : 3.5 * _trScale(z), weight:1.2,
         color:'#1c3f8c', fillColor:'#ffffff', fillOpacity:1})
-        .bindTooltip(`<b>${f.n}</b><br><span style="color:#8a9aaa">學校</span>`, {direction:'top', opacity:0.95})
+        .bindTooltip(`<div style="font-weight:700;margin-bottom:2px">${f.n}</div>`
+          + `<div><span style="color:#8a9aaa">學制</span>　${f.k || '—'}</div>`
+          + (f.ha ? `<div><span style="color:#8a9aaa">校地面積</span>　${f.ha >= 1 ? f.ha.toFixed(1) + ' 公頃'
+                     : Math.round(f.ha * 1e4).toLocaleString() + ' 平方公尺'}</div>` : ''),
+          {direction:'top', opacity:0.95, className:'tr-tip'})
         .addTo(_fac.pt);
     });
     _fac.pt.addTo(map);
@@ -3186,6 +3224,24 @@ function _bindNewLayerMoves(){
       if(_fac.on.school && _fac.school
          && !(_fac.bounds && _fac.bounds.contains(map.getBounds()))) renderFacLayer();
     }, 200);
+  });
+  // ★ 2026-11-08 圖例（交通、颱風、雨量色階…）是蓋在地圖上的獨立元件，層級高於地圖內的 tooltip，
+  //   車站 tooltip 一長（出入口清單）就被圖例蓋住。tooltip 開啟時，與它重疊的圖例暫時淡出，關閉即恢復。
+  const _legSel = '#bl-legends > *, #map-panel-body > *, .leaflet-control-container .leaflet-control';
+  map.on('tooltipopen', e=>{
+    const el = e.tooltip && e.tooltip.getElement && e.tooltip.getElement();
+    if(!el) return;
+    requestAnimationFrame(()=>{
+      const r = el.getBoundingClientRect();
+      document.querySelectorAll(_legSel).forEach(g=>{
+        const q = g.getBoundingClientRect();
+        const hit = q.width && !(q.right < r.left || q.left > r.right || q.bottom < r.top || q.top > r.bottom);
+        if(hit){ g.dataset.tipFade = '1'; g.style.opacity = '0.1'; }
+      });
+    });
+  });
+  map.on('tooltipclose', ()=>{
+    document.querySelectorAll('[data-tip-fade]').forEach(g=>{ g.style.opacity = ''; delete g.dataset.tipFade; });
   });
   map.on('zoomend', ()=>{
     clearTimeout(window._nlZ);
@@ -16074,12 +16130,7 @@ function _renderBaseTag(){
   if(lag) lines.push(`官方已發布 ${_tpeFmt(lag.expMs)}報，系統尚未更新`);
   if(stale) lines.push(`主排程每小時一次，已逾 ${Math.round(age)} 分鐘未更新`);
   el.title = lines.join('\n');
-  // CWA 模式按鈕的滑過說明一併帶出採用的報別
-  const iss = (_cwaIssuedMs != null) ? `（目前採用 ${_tpeFmt(_cwaIssuedMs)}報`
-            + (lag ? `；官方已有 ${_tpeFmt(lag.expMs)}報，系統尚未更新` : '') + '）' : '';
-  const bc = document.getElementById('mCwa'), bf = document.getElementById('mCwaf');
-  if(bc) bc.title = '只呈現氣象署官方定量降水預報；官方未發布的時段顯示無資料' + iss;
-  if(bf) bf.title = '官方有發布的時段用氣象署值，其餘時段以 FORMOSA 補齊' + iss;
+  // ★ 模式按鈕一律不加滑過說明（使用者明訂）；報別只在 CWA 模式的鄉鎮標頭與上方「更新時間」滑過時顯示
 }
 setInterval(()=>{ try{ _renderBaseTag(); }catch(e){} }, 60e3);
 
