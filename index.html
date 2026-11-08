@@ -1398,7 +1398,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-11-08T15:30Z';
+const FORMOSA_BUILD = '2026-11-08T16:00Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -2916,9 +2916,17 @@ function _trChipTxt(c, txt){
   return `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${c};`
     + `margin:0 3px -1px 0;box-shadow:0 0 0 1px rgba(255,255,255,.4)"></span>${txt}`;
 }
+// 圖資日期 YYYYMM → YYYY/MM（讓使用者判斷這筆資料多舊）
+function _ymTxt(d){ return (d && /^\d{6}$/.test(d)) ? `${d.slice(0, 4)}/${d.slice(4)}` : ''; }
+// 出入口名稱：純數字＝「N 號出口」；帶字母（臺北車站 M1、Y12…）＝「M1 出口」
+function _exName(e){ return e === '—' ? '出入口' : (/^\d+$/.test(e) ? `${e} 號出口` : `${e} 出口`); }
+function _haTxt(ha){ return ha >= 1 ? ha.toFixed(1) + ' 公頃' : Math.round(ha * 1e4).toLocaleString() + ' 平方公尺'; }
 function _trPointTip(k, f, LC){
   const row = (lbl, v)=> v ? `<div><span style="color:#8a9aaa">${lbl}</span>　${v}</div>` : '';
-  let h = `<div style="font-weight:700;margin-bottom:2px">${f.n}</div>`;
+  // 機場、碼頭的全名多半是管理機關全銜（交通部民用航空局恆春航空站），標題用通稱、全名列在下方
+  const useShort = (k === 'airport' || k === 'port') && f.n2;
+  let h = `<div style="font-weight:700;margin-bottom:2px">${useShort ? f.n2 : f.n}</div>`;
+  if(useShort) h += row('全名', f.n);
   if(k === 'st_mrt'){
     h += row('系統', (f.sys || []).join('／'));
     h += row('路線', (f.ln || []).map(n=>_trChipTxt(LC[n] || TR_NO_OFFICIAL, n)).join('　'));
@@ -2932,11 +2940,11 @@ function _trPointTip(k, f, LC){
       const pre = ((f.a || '').match(/^(.{2,3}[縣市].{1,4}?[鄉鎮市區])/) || [])[1] || '';
       const ad = a => (pre && a.startsWith(pre)) ? a.slice(pre.length) : a;
       h += withAddr.length
-        ? '<div class="ex">' + withAddr.map(e=>`<span>${e[0] === '—' ? '出入口' : e[0] + ' 號'}</span><span>${ad(e[1])}</span>`).join('') + '</div>'
+        ? '<div class="ex">' + withAddr.map(e=>`<span>${_exName(e[0])}</span><span>${ad(e[1])}</span>`).join('') + '</div>'
           + (withAddr.length < ex.length
              ? `<div style="padding-left:6px;color:#8a9aaa">其餘 ${ex.length - withAddr.length} 處圖資未記載位置：`
-               + ex.filter(e=>!e[1]).map(e=>e[0]).join('、') + '</div>' : '')
-        : `<div style="padding-left:6px">${ex.map(e=>e[0] === '—' ? '出入口' : e[0] + ' 號').join('、')}`
+               + ex.filter(e=>!e[1]).map(e=>_exName(e[0])).join('、') + '</div>' : '')
+        : `<div style="padding-left:6px">${ex.map(e=>_exName(e[0])).join('、')}`
           + `<span style="color:#8a9aaa">（圖資未記載各出口位置）</span></div>`;
     }
   }else if(k === 'st_tra'){
@@ -2947,6 +2955,7 @@ function _trPointTip(k, f, LC){
   }else{
     h += row('地址', f.a) + row('電話', f.tel);
   }
+  h += row('圖資日期', _ymTxt(f.d));
   return h;
 }
 function renderTransLayer(){
@@ -3107,9 +3116,12 @@ function renderFacLayer(){
       L.circleMarker(ll, {pane:'facPtPane', renderer:prend, radius: z >= 14 ? 5 : 3.5 * _trScale(z), weight:1.2,
         color:'#1c3f8c', fillColor:'#ffffff', fillOpacity:1})
         .bindTooltip(`<div style="font-weight:700;margin-bottom:2px">${f.n}</div>`
+          + (f.tw ? `<div><span style="color:#8a9aaa">位置</span>　${f.tw}</div>` : '')
           + `<div><span style="color:#8a9aaa">學制</span>　${f.k || '—'}</div>`
-          + (f.ha ? `<div><span style="color:#8a9aaa">校地面積</span>　${f.ha >= 1 ? f.ha.toFixed(1) + ' 公頃'
-                     : Math.round(f.ha * 1e4).toLocaleString() + ' 平方公尺'}</div>` : ''),
+          + (f.ha ? `<div><span style="color:#8a9aaa">校地面積</span>　${_haTxt(f.ha)}`
+                    + (f.np ? `<span style="color:#8a9aaa">（本筆；全校共 ${f.np} 筆範圍，合計 ${_haTxt(f.tot)}）</span>` : '')
+                    + '</div>' : '')
+          + (f.d ? `<div><span style="color:#8a9aaa">圖資日期</span>　${_ymTxt(f.d)}</div>` : ''),
           {direction:'top', opacity:0.95, className:'tr-tip'})
         .addTo(_fac.pt);
     });

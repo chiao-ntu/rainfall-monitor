@@ -252,6 +252,12 @@ def points(name, namef='MARKNAME1', addr=True):
         if addr and 'ADDRESS' in rec.as_dict() and rec['ADDRESS']: f['a'] = norm_tai(rec['ADDRESS'])
         if 'TEL' in rec.as_dict() and rec['TEL']: f['tel'] = rec['TEL'].strip()
         if 'MARKTYPE1' in rec.as_dict(): f['_t'] = (rec['MARKTYPE1'] or '').strip()
+        # ★ 2026-11-08 補齊圖資既有欄位：簡稱（MARKNAME2，與全名不同時）、圖資日期（MDATE／UPD_YYYYMM）
+        d = rec.as_dict()
+        n2 = norm_tai(d.get('MARKNAME2') or '').replace('\xa0', '').strip()
+        if n2 and n2 != f['n'] and '出入口' not in n2: f['n2'] = n2
+        ym = str(d.get('MDATE') or d.get('UPD_YYYYMM') or '').strip()
+        if re.fullmatch(r'\d{6}', ym): f['d'] = ym
         out.append(f)
     return out
 T['st_tra'] = points('MARK_臺鐵車站_1140206.shp')
@@ -290,6 +296,7 @@ for f in mrt_raw:
     sy, pre = next(((v, k) for k, v in SYS_PREFIX if nm.startswith(k)), ('', ''))
     g = grp.setdefault(nm, {'sys': sy, 'pre': pre, 'pts': [], 'ln': [], 'ex': [], 'a': '', 'tel': '', 'code': []})
     g['pts'].append(f['c'])
+    if f.get('d') and f['d'] > g.get('d', ''): g['d'] = f['d']
     if em:      # ★ 出入口：官方 ADDRESS 欄寫的是「出入口所在位置」（路口／地標），即「幾號出口往哪」
         lbl = re.sub(r'\s+', '', em.group(1)).replace('出入口', '') or '—'
         g['ex'].append([lbl, f.get('a', '')])
@@ -331,8 +338,10 @@ for nm, g in grp.items():
         hit['ex'] += [e for e in g['ex'] if e not in hit['ex']]
         if not hit.get('a') and g['a']: hit['a'] = g['a']
         if not hit.get('tel') and g['tel']: hit['tel'] = g['tel']
+        if g.get('d') and g['d'] > hit.get('d', ''): hit['d'] = g['d']
         continue
     o = {'n': base, 'c': [R5(x), R5(y)], 'ln': ln, 'sys': [g['sys']], 'code': g['code'], 'ex': g['ex']}
+    if g.get('d'): o['d'] = g['d']
     if g['a']: o['a'] = g['a']
     if g['tel']: o['tel'] = g['tel']
     st_out.append(o)
@@ -408,6 +417,39 @@ for sr in sr_.iterShapeRecords():
     ha = shape(sr.shape.__geo_interface__).area / 1e4 if tf is not None else None
     S.append({'n': nm, 'c': [R5(pt.x), R5(pt.y)], 'p': poly_out(gs), 'k': school_kind(nm),
               **({'ha': round(ha, 2)} if ha else {})})
+# ★ 2026-11-08 補齊：所在縣市鄉鎮（代表點落在哪個鄉鎮界內，與雨量聚合同一份 town_polys.json）、
+#   圖資日期（YYYYMM）、同校多筆範圍（同名）的筆數與全校合計面積。
+_TP = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'town_polys.json')
+_tpolys = []
+if os.path.exists(_TP):
+    for k, v in json.load(open(_TP, encoding='utf-8')).items():
+        try:
+            _tpolys.append((k, v[:4], unary_union([Polygon(r).buffer(0) for r in v[4] if len(r) >= 3])))
+        except Exception as e:
+            raise SystemExit(f'!! 鄉鎮界 {k} 無法建立多邊形：{e}')
+def _town_of(x, y):
+    p = Point(x, y)
+    for k, bb, g in _tpolys:
+        if bb[0] <= x <= bb[2] and bb[1] <= y <= bb[3] and g.contains(p):
+            return k
+    # 代表點落在鄉鎮界外（海岸、界線簡化誤差）：取 1km 內最近的鄉鎮；再遠就不填，不猜
+    best = min(((g.distance(p), k) for k, bb, g in _tpolys
+                if bb[0] - .02 <= x <= bb[2] + .02 and bb[1] - .02 <= y <= bb[3] + .02), default=(9, None))
+    return best[1] if best[0] <= 0.01 else None
+_ym = [str(sr.record['YYYYMM'] or '').strip() for sr in reader('各級學校範圍圖_121_1150409.shp').iterShapeRecords()]
+_cnt = collections.Counter(f['n'] for f in S); _tot = collections.defaultdict(float)
+for f in S: _tot[f['n']] += f.get('ha') or 0
+_no_town = 0
+for f, ym in zip(S, _ym):
+    tw = _town_of(*f['c'])
+    if not tw:   # 界外且 1km 內無鄉鎮：校名本身以「縣市＋鄉鎮」開頭者（官方校名），採校名
+        tw = next((k for k, bb, g in _tpolys if f['n'].startswith(k)), None)
+    if tw: f['tw'] = tw
+    else: _no_town += 1
+    if re.fullmatch(r'\d{6}', ym): f['d'] = ym
+    if _cnt[f['n']] > 1:
+        f['np'] = _cnt[f['n']]; f['tot'] = round(_tot[f['n']], 2)
+print('學校：鄉鎮定位', len(S) - _no_town, '/', len(S), '；多筆範圍校數', sum(1 for v in _cnt.values() if v > 1))
 json.dump({'source': 'NLSC 各級學校範圍圖 1150409', 'feats': S},
           open(os.path.join(OUT, 'schools.json'), 'w', encoding='utf-8'), ensure_ascii=False, separators=(',', ':'))
 print('學校', len(S))

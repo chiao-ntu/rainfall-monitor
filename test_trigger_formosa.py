@@ -47,18 +47,38 @@ ok('SECRET' not in out, 'token 不出現在輸出')
 now = datetime(2026, 11, 8, 11, 47, tzinfo=timezone.utc)
 def fake_get(url, headers=None, timeout=None, params=None):
     t = (now - timedelta(minutes=fake_get.age[url.split('/')[-2]])).strftime('%Y-%m-%dT%H:%M:%SZ')
-    return R(200, js={'workflow_runs': [{'updated_at': t}]})
+    if params and params.get('status') == 'success':
+        return R(200, js={'workflow_runs': [{'updated_at': t, 'created_at': t}]})
+    st = 'in_progress' if getattr(fake_get, 'busy', False) else 'completed'
+    return R(200, js={'workflow_runs': [{'updated_at': t, 'created_at': t, 'status': st,
+                                         'conclusion': None if st == 'in_progress' else 'failure', 'event': 'schedule'}]})
 T.requests.get = fake_get
 fake_get.age = {T.WF_RAIN: 252, T.WF_QPE: 10}
+fake_get.busy = False
 ok(round(T.last_success_age_min(T.WF_RAIN, now)) == 252, '看門狗：讀最近一次成功時間')
 class FDT(datetime):
     @classmethod
     def now(cls, tz=None): return now
 T.datetime = FDT
-fake_post.resp = [R(204)] * 5
+fake_post.resp = [R(204)] * 5; calls.clear()
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf): rc = T.main()
-ok(rc == 1 and '逾時未成功更新：update_rainfall.yml' in buf.getvalue(), '主排程 252 分未成功 → 非 0 結束')
+out = buf.getvalue()
+ok(rc == 0 and '[WARN] 已逾時未成功更新：update_rainfall.yml' in out, '19:47 逾時只記 WARN、不算失敗（每小時只在 :2x 那輪報警）')
+ok(any(c.endswith('/update_rainfall.yml/dispatches') for c in calls) and '[補跑]' in out, '主排程 252 分未成功且無執行中 → 立即補觸發')
+ok('最近幾次：' in out and 'GitHub排程 失敗' in out, 'log 列出最近幾次執行狀態（看得到是沒跑還是跑失敗）')
+fake_get.busy = True; fake_post.resp = [R(204)] * 5; calls.clear()
+with contextlib.redirect_stdout(io.StringIO()): T.main()
+ok(not any(c.endswith('/update_rainfall.yml/dispatches') for c in calls), '已有執行中的主排程 → 不重複補觸發')
+fake_get.busy = False
+class FDT2(datetime):
+    @classmethod
+    def now(cls, tz=None): return datetime(2026, 11, 8, 15, 23, tzinfo=timezone.utc)
+T.datetime = FDT2; now = datetime(2026, 11, 8, 15, 23, tzinfo=timezone.utc)
+fake_post.resp = [R(204)] * 5
+with contextlib.redirect_stdout(io.StringIO()): rc = T.main()
+ok(rc == 1, '23:23 那一輪仍逾時 → 非 0 結束（每小時報警一次）')
+T.datetime = FDT; now = datetime(2026, 11, 8, 11, 47, tzinfo=timezone.utc)
 fake_get.age = {T.WF_RAIN: 40, T.WF_QPE: 10}
 fake_post.resp = [R(204)] * 5
 with contextlib.redirect_stdout(io.StringIO()): rc = T.main()

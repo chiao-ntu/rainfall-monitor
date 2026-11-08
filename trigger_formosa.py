@@ -130,6 +130,34 @@ def last_success_age_min(wf, now_utc):
         return None
 
 
+# ★ 2026-11-08 補跑：上線第一晚看到主排程 7 小時沒成功，但它只排在每小時 :23，
+#   要等到下一個 :23 才會被觸發。改為：只要距上次成功超過 CATCHUP_MIN、
+#   且目前沒有排隊／執行中的同一支，就立刻補觸發，不等時刻表。
+CATCHUP_MIN = {WF_RAIN: 70, WF_QPE: 20}
+
+
+def recent_runs(wf, n=5):
+    """最近 n 次執行（任何狀態）。查不到回傳 None。"""
+    url = f"{API}/repos/{GH_REPO}/actions/workflows/{wf}/runs"
+    try:
+        r = requests.get(url, headers=_headers(), timeout=15,
+                         params={"branch": GH_BRANCH, "per_page": n})
+        if r.status_code != 200:
+            return None
+        return r.json().get("workflow_runs") or []
+    except Exception:
+        return None
+
+
+def _run_txt(run):
+    t = datetime.strptime(run["created_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone(TPE)
+    ev = {"schedule": "GitHub排程", "workflow_dispatch": "外部觸發"}.get(run.get("event"), run.get("event"))
+    st = run.get("conclusion") or run.get("status")
+    st = {"success": "成功", "failure": "失敗", "cancelled": "取消", "in_progress": "執行中",
+          "queued": "排隊中", "timed_out": "逾時中止"}.get(st, st)
+    return f"{t:%m/%d %H:%M} {ev} {st}"
+
+
 def main():
     if not GH_TOKEN:
         print("[ERROR] 缺少 GH_TOKEN 環境變數")
@@ -143,18 +171,31 @@ def main():
     late = []
     for wf, lim in WATCH_LIMIT_MIN.items():
         age = last_success_age_min(wf, now_utc)
+        runs = recent_runs(wf) or []
+        busy = any(r.get("status") in ("queued", "in_progress", "waiting", "pending") for r in runs)
+        if runs:
+            print(f"  [看門狗] {wf} 最近幾次：" + "；".join(_run_txt(r) for r in runs[:3]))
         if age is None:
             continue
         flag = "逾時" if age > lim else "正常"
         print(f"  [看門狗] {wf} 最近一次成功距今 {age:.0f} 分（門檻 {lim}）{flag}")
+        # 補跑：太久沒成功、這輪沒排到、也沒有正在跑的 → 立刻觸發
+        if age > CATCHUP_MIN[wf] and wf not in wfs and not busy:
+            print(f"  [補跑] {wf} 已 {age:.0f} 分未成功且無執行中 → 立即觸發")
+            if not dispatch(wf):
+                failed.append(wf)
         if age > lim:
             late.append(wf)
 
     if failed:
         print(f"[ERROR] 觸發失敗：{', '.join(failed)}")
+    # 逾時警報每小時只報一次（:20–:29 那一輪），避免每 10 分鐘寄一封失敗通知；
+    #   觸發失敗（token、權限、workflow 檔壞掉）則每次都報。
+    alert_late = late and 20 <= now_tpe.minute < 30
     if late:
-        print(f"[ERROR] 已逾時未成功更新：{', '.join(late)} → 請到 GitHub Actions 頁面看最近幾次的錯誤")
-    return 1 if (failed or late) else 0
+        print(f"[{'ERROR' if alert_late else 'WARN'}] 已逾時未成功更新：{', '.join(late)}"
+              " → 看上面「最近幾次」的狀態；若是「失敗」，到 GitHub Actions 點進該次看錯誤")
+    return 1 if (failed or alert_late) else 0
 
 
 if __name__ == "__main__":
