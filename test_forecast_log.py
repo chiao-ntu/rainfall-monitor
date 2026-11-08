@@ -75,5 +75,29 @@ one = {'towns': [f't{i}' for i in range(N)],
        'issues': {'2026-09-28': {'2026-09-29': {'best': NE}}}}
 ok(F.forecast_consistency(one, '2026-09-29') == {}, "只有一報 → 回空")
 
+print("\n=== ⑦ 2026-11-08：日曆日原點必須是當日 00:00，不是 6 小時取整的 base_dt ===")
+#   陣列第 0 段＝今天 00:00。base_dt=18:00 時若拿它當原點，所有日期錯位 18 小時。
+import tempfile, json as _json
+from datetime import datetime as _dt
+_cwd = os.getcwd(); _tmp = tempfile.mkdtemp(); os.chdir(_tmp)
+try:
+    #  段 4~7（明天 00~24 時）各 1mm、其餘 0 → 明天日量應恰為 4
+    arr = [0.0] * 4 + [1.0] * 4 + [0.0] * 56
+    towns = [{'county': 'C', 'township': f'T{i}', 'qpf_best': list(arr),
+              'qpf_cwa_q': [None] * 4 + [1.0, 1.0, None, 1.0],      # 缺一段
+              'daily_rain': [0, 0]} for i in range(10)]
+    for _h in (0, 6, 12, 18):
+        if os.path.exists(F.FORECAST_LOG_FILE): os.remove(F.FORECAST_LOG_FILE)
+        F.update_forecast_log(towns, _dt(2026, 11, 8, _h), _dt(2026, 11, 8, _h, 30))
+        lg = _json.load(open(F.FORECAST_LOG_FILE, encoding='utf-8'))
+        v = ((lg['issues'].get('2026-11-08') or {}).get('2026-11-09') or {}).get('best')
+        ok(v is not None and abs(v[0] - 4.0) < 1e-9,
+           f"base_dt {_h:02d}:00 → 明天日量 {v[0] if v else None}（應 4.0）")
+        cw = ((lg['issues'].get('2026-11-08') or {}).get('2026-11-09') or {}).get('cwa')
+        ok(cw is None or all(x is None for x in cw),
+           f"base_dt {_h:02d}:00 → CWA 缺一段時不得把缺段當 0 加總（實得 {cw[:2] if cw else None}）")
+finally:
+    os.chdir(_cwd)
+
 print("\n全部通過" if not fails else f"\n失敗 {len(fails)} 項：{fails}")
 raise SystemExit(1 if fails else 0)

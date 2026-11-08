@@ -1,0 +1,221 @@
+{
+ "regions": {
+  "main": [
+   [
+    21.85,
+    119.3
+   ],
+   [
+    25.35,
+    122.1
+   ]
+  ],
+  "kinmen": [
+   [
+    24.36,
+    118.13
+   ],
+   [
+    24.54,
+    118.52
+   ]
+  ]
+ },
+ "layers": {
+  "flood": {
+   "T10": [
+    {
+     "region": "main",
+     "file": "flood_T10_main.png",
+     "cells": 544834
+    },
+    {
+     "region": "kinmen",
+     "file": "flood_T10_kinmen.png",
+     "cells": 8928
+    }
+   ],
+   "T15": [
+    {
+     "region": "main",
+     "file": "flood_T15_main.png",
+     "cells": 539617
+    },
+    {
+     "region": "kinmen",
+     "file": "flood_T15_kinmen.png",
+     "cells": 8820
+    }
+   ],
+   "T20": [
+    {
+     "region": "main",
+     "file": "flood_T20_main.png",
+     "cells": 542986
+    },
+    {
+     "region": "kinmen",
+     "file": "flood_T20_kinmen.png",
+     "cells": 9142
+    }
+   ],
+   "T40": [
+    {
+     "region": "main",
+     "file": "flood_T40_main.png",
+     "cells": 548310
+    },
+    {
+     "region": "kinmen",
+     "file": "flood_T40_kinmen.png",
+     "cells": 9142
+    }
+   ]
+  },
+  "slope": {
+   "T10": [
+    {
+     "region": "main",
+     "file": "slope_T10_main.png",
+     "cells": 3248956
+    }
+   ],
+   "T15": [
+    {
+     "region": "main",
+     "file": "slope_T15_main.png",
+     "cells": 3227960
+    }
+   ],
+   "T20": [
+    {
+     "region": "main",
+     "file": "slope_T20_main.png",
+     "cells": 3232987
+    }
+   ],
+   "T40": [
+    {
+     "region": "main",
+     "file": "slope_T40_main.png",
+     "cells": 3254903
+    }
+   ]
+  }
+ },
+ "counties": {
+  "flood/南投縣": {
+   "iou": 0.9737
+  },
+  "flood/嘉義縣市": {
+   "iou": 0.9444
+  },
+  "flood/基隆市": {
+   "iou": 0.9419
+  },
+  "flood/宜蘭縣": {
+   "iou": 0.9664
+  },
+  "flood/屏東縣": {
+   "iou": 0.9315
+  },
+  "flood/彰化縣": {
+   "iou": 0.9564
+  },
+  "flood/新北市": {
+   "iou": 0.9223
+  },
+  "flood/新竹縣市": {
+   "iou": 0.9652
+  },
+  "flood/桃園市": {
+   "iou": 0.9585
+  },
+  "flood/澎湖縣": {
+   "iou": 0.6674
+  },
+  "flood/臺中市": {
+   "iou": 0.9244
+  },
+  "flood/臺北市": {
+   "iou": 0.9447
+  },
+  "flood/臺南市": {
+   "iou": 0.9581
+  },
+  "flood/臺東縣": {
+   "iou": 0.9077
+  },
+  "flood/花蓮縣": {
+   "iou": 0.9481
+  },
+  "flood/苗栗縣": {
+   "iou": 0.9518
+  },
+  "flood/連江縣": {
+   "iou": 0.1169
+  },
+  "flood/金門縣": {
+   "iou": 0.8873
+  },
+  "flood/雲林縣": {
+   "iou": 0.9232
+  },
+  "flood/高雄市": {
+   "iou": 0.9137
+  },
+  "slope/南投縣": {
+   "iou": 0.9716
+  },
+  "slope/嘉義縣市": {
+   "iou": 0.9241
+  },
+  "slope/基隆市": {
+   "iou": 0.9393
+  },
+  "slope/宜蘭縣": {
+   "iou": 0.9592
+  },
+  "slope/屏東縣": {
+   "iou": 0.9099
+  },
+  "slope/彰化縣": {
+   "iou": 0.9298
+  },
+  "slope/新北市": {
+   "iou": 0.9274
+  },
+  "slope/新竹縣市": {
+   "iou": 0.96
+  },
+  "slope/桃園市": {
+   "iou": 0.9473
+  },
+  "slope/臺中市": {
+   "iou": 0.9061
+  },
+  "slope/臺北市": {
+   "iou": 0.9038
+  },
+  "slope/臺南市": {
+   "iou": 0.9355
+  },
+  "slope/臺東縣": {
+   "iou": 0.9124
+  },
+  "slope/花蓮縣": {
+   "iou": 0.9483
+  },
+  "slope/苗栗縣": {
+   "iou": 0.9558
+  },
+  "slope/雲林縣": {
+   "iou": 0.9158
+  },
+  "slope/高雄市": {
+   "iou": 0.9115
+  }
+ },
+ "source": "NCDR AR6 GWLs 災害風險圖（縣市版 JPG）危害度：淹水網格40m、坡地最小統計區",
+ "note": "僅供氣候變遷調適之相對風險辨識（NCDR 使用限制），不代表即時災害預測"
+}

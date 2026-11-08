@@ -31,6 +31,141 @@ except ImportError:
 GITLAB_KEYS = {'stages', 'pages', 'image', 'before_script', 'variables',
                'include', 'default', 'workflow'}
 
+# ★★★ 2026-10-22：cron 欄位檢查。
+#   事故：weather-bot 的 check_weather.yml 寫成 cron: "300 * * * *"，
+#   分鐘欄位只能 0–59。GitHub 因此**整個檔案解析失敗**，後果遠大於
+#   「排程不準」——連 workflow_dispatch（手動／API 觸發）都回 422，
+#   Render 每 10 分鐘打過來也全部失敗，bot 從那行被加進去就全停了。
+#   而本支腳本當時只驗結構與放錯位置，這個值通得過，所以沒擋住。
+#
+#   欄位範圍依 GitHub Actions 文件（POSIX cron，5 欄）。
+CRON_FIELDS = (
+    ('分鐘', 0, 59, None),
+    ('小時', 0, 23, None),
+    ('日', 1, 31, None),
+    ('月', 1, 12, ('JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+                   'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC')),
+    ('星期', 0, 6, ('SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT')),
+)
+
+
+def _cron_atom(atom, lo, hi, names):
+    """驗單一值（可為數字或三字母名稱）。回傳錯誤字串或 None。"""
+    a = atom.strip()
+    if not a:
+        return '有空值'
+    if names and a.upper() in names:
+        return None
+    if not a.lstrip('-').isdigit():
+        return f'「{a}」不是數字'
+    v = int(a)
+    if not (lo <= v <= hi):
+        return f'「{a}」超出範圍（應為 {lo}–{hi}）'
+    return None
+
+
+def check_cron(expr):
+    """驗 GitHub Actions 的 cron 字串。回傳 (ok, 說明)。"""
+    if not isinstance(expr, str):
+        return False, f'cron 不是字串（{type(expr).__name__}）'
+    e = expr.strip()
+    if e.startswith('@'):
+        #   GitHub Actions 不支援 @daily / @hourly 這類簡寫
+        return False, f'「{e}」GitHub Actions 不支援 @ 簡寫，須寫成 5 欄 cron'
+    parts = e.split()
+    if len(parts) != 5:
+        return False, (f'「{e}」有 {len(parts)} 欄，cron 必須正好 5 欄'
+                       '（分 時 日 月 星期）')
+    for part, (fname, lo, hi, names) in zip(parts, CRON_FIELDS):
+        body, _, step = part.partition('/')
+        if _ and (not step.isdigit() or int(step) < 1):
+            return False, f'{fname}欄「{part}」的間隔值不合法'
+        for rng in body.split(','):
+            if rng == '*':
+                continue
+            if '-' in rng.lstrip('-') or (rng.count('-') == 1
+                                          and not rng.startswith('-')):
+                a, _d, b = rng.partition('-')
+                for one in (a, b):
+                    err = _cron_atom(one, lo, hi, names)
+                    if err:
+                        return False, f'{fname}欄{err}'
+                continue
+            err = _cron_atom(rng, lo, hi, names)
+            if err:
+                return False, f'{fname}欄{err}'
+    #   GitHub 最短間隔 5 分鐘；語法合法但實際不會照跑，屬提醒不是錯誤
+    m = parts[0]
+    warn = ''
+    if m.startswith('*/') and m[2:].isdigit() and int(m[2:]) < 5:
+        warn = '（提醒：GitHub 排程最短間隔 5 分鐘，比這更密不會照跑）'
+    return True, 'OK' + warn
+
+
+def _crons_in(doc):
+    """取出 on.schedule 底下所有 cron 字串。"""
+    on = doc.get('on')
+    if on is None:
+        on = doc.get(True)        # 裸的 on: 被 YAML 1.1 解析成 True
+    if not isinstance(on, dict):
+        return []
+    sch = on.get('schedule')
+    if not isinstance(sch, list):
+        return []
+    return [item.get('cron') for item in sch
+            if isinstance(item, dict) and 'cron' in item]
+
+
+# ★★★ 2026-11-08：累積型檔案沒有 commit ＝ 每一輪都從空檔開始。
+#   事故（兩件同類）：
+#     ‧ forecast_log.json（fetch_rainfall.py 寫）不在 update_rainfall.yml 的 git add 清單
+#       → CWA 官方 QPF 一天都沒被校驗過（預報存檔永遠是空的）。
+#     ‧ etr2_history.json（fetch_qpesums_hourly.py 寫）不在 update_qpesums.yml 的清單
+#       → 官方 ETR2 逐段歷史每 10 分鐘歸零一次。
+#   先前 obs_history／model_skill 也出過一樣的事，靠人記不住，改成機器檢查：
+#   workflow 執行的 .py 裡，凡是「先讀回（os.path.exists(常數)）再寫出（open(常數,'w')）」
+#   的 *_FILE 常數，就是累積型，該 workflow 必須 git add 它。
+import re as _re
+
+
+def _accum_files(py_path):
+    try:
+        src = open(py_path, encoding='utf-8').read()
+    except Exception:
+        return {}
+    consts = dict(_re.findall(r'^([A-Z][A-Z0-9_]*FILE)\s*=\s*[\'"]([^\'"]+)[\'"]', src, _re.M))
+    out = {}
+    for c, fn in consts.items():
+        reads = _re.search(rf'os\.path\.exists\(\s*{c}\s*\)', src)
+        writes = _re.search(rf"open\(\s*{c}\s*,\s*['\"]w", src)
+        if reads and writes:
+            out[c] = fn
+    return out
+
+
+#   不必 commit 的例外（理由寫清楚，不可只為了讓檢查通過而加）
+PERSIST_EXEMPT = {
+    'data.json',            # 主輸出，另有專門的 git add（不是累積型，但每輪都會 add）
+    'cwa_qpf_source.json',  # 探測快取：沒有就重新掃描，不影響正確性
+}
+
+
+def check_persist(raw, wf_dir):
+    """回傳缺 commit 的說明清單（空＝通過）。只檢查本 workflow 會執行的 .py。"""
+    runs = set(_re.findall(r'python3?\s+([\w./-]+\.py)', raw))
+    added = set(_re.findall(r'git\s+add\s+(?:-[A-Za-z]+\s+)*([\w./-]+)', raw))
+    roots = [os.path.normpath(os.path.join(wf_dir, '..', '..')), wf_dir, os.getcwd()]
+    miss = []
+    for py in sorted(runs):
+        path = next((os.path.join(r, py) for r in roots if os.path.exists(os.path.join(r, py))), None)
+        if not path:
+            continue
+        for c, fn in sorted(_accum_files(path).items()):
+            if fn in PERSIST_EXEMPT or fn in added:
+                continue
+            miss.append(f'{py} 會累積寫入 {fn}（{c}），但本 workflow 沒有 git add → 每輪從空檔開始')
+    return miss
+
 
 def check_one(path):
     """回傳 (ok, 說明)。"""
@@ -62,9 +197,22 @@ def check_one(path):
         return False, '缺少 on:（觸發條件），workflow 永遠不會執行'
     if not isinstance(doc.get('jobs'), dict) or not doc['jobs']:
         return False, 'jobs: 是空的'
+    #  ★ cron 一壞，整個 workflow 解析失敗 —— 連手動觸發都會 422，
+    #    所以這裡視為不合格，不是警告。
+    for expr in _crons_in(doc):
+        ok, why = check_cron(expr)
+        if not ok:
+            return False, f'cron 不合法：{why}　→ 整個 workflow 會無法解析，' \
+                          '連 workflow_dispatch 都會回 422'
+    #  ★ 累積型檔案必須 commit（見 check_persist）
+    miss = check_persist(raw, os.path.dirname(os.path.abspath(path)))
+    if miss:
+        return False, '；'.join(miss)
     njobs = len(doc['jobs'])
     name = doc.get('name') or '(無 name)'
-    return True, f'OK　{name}　job {njobs} 個'
+    _c = _crons_in(doc)
+    _cn = f'　cron {len(_c)} 條' if _c else ''
+    return True, f'OK　{name}　job {njobs} 個{_cn}'
 
 
 def main():
