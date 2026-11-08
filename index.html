@@ -60,8 +60,8 @@ body.panel-full canvas{ max-width:1100px }
 .dd-h{color:#7ee8a8;font-weight:700;margin:4px 0 2px}
 .vill-lbl span{font-size:10px;color:#222;white-space:nowrap;text-shadow:0 0 2px #fff,0 0 2px #fff,0 0 1px #fff;
   transform:translate(-50%,-50%);display:inline-block}
-.tr-glyph span{font-size:14px;line-height:16px;display:block;text-align:center;
-  text-shadow:0 0 2px #fff,0 0 2px #fff}
+.tr-badge span{display:block;border-radius:50%;color:#fff;text-align:center;font-weight:700;
+  border:1.5px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.55),0 1px 3px rgba(0,0,0,.45);box-sizing:border-box}
 .b{padding:3px 9px;font-size:10px;border:1px solid #1e3a5a;background:#0d2035;color:#5a90b8;cursor:pointer;border-radius:3px;transition:all .12s;white-space:nowrap}
 .b:hover{background:#1a3a5a}
 .b.on{background:#14507a;border-color:#3a8acc;color:#6bc8e8;font-weight:700}
@@ -1398,7 +1398,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-11-08T13:30Z';
+const FORMOSA_BUILD = '2026-11-08T14:30Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -2855,7 +2855,7 @@ async function renderVillageLayer(){
 // ══════════════════════════════════════════════════════════
 const TRANS_ITEMS = [
   ['road',    '道路（國道／快速／主要／次要／集散）'],
-  ['rail',    '臺鐵（含林鐵、糖鐵等）'],
+  ['rail',    '臺鐵／阿里山林鐵'],
   ['hsr',     '高鐵'],
   ['mrt',     '捷運'],
   ['lrt',     '輕軌'],
@@ -2865,19 +2865,28 @@ const TRANS_ITEMS = [
   ['airport', '機場'],
   ['port',    '碼頭／漁港'],
 ];
+// ★ 2026-11-08 路線改用各營運機構官方路線色（顏色存在 transport.json 每條線的 c 欄，
+//   由 build_static_layers.py 依官方色表寫入；查無官方色者為中性灰，不自編）。
+//   線型只用來區分「種類」：鐵路＝色線＋白色間斷（傳統鐵路符號）、高鐵＝色線＋白色中線、
+//   捷運＝粗實線、輕軌＝細實線；捷運／輕軌加深色細外框，淺色線（環狀線黃、小碧潭線）在白底才看得到。
+const TR_NO_OFFICIAL = '#7a7a7a';
 const TRANS_STYLE = {
-  rail: {color:'#222', w:2.2, inner:'#fff', innerW:1, dash:'5,5'},
-  hsr:  {color:'#222', w:3.4, inner:'#f0f0f0', innerW:1.2},
-  mrt:  {color:'#4a4a4a', w:2, dash:'7,3'},
-  lrt:  {color:'#4a4a4a', w:1.6, dash:'2,3'},
+  rail: {w:2.6, inner:'#fff', innerW:1, dash:'5,5'},
+  hsr:  {w:3.6, inner:'#fff', innerW:1.2},
+  mrt:  {w:3.0, casing:'#2a2a2a', casingW:4.4},
+  lrt:  {w:2.0, casing:'#2a2a2a', casingW:3.2},
 };
+// ★ 點位：所有分項同一規則（使用者指定統一）——勾選即顯示，不設縮放門檻、介面不出現縮放級數；
+//   只依縮放調整符號大小，拉遠時縮小以免互相覆蓋。
+//   機場／碼頭改為實心色底白字圖示（先前透明底的 ✈ 太淺，在地圖上看不到）。
 const TRANS_PT = {
-  st_tra:  {fill:'#ffffff', stroke:'#222', r:4.5, minZ:9},
-  st_hsr:  {fill:'#222', stroke:'#fff', r:5.5, minZ:7},
-  st_mrt:  {fill:'#8a8a8a', stroke:'#222', r:3.5, minZ:11},
-  airport: {glyph:'✈', minZ:6},
-  port:    {glyph:'⚓', minZ:10},
+  st_tra:  {fill:'#ffffff', stroke:'#090980', r:4.5, w:2},
+  st_hsr:  {fill:'#C35617', stroke:'#ffffff', r:5.5, w:1.6},
+  st_mrt:  {r:4, w:1.4},                 // 填色＝所屬路線色；轉乘站白心粗框
+  airport: {glyph:'✈', bg:'#111111'},
+  port:    {glyph:'⚓', bg:'#0369a1'},
 };
+function _trScale(z){ return z <= 7 ? 0.7 : z <= 9 ? 0.85 : 1; }
 let _tr = {on:{}, data:null, line:null, pt:null, bounds:null};
 function openTransMenu(btn){
   _ddMenu('ddTrans', TRANS_ITEMS.map(([k, v])=>
@@ -2899,6 +2908,7 @@ async function _trSet(k, v){
   const any = _roadOn || Object.values(_tr.on).some(Boolean);
   const b = document.getElementById('bTrans'); if(b) b.classList.toggle('on', any);
 }
+function _trLineColor(f){ return f.c || TR_NO_OFFICIAL; }
 function renderTransLayer(){
   [_tr.line, _tr.pt].forEach(l=>{ if(l) try{ map.removeLayer(l); }catch(e){} });
   _tr.line = _tr.pt = null;
@@ -2908,36 +2918,71 @@ function renderTransLayer(){
   ['rail', 'lrt', 'mrt', 'hsr'].forEach(k=>{
     if(!_tr.on[k]) return;
     const st = TRANS_STYLE[k];
-    const ls = [];
-    (_tr.data[k] || []).forEach(f=>f.l.forEach(l=>ls.push(l.map(p=>[p[1], p[0]]))));
-    L.polyline(ls, {renderer:rend, interactive:false, color:st.color, weight:st.w,
-                    opacity:0.95, dashArray: st.inner ? null : st.dash}).addTo(_tr.line);
-    if(st.inner) L.polyline(ls, {renderer:rend, interactive:false, color:st.inner,
-                    weight:st.innerW, opacity:0.95, dashArray:st.dash || null}).addTo(_tr.line);
+    // 依顏色分組（同色一條 polyline，減少物件數）
+    const byC = new Map();
+    (_tr.data[k] || []).forEach(f=>{
+      const c = _trLineColor(f);
+      if(!byC.has(c)) byC.set(c, []);
+      f.l.forEach(l=>byC.get(c).push(l.map(p=>[p[1], p[0]])));
+    });
+    const opt = {renderer:rend, interactive:false, opacity:0.95};
+    if(st.casing){
+      const all = [].concat(...byC.values());
+      L.polyline(all, Object.assign({}, opt, {color:st.casing, weight:st.casingW})).addTo(_tr.line);
+    }
+    byC.forEach((ls, c)=>{
+      const unnamed = (c === TR_NO_OFFICIAL && (k === 'mrt' || k === 'lrt'));
+      L.polyline(ls, Object.assign({}, opt, {color:c, weight: unnamed ? st.w*0.6 : st.w})).addTo(_tr.line);
+      if(st.inner) L.polyline(ls, Object.assign({}, opt, {color:st.inner, weight:st.innerW,
+                                     dashArray:st.dash || null})).addTo(_tr.line);
+    });
   });
   _tr.line.addTo(map);
-  const z = map.getZoom(), vb = map.getBounds().pad(0.3);
+  const z = map.getZoom(), vb = map.getBounds().pad(0.3), sc = _trScale(z);
   _tr.bounds = vb;
   const prend = _ensurePtPane('transPtPane', 615);
+  const LC = _tr.data.line_color || {};
   _tr.pt = L.layerGroup();
   Object.keys(TRANS_PT).forEach(k=>{
-    if(!_tr.on[k] || z < TRANS_PT[k].minZ) return;
+    if(!_tr.on[k]) return;
     const st = TRANS_PT[k];
     (_tr.data[k] || []).forEach(f=>{
       const ll = L.latLng(f.c[1], f.c[0]);
       if(!vb.contains(ll)) return;
-      const tip = `<b>${f.n}</b>` + (f.a ? `<br>地址：${f.a}` : '') + (f.tel ? `<br>電話：${f.tel}` : '')
-        + (f.exits ? `<br>出入口 ${f.exits} 處` : '');
-      const m = st.glyph
-        ? L.marker(ll, {pane:'transPtPane', icon:L.divIcon({className:'tr-glyph',
-            html:`<span>${st.glyph}</span>`, iconSize:[16, 16], iconAnchor:[8, 8]})})
-        : L.circleMarker(ll, {pane:'transPtPane', renderer:prend, radius:st.r, weight:1.4,
-            color:st.stroke, fillColor:st.fill, fillOpacity:1});
+      const ln = f.ln || [];
+      const chips = ln.map(n=>`<span style="display:inline-block;width:10px;height:10px;border-radius:2px;`
+        + `background:${LC[n] || TR_NO_OFFICIAL};margin:0 3px -1px 0"></span>${n}`).join('　');
+      const tip = `<b>${f.n}</b>`
+        + (f.sys && f.sys.length ? `<br><span style="color:#8a9aaa">${f.sys.join('／')}</span>` : '')
+        + (chips ? `<br>${chips}` : '')
+        + (f.a ? `<br>地址：${f.a}` : '') + (f.tel ? `<br>電話：${f.tel}` : '')
+        + (f.exits ? `<br>站體／出入口點位 ${f.exits} 處` : '');
+      let m;
+      if(st.glyph){
+        const px = Math.round(18 * sc);
+        m = L.marker(ll, {pane:'transPtPane', icon:L.divIcon({className:'tr-badge',
+              html:`<span style="background:${st.bg};width:${px}px;height:${px}px;line-height:${px}px;`
+                 + `font-size:${Math.round(px*0.66)}px">${st.glyph}</span>`,
+              iconSize:[px, px], iconAnchor:[px/2, px/2]})});
+      }else if(k === 'st_mrt'){
+        const multi = ln.length > 1;
+        m = L.circleMarker(ll, {pane:'transPtPane', renderer:prend, radius:st.r*sc*(multi ? 1.2 : 1),
+              weight: multi ? 2 : st.w, color:'#222',
+              fillColor: multi ? '#ffffff' : (LC[ln[0]] || TR_NO_OFFICIAL), fillOpacity:1});
+      }else{
+        m = L.circleMarker(ll, {pane:'transPtPane', renderer:prend, radius:st.r*sc, weight:st.w,
+              color:st.stroke, fillColor:st.fill, fillOpacity:1});
+      }
       m.bindTooltip(tip, {direction:'top', opacity:0.95}).addTo(_tr.pt);
     });
   });
   _tr.pt.addTo(map);
   _renderOverlayLegend();
+}
+function _trChip(c, txt){
+  return `<span style="display:inline-flex;align-items:center;margin:0 8px 2px 0;white-space:nowrap">`
+    + `<span style="display:inline-block;width:14px;height:4px;background:${c};margin-right:4px;`
+    + `box-shadow:0 0 0 1px rgba(0,0,0,.35)"></span>${txt}</span>`;
 }
 function _transLegendHtml(){
   if(!_tr.data) return '';
@@ -2945,14 +2990,37 @@ function _transLegendHtml(){
   const name = Object.fromEntries(TRANS_ITEMS);
   ['rail', 'hsr', 'mrt', 'lrt'].forEach(k=>{
     if(!_tr.on[k]) return;
-    const st = TRANS_STYLE[k];
-    rows.push(`<div>${_ln(st.color, st.w, !!st.dash && !st.inner)}${name[k]}</div>`);
+    // 每條線一個色票（同名同色只列一次）；中性灰＝查無官方路線色
+    //   ★ 只列「目前畫面內看得到」的路線：全臺視野列全部，放大到臺北只剩臺北各線，
+    //     圖例不會蓋住大半張地圖。
+    const seen = new Map(), vb = map.getBounds();
+    (_tr.data[k] || []).forEach(f=>{
+      if(!f.l.some(l=>l.some(p=>vb.contains([p[1], p[0]])))) return;
+      const c = _trLineColor(f);
+      let n = f.n || '其他軌道（圖資未標路線名稱）';
+      if(k === 'rail') n = (c === TR_NO_OFFICIAL) ? '阿里山林鐵／未標名段（查無官方路線色）' : '臺鐵';
+      if(k === 'hsr') n = '高鐵';
+      if(k === 'lrt' && /^淡海輕軌/.test(n)) n = '淡海輕軌';
+      if(!seen.has(n)) seen.set(n, c);
+    });
+    if(!seen.size) return;
+    rows.push(`<div style="margin-top:2px"><b style="font-weight:600">${name[k]}</b><div style="max-width:360px">`
+      + [...seen].map(([n, c])=>_trChip(c, n)).join('') + '</div></div>');
   });
+  const ptLeg = {
+    st_tra:  _dot('#ffffff', '#090980'),
+    st_hsr:  _dot('#C35617', '#ffffff'),
+    st_mrt:  _dot('#E3002C', '#222') + _dot('#ffffff', '#222'),
+  };
   ['st_tra', 'st_hsr', 'st_mrt', 'airport', 'port'].forEach(k=>{
     if(!_tr.on[k]) return;
     const st = TRANS_PT[k];
-    rows.push(`<div>${st.glyph ? `<span style="margin-right:6px">${st.glyph}</span>` : _dot(st.fill, st.stroke)}`
-      + `${name[k]}${map.getZoom() < st.minZ ? `<span style="color:#8a9aaa">（放大到 ${st.minZ} 級顯示）</span>` : ''}</div>`);
+    const sym = st.glyph
+      ? `<span style="display:inline-block;width:14px;height:14px;line-height:14px;border-radius:50%;`
+        + `background:${st.bg};color:#fff;font-size:9px;text-align:center;margin-right:6px">${st.glyph}</span>`
+      : ptLeg[k];
+    rows.push(`<div>${sym}${name[k]}${k === 'st_mrt'
+      ? '<span style="color:#8a9aaa">（實心＝所屬路線色；白心＝轉乘站）</span>' : ''}</div>`);
   });
   return rows.length ? '<div style="font-weight:700;margin-bottom:3px">交通</div>' + rows.join('') : '';
 }
@@ -2995,13 +3063,14 @@ function renderFacLayer(){
     _fac.poly = L.polygon(rings, {renderer:rend, interactive:false, color:'#1c3f8c', weight:1.2,
                                   fillColor:'#7aa2f0', fillOpacity:0.25}).addTo(map);
   }
-  if(z >= SCHOOL_PT_ZOOM){
+  {
+    // ★ 與交通同一規則：勾選即顯示，不設縮放門檻；拉遠只縮小符號
     const prend = _ensurePtPane('facPtPane', 612);
     _fac.pt = L.layerGroup();
     _fac.school.feats.forEach(f=>{
       const ll = L.latLng(f.c[1], f.c[0]);
       if(!vb.contains(ll)) return;
-      L.circleMarker(ll, {pane:'facPtPane', renderer:prend, radius: z >= 14 ? 5 : 3.5, weight:1.2,
+      L.circleMarker(ll, {pane:'facPtPane', renderer:prend, radius: z >= 14 ? 5 : 3.5 * _trScale(z), weight:1.2,
         color:'#1c3f8c', fillColor:'#ffffff', fillOpacity:1})
         .bindTooltip(`<b>${f.n}</b><br><span style="color:#8a9aaa">學校</span>`, {direction:'top', opacity:0.95})
         .addTo(_fac.pt);
@@ -3014,8 +3083,8 @@ function _facLegendHtml(){
   if(!_fac.on.school || !_fac.school) return '';
   const z = map.getZoom();
   return '<div style="font-weight:700;margin-bottom:3px">重要公共設施</div>'
-    + `<div>${_dot('#ffffff', '#1c3f8c')}學校${z < SCHOOL_PT_ZOOM
-      ? `<span style="color:#8a9aaa">（放大到 ${SCHOOL_PT_ZOOM} 級顯示）</span>` : ''}</div>`;
+    + `<div>${_dot('#ffffff', '#1c3f8c')}學校${z >= SCHOOL_POLY_ZOOM
+      ? `<span style="color:#8a9aaa">（淺藍範圍＝校地）</span>` : ''}</div>`;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -3110,8 +3179,10 @@ function _bindNewLayerMoves(){
     clearTimeout(window._nlT);
     window._nlT = setTimeout(()=>{
       if(showTownName) renderVillageLayer();
-      if(_tr.data && Object.values(_tr.on).some(Boolean)
-         && !(_tr.bounds && _tr.bounds.contains(map.getBounds()))) renderTransLayer();
+      if(_tr.data && Object.values(_tr.on).some(Boolean)){
+        if(!(_tr.bounds && _tr.bounds.contains(map.getBounds()))) renderTransLayer();
+        else _renderOverlayLegend();     // 圖例只列畫面內路線 → 平移後也要更新
+      }
       if(_fac.on.school && _fac.school
          && !(_fac.bounds && _fac.bounds.contains(map.getBounds()))) renderFacLayer();
     }, 200);
@@ -11944,6 +12015,8 @@ async function tryLoadLive(){
     _cwaQpfActive = !!d.cwa_qpf_active;
     try{ _normalizeEtrPct(); }catch(e){ console.warn('etr2_pct 單位正規化失敗', e); }
     window._dataGenAt = d.generated_at || '';  // 供各面板快取鍵使用
+    _dataGenMs = _tpeMs(d.generated_at);
+    _cwaIssuedMs = _cwaIssuedFromData(d);
     // 颱風動態（W-C0034-005 軌跡）：無颱風時為空陣列
     window.TYPHOON_TRACK = d.typhoon_track || [];
     // 風力預測：wind_fcst＝368鄉鎮平均風（官方）、gust_fcst＝颱風期間各地區陣風（官方）
@@ -12331,6 +12404,7 @@ async function tryLoadLive(){
   }
   const baseTag = document.getElementById('base-tag');
   if(baseTag) baseTag.textContent = `更新時間：${fmtDT(BASE_TIME)}`;
+  try{ _renderBaseTag(); }catch(e){ console.warn('更新時間標示失敗', e); }
   buildPastBtns();
   buildFuture6hBtns();
   buildFuture1hBtns();
@@ -15914,6 +15988,101 @@ function _windRow(t){
 
 // 目前檢視模式的標頭：把該 mode 的主值放在鄉鎮名旁邊，
 //   其餘欄位仍完整顯示（雨量、ETR2、風險、風力、氣溫、浪高、潮汐…）。
+// ════════════════════════════════════════════════
+//  資料新鮮度（2026-11-08）
+//  根因：GitHub 排程（cron）在尖峰時段會被延後或略過，實測「每小時」排程
+//  實際 3.5～8.5 小時才跑一次，系統顯示的氣象署定量降水預報因此停在舊報。
+//  這裡不改資料，只把「用的是哪一報、是否已落後官方」明確標出，
+//  讓落後一眼可見，不會被誤認為官方圖資。
+// ════════════════════════════════════════════════
+const CWA_ROUTINE_SLOTS = [5, 11, 17, 23];   // 常態發布班次（TST）；加強作業另加報，無法預知，不納入判斷
+const CWA_SLOT_READY_MIN = 40;    // 班次後多久官方圖資應已上線（實測 Sent 約 xx:18）
+const CWA_LAG_GRACE_MIN = 90;     // 再給系統一輪（每小時 :25）+ 處理時間，逾時才判落後
+const DATA_STALE_MIN = 90;        // 主排程每小時一次，逾 90 分未更新即視為延誤
+let _cwaIssuedMs = null, _dataGenMs = null;
+function _tpeMs(s){
+  if(!s) return null;
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+  if(!m) return null;
+  return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4]-8, +m[5], +(m[6]||0));
+}
+function _tpeFmt(ms, withMin){
+  const d = new Date(ms + 8*3600e3);
+  return `${d.getUTCMonth()+1}/${d.getUTCDate()} ${String(d.getUTCHours()).padStart(2,'0')}`
+       + (withMin ? `:${String(d.getUTCMinutes()).padStart(2,'0')}` : '時');
+}
+function _cwaIssuedFromData(d){
+  if(d && d.cwa_qpf_issued) return _tpeMs(d.cwa_qpf_issued);
+  // 舊資料無此欄：由窗起點回推（start − 12h × order），取最早者
+  let best = null;
+  for(const w of (d && d.cwa_qpf_windows) || []){
+    const st = _tpeMs(w.issued || w.start);
+    if(st == null) continue;
+    const v = w.issued ? st : st - 12*3600e3*(+w.order || 0);
+    if(best == null || v < best) best = v;
+  }
+  return best;
+}
+// 依現在時刻推算「官方最新一報應已上線」的常態班次
+function _cwaExpectedSlotMs(nowMs){
+  const d = new Date(nowMs + 8*3600e3);
+  const day0 = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - 8*3600e3;
+  for(let k = 0; k <= 1; k++){
+    for(let i = CWA_ROUTINE_SLOTS.length - 1; i >= 0; i--){
+      const ms = day0 - k*86400e3 + CWA_ROUTINE_SLOTS[i]*3600e3;
+      if(ms + CWA_SLOT_READY_MIN*60e3 <= nowMs) return ms;
+    }
+  }
+  return null;
+}
+// 系統採用的報是否已落後官方：回傳 {expMs} 或 null
+function _cwaLag(nowMs){
+  nowMs = nowMs || Date.now();
+  if(_cwaIssuedMs == null) return null;
+  const exp = _cwaExpectedSlotMs(nowMs);
+  if(exp == null || exp <= _cwaIssuedMs) return null;
+  if(nowMs - exp < CWA_LAG_GRACE_MIN*60e3) return null;   // 尚在正常更新週期內
+  return {expMs: exp};
+}
+function _cwaIssueHtml(){
+  if(_cwaIssuedMs == null) return '';
+  const lag = _cwaLag();
+  return `<span style="color:#8a9aaa">｜${_tpeFmt(_cwaIssuedMs)}報</span>`
+    + (lag ? `<span style="color:#e8a860">｜官方已發布 ${_tpeFmt(lag.expMs)}報，系統尚未更新</span>` : '');
+}
+// 標頭「更新時間」：逾時改色並註明延誤時數；滑過列出各來源時間
+function _renderBaseTag(){
+  const el = document.getElementById('base-tag');
+  if(!el) return;
+  const now = Date.now();
+  // ★ 「更新時間」顯示實際產製時刻（generated_at）；base_time 是預報時段基準（6 小時對齊），
+  //   先前直接拿它當更新時間，15:15 產製的資料會顯示成「12時」，看不出其實已經舊了。
+  const hasBase = (typeof BASE_TIME !== 'undefined' && BASE_TIME && !isNaN(BASE_TIME));
+  const base = (_dataGenMs != null) ? `更新時間：${_tpeFmt(_dataGenMs, true)}`
+             : hasBase ? `更新時間：${fmtDT(BASE_TIME)}` : '更新時間：—';
+  const age = (_dataGenMs != null) ? (now - _dataGenMs) / 60e3 : null;
+  const stale = age != null && age > DATA_STALE_MIN;
+  const lag = _cwaLag(now);
+  el.textContent = base + (stale ? `（已 ${(age/60).toFixed(1)} 小時未更新）` : '');
+  el.style.color = (stale || lag) ? '#e8a860' : '';
+  el.style.borderColor = (stale || lag) ? '#8a6a3a' : '';
+  const lines = [];
+  if(_dataGenMs != null) lines.push(`系統資料產製：${_tpeFmt(_dataGenMs, true)}`);
+  if(hasBase) lines.push(`預報時段基準：${fmtDT(BASE_TIME)}`);
+  if(_cwaIssuedMs != null) lines.push(`氣象署定量降水預報：採用 ${_tpeFmt(_cwaIssuedMs)}報`);
+  else lines.push('氣象署定量降水預報：本次未取得');
+  if(lag) lines.push(`官方已發布 ${_tpeFmt(lag.expMs)}報，系統尚未更新`);
+  if(stale) lines.push(`主排程每小時一次，已逾 ${Math.round(age)} 分鐘未更新`);
+  el.title = lines.join('\n');
+  // CWA 模式按鈕的滑過說明一併帶出採用的報別
+  const iss = (_cwaIssuedMs != null) ? `（目前採用 ${_tpeFmt(_cwaIssuedMs)}報`
+            + (lag ? `；官方已有 ${_tpeFmt(lag.expMs)}報，系統尚未更新` : '') + '）' : '';
+  const bc = document.getElementById('mCwa'), bf = document.getElementById('mCwaf');
+  if(bc) bc.title = '只呈現氣象署官方定量降水預報；官方未發布的時段顯示無資料' + iss;
+  if(bf) bf.title = '官方有發布的時段用氣象署值，其餘時段以 FORMOSA 補齊' + iss;
+}
+setInterval(()=>{ try{ _renderBaseTag(); }catch(e){} }, 60e3);
+
 function _modeHeadRow(t){
   // ★ CWA 模式：標示本視窗有多少段是官方值、多少段以融合值補
   //   （官方只發布 48 小時內的常態 QPF，其餘段沒有官方數據）
@@ -15929,7 +16098,7 @@ function _modeHeadRow(t){
     if(nAll){
       const tail = (mode === 'rain') ? '' : `　${
         {etr:'ETR2', risk:'風險', warn:'警特報'}[mode] || ''}依此計算`;
-      const band = _cwaBandLabel(t);
+      const band = _cwaBandLabel(t) + _cwaIssueHtml();
       if(nOff === nAll)
         return `<span style="color:#8ad8a0;font-size:10px">　氣象署官方值${band}${tail}</span>`;
       if(nOff === 0)

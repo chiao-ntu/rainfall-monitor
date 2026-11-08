@@ -5826,6 +5826,22 @@ CWA_PNG_WINDOWS = []
 CWA_QPF_SLOTS = (2, 5, 8, 11, 14, 17, 20, 23)
 
 
+def cwa_issued_of(windows):
+    """由各窗（start, order）回推發布班次：issued 欄位優先，否則 start − 12h×order。
+    多張圖班次不一致時取最早者（保守：代表本次資料裡最舊的那一報）。"""
+    out = []
+    for w in windows or []:
+        try:
+            if w.get('issued'):
+                out.append(w['issued'])
+            elif w.get('start') and w.get('order') is not None:
+                st = datetime.strptime(w['start'][:19], '%Y-%m-%dT%H:%M:%S')
+                out.append((st - timedelta(hours=12 * int(w['order']))).strftime('%Y-%m-%dT%H:%M:%S'))
+        except Exception:
+            continue
+    return min(out) if out else None
+
+
 def cwa_issue_slot(sent):
     """官方 Sent → 發布班次（naive 臺灣時間，整點）。
 
@@ -6031,6 +6047,8 @@ def fetch_cwa_routine_qpf(now_tpe):
                         'start': _win_start.strftime('%Y-%m-%dT%H:%M:%S'),
                         'end': (_win_start + timedelta(hours=12)).strftime('%Y-%m-%dT%H:%M:%S'),
                         'seg': _wseg, 'order': _worder,
+                        # ★ 2026-11-08 發布班次（前端據此標示「第 HH 時報」，並偵測系統是否落後官方）
+                        'issued': _issue.strftime('%Y-%m-%dT%H:%M:%S'),
                     })
                 if segs:
                     for st, tv in segs.items():
@@ -7444,6 +7462,8 @@ def main():
             ('routine_png' if routine_is_png else 'routine') if routine_seg_map else None),
         'cwa_qpf_segs': sorted(routine_seg_map.keys()) if routine_seg_map else [],
         'cwa_qpf_windows': (routine_qpf.get('windows') if routine_qpf else []) or [],
+        # ★ 2026-11-08 本次採用的官方定量降水預報發布班次（無＝本次沒取得常態 QPF）
+        'cwa_qpf_issued': cwa_issued_of((routine_qpf.get('windows') if routine_qpf else []) or []),
         'official_warn': official_warn,  # 官方現行警特報（W-C0033-001，縣市級）
         'township_count':len(out_towns),
         'townships':out_towns,

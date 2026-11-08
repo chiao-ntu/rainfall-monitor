@@ -215,6 +215,41 @@ def check_one(path):
     return True, f'OK　{name}　job {njobs} 個{_cn}'
 
 
+def _on_of(doc):
+    on = doc.get('on', doc.get(True)) if isinstance(doc, dict) else None
+    if isinstance(on, str):
+        return {on: None}
+    if isinstance(on, list):
+        return {k: None for k in on}
+    return on if isinstance(on, dict) else {}
+
+
+# ★★★ 2026-11-08：跨檔檢查。
+#   事故一：publish_to_public.yml 的 workflow_run 填「資料更新」，實際名稱是
+#     「降雨監測主排程」→ 名稱不符 GitHub 不報錯，只是永遠不觸發。
+#   事故二：GitHub 排程在尖峰會被延後／略過（實測每小時排程 3.5～8.5 小時才跑一次），
+#     改由外部（Render Cron → trigger_formosa.py）以 workflow_dispatch 觸發；
+#     有 schedule 的 workflow 若少了 workflow_dispatch，外部觸發會回 422。
+def check_cross(docs):
+    """docs: {檔名: doc}。回傳問題清單（空＝通過）。"""
+    names = {d.get('name') for d in docs.values() if isinstance(d, dict) and d.get('name')}
+    issues = []
+    for fn, doc in sorted(docs.items()):
+        if not isinstance(doc, dict):
+            continue
+        on = _on_of(doc)
+        wr = on.get('workflow_run') if isinstance(on, dict) else None
+        if isinstance(wr, dict):
+            for w in wr.get('workflows') or []:
+                if w not in names:
+                    issues.append(f'{fn}：workflow_run 指向「{w}」，但沒有任何 workflow 叫這個名字'
+                                  f'（現有：{"、".join(sorted(names))}）→ 永遠不會觸發')
+        if 'schedule' in on and 'workflow_dispatch' not in on:
+            issues.append(f'{fn}：有 schedule 卻沒有 workflow_dispatch → 外部排程無法觸發，'
+                          '只能靠會被 GitHub 延後的 cron')
+    return issues
+
+
 def main():
     d = sys.argv[1] if len(sys.argv) > 1 else '.github/workflows'
     if not os.path.isdir(d):
@@ -231,6 +266,16 @@ def main():
         print(f'{"  " if ok else "!!"} {f:34s} {msg}')
         if not ok:
             bad += 1
+    docs = {}
+    for f in files:
+        try:
+            with open(os.path.join(d, f), encoding='utf-8') as fh:
+                docs[f] = yaml.safe_load(fh)
+        except Exception:
+            pass
+    for msg in check_cross(docs):
+        print(f'!! {msg}')
+        bad += 1
     print(f'\n共 {len(files)} 個檔，{bad} 個有問題')
     return 1 if bad else 0
 
