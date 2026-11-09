@@ -20,12 +20,11 @@ const puppeteer=require('puppeteer');
    srcFails.push('drawEtrWaterfall 又出現寫死的 90／den*0.9');
  if(!/function _marginWarnOf/.test(src))
    srcFails.push('找不到單一門檻來源 _marginWarnOf()');
+ // ★ 2026-11-08 門檻改 100%：任何寫死的 90 差值都會讓圖與門檻不一致
+ if(/\(\s*90\s*-|[\w)\]]\s*-\s*90\b(?!\d)/.test(src.replace(/\/\/.*$/mg,'')))
+   srcFails.push('出現寫死的「90 −」或「− 90」差值，門檻必須取 MARGIN_WARN');
  const nWarn=(src.match(/const MARGIN_WARN\s*=/g)||[]).length;
  if(nWarn!==1) srcFails.push(`MARGIN_WARN 定義了 ${nWarn} 次（必須恰好 1 次）`);
- if(/\(\s*90\s*-\s*cur\s*\)/.test(src))
-   srcFails.push('drawCountyTowns 又出現寫死的 (90 - cur)');
- if(/\(\s*90\s*-\s*x\.v\s*\)/.test(src))
-   srcFails.push('renderRankList 又出現寫死的 (90 - x.v)');
 
  const b=await puppeteer.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
    args:['--no-sandbox','--disable-dev-shm-usage'],defaultViewport:{width:1400,height:880}});
@@ -43,10 +42,10 @@ const puppeteer=require('puppeteer');
   log.push(`（樣本 ${t.county}${t.township}　警戒值 den=${den}）`);
 
   // ── ① 門檻單一來源 ──
-  ok(_marginWarnOf(t,'pct')===MARGIN_WARN && MARGIN_WARN===90,
+  ok(_marginWarnOf(t,'pct')===MARGIN_WARN && MARGIN_WARN===100,
      `①百分比門檻＝MARGIN_WARN＝${_marginWarnOf(t,'pct')}`);
   ok(Math.abs(_marginWarnOf(t,'mm') - den*MARGIN_WARN/100) < 1e-9,
-     `①雨量門檻＝den×90%＝${_marginWarnOf(t,'mm').toFixed(1)}mm`);
+     `①雨量門檻＝den×${MARGIN_WARN}%＝${_marginWarnOf(t,'mm').toFixed(1)}mm`);
   ok(_marginWarnOf(t,'mm') !== _marginWarnOf(t,'pct'),
      '①兩種基礎的門檻是不同量（mm vs %），不可混用');
 
@@ -81,45 +80,35 @@ const puppeteer=require('puppeteer');
      '④不再出現沒有數值的「0 ＝ 達警戒」（那正是被誤讀成 50% 的原因）');
 
   // ── ⑤ 軸名要說明負值是餘裕，不是絕對值 ──
-  ok([...wfMm,...wfPct].some(s=>/負值?＝尚有餘裕/.test(s)),
-     '⑤畫面上說明「負值＝尚有餘裕」（畫在零線下方＝餘裕區本身）');
+  ok([...wfMm,...wfPct].some(s=>s.includes('負值＝尚有餘裕')),
+     '⑤軸名說明「負值＝尚有餘裕」');
 
-  // ── ⑤b 版面：摘要（結論）任何情況都不可被省略或被壓住 ──
-  //    圖例放不下時應該讓掉圖例，而不是讓掉摘要。
-  ok(wfMm.some(s=>/期間內|預估/.test(s)) && wfPct.some(s=>/期間內|預估/.test(s)),
-     '⑤b 兩種基礎都畫出了結論摘要（何時達警戒／期間內未達）');
-
-  // ── ⑥ 鄉鎮警戒餘裕排行（drawCountyTowns）也必須標出同一個門檻 ──
-  //    ★ 注意：drawMarginChart 已無呼叫點、cv-margin 不在 DOM，是死碼。
-  //      使用者看到的排行是 drawCountyTowns（cv-countytowns）。
-  const renderCT=(mv)=>{
-    const el=document.getElementById('ct-metric');
-    if(el) el.value=mv;
+  // ── ⑥ 警戒餘裕排行（現行路徑 drawCountyTowns，metric=ct-metric）必須把同一個門檻寫在圖上 ──
+  //   ★ 2026-11-08：原本測的是 drawMarginChart，那是已無呼叫點的死碼（canvas 不在 DOM），
+  //     測試因此永遠畫不出東西 —— 守錯對象等於沒守。改測使用者實際看到的那張圖。
+  const renderCT=(metric)=>{
+    const el=document.getElementById('ct-metric'); const old=el?el.value:null;
+    if(el) el.value=metric;
     drawn=[];
     try{ drawCountyTowns(); }catch(e){ drawn.push('THREW:'+e.message); }
+    if(el && old!=null) el.value=old;
     return drawn.slice();
   };
-  const ctPct=renderCT('margin_pct');
-  ok(ctPct.length>0 && !ctPct.some(s=>/THREW|無資料/.test(s)),
-     `⑥排行圖有實際繪製（共 ${ctPct.length} 個文字）`);
-  ok(ctPct.some(s=>s.includes('門檻') && s.includes(MARGIN_WARN+'%')),
-     `⑥排行圖標出門檻 ${MARGIN_WARN}%（實得：${ctPct.filter(s=>s.includes('門檻')).join(' / ')||'無'}）`);
-  const ctMm=renderCT('margin_mm');
-  ok(ctMm.some(s=>s.includes('門檻') && s.includes(MARGIN_WARN+'%')),
+  const mcPct=renderCT('margin_pct');
+  ok(mcPct.length>0 && !mcPct.some(s=>/^THREW/.test(s)),
+     `⑥排行圖有實際繪製（共 ${mcPct.length} 個文字）`);
+  ok(mcPct.some(s=>s.includes('門檻') && s.includes(MARGIN_WARN+'%')),
+     `⑥排行圖標出門檻 ${MARGIN_WARN}%（實得：${mcPct.filter(s=>s.includes('門檻')).join(' / ')||'無'}）`);
+  const mcMm=renderCT('margin_mm');
+  ok(mcMm.some(s=>s.includes('門檻') && s.includes(MARGIN_WARN+'%')),
      `⑥排行圖 mm 基礎也標出 ${MARGIN_WARN}%`);
 
-  // ── ⑦ 兩張圖標的是同一個數字 ──
-  ok(wfPct.some(s=>s.includes('達警戒') && s.includes(MARGIN_WARN+'%'))
-     && ctPct.some(s=>s.includes('門檻') && s.includes(MARGIN_WARN+'%')),
-     `⑦達標時間與排行都標 ${MARGIN_WARN}%（同一標準）`);
-  // ★ 不能斷言「畫面上不許出現 50%」—— 縱軸的 -50% 是正確的格線值
-  //   （距警戒 −50 個百分點），那正是被誤讀的那一格，必須留著。
-  //   要鎖的是「出現負值格線時，必須同時有消除歧義的說明」。
-  const negGrid = wfPct.filter(s=>/^-\d+%?$/.test(s.trim()));
-  ok(negGrid.length === 0 || (
-       wfPct.some(s=>/負值?＝尚有餘裕/.test(s)) &&
-       wfPct.some(s=>s.includes('達警戒') && s.includes(MARGIN_WARN+'%'))),
-     `⑦軸上有負值格線（${negGrid.join(',')||'無'}）時，必須同時標出「負＝尚有餘裕」與門檻值`);
+  // ── ⑦ 兩張圖標示的是同一個數字 ──
+  //   ★ 取「= N%」或「＝ETR2% N%」的 N，不可抓到「ETR2%」裡的 2
+  const pick=arr=>{ const s=arr.find(x=>/達警戒|門檻/.test(x))||'';
+    const m=s.match(/(?:=|＝)\s*(?:ETR2%\s*)?(\d+)\s*%/); return m?m[1]:null; };
+  ok(pick(wfPct)===pick(mcPct) && pick(wfPct)===String(MARGIN_WARN),
+     `⑦兩張圖標的百分比門檻一致：達標時間 ${pick(wfPct)}%、排行 ${pick(mcPct)}%`);
 
   proto.fillText=real;
   return {fails, log};

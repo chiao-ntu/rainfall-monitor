@@ -5,7 +5,7 @@
 //   ‧ 不拖慢鄉鎮著色
 const puppeteer=require('puppeteer');
 (async()=>{
- const b=await puppeteer.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
+ const b=await puppeteer.launch({executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
    args:['--no-sandbox','--disable-dev-shm-usage'],defaultViewport:{width:1400,height:900}});
  const pg=await b.newPage(); const errs=[], req=[];
  pg.on('pageerror',e=>errs.push(String(e).slice(0,200)));
@@ -96,7 +96,29 @@ const puppeteer=require('puppeteer');
   map.setView([25.05, 121.52], 13, {animate:false}); await wait(400); renderTransLayer();
   const tipTxt=_tr.pt.getLayers().map(m=>m.getTooltip()&&m.getTooltip()._content||'').join('|');
   ok(/板南線/.test(tipTxt)&&/淡水信義線/.test(tipTxt), '③車站 tooltip 列出所屬路線');
-  ok(/出入口（\d+ 處）/.test(tipTxt) && /<span>\w+ (號)?出口<\/span><span>[^<]*[路街口站]/.test(tipTxt), '③捷運站 tooltip 列出各出入口位置');
+  ok(/出入口（\d+ 處(，無障礙 \d+ 處)?）/.test(tipTxt) && /<span>\w+ (號)?出口<\/span><span>[^<]*[路街口站]/.test(tipTxt), '③捷運站 tooltip 列出各出入口位置');
+  // ── 臺北捷運官方出入口（2026-11-09 併入：資料服務／出入口座標／無障礙電梯坡道／電梯位置）──
+  const LC0=_tr.data.line_color||{};
+  const S=n=>stn.find(s=>s.n===n);
+  const dp=S('頂埔站'), tdp=_trPointTip('st_mrt',dp,LC0);
+  ok(dp.exo && dp.exo.length===4 && /1 號出口<\/span><span>中央路4段約100號旁/.test(tdp),
+     '③頂埔站：官方出口名稱＋位置說明');
+  ok(/出入口（4 處，無障礙 3 處）/.test(tdp) && /class="tg ok">無障礙/.test(tdp) && /class="tg">電梯/.test(tdp) && /class="tg">電扶梯/.test(tdp),
+     '③頂埔站：無障礙／電梯／電扶梯標示');
+  ok(/出入口資料<\/?[^>]*>?[^<]*臺北捷運公司 2026\/09\/02|出入口資料：臺北捷運公司 2026\/09\/02/.test(tdp), '③出入口資料註明來源與日期');
+  const tm=_trPointTip('st_mrt',S('臺北車站'),LC0);
+  ok(/M1 出口/.test(tm) && /M8 出口/.test(tm) && /無障礙電梯位置/.test(tm) && /1號電梯/.test(tm), '③臺北車站 M1～M8 與無障礙電梯位置');
+  const md=_trPointTip('st_mrt',S('明德站'),LC0);
+  ok(/<span>出入口<\/span><span>明德路95號/.test(md) && /未提供位置說明/.test(md) && /class="tg">坡道/.test(md),
+     '③明德站：資料服務單一出口與座標資料 1～3 號出口並列，不互相推論');
+  ok(/新北市中和區中山路二段/.test(_trPointTip('st_mrt',S('中和站'),LC0).replace(/<[^>]+>/g,'')) || /中山路二段/.test(_trPointTip('st_mrt',S('中和站'),LC0)),
+     '③環狀線（無資料服務）沿用國土測繪出口位置，並補無障礙註記');
+  const ks=stn.find(s=>(s.sys||[]).includes('高雄捷運') && s.ex && s.ex.length);
+  ok(ks && !ks.exo && /出入口（\d+ 處）/.test(_trPointTip('st_mrt',ks,LC0)), `③非臺北捷運站維持原出口呈現（${ks&&ks.n}）`);
+  ok(stn.filter(s=>(s.sys||[]).some(x=>/臺北捷運|新北捷運/.test(x)) && !/貓空纜車/.test(s.n)).every(s=>s.exo && s.exo.length),
+     '③臺北／新北捷運各站（纜車除外）都有官方出口資料');
+  const fake=Object.assign({},dp,{exo:[{i:'1',l:'<img src=x onerror=alert(1)>'}]});
+  ok(!/<img/.test(_trPointTip('st_mrt',fake,LC0)), '③出口文字經過跳脫（不注入 HTML）');
   ok(/站碼/.test(tipTxt) && /站址/.test(tipTxt), '③捷運站 tooltip 列出站碼、站址');
   ok(/路線<\/span>　縱貫線/.test(tipTxt) && /電話/.test(tipTxt), '③臺鐵站 tooltip 列出路線與電話');
   ['rail','hsr','st_hsr','airport','st_tra','st_mrt','port','mrt'].forEach(k=>_tr.on[k]=false); renderTransLayer();
@@ -117,7 +139,57 @@ const puppeteer=require('puppeteer');
   const multi=(_fac.school.feats||_fac.school).find(f=>f.np>1);
   ok(multi && multi.tot>=multi.ha, '④同校多筆範圍有筆數與合計面積');
   ok(_fac.school.feats.every(f=>!/[校學部院]\d+$/.test(f.n)), '④校名不帶圖資流水號');
+  const sch=(_fac.school.feats||_fac.school);
+  const rost=sch.filter(f=>f.code&&f.a&&f.pub);
+  ok(rost.length>3500, `④學校併入教育部名錄（${rost.length} 所有公私立、地址）`);
+  const jg=sch.find(f=>f.n==='臺北市立建國高級中學');
+  ok(jg && /臺北市/.test(jg.a) && /^<div[^>]*>市立建國中學<\/div>/.test(_facTip('school',jg)) && /全銜/.test(_facTip('school',jg)), '④學校 tooltip 標題用名錄校名、另列全銜與地址');
   await _facSet('school', false);
+  // ── 2026-11-09 災害應變中心、消防單位、露營場 ──
+  map.setView(TW_HOME.center, TW_HOME.zoom, {animate:false}); await wait(400);
+  for(const k of ['eoc','fire','camp']) await _facSet(k, true);
+  ok(_fac.data && _fac.data.eoc.length>=22 && _fac.data.fire.length>700 && _fac.data.camp.length>1500,
+     `④設施筆數：應變中心 ${_fac.data.eoc.length}、消防 ${_fac.data.fire.length}、露營場 ${_fac.data.camp.length}`);
+  ok(_fac.pt.getLayers().length >= _fac.data.eoc.length+_fac.data.fire.length+_fac.data.camp.length-5, '④全臺視野勾選即全部顯示');
+  const leg2=document.getElementById('overlay-legend').innerHTML;
+  ok(/災害應變中心/.test(leg2)&&/消防單位/.test(leg2)&&/露營場/.test(leg2), '④圖例列出三類');
+  const camp=_fac.data.camp.find(f=>!f.legal&&f.vio);
+  ok(camp && /違反相關法規/.test(_facTip('camp',camp)) && /原住民族地區/.test(_facTip('camp',camp)), '④露營場 tooltip 列出法規與原民區');
+  const allIn=_fac.data.fire.every(f=>f.c[0]>118&&f.c[0]<122.5&&f.c[1]>21.5&&f.c[1]<26.5&&f.tw);
+  ok(allIn, '④消防單位座標皆經縣市核對（無 0 座標）');
+  for(const k of ['eoc','fire','camp']) await _facSet(k, false);
+  ok(!_fac.pt || _fac.pt.getLayers().length===0, '④全部關閉後清空');
+
+  // ── 2026-11-09（二）雨量測站、避難收容所併入重要公共設施；地下水／地層下陷監測 ──
+  ok(!document.querySelector('button#bStnLayer') && !document.querySelector('button#bShelter'),
+     '④雨量測站、避難收容所不再另開按鈕');
+  openFacMenu(document.getElementById('bFac')); await wait(800);
+  const mh=document.getElementById('ddFac').innerHTML;
+  ok(/雨量測站/.test(mh) && /避難收容所/.test(mh) && /地下水觀測井/.test(mh) && /深層水準樁/.test(mh),
+     '④選單列出雨量測站、避難收容所與水利署監測點');
+  ok(['police','hosp','siren'].every(k=>_facHas(k) === !!(_fac.data[k]&&_fac.data[k].length)),
+     '④沒有資料的類別（警察、醫院、海嘯警報臺）不出現空選項');
+  _ddToggle('ddFac', document.getElementById('bFac'));
+  await _facSet('shelter', true); await wait(1500);
+  ok(_shelterOn && !!_shelterLayer, '④從選單開啟避難收容所');
+  ok(document.getElementById('bFac').classList.contains('on'), '④開啟收容所時「重要公共設施」按鈕亮起');
+  const shTips=_shelterLayer.getLayers().map(m=>m.getTooltip()._content).join('|');
+  ok(!/管理人/.test(shTips) && !(_shelterData.features||[]).some(f=>'mgr' in f.properties || 'tel' in f.properties),
+     '④收容所不含管理人姓名、電話（圖資與 tooltip 都沒有）');
+  await _facSet('shelter', false);
+  ok(!_shelterOn && !_shelterLayer, '④從選單關閉避難收容所');
+  await _facSet('rainstn', true); await wait(300);
+  ok(_stnLayerOn, '④從選單開啟雨量測站'); await _facSet('rainstn', false);
+  ok(!_stnLayerOn && !document.getElementById('bFac').classList.contains('on'), '④全部關閉後按鈕熄滅');
+  for(const k of ['gw','lsw','lsst','bm']) await _facSet(k, true);
+  ok(_fac.data.gw.length>900 && _fac.data.lsw.length>50 && _fac.data.bm.length===9,
+     `④水利署監測點：觀測井 ${_fac.data.gw.length}、下陷監測井 ${_fac.data.lsw.length}、監測站 ${_fac.data.lsst.length}、水準樁 ${_fac.data.bm.length}`);
+  const km=_fac.data.gw.filter(f=>/^金門縣/.test(f.tw)), ph=_fac.data.gw.filter(f=>/^澎湖縣/.test(f.tw));
+  ok(km.length>=8 && km.every(f=>f.c[0]<118.6) && ph.length>=5 && ph.every(f=>f.c[0]>119.3&&f.c[0]<119.8),
+     `④離島分帶正確：金門 ${km.length} 口在東經 118 度、澎湖 ${ph.length} 口在 119.5 度`);
+  const g0=_fac.data.gw.find(f=>f.dep);
+  ok(/井深<\/span>　[\d.]+ 公尺/.test(_facTip('gw',g0)) && /經濟部水利署/.test(_facTip('gw',g0)), '④觀測井 tooltip 列出井深與資料來源');
+  for(const k of ['gw','lsw','lsst','bm']) await _facSet(k, false);
   map.setView([25.03, 121.52], 14, {animate:false}); await wait(400);
 
   // ── 村里界（跟行政區名綁定）──
@@ -129,6 +201,22 @@ const puppeteer=require('puppeteer');
   map.setZoom(10, {animate:false}); await wait(800);
   ok(!_vill.layer, '⑤縮小到 12 級以下不畫村里');
   toggleTownNameLayer(); await wait(300);
+
+  // ── 衛星雲圖：氣象廳時間清單取不到時不得無限重抓（11/9 查出每秒數百次請求）──
+  {
+    const _f=window.fetch, _tg=toggleHimawari; let nList=0, nToggle=0;
+    window.fetch=(u,...a)=>{ if(/targetTimes_fd\.json/.test(String(u))){ nList++; return Promise.reject(new TypeError('blocked')); } return _f(u,...a); };
+    toggleHimawari=function(){ nToggle++; return _tg.apply(this,arguments); };
+    try{
+      if(_himaOn) _tg();
+      _himaTimes=null; _himaTimesTriedAt=-Infinity;
+      toggleHimawari(); await wait(2500);
+      ok(_himaOn && nList===1 && nToggle===1,
+         `⑦氣象廳清單取不到：只試 1 次、不重建圖層（清單請求 ${nList} 次、重建 ${nToggle} 次）`);
+      ok(!!_himaLayer && /\/\d{14}\/fd\//.test(_himaLayer._url), '⑦取不到清單時仍以推算時刻顯示雲圖');
+      _tg();
+    } finally { window.fetch=_f; toggleHimawari=_tg; }
+  }
 
   // ── 各國颱風路徑 ──
   await _mtyLoad();

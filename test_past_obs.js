@@ -88,9 +88,12 @@ if(_EXEC) _LAUNCH.executablePath=_EXEC;
   //    ★ 必須固定時鐘：錨點綁資料時刻後，落在資料時刻「之後」的小時本來就
   //      該走預測軌而有值。這裡要測的是錨點「之前」且無歷史的小時。
   (function(){
-    const _bt=BASE_TIME, _realNow=Date.now;
+    // ★ 錨點優先取 ETR2_NOW_TIME（etr2_now.json 的時刻），其次才是 BASE_TIME。
+    //   兩個都要固定，否則錨點會跟著測試頁載入的 etr2_now.json 日期走（11/9 查出）。
+    const _bt=BASE_TIME, _realNow=Date.now, _ent=window.ETR2_NOW_TIME;
     try{
       const d=new Date(); d.setHours(21,0,0,0); BASE_TIME=d;        // 資料＝段3
+      window.ETR2_NOW_TIME=d.toISOString();
       const n=new Date(); n.setHours(21,30,0,0); Date.now=()=>n.getTime();
       const t3c=mk(9);                                              // 無 etr2_hist
       const hs=[-30,-24,-12,-6];                                    // 全在錨點之前
@@ -108,7 +111,20 @@ if(_EXEC) _LAUNCH.executablePath=_EXEC;
       const t3c2=Object.assign({},t3c,{etr2_hist:H3c, etr2_hist_base:32});
       ok(_etrAtHour(t3c2,0,'qpf_best')!=null,
          '③c 補上前一段歷史後，錨點當下即有值');
-    } finally { BASE_TIME=_bt; Date.now=_realNow; }
+    } finally { BASE_TIME=_bt; Date.now=_realNow; window.ETR2_NOW_TIME=_ent; }
+  })();
+
+  // ③e 錨點時刻來源：ETR2_NOW_TIME 優先於 BASE_TIME
+  (function(){
+    const _bt=BASE_TIME, _realNow=Date.now, _ent=window.ETR2_NOW_TIME;
+    try{
+      const d=new Date(); d.setHours(9,30,0,0); BASE_TIME=d;          // 資料＝段1
+      const e=new Date(); e.setHours(15,10,0,0); window.ETR2_NOW_TIME=e.toISOString();  // 現值＝段2
+      const n=new Date(); n.setHours(21,0,0,0); Date.now=()=>n.getTime();
+      ok(_etrAnchorSeg()===2, `③e 錨點跟 etr2_now 時刻（段2），不是 data.json 時刻（實得段 ${_etrAnchorSeg()}）`);
+      window.ETR2_NOW_TIME='';
+      ok(_etrAnchorSeg()===1, `③e 沒有 etr2_now 時退回 data.json 時刻（段1；實得段 ${_etrAnchorSeg()}）`);
+    } finally { BASE_TIME=_bt; Date.now=_realNow; window.ETR2_NOW_TIME=_ent; }
   })();
 
   // ③d ETR2% 一律整數
@@ -134,9 +150,10 @@ if(_EXEC) _LAUNCH.executablePath=_EXEC;
   //    錨點必須綁資料時刻（BASE_TIME），那幾段相對於資料是「未來」，
   //    走預測折減軌道。
   (function(){
-    const _bt=BASE_TIME, _realNow=Date.now;
+    const _bt=BASE_TIME, _realNow=Date.now, _ent=window.ETR2_NOW_TIME;
     try{
       const d=new Date(); d.setHours(9,30,0,0); BASE_TIME=d;      // 資料＝段1
+      window.ETR2_NOW_TIME=d.toISOString();
       const n=new Date(); n.setHours(21,17,0,0); Date.now=()=>n.getTime();  // 現在＝段3
       ok(_nowSeg()===3 && _etrAnchorSeg()===1,
          `④b 觀看者段 ${_nowSeg()}／資料段 ${_etrAnchorSeg()}（兩者確實不同）`);
@@ -156,7 +173,7 @@ if(_EXEC) _LAUNCH.executablePath=_EXEC;
       const s2=calcEtr2AtSeg(t4b,2,'qpf_best'), s3=calcEtr2AtSeg(t4b,3,'qpf_best');
       ok(s2!=null && s3!=null && s2<200 && s3<s2,
          `④b 資料時刻之後的段走預測折減（${s2.toFixed(1)} → ${s3.toFixed(1)}，遞減）`);
-    } finally { BASE_TIME=_bt; Date.now=_realNow; }
+    } finally { BASE_TIME=_bt; Date.now=_realNow; window.ETR2_NOW_TIME=_ent; }
   })();
 
   // ⑤ 有官方歷史 → 用當時的官方值，不重建

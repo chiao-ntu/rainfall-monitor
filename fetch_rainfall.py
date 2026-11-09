@@ -5739,6 +5739,7 @@ def fetch_typhoon_qpf():
 #   A. fileapi 指標檔 F-C0035-015/017/023/024（JSON 內含 uri → 下載 zip/csv）
 #   B. fileapi ZIP 掃描 F-C0035-013..030（找 zip 內 *QPF6h*.csv）
 CWA_QPF_SRC_FILE = "cwa_qpf_source.json"
+CWA_QPF_PREV_FILE = "cwa_qpf_prev.json"   # 上一輪採用的定量降水窗（補新報有效起點前的空窗）
 CWA_QPF_SRC_DIR = "cwa_qpf_src"      # 判讀所用官方原圖（w0..w3.png＋index.json，每輪覆蓋）
 _CWA_SRC_INDEX = []
 QPF_GRID = dict(lon0=117.56, lat0=20.8, dlon=0.0245, dlat=0.0226, nx=260, ny=260)
@@ -5828,11 +5829,31 @@ CWA_PNG_WINDOWS = []
 CWA_QPF_SLOTS = (2, 5, 8, 11, 14, 17, 20, 23)
 
 
+def cwa_gap_windows(prev, cur_issued, first_start, now_h):
+    """上一輪存下的窗（cwa_qpf_prev.json）中，可用來補「新報第一張起點之前、尚未過去」小時者。
+    只取比本次更早的報、起點早於新報第一張、結束晚於現在的窗；實際哪幾小時採用由
+    cwa_split_windows 決定（新報先佔、舊報只補空著的小時）。"""
+    out = []
+    for pw in prev or []:
+        try:
+            ps = datetime.strptime(pw['start'], '%Y-%m-%dT%H:%M:%S')
+            pe = datetime.strptime(pw['end'], '%Y-%m-%dT%H:%M:%S')
+            pi = datetime.strptime(pw['issued'], '%Y-%m-%dT%H:%M:%S')
+        except Exception:
+            continue
+        if pi < cur_issued and ps < first_start and pe > now_h:
+            out.append({'start': ps, 'end': pe, 'vals': pw.get('vals') or {},
+                        'q12': pw.get('q12') or {}, 'issued': pi, 'gap_fill': True})
+    return out
+
+
 def cwa_issued_of(windows):
     """由各窗（start, order）回推發布班次：issued 欄位優先，否則 start − 12h×order。
     多張圖班次不一致時取最早者（保守：代表本次資料裡最舊的那一報）。"""
     out = []
     for w in windows or []:
+        if w.get('gap_fill'):          # 補空窗用的上一報，不代表本次採用的報
+            continue
         try:
             if w.get('issued'):
                 out.append(w['issued'])
@@ -5842,6 +5863,9 @@ def cwa_issued_of(windows):
         except Exception:
             continue
     return min(out) if out else None
+
+
+CWA_VALID_OFFSET_H = 3   # 有效時間起點＝發布班次＋3h（05:30 報 → 08:00 起；官方圖標題實測 2026-11-09）
 
 
 def cwa_issue_slot(sent):
@@ -6037,8 +6061,24 @@ def fetch_cwa_routine_qpf(now_tpe):
                         for _hh in (5, 11, 17, 23):
                             _cands.append(_d.replace(hour=_hh))
                     _issue = max([c for c in _cands if c <= now_tpe.replace(tzinfo=None)], default=None)
-                # 該圖真實起訖（發布 + order*12h ~ +12h）
-                _win_start = _issue + timedelta(hours=12*_worder) if (_issue and _worder is not None) else None
+                # 該圖真實起訖
+                # ★★ 2026-11-09 根因修正：有效時間不是從發布班次起算。官方圖標題：
+                #   「發布 05:30／有效 08:00~20:00、20:00~08:00、08:00~20:00、20:00~08:00」
+                #   → 起點＝班次 + 3 小時 + 12h×序。原本用「班次 + 12h×序」，整組時段早了 3 小時。
+                #   以標題文字為準（OCR）；讀不到或不合理才用規則，兩者不一致時記錄並採標題。
+                _win_start = (_issue + timedelta(hours=CWA_VALID_OFFSET_H + 12*_worder)
+                              if (_issue and _worder is not None) else None)
+                _tt = cwa_png_title_times(r.content) if _worder is not None else None
+                _time_src = 'rule'
+                if _tt:
+                    _time_src = 'title'
+                    _iss_slot = _tt['issued'].replace(minute=0)
+                    if _win_start is not None and (_tt['start'] != _win_start or _iss_slot != _issue):
+                        print(f"    ⚠ {did} 標題時間（發布 {_tt['issued']:%m/%d %H:%M}、有效 {_tt['start']:%m/%d %H:%M}起）"
+                              f"與規則推算（{_issue:%m/%d %H}時、{_win_start:%m/%d %H:%M}起）不同 → 採標題")
+                    _issue, _win_start = _iss_slot, _tt['start']
+                print(f"    {did} 有效時間 {_win_start:%m/%d %H:%M} 起 12 小時（{'標題' if _time_src == 'title' else '規則推算'}）"
+                      if _win_start is not None else f"    {did} 無法判定有效時間")
                 # 轉段索引（今天00:00起算、吸附6h邊界）供內部陣列定位
                 _wseg = None
                 if _win_start is not None:
@@ -6053,6 +6093,7 @@ def fetch_cwa_routine_qpf(now_tpe):
                     CWA_PNG_WINDOWS.append({'start': _win_start,
                                             'end': _win_start + timedelta(hours=12),
                                             'vals': next(iter(segs.values())),
+                                            'q12': dict(QPF_LAST_Q12),
                                             'issued': _issue})
                     _cwa_windows.append({
                         'start': _win_start.strftime('%Y-%m-%dT%H:%M:%S'),
@@ -6060,6 +6101,7 @@ def fetch_cwa_routine_qpf(now_tpe):
                         'seg': _wseg, 'order': _worder,
                         # ★ 2026-11-08 發布班次（前端據此標示「第 HH 時報」，並偵測系統是否落後官方）
                         'issued': _issue.strftime('%Y-%m-%dT%H:%M:%S'),
+                        'time_src': _time_src,
                     })
                     # ★ 2026-11-08 保存判讀所用的官方原圖（每窗一張，覆蓋舊檔）。
                     #   先前原圖只在 runner 上用完即丟，使用者回報「熱區與官方圖不一致」時
@@ -6105,6 +6147,41 @@ def fetch_cwa_routine_qpf(now_tpe):
                     merged.pop(_st, None)
                 for _e in _CWA_SRC_INDEX:
                     _e['used'] = (_e.get('issued') == _nk)
+        # ★★ 2026-11-09 補「發布到有效起點」之間的空窗。
+        #   官方 05:30 報的第一張從 08:00 起算，05:30~08:00 這段新報不涵蓋；
+        #   這幾個小時的官方預報在上一報（23:30 報 02:00~14:00）裡。上一報的圖官方已撤換、
+        #   下載不到，所以每輪把本輪採用的窗存成 cwa_qpf_prev.json，下一輪只拿來補
+        #   「新報第一張起點之前、且尚未過去」的小時（同一小時新報優先，不會重複加）。
+        if CWA_PNG_WINDOWS:
+            _cur_iss = max(w['issued'] for w in CWA_PNG_WINDOWS if w.get('issued'))
+            _first = min(w['start'] for w in CWA_PNG_WINDOWS)
+            _now_h = now_tpe.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+            try:
+                with open(CWA_QPF_PREV_FILE, encoding='utf-8') as _f:
+                    _prev = json.load(_f).get('windows') or []
+            except Exception:
+                _prev = []
+            _gap = cwa_gap_windows(_prev, _cur_iss, _first, _now_h)
+            for _gw in _gap:
+                CWA_PNG_WINDOWS.append(_gw)
+                _cwa_windows.append({'start': _gw['start'].strftime('%Y-%m-%dT%H:%M:%S'),
+                                     'end': _gw['end'].strftime('%Y-%m-%dT%H:%M:%S'), 'seg': None,
+                                     'order': None, 'issued': _gw['issued'].strftime('%Y-%m-%dT%H:%M:%S'),
+                                     'gap_fill': True, 'time_src': 'cache'})
+            if _gap:
+                print(f"    ✓ {_now_h:%H}:00~{_first:%H}:00 新報未涵蓋 → 以上一報"
+                      f"（{_gap[0]['issued']:%m/%d %H}時）補 {len(_gap)} 張窗的對應小時")
+            try:
+                with open(CWA_QPF_PREV_FILE, 'w', encoding='utf-8') as _f:
+                    json.dump({'saved_at': now_tpe.strftime('%Y-%m-%dT%H:%M:%S'),
+                               'windows': [{'start': w['start'].strftime('%Y-%m-%dT%H:%M:%S'),
+                                            'end': w['end'].strftime('%Y-%m-%dT%H:%M:%S'),
+                                            'issued': w['issued'].strftime('%Y-%m-%dT%H:%M:%S'),
+                                            'vals': w.get('vals') or {}, 'q12': w.get('q12') or {}}
+                                           for w in CWA_PNG_WINDOWS if not w.get('gap_fill')]},
+                              _f, ensure_ascii=False, separators=(',', ':'))
+            except Exception as _e:
+                print(f"    上一報快取寫入失敗：{_e}")
         if _CWA_SRC_INDEX:
             try:
                 with open(os.path.join(CWA_QPF_SRC_DIR, 'index.json'), 'w', encoding='utf-8') as _f:
@@ -6131,8 +6208,14 @@ def fetch_cwa_routine_qpf(now_tpe):
 #   單應性（透視變形已修正，非軸對齊——實測仿射殘差達27px、單應性收斂至0）。
 #   H3 由 CAPES 四點解得；不同尺寸/版式的圖需重新定位（見 QPF_PNG_H3 尺寸檢查）。
 # 色表：右側圖例17級實測色（級距下界為代表值，保守）。
-CAPES_PX = {  # 樣張像素座標（1245×1500）
-    'N': (933, 202),  'E': (1102, 306),  'S': (687, 1423),  'W': (380, 860),
+# ★★★ 2026-11-09 根因修正：W 點（國聖港燈塔）原定位 (380,860) 錯了 131 像素，
+#   四點單應性因此整張扭曲——海岸線、縣市界投影到官方圖上平均偏 14 像素（約 5 公里），
+#   北部、中部偏移最大，雨區熱點被讀到隔壁鄉鎮（使用者 11/9 以 05:30 報四張圖比對發現）。
+#   新值是以官方圖上的黑色海岸線＋縣市界（16,628 個界線點）做最佳化求得，
+#   四張圖各自求解結果差 <0.5 像素；96% 界線點落在官方黑線 2 像素內（舊值 <10%）。
+#   之後每張圖仍會跑 _png_register 對位自檢，偏移超過門檻會自動修正並記錄。
+CAPES_PX = {  # 官方圖像素座標（1245×1500）
+    'N': (932.7, 202.8),  'E': (1099.4, 307.0),  'S': (689.4, 1422.8),  'W': (394.3, 991.0),
 }
 CAPES_LL = {
     'N': (121.5366, 25.2977),  'E': (122.0017, 25.0074),
@@ -6195,7 +6278,9 @@ def cwa_split_windows(tkey, windows, today00, nseg):
         v = (w.get('vals') or {}).get(tkey)
         if v is None:
             continue
-        hi = float(qpf_band_hi(v))
+        # ★ 2026-11-09 可加量用鄉鎮面積平均（q12）；舊資料沒有才退回色帶上界
+        _q12 = (w.get('q12') or {}).get(tkey)
+        hi = float(_q12) if _q12 is not None else float(qpf_band_hi(v))
         span_h = (w['end'] - w['start']).total_seconds() / 3600.0 or 12.0
         t = w['start']
         while t < w['end']:
@@ -6361,93 +6446,148 @@ def _load_town_polys():
 
 
 
-# ★★ 2026-11-08 對位自檢（使用者回報：官方圖花蓮無雨、系統讀出花蓮有雨，高屏反而偏少）。
-#   像素↔經緯度的對應是 2026/07 以四個海岬在樣張上人工定位的（CAPES_PX）。
-#   官方圖只檢查「尺寸相同」，若版面平移（地圖在畫布裡挪了位置），整張判讀會一起偏移，
-#   中央山脈西側（高屏山區）的雨就會被讀到東側（臺東、花蓮）。
-#   檢查法：把海岸線與縣市界投影到圖上，看是否落在官方圖的深色界線上；
-#   在 ±30 像素內找最吻合的平移。明顯優於現行對位才修正（避免雜訊誤修），
-#   每張圖的結果都寫進 data.json（cwa_qpf_reg），可事後稽核。
+# ★★ 對位自檢（2026-11-08 建、2026-11-09 改為完整重新對位）
+#   根因（11/9 查明）：四海岬控制點的 W 點錯 131 像素，單應性整張扭曲，平均偏 14 像素；
+#   舊自檢只找「整張平移」，對扭曲無效（只量到吻合 0.08 卻沒有動作）。
+#   現行做法：把縣市界＋海岸線（qpf_reg_pts.json）投影到官方圖，量「落在官方黑線 2 像素內」
+#   的比例。正常應 ≥0.85；低於 0.80 代表版面變了或控制點錯了 → 以四個控制點的像素位置為
+#   參數重新最佳化（距離場下降法），重新對位後 ≥0.85 才採用；仍不行 → 該張圖不用
+#   （寧可該時段無官方資料，也不放錯位的資料），並寫入 data.json 的 cwa_qpf_reg 供稽核。
 CWA_PNG_REG = []
+QPF_LAST_VOTES = {}     # 最近一張圖各鄉鎮的像素色帶票數（面積比例計算用）
+QPF_LAST_Q12 = {}       # 最近一張圖各鄉鎮 12 小時面積平均雨量（色帶上界×面積比例）
+REG_PTS_FILE = 'qpf_reg_pts.json'
+REG_OK, REG_REFIT_MIN = 0.80, 0.85
 _REG_PTS_CACHE = None
-REG_MAX_SHIFT = 30
-REG_MIN_SCORE, REG_MIN_GAIN = 0.30, 1.6
+_REG_CAPES_RUN = None          # 本輪重新對位成功的控制點（同一輪其餘圖沿用）
 
 
 def _reg_boundary_lonlat():
-    """海岸線＋縣市界的經緯度取樣點（鄉鎮內部界線不畫在官方圖上，排除）。"""
     global _REG_PTS_CACHE
-    if _REG_PTS_CACHE is not None:
-        return _REG_PTS_CACHE
-    polys = _load_town_polys()
-    seg_cty = {}
-    segs = []
-    for key, g in polys.items():
-        cty = key[:3]
-        for ring in (g[4] if g and len(g) > 4 else []) or []:
-            for i in range(len(ring) - 1):
-                a = (round(ring[i][0], 4), round(ring[i][1], 4))
-                b = (round(ring[i + 1][0], 4), round(ring[i + 1][1], 4))
-                k = (a, b) if a <= b else (b, a)
-                seg_cty.setdefault(k, set()).add(cty)
-                segs.append((k, cty))
-    cnt = {}
-    for k, _ in segs:
-        cnt[k] = cnt.get(k, 0) + 1
-    pts = []
-    for k, cs in seg_cty.items():
-        # 只出現一次（海岸或對不上的界）或兩側屬不同縣市 → 官方圖上會有線
-        if cnt[k] == 1 or len(cs) > 1:
-            (x0, y0), (x1, y1) = k
-            n = max(1, int(max(abs(x1 - x0), abs(y1 - y0)) / 0.004))
-            for j in range(n):
-                t = j / n
-                pts.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t))
-    _REG_PTS_CACHE = pts
-    return pts
+    if _REG_PTS_CACHE is None:
+        try:
+            with open(REG_PTS_FILE, encoding='utf-8') as f:
+                _REG_PTS_CACHE = [tuple(p) for p in json.load(f)['pts']]
+        except Exception as e:
+            print(f"    對位自檢點位讀取失敗：{e}")
+            _REG_PTS_CACHE = []
+    return _REG_PTS_CACHE
 
 
-def _png_register(arr, H3):
-    """回傳 (可能修正後的 H3, 指標 dict)。"""
+def _reg_dist_map(arr, maxd=25):
+    """官方圖黑色界線（海岸線、縣市界）的距離場（8 鄰接，單位像素，上限 maxd）。"""
     import numpy as _np
-    H, W = arr.shape[0], arr.shape[1]
     a = arr.astype(_np.int16)
     mx, mn = a.max(axis=2), a.min(axis=2)
-    dark = (mx < 140) & ((mx - mn) < 40)                  # 黑／深灰界線
-    d2 = dark.copy()                                      # 容許 1 像素抗鋸齒偏差
-    d2[1:, :] |= dark[:-1, :]; d2[:-1, :] |= dark[1:, :]
-    d2[:, 1:] |= dark[:, :-1]; d2[:, :-1] |= dark[:, 1:]
-    ll = _reg_boundary_lonlat()
-    if len(ll) < 200:
-        return H3, {'ok': False, 'why': '界線取樣點不足'}
-    if len(ll) > 8000:
-        ll = ll[::max(1, len(ll) // 8000)]
-    P = _np.array([_png_ll2px(H3, lo, la) for lo, la in ll])
-    X = _np.rint(P[:, 0]).astype(int); Y = _np.rint(P[:, 1]).astype(int)
+    blk = (mx < 100) & ((mx - mn) < 30)
+    H, W = blk.shape
+    blk[:160, :] = False                     # 標題
+    blk[:, 1150:] = False                    # 色階圖例
+    blk[1250:, :400] = False                 # 署徽
+    blk[150:620, 60:340] = False             # 金門、馬祖、東沙等小框
+    D = _np.full((H, W), maxd, _np.int16)
+    cur = blk.copy(); D[cur] = 0
+    for d in range(1, maxd):
+        nx = cur.copy()
+        nx[1:, :] |= cur[:-1, :]; nx[:-1, :] |= cur[1:, :]
+        nx[:, 1:] |= cur[:, :-1]; nx[:, :-1] |= cur[:, 1:]
+        nx[1:, 1:] |= cur[:-1, :-1]; nx[:-1, :-1] |= cur[1:, 1:]
+        nx[1:, :-1] |= cur[:-1, 1:]; nx[:-1, 1:] |= cur[1:, :-1]
+        D[nx & ~cur] = d
+        cur = nx
+    return D
 
-    def score(dx, dy, M):
-        xs, ys = X + dx, Y + dy
-        m = (xs >= 0) & (xs < W) & (ys >= 0) & (ys < H)
-        return float(M[ys[m], xs[m]].mean()) if m.sum() > 100 else 0.0
-    s0 = score(0, 0, d2)
-    grid = {(dx, dy): score(dx, dy, d2) for dy in range(-REG_MAX_SHIFT, REG_MAX_SHIFT + 1)
-            for dx in range(-REG_MAX_SHIFT, REG_MAX_SHIFT + 1)}
-    top = max(grid.values())
-    # 容許 1 像素膨脹 → 最高分是一小塊平台；平台內以「未膨脹」吻合度定位，再以離原點近者優先
-    near = [k for k, v in grid.items() if v >= top - 0.01]
-    if (0, 0) in near:
-        bdx, bdy = 0, 0
-    else:
-        bdx, bdy = max(near, key=lambda k: (score(k[0], k[1], dark), -abs(k[0]) - abs(k[1])))
-    sb = grid[(bdx, bdy)]
-    fix = (bdx, bdy) != (0, 0) and sb >= REG_MIN_SCORE and sb >= s0 * REG_MIN_GAIN
-    info = {'ok': True, 'score0': round(s0, 3), 'best': round(sb, 3), 'dx': bdx, 'dy': bdy,
-            'applied': bool(fix), 'dark_frac': round(float(dark.mean()), 4), 'n_pts': int(len(X))}
-    if fix:
-        H3 = [[H3[0][j] + bdx * H3[2][j] for j in range(3)],
-              [H3[1][j] + bdy * H3[2][j] for j in range(3)],
-              list(H3[2])]
-    return H3, info
+
+def _reg_eval(D, capes, LL):
+    import numpy as _np
+    H3 = _png_solve_homography(capes, CAPES_LL)
+    h = _np.array(H3)
+    w = h[2, 0] * LL[:, 0] + h[2, 1] * LL[:, 1] + h[2, 2]
+    x = (h[0, 0] * LL[:, 0] + h[0, 1] * LL[:, 1] + h[0, 2]) / w
+    y = (h[1, 0] * LL[:, 0] + h[1, 1] * LL[:, 1] + h[1, 2]) / w
+    Hh, Ww = D.shape
+    xi = _np.clip(_np.rint(x).astype(int), 0, Ww - 1); yi = _np.clip(_np.rint(y).astype(int), 0, Hh - 1)
+    d = D[yi, xi]
+    return float(d.mean()), float((d <= 2).mean()), H3
+
+
+def _reg_refit(D, capes, LL):
+    """以四個控制點像素座標（8 參數）做座標下降，最小化界線點到官方黑線的平均距離。"""
+    keys = ['N', 'E', 'S', 'W']
+    cur = {k: list(capes[k]) for k in keys}
+    best = _reg_eval(D, cur, LL)[0]
+    for step in (64, 32, 16, 8, 4, 2, 1, 0.5):
+        improved = True
+        while improved:
+            improved = False
+            for k in keys:
+                for ax in (0, 1):
+                    for sgn in (1, -1):
+                        trial = {kk: list(v) for kk, v in cur.items()}
+                        trial[k][ax] += sgn * step
+                        c = _reg_eval(D, trial, LL)[0]
+                        if c < best - 1e-4:
+                            best, cur, improved = c, trial, True
+    return {k: tuple(v) for k, v in cur.items()}
+
+
+def _png_register(arr, H3_unused=None):
+    """回傳 (H3 或 None, 指標 dict)。None＝對位失敗，這張圖不可用。"""
+    global _REG_CAPES_RUN
+    import numpy as _np
+    pts = _reg_boundary_lonlat()
+    if len(pts) < 500:
+        return _png_solve_homography(CAPES_PX, CAPES_LL), {'ok': False, 'why': '缺對位點位檔，未自檢'}
+    LL = _np.array(pts, dtype=float)
+    D = _reg_dist_map(arr)
+    capes = _REG_CAPES_RUN or CAPES_PX
+    c0, f0, H3 = _reg_eval(D, capes, LL)
+    info = {'ok': True, 'fit0': round(f0, 3), 'dist0': round(c0, 2), 'refit': False}
+    if f0 >= REG_OK:
+        info['fit'] = info['fit0']
+        return H3, info
+    new = _reg_refit(D, capes, LL)
+    c1, f1, H3n = _reg_eval(D, new, LL)
+    info.update({'refit': True, 'fit': round(f1, 3), 'dist': round(c1, 2),
+                 'capes': {k: [round(v[0], 1), round(v[1], 1)] for k, v in new.items()}})
+    if f1 >= REG_REFIT_MIN:
+        _REG_CAPES_RUN = new
+        print(f"    ⚠ 官方圖版面與控制點不符（吻合 {f0:.2f}）→ 已自動重新對位（吻合 {f1:.2f}），"
+              f"控制點 {info['capes']}；請更新 CAPES_PX")
+        return H3n, info
+    info['ok'] = False
+    print(f"    ✖ 對位失敗（吻合 {f0:.2f}→重新對位後 {f1:.2f}）：這張圖不採用，該時段不放官方值")
+    return None, info
+
+
+def cwa_png_title_times(png_bytes):
+    """從官方圖標題讀「發布時間」與「有效時間」（tesseract）。
+    ★ 2026-11-09 根因修正：系統原本假設時段從發布班次起算（05:30 報＝05~17 時），
+      官方圖標題寫的是 08:00~20:00 —— 有效時間比發布晚 2.5 小時，整組時段錯位 3 小時。
+    回傳 {'issued','start','end'}（naive TST datetime）或 None（讀不到→呼叫端用規則推算）。"""
+    import io, re as _re, subprocess, tempfile
+    try:
+        from PIL import Image as _Im
+        im = _Im.open(io.BytesIO(png_bytes)).convert('L').crop((0, 40, 1000, 150))
+        im = im.resize((im.width * 2, im.height * 2))
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
+            im.save(tf.name)
+        out = subprocess.run(['tesseract', tf.name, '-', '--psm', '6'], capture_output=True,
+                             text=True, timeout=30).stdout
+        os.remove(tf.name)
+    except Exception as e:
+        print(f"    標題時間讀取失敗（{type(e).__name__}），改用規則推算")
+        return None
+    ts = [datetime.strptime(f"{m[0]} {m[1]}", '%Y/%m/%d %H:%M')
+          for m in _re.findall(r'(20\d\d/\d\d/\d\d)\s*(\d\d:\d\d)', out)]
+    if len(ts) != 3:
+        print(f"    標題時間讀取不完整（{len(ts)} 筆）：{out.strip()[:80]!r}")
+        return None
+    iss, st, en = ts
+    if not (en - st == timedelta(hours=12) and timedelta(0) < st - iss <= timedelta(hours=48)):
+        print(f"    標題時間不合理（發布 {iss}、有效 {st}~{en}），改用規則推算")
+        return None
+    return {'issued': iss, 'start': st, 'end': en}
 
 def decode_qpf_png(png_bytes, did, now_tpe, towns, fname='', win_seg=None, win_nseg=2):
     """CWA 定量降水預報 PNG → 各鄉鎮 QPF 值（單應性 + 質心多點取樣多數決）。
@@ -6467,15 +6607,15 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns, fname='', win_seg=None, win_n
         print(f"    PNG尺寸 {W}×{H} ≠ 校正基準 {QPF_PNG_REF_SIZE}——無法套用內建四點，略過")
         print(f"    （若為新版式，請提供新樣張重新定位四海岬像素）")
         return None
-    H3 = _png_solve_homography(CAPES_PX, CAPES_LL)
     try:
-        H3, _reg = _png_register(arr, H3)
+        H3, _reg = _png_register(arr)
     except Exception as _e:
-        _reg = {'ok': False, 'why': f'{type(_e).__name__}: {_e}'[:120]}
+        H3, _reg = _png_solve_homography(CAPES_PX, CAPES_LL), {'ok': False, 'why': f'{type(_e).__name__}: {_e}'[:120]}
     _reg.update({'dataid': did, 'file': fname})
     CWA_PNG_REG.append(_reg)
-    print(f"    對位自檢：現行吻合 {_reg.get('score0')}、最佳 {_reg.get('best')}"
-          f"（平移 {_reg.get('dx')},{_reg.get('dy')} 像素）{'→ 已修正' if _reg.get('applied') else ''}")
+    print(f"    對位自檢：界線吻合 {_reg.get('fit0')}" + (f" → 重新對位 {_reg.get('fit')}" if _reg.get('refit') else ''))
+    if H3 is None:
+        return {}
     bands = QPF_PNG_BANDS
     tol2 = QPF_PNG_TOL * QPF_PNG_TOL * 3
 
@@ -6567,29 +6707,32 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns, fname='', win_seg=None, win_n
     # 級距值由小到大（用於限制「跳級」幅度）
     _BAND_VALS = sorted({bv for (_r, _g, _b, bv) in bands})
 
-    def aggregate(votes, hi_frac=0.35, hi_min=8):
-        """眾數為主；更高級距要「佔比足夠且票數足夠」才升級（防漏報但不誤報）。
-        兩道防線（對付白底/邊界反鋸齒誤配到淺色高級距，如 #FDC9FF≥300）：
-          ① 眾數為 0（幾乎無雨）→ 需極強證據（佔比≥0.55 且票數≥14）才升級
-          ② 一般情況 → 升級最多跨 2 個級距，避免少數雜訊像素把值拉到最高帶
-        """
+    # ★★ 2026-11-09 鄉鎮代表值改法（使用者以 11/9 05:30 報比對：熱區不一致）。
+    #   舊法取「眾數」：鄉鎮內有雨面積不到一半就算 0（需 ≥55%），
+    #   山區零星雨區、大鄉鎮裡的強降雨核心全部消失，熱區因此跟官方圖對不上。
+    #   新法分成兩個量，各管各的用途：
+    #   ① 雨量（可加、累積用）＝鄉鎮面積平均：每個像素取該色帶上界、無雨像素算 0，
+    #      全鄉鎮平均。這才是「這個鄉鎮平均會下多少」，多張圖相加也成立（眾數不能相加）。
+    #   ② 色帶（標示用）＝鄉鎮內雨最大的 10% 面積所在色帶，代表「鄉鎮裡較大雨區的強度」，
+    #      大鄉鎮裡的小核心不會被平均掉而看不見。
+    QPF_TOP_FRAC = 0.10
+
+    def aggregate(votes):
         if not votes: return None
+        tot = sum(votes.values()); acc = 0
+        for v in sorted(votes, reverse=True):
+            acc += votes[v]
+            if acc >= tot * QPF_TOP_FRAC:
+                return v
+        return 0.0
+
+    def areal_mean(votes):
         tot = sum(votes.values())
-        mode = max(votes.items(), key=lambda kv: (kv[1], kv[0]))[0]
-        if mode == 0.0:
-            cand = [v for v, c in votes.items()
-                    if v > 0 and c / tot >= 0.55 and c >= 14]
-            return max(cand) if cand else 0.0
-        try:
-            mi = _BAND_VALS.index(mode)
-        except ValueError:
-            mi = 0
-        max_val = _BAND_VALS[min(mi + 2, len(_BAND_VALS) - 1)]
-        hi = [v for v, c in votes.items()
-              if v > mode and v <= max_val and c / tot >= hi_frac and c >= hi_min]
-        return max(hi) if hi else mode
+        if not tot: return None
+        return sum((float(qpf_band_hi(v)) if v else 0.0) * c for v, c in votes.items()) / tot
 
     town_vals = {}
+    QPF_LAST_VOTES.clear(); QPF_LAST_Q12.clear()
     n_hit = n_poly = 0
     for t in towns:
         lat, lng = t.get('lat'), t.get('lng')
@@ -6600,9 +6743,11 @@ def decode_qpf_png(png_bytes, did, now_tpe, towns, fname='', win_seg=None, win_n
             n_poly += 1
         else:
             hv = town_hist(lng, lat)          # 退路：質心圓
+        QPF_LAST_VOTES[key] = hv
         val = aggregate(hv)
         if val is None: continue
         town_vals[key] = val
+        QPF_LAST_Q12[key] = round(areal_mean(hv), 2)
         if val > 0: n_hit += 1
     print(f"    PNG判讀（單應性＋鄉鎮界內取樣 {n_poly}／質心圓 {len(towns) - n_poly}）："
           f"{n_hit}/{len(towns)} 鄉鎮有雨值")

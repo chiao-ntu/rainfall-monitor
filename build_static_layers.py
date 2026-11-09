@@ -441,9 +441,10 @@ _cnt = collections.Counter(f['n'] for f in S); _tot = collections.defaultdict(fl
 for f in S: _tot[f['n']] += f.get('ha') or 0
 _no_town = 0
 for f, ym in zip(S, _ym):
-    tw = _town_of(*f['c'])
-    if not tw:   # 界外且 1km 內無鄉鎮：校名本身以「縣市＋鄉鎮」開頭者（官方校名），採校名
-        tw = next((k for k, bb, g in _tpolys if f['n'].startswith(k)), None)
+    # 校名本身以「縣市＋鄉鎮」開頭者（官方校名）以校名為準；鄉鎮界是簡化過的，
+    #   界線附近的學校用代表點判定會落到隔壁鄉鎮（如礁溪鄉龍潭國小被判到宜蘭市）
+    tw = next((k for k, bb, g in sorted(_tpolys, key=lambda t: -len(t[0])) if f['n'].startswith(k)), None) \
+         or _town_of(*f['c'])
     if tw: f['tw'] = tw
     else: _no_town += 1
     if re.fullmatch(r'\d{6}', ym): f['d'] = ym

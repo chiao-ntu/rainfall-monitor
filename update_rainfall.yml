@@ -1,0 +1,104 @@
+name: 降雨監測主排程
+
+# ★ 這份 workflow 的重點在「累積型檔案必須一起 commit」：
+#   obs_history.json（測站逐日雨量，16 天）
+#   model_skill.json（融合模式的誤差追蹤，45 天）  ← 先前漏掉，導致每輪歸零
+#   若漏 commit，下一輪 checkout 拿到的是空的，等於永遠從頭開始。
+
+on:
+  schedule:
+    # ★ 2026-11-08 依 API 延遲實測（2026-10-25～11-08，59 筆）改為每小時第 25 分：
+    #   O-A0002 雨量站 中位 10 分／p90 15 分 → :25 已能拿到「本小時整點」的雨量
+    #     （:05 只拿得到上一個 10 分鐘）
+    #   CWA 定量降水預報 實測 Sent 約 xx:18（11:30 那一報 11:18 送出）→ :25 當小時就換新，
+    #     :05 要晚 47 分鐘才換
+    #   O-A0001 氣象站 中位 40 分／最大 69 分 → :05 與 :25 都拿到上一整點，不變
+    #   同時避開整點的 GitHub 排程壅塞。
+    - cron: '25 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: update-rainfall
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50        # 波浪模式 zip 有 56MB，CWA 慢時需要時間
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests numpy pillow
+          # ★ 2026-11-09 讀官方定量降水預報圖標題的「有效時間」（OCR）；裝不起來時程式改用規則推算，不會中斷
+          sudo apt-get install -y -qq tesseract-ocr > /dev/null || echo "::warning::tesseract 安裝失敗，有效時間改用規則推算"
+
+      - name: Fetch rainfall data
+        env:
+          CWA_API_KEY: ${{ secrets.CWA_API_KEY }}
+        run: python fetch_rainfall.py
+
+      - name: Commit and push
+        run: |
+          # data.json 沒產出就中止（fetch_rainfall 的健全性檢查會擋下殘缺資料，
+          # 此時保留前一輪的檔案是正確行為，不該視為失敗）
+          if [ ! -f data.json ]; then
+            echo "data.json 不存在（可能是健全性檢查中止寫檔），跳過 commit"
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add data.json
+
+          # ★ 累積型檔案：缺一個就會讓對應功能永遠重新開始
+          [ -f obs_history.json ] && git add obs_history.json   # 測站逐日雨量（16天）
+          [ -f model_skill.json ] && git add model_skill.json   # 融合誤差追蹤（45天）
+          [ -f verify.json ]      && git add verify.json        # 逐日校驗 POD/FAR/CSI（60天）
+          [ -f multity.json ]     && git add multity.json      # NCDR 各國颱風預報路徑（無颱風時為空）
+          # ★ 2026-11-08 補上：預報存檔（每報對未來 7 日的預報，CWA 校驗唯一來源）。
+          #   先前漏 commit → 每輪從空檔開始 → CWA 官方 QPF 一天都沒被校驗過。
+          [ -f forecast_log.json ] && git add forecast_log.json  # 預報存檔（12天）
+
+          # 靜態資料檔（極少變動，但若有重建也一併帶上）
+          [ -f coastal_towns.json ]           && git add coastal_towns.json
+          [ -f terrain_zones_official.json ]  && git add terrain_zones_official.json
+          [ -f all_townships.json ]           && git add all_townships.json
+
+          # 快照（archive/ 由 fetch_rainfall 自行輪替與清理）
+          [ -d archive ] && git add -A archive
+          [ -f cwa_qpf_prev.json ] && git add cwa_qpf_prev.json   # 上一報定量降水窗（補新報有效起點前的空窗，跨輪必須保留）
+          [ -d cwa_qpf_src ] && git add -A cwa_qpf_src   # 判讀所用的氣象署定量降水預報原圖（每輪覆蓋，供比對）
+
+          if git diff --cached --quiet; then
+            echo "無變更，跳過 commit"
+            exit 0
+          fi
+
+          git commit -m "自動更新 $(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M') TST"
+
+          # 與遠端可能有其他 workflow 的 push 衝突，重試幾次
+          for i in 1 2 3 4 5; do
+            if git push; then
+              echo "push 成功"
+              exit 0
+            fi
+            echo "push 失敗，rebase 後重試（$i/5）"
+            git pull --rebase --autostash || true
+            sleep $((i * 5))
+          done
+          echo "push 連續失敗"
+          exit 1

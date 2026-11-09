@@ -62,6 +62,8 @@ body.panel-full canvas{ max-width:1100px }
   transform:translate(-50%,-50%);display:inline-block}
 .leaflet-tooltip.tr-tip{white-space:normal;width:340px;line-height:1.4;font-size:11px}
 .tr-tip .ex{display:grid;grid-template-columns:auto 1fr;column-gap:6px;padding-left:4px}
+.tr-tip .tg{display:inline-block;padding:0 3px;margin-left:3px;border-radius:2px;font-size:10px;line-height:14px;background:#334155;color:#e2e8f0;white-space:nowrap}
+.tr-tip .tg.ok{background:#166534;color:#dcfce7}
 .tr-badge span{display:block;border-radius:50%;color:#fff;text-align:center;font-weight:700;
   border:1.5px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.55),0 1px 3px rgba(0,0,0,.45);box-sizing:border-box}
 .b{padding:3px 9px;font-size:10px;border:1px solid #1e3a5a;background:#0d2035;color:#5a90b8;cursor:pointer;border-radius:3px;transition:all .12s;white-space:nowrap}
@@ -267,13 +269,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         style="border-color:#3a4a6a;color:#8aa8d8">🌊 深色海</button>
       <button class="b"    id="bTownName" onclick="toggleTownNameLayer()"
         style="border-color:#1a4060;color:#8ac8e8">🏷 行政區名</button>
-      <button class="b"    id="bStnLayer" onclick="toggleStationLayer()"
-        style="border-color:#8a6a3a;color:#e8c87a">📍 雨量測站</button>
+      <span id="bStnLayer" style="display:none"></span>
       <button class="b dd-btn" id="bTrans" onclick="openTransMenu(this)"
         style="border-color:#6a6a4a;color:#d8d0a0">🛣 交通 ▾</button>
       <span id="bRoads" style="display:none"></span>
-      <button class="b"    id="bShelter" onclick="toggleShelterLayer()"
-        style="border-color:#4a6a5a;color:#9ad8b8">🏠 避難收容所</button>
+      <span id="bShelter" style="display:none"></span>
       <button class="b dd-btn" id="bFac" onclick="openFacMenu(this)"
         style="border-color:#3a5a8a;color:#a8c8f0">🏫 重要公共設施 ▾</button>
      </div>
@@ -1398,7 +1398,7 @@ let sidebarOpen = true;
 //   曾發生過更新了 index.html、實際測到的卻是舊檔（瀏覽器快取或沒部署成功），
 //   症狀是「修好的東西又出現」。沒有版本資訊就無法自我診斷。
 //   查法：瀏覽器主控台輸入 FORMOSA_BUILD，或看載入時印出的那行。
-const FORMOSA_BUILD = '2026-11-08T16:00Z';
+const FORMOSA_BUILD = '2026-11-09T05:00Z';
 try{ console.log('%cFORMOSA build ' + FORMOSA_BUILD,
      'color:#6bc8e8;font-weight:700'); }catch(e){}
 
@@ -1742,7 +1742,7 @@ let _himaOn = false, _himaLayer = null, _himaBand = 'SND/ETC', _himaTimes = null
 async function _himaLoadTimes(){
   try{
     const r = await fetch(`${HIMAWARI_BASE}/targetTimes_fd.json`, {cache: 'no-store'});
-    if(r.ok) _himaTimes = await r.json();
+    if(r.ok){ const j = await r.json(); _himaTimes = (Array.isArray(j) && j.length) ? j : null; }
   }catch(e){ _himaTimes = null; }
 }
 function _himaTime(back){
@@ -1766,6 +1766,8 @@ function _himaSetBand(b){
 // ★ 退檔：0 ＝ 官方清單最新的一刻。預設從 1 起跳（往前一檔），
 //   因為最新那一刻常常只發布了一部分圖磚。
 const HIMA_MAX_BACKOFF = 4;
+const HIMA_TIMES_RETRY_MS = 5 * 60e3;
+let _himaTimesTriedAt = -Infinity;
 let _himaBackoff = 1;
 function _himaBaseTime(){
   if(Array.isArray(_himaTimes) && _himaTimes.length){
@@ -1801,7 +1803,13 @@ function toggleHimawari(){
   if(_himaLayer){ try{ map.removeLayer(_himaLayer); }catch(e){} }
   _himaLayer = null;
   if(!_himaOn) return;
-  if(!_himaTimes) _himaLoadTimes().then(()=>{ if(_himaOn){ _himaOn = false; toggleHimawari(); } });
+  // ★★ 只在「清單真的拿到了」才重建圖層。先前清單取不到（氣象廳連不上、被擋）時
+  //   _himaTimes 仍是 null，重建又觸發重抓，形成每秒數百次請求的無限迴圈。
+  //   取不到時改用推算時刻照常顯示，清單至少隔 HIMA_TIMES_RETRY_MS 才再試。
+  if(!_himaTimes && Date.now() - _himaTimesTriedAt > HIMA_TIMES_RETRY_MS){
+    _himaTimesTriedAt = Date.now();
+    _himaLoadTimes().then(()=>{ if(_himaOn && _himaTimes){ _himaOn = false; toggleHimawari(); } });
+  }
   if(!map.getPane('himaPane')){
     map.createPane('himaPane');
     map.getPane('himaPane').style.pointerEvents = 'none';
@@ -2921,6 +2929,34 @@ function _ymTxt(d){ return (d && /^\d{6}$/.test(d)) ? `${d.slice(0, 4)}/${d.slic
 // 出入口名稱：純數字＝「N 號出口」；帶字母（臺北車站 M1、Y12…）＝「M1 出口」
 function _exName(e){ return e === '—' ? '出入口' : (/^\d+$/.test(e) ? `${e} 號出口` : `${e} 出口`); }
 function _haTxt(ha){ return ha >= 1 ? ha.toFixed(1) + ' 公頃' : Math.round(ha * 1e4).toLocaleString() + ' 平方公尺'; }
+// 臺北捷運公司官方出入口資料（merge_mrt_exits.py 併入的 exo / elv / exa / exd）
+function _h(t){ return String(t == null ? '' : t).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function _ymdTxt(d){ return (d && /^\d{8}$/.test(d)) ? `${d.slice(0, 4)}/${d.slice(4, 6)}/${d.slice(6)}` : ''; }
+function _mrtExoHtml(f){
+  const exo = f.exo;
+  const nAcc = exo.filter(e=>e.w === 1).length;
+  const tg = (t, ok)=> `<span class="tg${ok ? ' ok' : ''}">${t}</span>`;
+  const pre = ((f.a || '').match(/^(.{2,3}[縣市].{1,4}?[鄉鎮市區])/) || [])[1] || '';
+  const ad = a => (pre && a.startsWith(pre)) ? a.slice(pre.length) : a;
+  let h = `<div style="color:#8a9aaa;margin-top:3px">出入口（${exo.length} 處${nAcc ? `，無障礙 ${nAcc} 處` : ''}）</div>`;
+  h += '<div class="ex">' + exo.map(e=>{
+    const r = e.r || '';
+    const tags = (e.w === 1 ? tg('無障礙', true) : '')
+      + ((e.e > 0 || /電梯/.test(r)) && !/或/.test(r) ? tg('電梯') : '')
+      + (/坡道/.test(r) && !/或/.test(r) ? tg('坡道') : '')
+      + (/或/.test(r) ? tg('電梯或坡道') : '')
+      + (e.s > 0 ? tg('電扶梯') : '');
+    const loc = e.l ? _h(ad(e.l)) : '<span style="color:#8a9aaa">未提供位置說明</span>';
+    return `<span>${_exName(e.i === '0' ? '—' : e.i)}</span><span>${loc}${tags}</span>`;
+  }).join('') + '</div>';
+  if(f.exa) h += `<div style="padding-left:6px;color:#8a9aaa">另有無障礙${_h(f.exa)}（官方資料未指明在哪個出口）</div>`;
+  if(f.elv && f.elv.length){
+    h += `<div style="color:#8a9aaa;margin-top:3px">無障礙電梯位置</div>`
+      + `<div style="padding-left:6px">${f.elv.map(t=>_h(t).replace(/\n/g, '<br>')).join('<br>')}</div>`;
+  }
+  h += `<div style="color:#8a9aaa;margin-top:2px">出入口資料：臺北捷運公司 ${_ymdTxt(f.exd)}</div>`;
+  return h;
+}
 function _trPointTip(k, f, LC){
   const row = (lbl, v)=> v ? `<div><span style="color:#8a9aaa">${lbl}</span>　${v}</div>` : '';
   // 機場、碼頭的全名多半是管理機關全銜（交通部民用航空局恆春航空站），標題用通稱、全名列在下方
@@ -2933,7 +2969,9 @@ function _trPointTip(k, f, LC){
     h += row('站碼', (f.code || []).join('、'));
     h += row('站址', f.a) + row('電話', f.tel);
     const ex = f.ex || [];
-    if(ex.length){
+    if(f.exo && f.exo.length){
+      h += _mrtExoHtml(f);
+    }else if(ex.length){
       const withAddr = ex.filter(e=>e[1]);
       h += `<div style="color:#8a9aaa;margin-top:3px">出入口（${ex.length} 處）</div>`;
       // 與站址同縣市區的前綴省略（臺北車站 20 個出口都寫「臺北市中正區…」，只留路段）
@@ -3071,32 +3109,124 @@ function _transLegendHtml(){
 // ══════════════════════════════════════════════════════════
 //  ④ 重要公共設施（學校；其他類別待資料）
 // ══════════════════════════════════════════════════════════
-const FAC_ITEMS = [['school', '各級學校']];
-const SCHOOL_PT_ZOOM = 11, SCHOOL_POLY_ZOOM = 14;
-let _fac = {on:{}, school:null, poly:null, pt:null, bounds:null};
-function openFacMenu(btn){
-  _ddMenu('ddFac', FAC_ITEMS.map(([k, v])=>
-    `<label class="dd-it"><input type="checkbox" ${_fac.on[k] ? 'checked' : ''}
-      onchange="_facSet('${k}', this.checked)">${v}</label>`).join(''));
+// ★ 2026-11-09 新增：消防單位、災害應變中心、露營場（政府開放資料，facilities.json）。
+//   每一點都經建置程式核對「座標落在資料自己寫的縣市／鄉鎮內」，對不上的不上圖
+//   （列在 facilities_rejected.csv）。學校併入教育部 115 學年名錄（公私立、地址、電話、網址）。
+// ★ 2026-11-09（二）：雨量測站、避難收容所併入本選單（不另開按鈕）；
+//   新增警察機關、海嘯警報臺、醫院（官方資料下載後自動出現）與地下水／地層下陷監測。
+//   選單只列出「實際有資料」的項目，沒有資料的類別不顯示空選項。
+const FAC_GROUPS = [
+  ['防災據點', [['rainstn', '雨量測站'], ['shelter', '避難收容所'], ['eoc', '災害應變中心'], ['fire', '消防單位'],
+               ['police', '警察機關'], ['hosp', '醫院'], ['siren', '海嘯警報臺']]],
+  ['學校與營地', [['school', '各級學校'], ['camp', '露營場']]],
+  ['地下水與地層下陷監測（水利署）', [['gw', '地下水觀測井'], ['lsw', '地層下陷監測井'], ['lsst', '地層下陷監測站'], ['bm', '深層水準樁']]],
+];
+const FAC_ITEMS = FAC_GROUPS.flatMap(g=>g[1]);
+const FAC_EXT = {rainstn:1, shelter:1};          // 既有圖層，由原本的繪製函式負責
+const FAC_STYLE = {
+  school: {fill:'#ffffff', stroke:'#1c3f8c', r:3.5, w:1.2},
+  eoc:    {glyph:'應', bg:'#b91c1c'},
+  fire:   {fill:'#ef4444', stroke:'#7f1d1d', r:3.8, w:1.2},
+  police: {fill:'#2563eb', stroke:'#172554', r:3.6, w:1.2},
+  hosp:   {glyph:'醫', bg:'#0f766e'},
+  siren:  {fill:'#f59e0b', stroke:'#78350f', r:4, w:1.2},
+  camp:   {fill:'#16a34a', stroke:'#14532d', r:3.6, w:1.2},
+  gw:     {fill:'#22d3ee', stroke:'#155e75', r:3, w:1},
+  lsw:    {fill:'#c084fc', stroke:'#581c87', r:3.4, w:1},
+  lsst:   {fill:'#f0abfc', stroke:'#701a75', r:3.4, w:1},
+  bm:     {fill:'#94a3b8', stroke:'#1e293b', r:3.6, w:1.2},
+};
+const FAC_LEG = {
+  fire:'消防單位（消防局、大隊、分隊）', police:'警察機關（警察局、分局、分駐／派出所）', siren:'海嘯警報臺',
+  gw:'地下水觀測井', lsw:'地層下陷監測井', lsst:'地層下陷監測站', bm:'深層水準樁',
+};
+function _facHas(k){
+  if(k === 'rainstn' || k === 'shelter' || k === 'school') return true;
+  return !!(_fac.data && Array.isArray(_fac.data[k]) && _fac.data[k].length);
+}
+function _facIsOn(k){
+  return k === 'rainstn' ? !!_stnLayerOn : k === 'shelter' ? !!_shelterOn : !!_fac.on[k];
+}
+function _facAnyOn(){ return FAC_ITEMS.some(([k])=>_facIsOn(k)); }
+const SCHOOL_POLY_ZOOM = 14;
+let _fac = {on:{}, school:null, data:null, poly:null, pt:null, bounds:null};
+function _facMenuHtml(){
+  return FAC_GROUPS.map(([g, items])=>{
+    const its = items.filter(([k])=>_facHas(k));
+    if(!its.length) return '';
+    return `<div style="color:#8a9aaa;font-size:10px;margin:4px 0 1px">${g}</div>`
+      + its.map(([k, v])=>`<label class="dd-it"><input type="checkbox" ${_facIsOn(k) ? 'checked' : ''}
+          onchange="_facSet('${k}', this.checked)">${v}${k !== 'rainstn' && k !== 'shelter' && k !== 'school'
+            && _fac.data && _fac.data[k] ? `<span style="color:#8a9aaa">（${_fac.data[k].length}）</span>` : ''}</label>`).join('');
+  }).join('');
+}
+async function openFacMenu(btn){
+  _ddMenu('ddFac', _facMenuHtml());
   _ddToggle('ddFac', btn);
+  // 清單要知道哪些類別有資料：第一次打開時載入 facilities.json，再補上那些項目
+  if(!_fac.data && !_fac.loadErr){
+    try{ _fac.data = await _loadJsonOnce('facilities.json', '公共設施圖資'); }
+    catch(e){ _fac.loadErr = true; }
+    const m = document.getElementById('ddFac');
+    if(m && m.style.display === 'block') m.innerHTML = _facMenuHtml();
+  }
 }
 async function _facSet(k, v){
   _bindNewLayerMoves();
+  if(FAC_EXT[k]){
+    if(_facIsOn(k) !== !!v){ if(k === 'rainstn') toggleStationLayer(); else await toggleShelterLayer(); }
+    _facBtnState();
+    return;
+  }
   _fac.on[k] = v;
   if(k === 'school' && v && !_fac.school){
     try{ _fac.school = await _loadJsonOnce('schools.json', '學校圖資'); }
     catch(e){ _fac.on[k] = false; _setOverlayMsg('學校圖資尚未部署：缺 schools.json'); return; }
   }
-  const b = document.getElementById('bFac'); if(b) b.classList.toggle('on', Object.values(_fac.on).some(Boolean));
+  if(k !== 'school' && v && !_fac.data){
+    try{ _fac.data = await _loadJsonOnce('facilities.json', '公共設施圖資'); }
+    catch(e){ _fac.on[k] = false; _setOverlayMsg('公共設施圖資尚未部署：缺 facilities.json'); return; }
+  }
+  _facBtnState();
   renderFacLayer();
+}
+function _facBtnState(){
+  const b = document.getElementById('bFac'); if(b) b.classList.toggle('on', _facAnyOn());
+}
+function _facRow(lbl, v){ return v ? `<div><span style="color:#8a9aaa">${lbl}</span>　${v}</div>` : ''; }
+function _facTip(k, f){
+  const h = `<div style="font-weight:700;margin-bottom:2px">${k === 'school' && f.nm ? f.nm : f.n}</div>`;
+  if(k === 'school'){
+    return h + (f.nm && f.nm !== f.n ? _facRow('全銜', f.n) : '')
+      + _facRow('位置', f.tw) + _facRow('學制', (f.k || '—') + (f.pub ? `（${f.pub}）` : ''))
+      + _facRow('地址', f.a) + _facRow('電話', f.tel) + _facRow('網址', f.url)
+      + (f.ha ? `<div><span style="color:#8a9aaa">校地面積</span>　${_haTxt(f.ha)}`
+                + (f.np ? `<span style="color:#8a9aaa">（本筆；全校共 ${f.np} 筆範圍，合計 ${_haTxt(f.tot)}）</span>` : '')
+                + '</div>' : '')
+      + _facRow('圖資日期', _ymTxt(f.d));
+  }
+  if(k === 'camp'){
+    return h + _facRow('位置', f.tw) + _facRow('地址', f.a) + _facRow('電話', f.tel)
+      + _facRow('原住民族地區', f.ab ? '是' : '否')
+      + _facRow('法規', f.legal ? '符合相關法規' : `<span style="color:#e8a860">違反相關法規${f.vio ? '（' + f.vio + '）' : ''}</span>`);
+  }
+  if(k === 'gw' || k === 'lsw' || k === 'lsst' || k === 'bm'){
+    const m = v => v != null ? v + ' 公尺' : '';
+    return h + _facRow('位置', f.tw) + _facRow('地址', f.a) + _facRow('編號', f.id)
+      + _facRow('地下水分區', f.zone) + _facRow(k === 'bm' ? '樁深' : '井深', m(f.dep))
+      + _facRow('井口高程', m(f.el)) + _facRow('設置日期', f.since)
+      + _facRow('資料來源', '經濟部水利署');
+  }
+  return h + _facRow('類別', f.lv) + _facRow('位置', f.tw) + _facRow('地址', f.a) + _facRow('電話', f.tel)
+    + (k === 'eoc' ? _facRow('與消防局同址', f.note) : '');
 }
 function renderFacLayer(){
   [_fac.poly, _fac.pt].forEach(l=>{ if(l) try{ map.removeLayer(l); }catch(e){} });
   _fac.poly = _fac.pt = null;
-  if(!_fac.on.school || !_fac.school){ _renderOverlayLegend(); return; }
-  const z = map.getZoom(), vb = map.getBounds().pad(0.3);
+  if(!Object.values(_fac.on).some(Boolean)){ _renderOverlayLegend(); return; }
+  const z = map.getZoom(), vb = map.getBounds().pad(0.3), sc = _trScale(z);
   _fac.bounds = vb;
-  if(z >= SCHOOL_POLY_ZOOM){
+  if(_fac.on.school && _fac.school && z >= SCHOOL_POLY_ZOOM){
     const rend = _paneCanvas('facPane', 399);
     const rings = [];
     _fac.school.feats.forEach(f=>{
@@ -3106,35 +3236,50 @@ function renderFacLayer(){
     _fac.poly = L.polygon(rings, {renderer:rend, interactive:false, color:'#1c3f8c', weight:1.2,
                                   fillColor:'#7aa2f0', fillOpacity:0.25}).addTo(map);
   }
-  {
-    // ★ 與交通同一規則：勾選即顯示，不設縮放門檻；拉遠只縮小符號
-    const prend = _ensurePtPane('facPtPane', 612);
-    _fac.pt = L.layerGroup();
-    _fac.school.feats.forEach(f=>{
+  // ★ 與交通同一規則：勾選即顯示，不設縮放門檻；拉遠只縮小符號
+  const prend = _ensurePtPane('facPtPane', 612);
+  _fac.pt = L.layerGroup();
+  FAC_ITEMS.forEach(([k])=>{
+    if(FAC_EXT[k] || !_fac.on[k]) return;
+    const list = k === 'school' ? (_fac.school && _fac.school.feats) : (_fac.data && _fac.data[k]);
+    const st = FAC_STYLE[k];
+    (list || []).forEach(f=>{
       const ll = L.latLng(f.c[1], f.c[0]);
       if(!vb.contains(ll)) return;
-      L.circleMarker(ll, {pane:'facPtPane', renderer:prend, radius: z >= 14 ? 5 : 3.5 * _trScale(z), weight:1.2,
-        color:'#1c3f8c', fillColor:'#ffffff', fillOpacity:1})
-        .bindTooltip(`<div style="font-weight:700;margin-bottom:2px">${f.n}</div>`
-          + (f.tw ? `<div><span style="color:#8a9aaa">位置</span>　${f.tw}</div>` : '')
-          + `<div><span style="color:#8a9aaa">學制</span>　${f.k || '—'}</div>`
-          + (f.ha ? `<div><span style="color:#8a9aaa">校地面積</span>　${_haTxt(f.ha)}`
-                    + (f.np ? `<span style="color:#8a9aaa">（本筆；全校共 ${f.np} 筆範圍，合計 ${_haTxt(f.tot)}）</span>` : '')
-                    + '</div>' : '')
-          + (f.d ? `<div><span style="color:#8a9aaa">圖資日期</span>　${_ymTxt(f.d)}</div>` : ''),
-          {direction:'top', opacity:0.95, className:'tr-tip'})
-        .addTo(_fac.pt);
+      let m;
+      if(st.glyph){
+        const px = Math.round(18 * sc);
+        m = L.marker(ll, {pane:'facPtPane', icon:L.divIcon({className:'tr-badge',
+              html:`<span style="background:${st.bg};width:${px}px;height:${px}px;line-height:${px}px;`
+                 + `font-size:${Math.round(px*0.6)}px">${st.glyph}</span>`, iconSize:[px, px], iconAnchor:[px/2, px/2]})});
+      }else{
+        const r = (k === 'school' && z >= 14) ? 5 : st.r * sc;
+        m = L.circleMarker(ll, {pane:'facPtPane', renderer:prend, radius:r, weight:st.w, color:st.stroke,
+              fillColor:(k === 'camp' && !f.legal) ? '#facc15' : st.fill, fillOpacity:1});
+      }
+      m.bindTooltip(_facTip(k, f), {direction:'top', opacity:0.95, className:'tr-tip'}).addTo(_fac.pt);
     });
-    _fac.pt.addTo(map);
-  }
+  });
+  _fac.pt.addTo(map);
   _renderOverlayLegend();
 }
 function _facLegendHtml(){
-  if(!_fac.on.school || !_fac.school) return '';
-  const z = map.getZoom();
-  return '<div style="font-weight:700;margin-bottom:3px">重要公共設施</div>'
-    + `<div>${_dot('#ffffff', '#1c3f8c')}學校${z >= SCHOOL_POLY_ZOOM
-      ? `<span style="color:#8a9aaa">（淺藍範圍＝校地）</span>` : ''}</div>`;
+  if(!Object.values(_fac.on).some(Boolean)) return '';
+  const z = map.getZoom(), rows = [];
+  if(_fac.on.school) rows.push(`<div>${_dot('#ffffff', '#1c3f8c')}學校${z >= SCHOOL_POLY_ZOOM
+      ? `<span style="color:#8a9aaa">（淺藍範圍＝校地）</span>` : ''}</div>`);
+  if(_fac.on.eoc) rows.push(`<div><span style="display:inline-block;width:14px;height:14px;line-height:14px;border-radius:50%;`
+      + `background:#b91c1c;color:#fff;font-size:9px;text-align:center;margin-right:6px">應</span>災害應變中心</div>`);
+  ['fire', 'police', 'siren'].forEach(k=>{
+    if(_fac.on[k]) rows.push(`<div>${_dot(FAC_STYLE[k].fill, FAC_STYLE[k].stroke)}${FAC_LEG[k]}</div>`);
+  });
+  if(_fac.on.hosp) rows.push(`<div><span style="display:inline-block;width:14px;height:14px;line-height:14px;border-radius:50%;`
+      + `background:#0f766e;color:#fff;font-size:9px;text-align:center;margin-right:6px">醫</span>醫院</div>`);
+  if(_fac.on.camp) rows.push(`<div>${_dot('#16a34a', '#14532d')}露營場（合法）　${_dot('#facc15', '#14532d')}違反相關法規</div>`);
+  ['gw', 'lsw', 'lsst', 'bm'].forEach(k=>{
+    if(_fac.on[k]) rows.push(`<div>${_dot(FAC_STYLE[k].fill, FAC_STYLE[k].stroke)}${FAC_LEG[k]}</div>`);
+  });
+  return '<div style="font-weight:700;margin-bottom:3px">重要公共設施</div>' + rows.join('');
 }
 
 // ══════════════════════════════════════════════════════════
@@ -3233,7 +3378,7 @@ function _bindNewLayerMoves(){
         if(!(_tr.bounds && _tr.bounds.contains(map.getBounds()))) renderTransLayer();
         else _renderOverlayLegend();     // 圖例只列畫面內路線 → 平移後也要更新
       }
-      if(_fac.on.school && _fac.school
+      if(Object.values(_fac.on).some(Boolean)
          && !(_fac.bounds && _fac.bounds.contains(map.getBounds()))) renderFacLayer();
     }, 200);
   });
@@ -3260,7 +3405,7 @@ function _bindNewLayerMoves(){
     window._nlZ = setTimeout(()=>{
       if(showTownName) renderVillageLayer();
       if(_tr.data) renderTransLayer();
-      if(_fac.school) renderFacLayer();
+      if(_fac.school || _fac.data) renderFacLayer();
     }, 160);
   });
 }
@@ -3304,6 +3449,7 @@ async function toggleShelterLayer(){
   _shelterOn = !_shelterOn;
   const b = document.getElementById('bShelter');
   if(b) b.classList.toggle('on', _shelterOn);
+  try{ _facBtnState(); }catch(e){}
   if(_shelterOn && !_shelterData){
     _shelterLoading = true;
     _layerBtnBusy('bShelter', true); _setOverlayMsg('避難收容所載入中…');
@@ -3393,10 +3539,7 @@ function renderShelterLayer(){
     if(p.cvil) rows.push(`預計收容村里：${p.cvil}`);
     rows.push(`室內 ${mark(p.ind)}｜室外 ${mark(p.out)}`
       + `｜適合避難弱者安置 ${mark(p.weak)}`);
-    if(p.mgr || p.tel){
-      rows.push(`<span style="color:#8a9aaa">管理人</span>　${p.mgr || '—'}`
-        + (p.tel ? `　${p.tel}` : ''));
-    }
+    // ★ 管理人姓名、電話屬個人資料，圖資已移除，這裡也不顯示（舊檔殘留時亦不輸出）
     m.bindTooltip(rows.join('<br>'), {direction:'top', opacity:0.95});
     m.on('click', ()=>{
       const tt = _townAtLatLng(c[1], c[0]);
@@ -3413,6 +3556,7 @@ function toggleStationLayer(){
   _stnLayerOn = !_stnLayerOn;
   const b = document.getElementById('bStnLayer');
   if(b) b.classList.toggle('on', _stnLayerOn);
+  try{ _facBtnState(); }catch(e){}
   renderStationLayer();
 }
 function renderStationLayer(){
@@ -4820,11 +4964,13 @@ function _cwaBandLabel(t){
     if(v != null && bs.has(s) && (band === null || v > band)) band = v;
   }
   if(band == null) return '';
-  const lbl = band>=200?'≥200' : band>=130?'130–200' : band>=110?'110–130'
+  // ★ 2026-11-09 級距與官方圖例一致（130–150、150–200、200–300、≥300）；
+  //   色階是「鄉鎮內雨最大的 10% 面積」所在級距，代表鄉鎮裡較大雨區的強度。
+  const lbl = band>=300?'≥300' : band>=200?'200–300' : band>=150?'150–200' : band>=130?'130–150' : band>=110?'110–130'
     : band>=90?'90–110' : band>=70?'70–90' : band>=50?'50–70' : band>=40?'40–50'
     : band>=30?'30–40' : band>=20?'20–30' : band>=15?'15–20' : band>=10?'10–15'
     : band>=5?'5–10' : band>=2?'2–5' : band>=1?'1–2' : '<1';
-  return `<span style="color:#8a9aaa">（官方圖色階 ${lbl}mm／12h）</span>`;
+  return `<span style="color:#8a9aaa">（鄉鎮內較大雨區：官方圖 ${lbl}mm／12h）</span>`;
 }
 // 可加量陣列：色帶段＝上界÷窗段數；真值段＝原值。沒有這個欄位（舊資料）時
 // 退回 qpf_cwa，但那是加倍的，所以同時在 tooltip 可辨識（_cwaQLegacy）。

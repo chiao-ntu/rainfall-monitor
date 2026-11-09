@@ -30,11 +30,22 @@ sk = {'平地': {'ecmwf': {'decay': {'bias': 1.5, 'n': 50}},
                'aifs':  {'decay': {'bias': 4.0, 'n': 50}},
                'gfs':   {'decay': {'bias': 1.2, 'n': 5}}}}   # n<10 不套用
 t3 = {'model_yday': {'ecmwf': 10.0}}
-ok(abs(_blend_yday(t3, '平地', {'平地': {'ecmwf': 1}}, sk) - 15.0) < 1e-6,
-   "物理模式 bias 1.5 → 10 校正為 15")
+#  ★ 2026-10-11 起偏差校正分量級（bias_factor：≤LO 不校正、≥HI 全額）。
+#    原本寫死「10 → 15」是舊的全額校正契約；改為綁定模組常數，契約變動時一起動。
+from fetch_rainfall import bias_factor
+_e3 = 10.0 * bias_factor(10.0, 1.5, 50, False, span=4)
+ok(abs(_blend_yday(t3, '平地', {'平地': {'ecmwf': 1}}, sk) - round(_e3, 2)) < 0.006,
+   f"物理模式 bias 1.5 → 10 依分量級校正為 {_e3:.2f}")
+_big = {'model_yday': {'ecmwf': 100.0}, 'daily_rain': [0, 0]}
+ok(abs(_blend_yday(_big, '平地', {'平地': {'ecmwf': 1}}, sk) - 150.0) < 1e-6,
+   "物理模式 bias 1.5 → 大雨 100 全額校正為 150")
 t4 = {'model_yday': {'aifs': 10.0}}
-ok(abs(_blend_yday(t4, '平地', {'平地': {'aifs': 1}}, sk) - 30.0) < 1e-6,
-   "AI 模式 bias 4.0 被限在 3.0 → 10 校正為 30")
+_e4 = 10.0 * bias_factor(10.0, 4.0, 50, True, span=4)
+ok(abs(_blend_yday(t4, '平地', {'平地': {'aifs': 1}}, sk) - round(_e4, 2)) < 0.006,
+   f"AI 模式 bias 4.0（上限 3.0）→ 10 依分量級校正為 {_e4:.2f}")
+_big4 = {'model_yday': {'aifs': 100.0}, 'daily_rain': [0, 0]}
+ok(abs(_blend_yday(_big4, '平地', {'平地': {'aifs': 1}}, sk) - 300.0) < 1e-6,
+   "AI 模式 bias 4.0 被限在 3.0 → 大雨 100 全額校正為 300")
 t5 = {'model_yday': {'gfs': 10.0}}
 ok(abs(_blend_yday(t5, '平地', {'平地': {'gfs': 1}}, sk) - 10.0) < 1e-6,
    "樣本不足（n=5）不套用校正 → 維持 10")

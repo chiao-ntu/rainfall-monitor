@@ -431,6 +431,10 @@ if all(os.path.exists(f) for f in _qf):
             def json(self): return next(_qit)
         return _R()
     FR.requests = types.SimpleNamespace(get=_mkq)
+    #  ★ 2026-11-08 起 F-C0041 有發布新鮮度門檻（>12 小時不採用）；
+    #    這裡驗的是「解析」，把現在時間固定在該報發布後 1 小時。
+    _iss = FR._tpe_naive(_qd[0]['cwaopendata']['Dataset']['DatasetInfo']['IssueTime'])
+    FR.now_tpe_naive = lambda: _iss + FR.timedelta(hours=1)
     _segs = FR.fetch_typhoon_qpf()
     chk('★解析出 8 段（48 小時）', len(_segs), 8)
     if _segs:

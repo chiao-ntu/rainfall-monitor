@@ -205,8 +205,11 @@ item('V', 'OK' if n_rank >= 2 else 'FAIL',
      f'排名統計呼叫點 {n_rank} 處（文字區塊＋排行圖，應 ≥2）')
 item('V', 'OK' if count(r'function _vfMetricLabel\(') == 1 else 'FAIL',
      '指標名稱只有一份（表頭、圖標題、說明共用）')
-item('V', 'OK' if 'function _vfHasEvent(' in text else 'FAIL',
-     '排名只統計「當天真的有事件」的日子（乾日會把排行灌成雜訊）')
+#  ★ 2026-11-08：原檢查「排名只統計有事件的日子（_vfHasEvent）」與使用者後來的
+#    指示相反 ——「所有天數都要列入比較跟統計」，_vfHasEvent 已依此移除。
+#    改為守住新契約：排名統計不得再以「有沒有事件」篩掉日子。
+item('V', 'OK' if 'function _vfHasEvent(' not in text else 'FAIL',
+     '排名統計涵蓋所有天數（使用者指定，不得再篩掉無事件日）')
 item('V', 'OK' if 'function _vfNiceRange(' in text else 'FAIL',
      '趨勢圖縱軸貼齊資料（固定 0~1 會把資料壓在底部三分之一）')
 item('F', 'OK' if 'bounded_interp' in CODE and '(b - a) <= 5' in CODE else 'FAIL',
