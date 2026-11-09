@@ -1,0 +1,8061 @@
+"""
+台灣降雨預測監測系統 - 資料抓取腳本 v5
+==============================================
+已確認的 CWA API 結構：
+  O-A0002-001: RainfallElement.Past6Hr / Past24hr / Past2days / Past3days
+  F-D0047-XXX: WeatherElement「3小時降雨機率」/ 「12小時降雨機率」
+               各縣市分開端點（奇數=3天，偶數=1週），Location = 鄉鎮
+"""
+import requests, json, math, os, re, sys, time
+from datetime import datetime, timezone, timedelta
+
+CWA_API_KEY  = os.environ.get("CWA_API_KEY", "")
+STATIC_FILE  = "etr2_static.json"
+ETR2_HISTORY_FILE = "etr2_history.json"   # 官方 ETR2 逐段歷史（唯一寫入者＝fetch_qpesums_hourly.py）
+ETR2_NOW_FILE     = "etr2_now.json"       # 官方鄉鎮 ETR2 現值（權威，同上腳本產出）
+SLOPE_WARN_FILE = "slope_warning_stations.json"  # 官方坡地警戒區→代表站+警戒值（改法B對齊）
+LS_WARN_FILE = "landslide_warning_stations.json"  # 官方大崩警戒區→代表站+警戒值（115年明細表）
+# 水保署土石流參考雨量站 API：直接回官方 ETR2(STRT)，涵蓋氣象署抓不到的自建站
+SWCB_RAIN_URL = "https://246.ardswc.gov.tw/webService/GetDebrisRainData.ashx"
+# ★ 定向診斷：列出這些站名／鄉鎮在官方資料中的真實內容。
+#   查個案時改這兩行就好，清空即關閉。放在這裡是因為「抓不到」這類問題
+#   一定要能看到原始資料，不能靠猜。
+def _row_pick(row, *names):
+    """從 API 回傳列取欄位，名稱容錯（含大小寫不分）。
+
+    為什麼需要：同一個檔案裡對同類 ID 曾出現 'DebrisNO' 與 'DebrisNo' 兩種拼法，
+    其中一種必然是錯的；錯的那個會讓整批資料靜默消失（回傳空字典，不報錯）。
+    外部 API 的欄位名不是我們能控制的，硬編單一拼法就是單點失效。
+    """
+    if not isinstance(row, dict): return None
+    for n in names:
+        if n in row and row[n] not in (None, ''): return row[n]
+    low = {str(k).lower(): v for k, v in row.items()}
+    for n in names:
+        v = low.get(n.lower())
+        if v not in (None, ''): return v
+    return None
+
+
+DIAG_STATION_KEYWORDS = ('寒溪',)
+DIAG_TOWNS = ('宜蘭縣大同鄉',)
+# ── 官方警戒（雙軌架構的「現況」側，權威值）──────────────
+#   現況紅/黃一律採官方發布值；系統只在「未來推估」側自行研判（明確標示推估）。
+SWCB_ALERT_URL   = "https://ls.ardswc.gov.tw/api/LandslideAlertOpenData"          # D=土石流 L=大崩
+SWCB_LSVAL_URL   = "https://246.ardswc.gov.tw/WebService/GetLSCountyTownAlertValueList.ashx"
+SWCB_EOCINFO_URL = "https://246.ardswc.gov.tw/webService/GetIDisasterInfo.ashx"   # 應變小組開設
+HEAVY_RAIN_COUNTY_TH = 150.0   # 「雨勢較大地區」縣市門檻：任一鄉鎮日累積達此值即納入
+HOURLY_FILE = "rain_hourly.json"   # 由 fetch_qpesums_hourly.py 每小時寫入（本腳本只讀）
+SWCB_STN_LOC = {}
+# 鄉鎮風力預報：{縣市: {鄉鎮: [{start,end,ws,bf}]}}，由 fetch_pop_county 順帶填充
+WIND_FCST = {}
+# 鄉鎮氣溫預報：{縣市: {鄉鎮: [{start,end,t,tmax,tmin}]}}
+TEMP_FCST = {}
+# (縣市, 鄉鎮, 站名) → ETR2(mm)：同名站以地理位置區分
+SWCB_BY_LOC = {}   # (縣市,鄉鎮) → {站名: ETR2}；由 fetch_swcb_etr2() 填充
+# 代表站對站層級的可讀名稱（log 與前端共用語彙）
+_LS_TIER_NAME = {'exact': '代表站精確', 'norm': '代表站正規化',
+                 'near_town': '同鄉鎮相似站', 'near_county': '同縣市相似站',
+                 'town': '退回鄉鎮值', 'none': '無值'}
+ALL_TOWNSHIPS_FILE = "all_townships.json"  # 全台368個行政區（含座標），不依賴是否有觀測站
+HISTORY_FILE = "obs_history.json"
+# ★ 跨日定版的時限：00~03 時之間執行到就把昨天定版。
+#   放寬到 3 時是因為排程可能延遲或某幾輪失敗；時間愈晚，
+#   rain_24h 的視窗偏離日曆日愈多，但仍遠勝於凍結在白天的值。
+DAY_FINALIZE_HOUR = 3
+OUTPUT_FILE  = "data.json"
+ETR2_WEIGHTS = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1]  # R0~R6 固定權重
+#  ETR2 每 6 小時的衰減係數：日權重 0.7，一天四段 → 0.7^(1/4)
+ETR2_DECAY_6H = 0.7 ** 0.25
+
+
+#  段末非日界且無逐時資料時，當日累積量的不確定上界（mm）。
+#  小於此值就以整日量代入 —— 誤差上界即為該值本身。
+#  官方警戒單元的代表站 → CWA 站號。由 agg_obs 的 _pick_sid 解析後記下，
+#  供 apply_official_etr2 補算過去時段 —— 站號解析只有 _pick_sid 一份實作，
+#  絕不在別處重寫（它含距離門檻與撞名消歧，重寫必然分歧）。
+SWCB_UNIT_SID = {}
+
+DAILY_R0_TOL = 2.0
+
+
+def etr2_from_daily(day_rain, r0_partial=None):
+    """以官方公式由「逐日雨量」算 ETR2。
+
+        ETR2 = Σ W[i] x R[i]，W = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1]
+        R[0]＝當日（至目標時刻為止），R[1..6]＝前 1~6 日的日總量
+
+    ★★ 2026-10-09 重做。上一版（fetch_qpesums_hourly.backfill_swcb_calc）
+       用 rain_hourly.json 的逐時資料湊出 7 天日雨量，要求 168 小時、
+       每日覆蓋 ≥90%。實際排程的 log 顯示序列只有 34 小時、缺格 130 ——
+       那個條件**從部署以來一次都沒成立過**（log：「自算 vs 官方：無共同站可比對」）。
+       我驗證了公式的算術，卻沒驗證輸入在真實環境下取不取得到。
+
+       正確的來源一直都在：obs_history.json 保留 16 天的逐站日雨量，
+       由主排程維護（每輪 1362 站），而官方公式要的就是日雨量。
+       逐時資料只在「當日累積到某個時刻」這一項才需要。
+
+    參數
+      day_rain : [R0_full, R1, ..., R6] 日總量（mm）；缺值用 None
+      r0_partial : 當日累積到目標時刻的量；None 表示用整日量（適用於
+                   段末剛好是日界 24:00 的情形，此時整日量就是正確值）
+    回傳 (etr2, exact, reason)
+      exact=False 時 etr2 仍可能有用，reason 說明不確定的來源
+    """
+    W = [1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1]
+    if not day_rain or len(day_rain) < 7:
+        return None, False, '日雨量序列不足 7 天'
+    tail = 0.0
+    for i in range(1, 7):
+        v = day_rain[i]
+        if v is None:
+            return None, False, f'前 {i} 日無日雨量'
+        tail += W[i] * float(v)
+    d0 = day_rain[0]
+    if r0_partial is not None:
+        return round(r0_partial + tail, 1), True, ''
+    if d0 is None:
+        return None, False, '當日無日雨量'
+    d0 = float(d0)
+    #  段末不是日界、又沒有逐時資料時，當日累積落在 [0, d0] 之間。
+    #  日雨量很小的話這段不確定性可以忽略；否則不猜，交回去留白。
+    if d0 <= DAILY_R0_TOL:
+        return round(d0 + tail, 1), False, f'當日量 {d0:.1f}mm 以整日計（誤差 ≤{d0:.1f}mm）'
+    return None, False, f'當日已累積 {d0:.1f}mm 但缺逐時資料，無法定出該時刻的累積量'
+
+
+def seal_etr2_series(es, segkeys, sid, history, now_naive):
+    """保證過去段不留空洞 —— 由結構決定，不是再找一個資料來源。
+
+    ★★ 2026-10-09：為什麼這次是結構性的
+      前幾輪每次都只修「這一次的成因」（API 單獨失敗、排程沒跑、
+      逐時覆蓋不足），修完下一個成因又讓同一條線斷掉。
+      使用者問「昨天跑過的流程難道又要全部走一遍」—— 那是對的。
+
+      官方 ETR2 = Σ W[i] x R[i]，R[i] 是**日**總量。
+      關鍵事實：同一天之內 R0 的權重固定 1.0，沒有日內衰減 ——
+      ETR2 在一天內只隨累積雨量單調上升。因此
+
+          ETR2(t) = R0(當日 00:00→t) + tail(前 1~6 日的加權和)
+
+      tail 在任一時刻都可由 obs_history 精確算出。未知的只有 R0(t)，
+      而 R0 在每一天都有兩個**精確錨點**：
+          00:00 → R0 = 0（當日還沒開始累積）
+          24:00 → R0 = 當日總量（obs_history 有）
+      所以任何日內缺口都被兩個精確值夾住，不是外插。
+
+    作法：已知段值換算回 R0（R0 = 值 − tail），在同一天內對 R0 線性內插，
+    再加回該段自己的 tail。跨日時 R0 歸零重算，不會把前一天的累積帶過去。
+
+    回傳 (es, n_filled, max_unc)
+      max_unc＝填補點的不確定上界（夾住它的兩個錨點之間下了多少雨）
+    """
+    rec = (history or {}).get(sid)
+    if not rec:
+        return es, 0, 0.0
+    n = len(segkeys)
+    tails, ends, days = [None] * n, [None] * n, [None] * n
+    for i, sk in enumerate(segkeys):
+        try:
+            st = datetime.strptime(sk, '%Y-%m-%dT%H')
+        except Exception:
+            continue
+        end = st + timedelta(hours=6)
+        ends[i] = end
+        #  段末落在 00:00 時，代表的是前一日的 24:00
+        d = (end - timedelta(days=1)).date() if end.hour == 0 else end.date()
+        days[i] = d
+        t = 0.0
+        ok = True
+        for k in range(1, 7):
+            v = rec.get((d - timedelta(days=k)).strftime('%Y-%m-%d'))
+            if v is None:
+                ok = False
+                break
+            t += ETR2_WEIGHTS[k] * float(v)
+        tails[i] = t if ok else None
+
+    n_filled, max_unc = 0, 0.0
+    by_day = {}
+    for i in range(n):
+        if days[i] is not None:
+            by_day.setdefault(days[i], []).append(i)
+    for d, idxs in by_day.items():
+        dt = rec.get(d.strftime('%Y-%m-%d'))
+        if dt is None:
+            continue                      # 當日總量不明 → 無法定出 24:00 錨點
+        dt = float(dt)
+        #  當日的 R0 錨點：00:00＝0、24:00＝日總量，再加上已知段值換算出的點
+        pts = [(0.0, 0.0), (24.0, dt)]
+        for i in idxs:
+            if es[i] is None or tails[i] is None or ends[i] is None:
+                continue
+            h = 24.0 if ends[i].hour == 0 else float(ends[i].hour)
+            pts.append((h, max(0.0, float(es[i]) - tails[i])))
+        pts.sort()
+        for i in idxs:
+            if es[i] is not None or tails[i] is None or ends[i] is None:
+                continue
+            if now_naive is not None and ends[i] > now_naive:
+                continue                  # 未來段不填
+            h = 24.0 if ends[i].hour == 0 else float(ends[i].hour)
+            lo = max((p for p in pts if p[0] <= h), default=None)
+            hi = min((p for p in pts if p[0] >= h), default=None)
+            if lo is None or hi is None:
+                continue
+            if hi[0] - lo[0] < 1e-9:
+                r0 = lo[1]
+            else:
+                f = (h - lo[0]) / (hi[0] - lo[0])
+                r0 = lo[1] + (hi[1] - lo[1]) * f
+            es[i] = round(max(0.0, r0) + tails[i], 1)
+            n_filled += 1
+            max_unc = max(max_unc, abs(hi[1] - lo[1]))
+    return es, n_filled, max_unc
+
+
+def fill_etr2_series(etr, rain, max_resid_ratio=0.25):
+    """以官方遞迴式補回「兩端都有官方錨點」的內部缺口。
+
+        E(s+1) = E(s) x 0.7^(1/4) + R(s+1)
+
+    ★★ 2026-10-09：為什麼要補，而不是留白
+      使用者兩度指出「留白沒有解決問題，觀測多少就是多少」。先前我把缺口
+      畫成一致的留白，那只是把症狀整齊化。
+      這個缺口其實是**可以唯一決定**的：左右兩端都是官方 ETR2，中間有官方
+      雨量，而 ETR2 的遞迴式是官方定義的。三者齊備時，中間值不是猜測。
+      實證（2026-10-09 臺北分署）：缺口前 25.0%、缺口後 21.5%，
+      純衰減推得 25.0 x 0.7^(2/4) = 20.92%，與官方值僅差 0.58 個百分點
+      —— 那 0.58 點正是該段期間的降雨貢獻。
+
+    參數
+      etr  : list[float|None]  逐 6h 段官方 ETR2（mm）
+      rain : list[float|None]  同段觀測雨量（mm）；None 視為 0 並計入 norain
+    回傳 (filled, mask, info)
+      filled : 補值後序列；原有官方值**原封不動**
+      mask   : 同長度 bool，True＝該段為補值（前端須以不同樣式呈現）
+      info   : {'filled','refused','norain','gaps'}
+
+    兩條紅線
+      1. 只補內部缺口。序列首尾之外沒有另一端錨點，補了就是外插＝猜測。
+      2. 殘差（遞迴推到右錨點 vs 官方值的差）超過 max_resid_ratio 就拒補。
+         殘差大代表這段的物理關係對不上（雨量對到錯的站、單位錯、或官方值
+         本身有問題）。那種情況下補出來的是一條「看似合理的假線」，
+         比留白更危險 —— 寧可留白。
+    """
+    n = len(etr)
+    filled = list(etr)
+    mask = [False] * n
+    info = {'filled': 0, 'refused': [], 'norain': 0, 'gaps': 0}
+    idx = [i for i, v in enumerate(etr) if v is not None]
+    if len(idx) < 2:
+        return filled, mask, info
+    for a, b in zip(idx, idx[1:]):
+        if b - a <= 1:
+            continue
+        info['gaps'] += 1
+        seq, e = {}, float(etr[a])
+        for k in range(a + 1, b + 1):
+            r = rain[k] if (k < len(rain) and rain[k] is not None) else None
+            if r is None:
+                info['norain'] += 1
+                r = 0.0
+            e = e * ETR2_DECAY_6H + float(r)
+            seq[k] = e
+        resid = float(etr[b]) - seq[b]
+        scale = max(abs(float(etr[a])), abs(float(etr[b])), 1.0)
+        if abs(resid) > max_resid_ratio * scale:
+            info['refused'].append((a, b, round(resid, 1), round(scale, 1)))
+            continue
+        span = b - a
+        for k in range(a + 1, b):
+            # 殘差線性分配，使序列在右錨點剛好落回官方值（k=b 時加滿 resid）
+            filled[k] = round(max(0.0, seq[k] + resid * (k - a) / span), 1)
+            mask[k] = True
+            info['filled'] += 1
+    return filled, mask, info
+# ── CWA 請求節流 ────────────────────────────────────────────
+#   ★ 實測 2026-09-01：短時間內連續請求 opendata.cwa.gov.tw（尤其掃描
+#     46 個 dataid 的探測迴圈）會被大量 Connection reset / timeout 打回，
+#     導致該輪幾乎所有資料抓不到。故對同一主機的請求做最小間隔節流，
+#     並改用 Session 重用連線（避免每次重新握手加重負擔）。
+_CWA_LAST_REQ = [0.0]
+_CWA_MIN_GAP  = 0.35            # 秒；約 3 req/s
+_CWA_SESSION  = None
+
+def _cwa_session():
+    global _CWA_SESSION
+    if _CWA_SESSION is None:
+        _CWA_SESSION = requests.Session()
+        _CWA_SESSION.headers.update({
+            'User-Agent': 'Mozilla/5.0 (compatible; RainfallMonitor/1.0)',
+            'Connection': 'keep-alive'})
+        try:
+            from requests.adapters import HTTPAdapter
+            _CWA_SESSION.mount('https://', HTTPAdapter(pool_connections=4,
+                                                       pool_maxsize=4))
+        except Exception:
+            pass
+    return _CWA_SESSION
+
+# 熔斷：連續失敗達門檻後，暫時跳過該主機的請求
+#   ★ 實測 2026-09-01 兩輪各跑 20-30 分鐘 —— CWA 不穩時每個請求都要等滿
+#     逾時（20~60 秒），46 個 dataid 的掃描光逾時就數百秒。
+#     連續失敗代表主機端問題，繼續苦等沒有意義，快速失敗讓其他來源
+#     仍能正常抓取，總時間才可控。
+# ★ 設計取捨（使用者指定）：CWA 官方資料無可取代，寧可執行久一點也要取得。
+#   故熔斷門檻放寬，且熔斷後仍會「冷卻再試」而非整輪放棄 ——
+#   先前設 8 次即永久跳過，會讓伺服器短暫抽風就整輪失去官方資料。
+_CWA_FAIL_STREAK = [0]
+_CWA_TRIP_AT     = 25       # 連續失敗達此數才暫停（放寬）
+_CWA_TRIPPED     = [False]
+_CWA_COOLDOWN    = 45       # 暫停後冷卻秒數，之後再試一輪
+_CWA_TRIP_TIME   = [0.0]
+
+def cwa_get(url, **kw):
+    """GET：打 CWA 主機時自動節流＋連線重用＋熔斷，其他主機照舊。
+
+    ★ 以 URL 判斷而非逐一改呼叫點：全檔有 26 處 requests.get，
+      逐一替換容易漏改，且日後新增的呼叫也會自動受益。
+    """
+    if 'opendata.cwa.gov.tw' in url and _CWA_TRIPPED[0]:
+        # 冷卻期過了就恢復嘗試（伺服器多為短暫抽風，不該整輪放棄官方資料）
+        if time.time() - _CWA_TRIP_TIME[0] >= _CWA_COOLDOWN:
+            _CWA_TRIPPED[0] = False
+            _CWA_FAIL_STREAK[0] = 0
+            print(f"    ★ CWA 冷卻 {_CWA_COOLDOWN}s 結束，恢復嘗試")
+        else:
+            raise requests.exceptions.ConnectionError('CWA 冷卻中（稍後自動恢復）')
+    # ★ 測試會替換模組層的 requests；若此處直接用 Session 就繞過了替換，
+    #   使測試環境與正式行為不一致。故僅在 requests 為真實模組時啟用 Session。
+    _real = getattr(requests, '__name__', '') == 'requests'
+    if 'opendata.cwa.gov.tw' in url:
+        gap = _CWA_MIN_GAP - (time.time() - _CWA_LAST_REQ[0])
+        if gap > 0:
+            time.sleep(gap)
+        _CWA_LAST_REQ[0] = time.time()
+        if _real:
+            try:
+                r = _cwa_session().get(url, **kw)
+            except Exception:
+                _CWA_FAIL_STREAK[0] += 1
+                if _CWA_FAIL_STREAK[0] >= _CWA_TRIP_AT and not _CWA_TRIPPED[0]:
+                    _CWA_TRIPPED[0] = True
+                    _CWA_TRIP_TIME[0] = time.time()
+                    print(f"    ★ CWA 連續失敗 {_CWA_FAIL_STREAK[0]} 次 → 冷卻 "
+                          f"{_CWA_COOLDOWN}s 後自動恢復（不放棄官方資料）")
+                raise
+            _CWA_FAIL_STREAK[0] = 0        # 成功即重置
+            return r
+    return requests.get(url, **kw)
+
+
+BASE_URL     = "https://opendata.cwa.gov.tw/api/v1/rest/datastore"
+# 檔案型產品（zip/nc/png/格點）走 fileapi；datastore 對這類 dataid 會 404
+FILEAPI      = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi"
+OBS_URL      = f"{BASE_URL}/O-A0002-001"
+OPENMETEO    = "https://api.open-meteo.com/v1/forecast"
+
+# 各縣市的鄉鎮預報端點（奇數=3天含3h PoP，偶數=1週含12h PoP）
+COUNTY_EP_3D = {
+    '宜蘭縣':'F-D0047-001','桃園市':'F-D0047-005','新竹縣':'F-D0047-009',
+    '苗栗縣':'F-D0047-013','彰化縣':'F-D0047-017','南投縣':'F-D0047-021',
+    '雲林縣':'F-D0047-025','嘉義縣':'F-D0047-029','屏東縣':'F-D0047-033',
+    '臺東縣':'F-D0047-037','花蓮縣':'F-D0047-041','澎湖縣':'F-D0047-045',
+    '基隆市':'F-D0047-049','新竹市':'F-D0047-053','嘉義市':'F-D0047-057',
+    '臺北市':'F-D0047-061','高雄市':'F-D0047-065','新北市':'F-D0047-069',
+    '臺中市':'F-D0047-073','臺南市':'F-D0047-077','連江縣':'F-D0047-081',
+    '金門縣':'F-D0047-085',
+}
+COUNTY_EP_7D = {
+    '宜蘭縣':'F-D0047-003','桃園市':'F-D0047-007','新竹縣':'F-D0047-011',
+    '苗栗縣':'F-D0047-015','彰化縣':'F-D0047-019','南投縣':'F-D0047-023',
+    '雲林縣':'F-D0047-027','嘉義縣':'F-D0047-031','屏東縣':'F-D0047-035',
+    '臺東縣':'F-D0047-039','花蓮縣':'F-D0047-043','澎湖縣':'F-D0047-047',
+    '基隆市':'F-D0047-051','新竹市':'F-D0047-055','嘉義市':'F-D0047-059',
+    '臺北市':'F-D0047-063','高雄市':'F-D0047-067','新北市':'F-D0047-071',
+    '臺中市':'F-D0047-075','臺南市':'F-D0047-079','連江縣':'F-D0047-083',
+    '金門縣':'F-D0047-087',
+}
+
+# 鄉鎮沿海預報（浪高）：F-D0047-095 為逐 3 小時、096 為週預報。
+#   ★ 只涵蓋 120 個「沿海預報代表點」，不是 368 鄉鎮 —— 內陸鄉鎮本來就無值，
+#     前端須留白而非填 0，否則會讓內陸看起來像「浪高 0 公尺」。
+# 鄉鎮沿海預報的資料集代號。★ 095/096 取自官方產品說明文件檔名
+#   （F-D0047-095_096.pdf「海象_鄉鎮沿海-鄉鎮沿海預報」），但**文件檔名未必等於
+#   API 的 dataid**。故依序嘗試多個候選，第一個回傳有效資料者即採用，
+#   並把每個候選的 HTTP 狀態與 records 鍵印出來，便於一次定位。
+# ★ 實測（2026-08-30）：F-D0047-095/096 與 F-A0085-001 皆回 404，
+#   只有 F-A0085-002 回 200 且含 Locations，故置於首位。
+#   先前誤用 095 是從官方 PDF 檔名推得，文件檔名 ≠ API dataid。
+WAVE_EP = 'F-A0020-001'          # 波浪預報模式（實測確認：含 hs/dir/t 三組格點）
+WAVE_STEPS = 24                  # 取 24 個時間步（每 3 小時 → 涵蓋 72 小時）
+COASTAL_TOWNS_FILE = 'coastal_towns.json'   # 沿海鄉鎮清單（由海岸線距離判定）
+
+
+def _resolve_product_url(dataid, timeout=60):
+    """大型檔案資料集：先取 metadata 拿 ProductURL，再從 S3 下載。
+
+    ★ CWA 對「檔案型」資料集（zip/nc/png）不直接以 format=ZIP 回傳檔案，
+      而是回一段 JSON，內含 Resources.Resource.ProductURL 指向 S3。
+      直接向 API 要 ZIP 會得到 HTTP 500 —— 實測 F-A0020-001 與
+      F-D0047-093 皆如此（與既有的 F-C0035 PNG 取法同一模式）。
+    回傳 URL 字串；失敗回 None。
+    """
+    # ★ 檔案型產品（zip/nc/png/格點）必須走 fileapi，且帶 downloadType=WEB。
+    #   datastore 路徑對這類 dataid 會回 404 —— 系統既有的 F-C0035、O-A0038、
+    #   F-B0046 都是這個模式，此處沿用同一套取法。
+    d = None
+    for _url, _params in (
+        (f"{FILEAPI}/{dataid}", {'Authorization': CWA_API_KEY,
+                                 'downloadType': 'WEB', 'format': 'JSON'}),
+        (f"{BASE_URL}/{dataid}", {'Authorization': CWA_API_KEY, 'format': 'JSON'}),
+    ):
+        try:
+            r = cwa_get(_url, params=_params, timeout=timeout)
+            if r.status_code != 200:
+                print(f"    {dataid} metadata HTTP {r.status_code}"
+                      f"（{'fileapi' if 'fileapi' in _url else 'datastore'}）")
+                continue
+            d = r.json()
+            break
+        except Exception as e:
+            print(f"    {dataid} metadata 取用失敗：{e}")
+    if d is None:
+        return None
+
+    def _walk(o):
+        """遞迴找出第一個看起來像檔案網址的值（鍵名含 ProductURL/uri）。"""
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if isinstance(v, str) and v.startswith('http') and \
+                   ('producturl' in k.lower() or k.lower() == 'uri'):
+                    return v
+                got = _walk(v)
+                if got: return got
+        elif isinstance(o, list):
+            for x in o:
+                got = _walk(x)
+                if got: return got
+        return None
+
+    url = _walk(d)
+    if url:
+        print(f"    {dataid} → {url.rsplit('/', 1)[-1]}")
+    else:
+        print(f"    {dataid} metadata 內找不到 ProductURL")
+    return url
+
+
+TIDE_EP = 'F-A0021-001'          # 鄉鎮潮汐預報（滿潮／乾潮時刻與潮高）
+
+
+# 雷達定量降雨：O-B0045-001 過去1小時實估、F-B0046-001 未來1小時預報
+#   ★ 這是原「QPESUMS」的接續資料集（換了 dataid，並非停用）。
+#     441×561 格點、解析度 0.0125°（約 1.4km），每 10 分鐘更新。
+RADAR_QPE_EP = 'O-B0045-001'      # 過去1小時（實估，含雨量站校正）
+RADAR_QPF_EP = 'F-B0046-001'      # 未來1小時（預報）
+
+
+def fetch_radar_grid(dataid, label):
+    """讀雷達定量降雨格點 → (values, meta)；失敗回 (None, None)。
+
+    格點定義（官方）：左下角為東經118、北緯20，先經向遞增再緯向遞增，
+    TWD67 經緯網格，無效值 -1。
+    """
+    if not CWA_API_KEY:
+        return None, None
+    print(f"抓取{label}（{dataid}）...")
+    txt = None
+    for _try in range(2):
+        try:
+            r = cwa_get(f"{FILEAPI}/{dataid}",
+                        params={"Authorization": CWA_API_KEY,
+                                "downloadType": "WEB", "format": "XML"},
+                        timeout=120)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}（{_try+1}/2）")
+                if _try == 0: time.sleep(5)
+                continue
+            txt = r.content.decode('utf-8', 'replace')
+            break
+        except Exception as e:
+            print(f"    取用失敗（{_try+1}/2）：{e}")
+            if _try == 0: time.sleep(5)
+    if not txt:
+        print(f"★ {label}：下載失敗")
+        return None, None
+    try:
+        def _tag(t):
+            m = re.search(rf'<{t}>([^<]*)</{t}>', txt)
+            return m.group(1).strip() if m else ''
+        meta = {
+            'lon0': float(_tag('StartPointLongitude') or 118),
+            'lat0': float(_tag('StartPointLatitude') or 20),
+            'res':  float(_tag('GridResolution') or 0.0125),
+            'nx':   int(_tag('GridDimensionX') or 441),
+            'ny':   int(_tag('GridDimensionY') or 561),
+            'time': _tag('DateTime'),
+        }
+        i = txt.index('<content>'); j = txt.index('</content>', i)
+        vals = [float(x) for x in txt[i+9:j].split(',') if x.strip()]
+    except Exception as e:
+        print(f"★ {label}：解析失敗 {e}")
+        return None, None
+    if len(vals) != meta['nx'] * meta['ny']:
+        print(f"★ {label}：格點數不符（{len(vals)} vs "
+              f"{meta['nx']}×{meta['ny']}）")
+        return None, None
+    pos = sum(1 for v in vals if v > 0)
+    print(f"    {meta['nx']}×{meta['ny']} 格點，有雨 {pos} "
+          f"（{pos/len(vals)*100:.1f}%），時間 {meta['time'][:16]}")
+    return vals, meta
+
+
+def radar_to_towns(vals, meta, town_polys):
+    """把雷達格點聚合到鄉鎮 → {縣市+鄉鎮: {'mean':x, 'max':x, 'n':格點數}}。
+
+    ★ 用「鄉鎮多邊形範圍內的所有格點」而非質心單點：
+      質心取樣時該點沒回波就是 null，但那不代表整個鄉鎮沒雨
+      —— 實測 radar.json 有約 60% 的鄉鎮是 null。
+      1.4km 格點下，一個鄉鎮涵蓋數十到數百格，統計上穩定得多。
+    """
+    lon0, lat0 = meta['lon0'], meta['lat0']
+    res, nx, ny = meta['res'], meta['nx'], meta['ny']
+    out = {}
+    for key, (lo0, la0, lo1, la1, poly) in town_polys.items():
+        i0 = max(0, int((lo0 - lon0) / res))
+        i1 = min(nx - 1, int((lo1 - lon0) / res) + 1)
+        j0 = max(0, int((la0 - lat0) / res))
+        j1 = min(ny - 1, int((la1 - lat0) / res) + 1)
+        if i1 < i0 or j1 < j0:
+            continue
+        acc, mx, n = 0.0, None, 0
+        for j in range(j0, j1 + 1):
+            base = j * nx
+            for i in range(i0, i1 + 1):
+                v = vals[base + i]
+                if v < 0:                 # -1 為無效值
+                    continue
+                # 只計落在多邊形內的格點
+                if not _pt_in_poly(lon0 + i * res, lat0 + j * res, poly):
+                    continue
+                acc += v; n += 1
+                if mx is None or v > mx: mx = v
+        if n:
+            out[key] = {'mean': round(acc / n, 1), 'max': round(mx, 1), 'n': n}
+    if out:
+        _nz = sum(1 for v in out.values() if v['max'] > 0)
+        _avg = sum(v['n'] for v in out.values()) / len(out)
+        print(f"    鄉鎮聚合：{len(out)} 個（有雨 {_nz}），平均每鄉鎮 {_avg:.0f} 格")
+    return out
+
+
+def _pt_in_poly(x, y, rings):
+    """射線法：點是否在多邊形內（rings 為外環清單，任一命中即算）。"""
+    for ring in rings:
+        inside = False
+        n = len(ring)
+        j = n - 1
+        for i in range(n):
+            xi, yi = ring[i]; xj, yj = ring[j]
+            if ((yi > y) != (yj > y)) and \
+               (x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi):
+                inside = not inside
+            j = i
+        if inside:
+            return True
+    return False
+
+
+def fetch_tide_forecast():
+    """鄉鎮潮汐預報 → {縣市+鄉鎮: {'range': 大/中/小, 'times': [...]}}。
+
+    ★ 為何需要：暴潮溢淹的高風險時刻是「滿潮 × 大浪」同時發生，
+      只看浪高會低估。潮差「大」的日子（大潮）風險更高。
+    ★ 資料源實測（使用者提供原始檔）：266 個地點，鍵即「縣市+鄉鎮」，
+      每日含 2-4 筆滿潮／乾潮，潮高有三種基準，取 AboveLocalMSL
+      （相對當地平均海平面）最適合判讀相對水位。
+    回傳 {}, 失敗不影響其他流程。
+    """
+    if not CWA_API_KEY:
+        return {}
+    print(f"抓取鄉鎮潮汐預報（{TIDE_EP}）...")
+    txt = None
+    for _try in range(2):
+        try:
+            r = cwa_get(f"{FILEAPI}/{TIDE_EP}",
+                             params={"Authorization": CWA_API_KEY,
+                                     "downloadType": "WEB", "format": "XML"},
+                             timeout=120)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}（{_try+1}/2）")
+                if _try == 0: time.sleep(5)
+                continue
+            txt = r.content.decode('utf-8', 'replace')
+            break
+        except Exception as e:
+            print(f"    取用失敗（{_try+1}/2）：{e}")
+            if _try == 0: time.sleep(5)
+    if not txt:
+        print("★ 潮汐：下載失敗")
+        return {}
+
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(re.sub(r'\sxmlns="[^"]+"', '', txt, count=1))
+    except Exception as e:
+        print(f"★ 潮汐：XML 解析失敗 {e}")
+        return {}
+
+    out = {}
+    for loc in root.iter('Location'):
+        name = (loc.findtext('LocationName') or '').strip()
+        if not name:
+            continue
+        days = []
+        for d in loc.iter('Daily'):
+            date = d.findtext('Date') or ''
+            rng = d.findtext('TideRange') or ''
+            times = []
+            for t in d.findall('Time'):
+                dt = t.findtext('DateTime') or ''
+                kind = t.findtext('Tide') or ''
+                th = t.find('TideHeights')
+                msl = None
+                if th is not None:
+                    v = th.findtext('AboveLocalMSL')
+                    try: msl = int(float(v))
+                    except (TypeError, ValueError): msl = None
+                if dt and kind:
+                    times.append({'t': dt, 'kind': kind, 'cm': msl})
+            if times:
+                days.append({'date': date, 'range': rng, 'times': times})
+        if days:
+            out[name] = days
+    if out:
+        n = sum(len(v) for v in out.values())
+        print(f"    潮汐預報：{len(out)} 個地點、{n} 個預報日")
+    else:
+        print("★ 潮汐：解析後無資料")
+    return out
+
+
+def fetch_wave_forecast():
+    """波浪預報模式（F-A0020-001）→ 沿海鄉鎮的浪高／浪向／週期。
+
+    ★ 資料源（實測 2026-08-31，使用者提供原始 zip 確認）：
+        F-A0020-001「波浪預報模式資料」
+        0.1°格點 163×268、範圍 109.9-126.1E / 9.4-36.1N、逐時 169 步
+        zip 內三組檔：hs（浪高）、dir（浪向）、t（週期），各 169 個 XML
+      先前誤用 F-D0047-095/096（404）與 F-A0085-002（實為寒害指數），
+      皆因從文件檔名或名稱推測 dataid —— CWA 的 dataid 無法推測，必須實證。
+
+    ★ 體積控制：解壓後全套約 2.4GB，故只讀「浪高＋浪向＋週期」各 24 個時間步
+      （前 72 小時、每 3 小時一筆），且只保留沿海鄉鎮對應的格點。
+
+    回傳 {縣市+鄉鎮: [{start, end, wave, dir, period}]}；失敗回 {}。
+    """
+    if not CWA_API_KEY:
+        print("★ 浪高：無 CWA_API_KEY，略過")
+        return {}
+    if not os.path.exists(COASTAL_TOWNS_FILE):
+        print(f"★ 浪高：找不到 {COASTAL_TOWNS_FILE}，略過")
+        return {}
+    try:
+        with open(COASTAL_TOWNS_FILE, encoding='utf-8') as f:
+            towns = json.load(f)
+    except Exception as e:
+        print(f"★ 浪高：沿海鄉鎮清單讀取失敗 {e}")
+        return {}
+
+    import io as _io, zipfile as _zip
+    print(f"抓取波浪預報模式（{WAVE_EP}）...")
+    url = _resolve_product_url(WAVE_EP)
+    zf = None
+    for _try in range(2):
+        try:
+            if url:                      # 主要路徑：ProductURL（多為 S3）
+                r = cwa_get(url, timeout=300)
+            else:
+                # ★ 備援：直接向 fileapi 要檔案（部分產品會直接回 zip 位元組，
+                #   而非先給 metadata）。datastore 對檔案型會 404/500，不再嘗試。
+                r = cwa_get(f"{FILEAPI}/{WAVE_EP}",
+                                 params={"Authorization": CWA_API_KEY,
+                                         "downloadType": "WEB", "format": "ZIP"},
+                                 timeout=300)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}（{_try+1}/2）")
+                if _try == 0: time.sleep(5)
+                continue
+            zf = _zip.ZipFile(_io.BytesIO(r.content))
+            print(f"    下載完成：{len(r.content)//1024//1024} MB")
+            break
+        except Exception as e:
+            print(f"    取用失敗（{_try+1}/2）：{e}")
+            if _try == 0: time.sleep(5)
+    if zf is None:
+        print("★ 浪高：下載失敗")
+        return {}
+
+    names = zf.namelist()
+    def _pick(tag):
+        got = sorted(n for n in names if f'-{tag}.' in n and n.endswith('.xml'))
+        return got[:WAVE_STEPS * 3:3]        # 逐時 → 每 3 小時取一筆
+    files = {'hs': _pick('hs'), 'dir': _pick('dir'), 't': _pick('t')}
+    print(f"    zip 內 {len(names)} 檔；取浪高 {len(files['hs'])}、"
+          f"浪向 {len(files['dir'])}、週期 {len(files['t'])} 個時間步")
+    if not files['hs']:
+        print(f"★ 浪高：zip 內找不到 hs 檔，實際檔名例：{names[:5]}")
+        return {}
+
+    _pt_re = re.compile(
+        r'<Latitude>([\d.]+)</Latitude>\s*<Longitude>([\d.]+)</Longitude>\s*<(\w+)>([-\d.]+)</\4?')
+
+    def _read(fn):
+        """回傳 (DateTime, {(lat,lng): value})，只保留臺灣周邊格點。"""
+        try:
+            txt = zf.read(fn).decode('utf-8', 'replace')
+        except Exception:
+            return None, {}
+        m = re.search(r'<DateTime>([^<]+)</DateTime>', txt)
+        dt = m.group(1) if m else ''
+        vals = {}
+        for mm in re.finditer(
+                r'<Latitude>([\d.]+)</Latitude>\s*<Longitude>([\d.]+)</Longitude>\s*'
+                r'<(?:WaveHeight|WaveDirection|WavePeriod)>([-\d.]+)<', txt):
+            la, lo, v = float(mm.group(1)), float(mm.group(2)), float(mm.group(3))
+            if not (21.0 <= la <= 26.5 and 118.0 <= lo <= 123.0):
+                continue
+            if v < 0:            # 負值＝陸地／無效
+                continue
+            vals[(round(la, 1), round(lo, 1))] = v
+        return dt, vals
+
+    # 每個沿海鄉鎮先找一次最近的有效格點（以第一個時間步為準），之後沿用
+    _dt0, _v0 = _read(files['hs'][0])
+    if not _v0:
+        print("★ 浪高：第一個時間步無有效格點")
+        return {}
+    sea_keys = list(_v0.keys())
+
+    def _nearest(lat, lng):
+        best, bd = None, 1e9
+        for (sla, slo) in sea_keys:
+            d = (sla - lat) ** 2 + ((slo - lng) * 0.92) ** 2
+            if d < bd: bd, best = d, (sla, slo)
+        return best, math.sqrt(bd) * 111.0
+
+    town_grid, far = {}, 0
+    for k, info in towns.items():
+        g, dkm = _nearest(info['lat'], info['lng'])
+        if g is None or dkm > 60:
+            far += 1
+            continue
+        town_grid[k] = (g, round(dkm, 1))
+    print(f"    沿海鄉鎮 {len(towns)} 個 → 對到格點 {len(town_grid)} 個"
+          + (f"（{far} 個超出 60km 略過）" if far else ""))
+
+    out = {}
+    for idx in range(len(files['hs'])):
+        dt, hs = _read(files['hs'][idx])
+        _, dr = _read(files['dir'][idx]) if idx < len(files['dir']) else ('', {})
+        _, pd = _read(files['t'][idx])   if idx < len(files['t'])   else ('', {})
+        if not dt or not hs:
+            continue
+        try:
+            st = datetime.fromisoformat(dt)
+            en = (st + timedelta(hours=3)).isoformat()
+            st = st.isoformat()
+        except Exception:
+            st, en = dt, dt
+        for k, (g, _d) in town_grid.items():
+            w = hs.get(g)
+            if w is None:
+                continue
+            out.setdefault(k, []).append({
+                'start': st, 'end': en, 'wave': round(w, 2),
+                'dir': dr.get(g), 'period': pd.get(g)})
+    if out:
+        n = sum(len(v) for v in out.values())
+        print(f"    沿海浪高：{len(out)} 個鄉鎮、{n} 筆時段"
+              f"（含浪向與週期）")
+    else:
+        print("★ 浪高：格點對應後仍無資料")
+    return out
+
+
+def load_static():
+    with open(STATIC_FILE, encoding='utf-8') as f:
+        rows = json.load(f)
+    table = {r['county']+r['township']: r for r in rows}
+    print(f"靜態警戒值：{len(table)} 個鄉鎮")
+    return table
+
+# ★ CWA 風向為中文方位詞（8方位，如「東北風」「偏南風」）。
+#   換算成氣象慣例的度數（風「來」向：北=0、東=90、南=180、西=270），
+#   供前端畫風場動畫。無法辨識時回 None，不猜。
+_WIND_DIR_MAP = {
+    '北': 0, '偏北': 0, '東北': 45, '東': 90, '偏東': 90,
+    '東南': 135, '南': 180, '偏南': 180, '西南': 225,
+    '西': 270, '偏西': 270, '西北': 315,
+    '北北東': 22.5, '東北東': 67.5, '東南東': 112.5, '南南東': 157.5,
+    '南南西': 202.5, '西南西': 247.5, '西北西': 292.5, '北北西': 337.5,
+}
+def _wind_dir_deg(v):
+    """中文方位詞 → 度數。也接受已是數字的情形。"""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v) % 360
+    txt = str(v).strip()
+    if not txt:
+        return None
+    try:                      # 已是數字字串
+        return float(txt) % 360
+    except ValueError:
+        pass
+    key = txt.replace('風', '').replace('方', '').strip()
+    if key in _WIND_DIR_MAP:
+        return _WIND_DIR_MAP[key]
+    # 退路：取最長的可辨識前綴（處理「東北風偏北」這類寫法）
+    for k in sorted(_WIND_DIR_MAP, key=len, reverse=True):
+        if k and k in key:
+            return _WIND_DIR_MAP[k]
+    return None
+
+
+def _om_alias(store, key, *model_keys):
+    """依序取第一個有值的模式鍵（ECMWF：'ecmwf_ifs' → 退回 'ecmwf_ifs025'）。"""
+    for mk in model_keys:
+        v = (store.get(mk) or {}).get(key)
+        if v:
+            return v
+    return []
+
+
+def _iso_ms(s):
+    """ISO 字串 → epoch 秒；失敗回 None。"""
+    try:
+        from datetime import datetime as _dt
+        return _dt.fromisoformat(str(s).replace('Z', '+00:00')).timestamp()
+    except Exception:
+        return None
+
+
+def _merge_res_series(store, county, name, segs, fine):
+    """把同一鄉鎮的「逐 3 小時（72hr）」與「逐 12 小時（Weekday）」序列合併。
+
+    ★ 根因（2026-11-08 使用者回報平均風／陣風比官網低很多）：
+      F-D0047-093 打包檔每縣市同時有 *_72hr_CH.xml 與 *_Weekday_CH.xml，
+      兩者都寫進 WIND_FCST[county][name]／TEMP_FCST[county][name]，
+      **後解析者整個覆蓋前者**。檔內順序是 72hr → Weekday，所以線上 368 鄉鎮
+      全部只剩逐 12 小時序列 —— 3 小時尺度的風力高峰被抹平，
+      陣風推估（平均風 × 陣風因子）也跟著偏低。逐縣市備援路徑同樣先 3d 後 7d。
+    ★ 合併規則（與解析順序無關）：
+      - 逐 3 小時涵蓋的時段一律用逐 3 小時（官方最細解析度）。
+      - 逐 12 小時只補在逐 3 小時結束之後；跨越交界的那一段把起點
+        截到交界（值仍是該 12 小時的官方值，不內插、不推估）。
+    """
+    for s in segs:
+        s['res'] = 3 if fine else 12
+    cur = (store.get(county) or {}).get(name) or []
+    allsegs = list(cur) + list(segs)
+    f3 = [x for x in allsegs if x.get('res') == 3]
+    c12 = [x for x in allsegs if x.get('res') != 3]
+    if f3:
+        ends = [e for e in (_iso_ms(x.get('end') or x.get('start')) for x in f3) if e is not None]
+        fine_end = max(ends) if ends else None
+        if fine_end is not None:
+            kept = []
+            for x in c12:
+                st, en = _iso_ms(x.get('start')), _iso_ms(x.get('end') or x.get('start'))
+                if st is None or en is None:
+                    continue
+                if en <= fine_end:
+                    continue                     # 完全落在逐 3 小時範圍內 → 捨棄
+                if st < fine_end:                # 跨越交界 → 起點截到交界
+                    x = dict(x)
+                    _f = [y for y in f3 if _iso_ms(y.get('end') or y.get('start')) == fine_end]
+                    x['start'] = (_f[0].get('end') or _f[0].get('start')) if _f else x['start']
+                kept.append(x)
+            c12 = kept
+    merged = {}
+    for x in f3 + c12:                           # f3 先放，同 start 時以 f3 為準
+        merged.setdefault(x.get('start') or '', x)
+    store.setdefault(county, {})[name] = sorted(merged.values(),
+                                                key=lambda x: _iso_ms(x.get('start')) or 0)
+
+
+def _numstr(v):
+    """把 ">= 11"、"<=3"、"12" 這類字串轉為數值；無法解析回 None。
+
+    ★ CWA 在風勢或雨勢強時會以區間下界表示（實測連江 F-D0047-081 的
+      WindSpeed 為 ">= 11"）。直接 float() 會拋錯而整筆丟棄，
+      使「數值愈大的地方反而沒資料」。
+    """
+    if v in (None, '', ' '):
+        return None
+    try:
+        return float(str(v).replace('>=', '').replace('<=', '')
+                      .replace('>', '').replace('<', '').strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _stn_key(n):
+    """站名正規化：去除尾端網站代碼字母（s水保/w水利/tp台北/sr/fr等）。"""
+    import re as _re
+    return _re.sub(r'[A-Za-z]+$', '', (n or '').strip()).strip()
+
+
+def fetch_debris_alerts():
+    """土石流警戒研判（依官方標準，以水保署 API 逐潛勢溪流計算）。
+      紅色警戒：實際有效累積雨量(ETR2) ≥ 警戒值 → 強制/勸告撤離
+      黃色警戒：預測雨量(ETR2＋未來QPF) ≥ 警戒值 → 疏散避難勸告
+    本函式先算「紅色」與「達成率」；黃色需未來QPF，於主流程併入。
+    回傳 {DebrisNO: {...}}；失敗回 {}。"""
+    def num(v):
+        try: return float(v)
+        except: return None
+    print("土石流警戒研判（水保署潛勢溪流）...")
+    data = None
+    for attempt in range(3):
+        try:
+            r = cwa_get(SWCB_RAIN_URL, timeout=60)
+            if r.status_code != 200:
+                if attempt < 2: time.sleep(3); continue
+                return {}
+            data = json.loads(r.content.decode('utf-8', 'replace'))
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return {}
+            time.sleep(3)
+    if not data: return {}
+
+    # ★★ 2026-10-05：這個函式是鄉鎮 ETR2% 的權威來源，但它比
+    #   fetch_swcb_etr2() 多依賴兩個欄位，兩個都是單點失效：
+    #     ① 原本硬要 row['DebrisNO']，拼錯就整批 continue → 回傳 {} → 靜默全失效。
+    #        本檔另一處解析同類 ID 用的是 'DebrisNo'（小寫 o），兩種拼法並存，
+    #        其中一種必然是錯的。而我們其實不需要這個 ID —— 真正用到的是
+    #        County/Town/AlertValue/STRT。要一個不需要的欄位是白送的失效點。
+    #     ② AlertValue 同理。
+    #   改法：欄位名容錯 + 不需要 ID（改以 (縣,鄉,村,站) 為鍵）+ 把每一種
+    #   被丟棄的原因統計出來。查不到欄位時直接把真實欄位名印出來 ——
+    #   不要再讓任何人（包括我）靠猜。
+    pick = _row_pick
+
+    if data and isinstance(data[0], dict):
+        print(f"    [欄位] 實際欄位名：{sorted(data[0].keys())}")
+
+    out = {}
+    n_red = 0
+    drop = {'no_alert': 0, 'no_station_val': 0, 'no_loc': 0}
+    for row in data:
+        if not isinstance(row, dict): continue
+        av = num(pick(row, 'AlertValue', 'Alert', 'AlertVal', 'ALERTVALUE'))
+        if not av or av <= 0:
+            drop['no_alert'] += 1; continue
+        # 兩支參考站取較高的 ETR2（保守，不漏報）
+        cands = []
+        for nk, vk in [('STName1', 'STRT1'), ('STName2', 'STRT2')]:
+            v = num(pick(row, vk))
+            if v is not None:
+                cands.append((v, (pick(row, nk) or '').strip()))
+        if not cands:
+            drop['no_station_val'] += 1; continue
+        etr2, stn = max(cands)
+        cty = (pick(row, 'County', 'CountyName') or '').strip()
+        twn = (pick(row, 'Town', 'TownName', 'Township') or '').strip()
+        if not cty or not twn:
+            drop['no_loc'] += 1
+        no = (pick(row, 'DebrisNO', 'DebrisNo', 'DebrisID', 'DF_NO') or '')
+        no = str(no).strip()
+        pct = round(etr2/av, 4)
+        red = etr2 >= av
+        if red: n_red += 1
+        # ★ 鍵不再依賴 ID：ID 缺失時用 (縣,鄉,村,站) 當鍵，資料不會整批消失
+        key = no or f"{cty}|{twn}|{(pick(row,'Vill','VillName') or '')}|{stn}"
+        out[key] = {
+            'county': cty, 'town': twn,
+            'vill': (pick(row, 'Vill', 'VillName') or '').strip(),
+            'alert': av, 'etr2': round(etr2, 1), 'pct': pct,
+            'station': stn, 'red': red, 'no': no,
+        }
+    print(f"    {len(out)} 條潛勢溪流｜達紅色警戒（ETR2≥警戒值）：{n_red} 條"
+          f"（原始 {len(data)} 筆）")
+    if any(drop.values()):
+        print(f"    [丟棄] 無警戒值 {drop['no_alert']}、無站雨量 {drop['no_station_val']}、"
+              f"無縣市鄉鎮 {drop['no_loc']}")
+    if not out and data:
+        print(f"    ⚠ 一條都沒解析出來 —— 欄位名對不上，請看上面 [欄位] 那一行")
+
+    # ── 原始欄位傾印：STRT1/STRT2 的語意至今未確認，不可再猜 ──
+    #   懸而未決的問題：同一個站名在同一個鄉鎮出現兩個不同的值
+    #   （大同鄉「寒溪」診斷區 156.8、稽核區 128.9，後者等於三星鄉的值）。
+    #   官方表有「雨量來源」欄指定主站／備站，推測 STName1=主站、STName2=備站，
+    #   但未經證實。把原始列整列印出來，一次看清楚對應關係。
+    for _kw in DIAG_STATION_KEYWORDS:
+        _raw = [r for r in data
+                if isinstance(r, dict)
+                and (_kw in str(_row_pick(r, 'STName1') or '')
+                     or _kw in str(_row_pick(r, 'STName2') or ''))]
+        if _raw:
+            print(f"    [原始列] STName 含「{_kw}」的前 6 列：")
+            for r in _raw[:6]:
+                print(f"       {_row_pick(r,'County')}{_row_pick(r,'Town')}"
+                      f"{_row_pick(r,'Vill')}　警戒 {_row_pick(r,'AlertValue')}")
+                print(f"         ST1 {_row_pick(r,'STName1')}"
+                      f"（{_row_pick(r,'STID1')}）= {_row_pick(r,'STRT1')}"
+                      f"　｜　ST2 {_row_pick(r,'STName2')}"
+                      f"（{_row_pick(r,'STID2')}）= {_row_pick(r,'STRT2')}")
+
+    # ── 定向診斷：使用者回報的個案（抓不到就把真相印出來，不要再猜）──
+    for _kw in DIAG_STATION_KEYWORDS:
+        _hit = [d for d in out.values() if _kw in (d['station'] or '')]
+        print(f"    [診斷] 站名含「{_kw}」：{len(_hit)} 條")
+        for d in _hit[:6]:
+            print(f"           {d['county']}{d['town']}{d['vill']} 「{d['station']}」"
+                  f"ETR2 {d['etr2']}／警戒 {d['alert']} = {round(d['pct']*100,1)}%")
+    for _tw in DIAG_TOWNS:
+        _hit = [d for d in out.values()
+                if (d['county'] + d['town']) == _tw or d['town'] in _tw]
+        print(f"    [診斷] {_tw} 的警戒單元：{len(_hit)} 條"
+              f"{'（最高 ' + str(round(max(x['pct'] for x in _hit)*100,1)) + '%）' if _hit else ''}")
+        for d in sorted(_hit, key=lambda x: -x['pct'])[:6]:
+            print(f"           {d['vill']} 「{d['station']}」ETR2 {d['etr2']}"
+                  f"／警戒 {d['alert']} = {round(d['pct']*100,1)}%")
+    return out
+
+
+def fetch_swcb_etr2():
+    """抓水保署土石流參考雨量站 API → 回傳「站名 → ETR2(mm)」對照表。
+
+    ★★ STRT 語意：**直接就是有效累積雨量（毫米）**，非比值。
+       實測佐證：曾誤將其乘上 AlertValue 換算，結果全臺 ETR2% 變成
+       數千至上萬（宜蘭南澳 13163%），恰為放大約 350~450 倍（即警戒值倍數），
+       證明原值本身即為毫米。**切勿再做任何比例換算。**
+       （官方 API 文件某些範例的 STRT 呈現 0~1 小數，係該站當時雨量甚小，
+         並非單位為比值——勿據此誤判。）
+    副作用：同時填充模組級 SWCB_STN_LOC（(縣市,鄉鎮) → {站名: ETR2}），
+      供大崩代表站找不到時「同鄉鎮／同縣市相似名」替代之用——這樣模糊比對
+      有地理範圍約束，不會把「大武」誤配到隔縣的「大武山」。
+      刻意用副作用而非改回傳值，以免動到 agg_obs 的呼叫介面。
+    失敗回 {}（agg_obs 會退回以 CWA 觀測自算）。"""
+    def num(v):
+        try: return float(v)
+        except: return None
+    print("抓取水保署土石流參考雨量站 ETR2...")
+    data = None
+    for attempt in range(3):
+        try:
+            r = cwa_get(SWCB_RAIN_URL, timeout=60)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}")
+                if attempt < 2: time.sleep(3); continue
+                return {}
+            data = json.loads(r.content.decode('utf-8', 'replace'))
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return {}
+            time.sleep(3)
+    if not data:
+        return {}
+    st_val = {}
+    SWCB_STN_LOC.clear()
+    SWCB_BY_LOC.clear()
+    _name_ids = {}
+    if data and isinstance(data[0], dict):
+        print(f"    [欄位] 實際欄位名：{sorted(data[0].keys())}")
+    _n_noloc = 0
+    for row in data:
+        # ★ 欄位名容錯：County/Town 一旦對不上，SWCB_STN_LOC 會是空的，
+        #   「同鄉鎮消歧」那一層就永遠找不到站 —— 且完全不報錯。
+        _cty = (_row_pick(row, 'County', 'CountyName') or '').strip()
+        _twn = (_row_pick(row, 'Town', 'TownName', 'Township') or '').strip()
+        if not (_cty and _twn): _n_noloc += 1
+        for ik, nk, vk in [('STID1','STName1','STRT1'), ('STID2','STName2','STRT2')]:
+            nm = (_row_pick(row, nk) or '').strip(); v = num(_row_pick(row, vk))
+            sid = (_row_pick(row, ik) or '').strip()
+            if v is None or (not nm and not sid): continue
+            if sid: st_val[sid] = v             # ★ STID 為權威鍵（唯一識別）
+            if nm:
+                _name_ids.setdefault(nm, set()).add(sid or nm)
+                if _cty and _twn:
+                    SWCB_BY_LOC[(_cty, _twn, nm)] = v
+                    SWCB_STN_LOC.setdefault((_cty, _twn), {})[nm] = v
+    # ★ 站名鍵僅在該名稱全臺對應唯一 STID 時建立。
+    #   實例：「武陵」有臺中和平 A0F010（33.7mm）與臺東延平 01S130（162mm）兩站，
+    #   以站名為鍵會讓臺東的值覆蓋臺中，使和平區 ETR2% 由 10% 暴增至 46%。
+    _n_amb = 0
+    for nm, ids in _name_ids.items():
+        if len(ids) > 1: _n_amb += 1
+    for nm, ids in _name_ids.items():
+        if len(ids) > 1: continue
+        sid = next(iter(ids))
+        if sid in st_val: st_val[nm] = st_val[sid]
+    # ★ 正規化鍵僅在不撞名時建立（與 fetch_qpesums_hourly.py 同一規則）。
+    #   全臺有 6 組站去尾字母後同名但屬不同機關、不同地點（武陵/武陵w、
+    #   關山/關山w、南庄/南庄w、外大坪/外大坪w、寒溪/寒溪s、雙溪/雙溪tp）。
+    #   舊版無條件 setdefault 會讓兩站塌成一鍵，對站時可能取到另一站的 ETR2。
+    _owner = {}
+    for nm in [k for k in _name_ids if len(_name_ids[k]) == 1 and k in st_val]:
+        k = _stn_key(nm)
+        if k == nm or not k: continue
+        _owner.setdefault(k, set()).add(nm)
+    _n_norm = 0
+    for k, owners in _owner.items():
+        if k in st_val: continue
+        if len(owners) > 1: continue            # 撞名 → 不建立，寧可對不到也不對錯
+        st_val[k] = st_val[next(iter(owners))]; _n_norm += 1
+    if _n_noloc:
+        print(f"    ⚠ {_n_noloc}/{len(data)} 筆取不到縣市鄉鎮 —— 位置索引會不完整，"
+              f"請看上面 [欄位] 那一行")
+    print(f"    水保署ETR2：{len(data)} 條潛勢溪流、{len(st_val)} 個鍵"
+          f"（STID＋唯一站名；正規化鍵 {_n_norm} 個，"
+          f"同名多站 {_n_amb} 個改以 STID/地理區分）、"
+          f"{len(SWCB_STN_LOC)} 個鄉鎮位置索引")
+    return st_val
+
+
+# ══════════════════════════════════════════════════════════
+#  官方警戒（雙軌架構「現況」側）
+#    現況紅/黃 = 水保署官方發布值（權威，含報別）
+#    未來推估 = 系統自算（ETR2＋QPF，依技術指引門檻），一律標示為推估
+# ══════════════════════════════════════════════════════════
+def _swcb_json(url, label, tries=3, timeout=60):
+    """水保署系列 API 通用取用（回 list/dict；失敗回 None）。"""
+    # ★ 帶 User-Agent 與 Accept：多數政府 API 會擋掉沒有 UA 的請求（回 403）。
+    #   實測 2026-08-31 曾連續三次 403，改帶標頭後恢復。
+    _hdr = {'User-Agent': 'Mozilla/5.0 (compatible; RainfallMonitor/1.0)',
+            'Accept': 'application/json, text/plain, */*'}
+    for attempt in range(tries):
+        try:
+            r = cwa_get(url, headers=_hdr, timeout=timeout)
+            if r.status_code != 200:
+                print(f"    {label} HTTP {r.status_code}")
+                # 403/429 多為擋爬或限流，退避久一點再試
+                if attempt < tries - 1:
+                    time.sleep(8 if r.status_code in (403, 429) else 3)
+                    continue
+                return None
+            return json.loads(r.content.decode('utf-8', 'replace'))
+        except Exception as e:
+            print(f"    {label} 失敗（{attempt+1}/{tries}）：{e}")
+            if attempt == tries - 1: return None
+            time.sleep(3)
+    return None
+
+
+def fetch_official_alerts():
+    """水保署官方已發布之土石流／大規模崩塌紅黃警戒。
+    來源 ls.ardswc.gov.tw/api/LandslideAlertOpenData
+      AlertType D=土石流（DebrisNo）、L=大規模崩塌（LandslideID）
+      AlertLevel y=黃色警戒、r=紅色警戒
+    回傳 {'debris':{編號:{...}}, 'landslide':{編號:{...}}, 'report_id':..., 'updated':...}
+    無警戒時 API 可能回空陣列或錯誤物件 → 回空結構（非失敗）。"""
+    print("抓取官方土石流／大崩警戒（水保署 LandslideAlertOpenData）...")
+    data = _swcb_json(SWCB_ALERT_URL, "官方警戒")
+    out = {'debris': {}, 'landslide': {}, 'report_id': '', 'updated': '', 'ok': data is not None}
+    if data is None:
+        print("    取用失敗 → 現況警戒改以系統推估值代用（前端會標示為推估）")
+        return out
+    if isinstance(data, dict):
+        # 無警戒時可能回 {"errorMessage": "目前無警戒"}
+        if data.get('errorMessage'):
+            print(f"    {data.get('errorMessage')}")
+            return out
+        data = [data]
+    if not isinstance(data, list):
+        print(f"    非預期結構（{type(data).__name__}）→ 視為無警戒")
+        return out
+    for row in data:
+        if not isinstance(row, dict): continue
+        lvl = (row.get('AlertLevel') or '').strip().lower()
+        if lvl not in ('y', 'r'): continue
+        rec = {
+            'level': lvl,
+            'county': (row.get('County') or '').strip(),
+            'town':   (row.get('Town') or '').strip(),
+            'vill':   (row.get('Vill') or '').strip() or None,
+            'name':   (row.get('LandslideName') or '').strip() or None,
+            'updated': (row.get('LastUpdateDate') or '').strip(),
+            'report':  (row.get('ReportID') or '').strip(),
+        }
+        typ = (row.get('AlertType') or '').strip().upper()
+        no_d = (row.get('DebrisNo') or '').strip()
+        no_l = (row.get('LandslideID') or '').strip()
+        if typ == 'D' and no_d and no_d != '-':
+            out['debris'][no_d] = rec
+        elif typ == 'L' and no_l and no_l != '-':
+            out['landslide'][no_l] = rec
+        if rec['report'] and not out['report_id']: out['report_id'] = rec['report']
+        if rec['updated'] > out['updated']:        out['updated'] = rec['updated']
+    dr = sum(1 for v in out['debris'].values()    if v['level'] == 'r')
+    dy = sum(1 for v in out['debris'].values()    if v['level'] == 'y')
+    lr = sum(1 for v in out['landslide'].values() if v['level'] == 'r')
+    ly = sum(1 for v in out['landslide'].values() if v['level'] == 'y')
+    print(f"    官方警戒｜土石流 紅{dr}/黃{dy} 條、大崩 紅{lr}/黃{ly} 處"
+          f"（報別 {out['report_id'] or '—'}，更新 {out['updated'] or '—'}）")
+    return out
+
+
+def fetch_ls_alert_values():
+    """大規模崩塌潛勢區官方警戒值（GetLSCountyTownAlertValueList.ashx）。
+    逐潛勢區：LSNo / Name / AlertValue / Lng / Lat。新增潛勢區會自動出現，
+    故本表優先於 landslide_warning_stations.json 的靜態 alert 值。
+    回傳 {LSNo: {...}}；失敗回 {}。"""
+    print("抓取大崩潛勢區官方警戒值...")
+    data = _swcb_json(SWCB_LSVAL_URL, "大崩警戒值")
+    if not isinstance(data, list):
+        print("    取用失敗 → 改用 landslide_warning_stations.json 靜態警戒值")
+        return {}
+    out = {}
+    for row in data:
+        if not isinstance(row, dict): continue
+        no = (row.get('LSNo') or '').strip()
+        if not no: continue
+        try: av = float(row.get('AlertValue'))
+        except (TypeError, ValueError): continue
+        if av <= 0: continue
+        def _f(v):
+            try: return float(v)
+            except (TypeError, ValueError): return None
+        out[no] = {
+            'alert': av,
+            'name':  (row.get('Name') or '').strip(),
+            'county': (row.get('County') or '').strip(),
+            'town':   (row.get('Town') or '').strip(),
+            'lat': _f(row.get('Lat')), 'lng': _f(row.get('Lng')),
+        }
+    print(f"    大崩官方警戒值：{len(out)} 處潛勢區")
+    return out
+
+
+def _stn_key2(n):
+    """強化版站名正規化：去尾端機關代碼字母、再去尾端 (數字) 或 空白數字，反覆到收斂。
+    與 landslide_warning_stations.json 的 station_norm、fetch_qpesums_hourly.py 的
+    _stn_key 規則一致（例：太平山(1)w→太平山、知本(5)→知本、太麻里 2→太麻里）。
+
+    ★ 刻意與上面的 _stn_key() 分開：_stn_key() 是既有 ETR2 官方對齊在用的
+      （v8.0 修正的 21 個 sr/tp 站），它只去尾端字母。若把 (數字) 也一併去掉，
+      「集集(2)」「知本(5)」這類同名不同機關的獨立測站會塌成同一個鍵，
+      可能改變已驗證的 ETR2 對齊結果。故新邏輯另立函式，不動舊路徑。
+    """
+    import re as _re, unicodedata as _ud
+    s = _ud.normalize('NFKC', (n or '')).strip()
+    prev = None
+    while prev != s:
+        prev = s
+        s = _re.sub(r'[A-Za-z]+$', '', s).strip()
+        s = _re.sub(r'\(\s*\d+\s*\)$', '', s).strip()
+        s = _re.sub(r'\s+\d+$', '', s).strip()
+    return s
+
+
+# ★★ 2026-10-05（第二次修正）：代表站的地理判準改用「距離」，不用行政區比對。
+#   前一版對站號解析加了「必須同鄉鎮」的硬要求，實跑擋掉 1200 筆 ——
+#   而那些幾乎全是正確配對：土石流警戒區的代表站本來就常在鄰近鄉鎮甚至跨縣市
+#   （基隆仁愛區的警戒區用安樂區的站 2km、淡水區用北投區的站 7km、
+#     南投國姓鄉用臺中太平區的站 20km）。結果 station_etr2 幾乎全空，
+#   前端測站 ETR2% 整排消失 —— 那是我造成的回歸，不是原本的缺陷。
+#   真正該擋的是「同名但其實是不同的站」：
+#     關山（臺南南化↔臺東海端）58km、武陵（臺中和平↔臺東延平）150km。
+#   行政區相同與否無法區分這兩類，距離可以。30km 把兩邊乾淨分開。
+MAX_STN_KM = 30.0
+TWN_CENTER = {}        # (縣市, 鄉鎮) → (lat, lon)，由 agg_obs 以測站平均填入
+GEO_NO_COORD = [0]     # 查不到座標而放行的次數（寬鬆選擇不可靜默）
+
+
+def _haversine_km(a, b):
+    if not a or not b: return None
+    la1, lo1 = math.radians(a[0]), math.radians(a[1])
+    la2, lo2 = math.radians(b[0]), math.radians(b[1])
+    h = (math.sin((la2 - la1) / 2) ** 2
+         + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2)
+    return 2 * 6371.0 * math.asin(min(1.0, math.sqrt(h)))
+
+
+def _twn_dist_km(c1, t1, c2, t2):
+    """兩個鄉鎮中心的距離（km）；任一側沒有座標回 None。"""
+    a = TWN_CENTER.get((_cty_norm(c1), _cty_norm(t1)))
+    b = TWN_CENTER.get((_cty_norm(c2), _cty_norm(t2)))
+    return _haversine_km(a, b)
+
+
+def _swcb_name_locs(nm):
+    """該站名在水保署資料中出現過的 (縣市, 鄉鎮)。空集合＝無位置可查。"""
+    if not nm: return set()
+    out = set()
+    k = _stn_key2(nm)
+    for (c, t), d in SWCB_STN_LOC.items():
+        for pn in d:
+            if pn == nm or (k and _stn_key2(pn) == k):
+                out.add((c, t)); break
+    return out
+
+
+def _geo_ok(nm, county, town):
+    """以站名查到的 ETR2 是否與目標鄉鎮地理相符。
+
+    為什麼需要這道閘門：
+      swcb_etr2 的站名鍵「全臺唯一名稱」才建立，那條規則只擋得住
+      *同名多站*（武陵／武陵w），擋不住「名稱全臺唯一、但那個站在別縣市」。
+      靜態警戒表的代表站名未必存在於水保署回傳集合，一旦某個同名或近名的站
+      在別處，swcb_etr2.get(站名) 就把別縣市的值灌了進來 —— 與「臺中和平區
+      拿到臺東延平 162mm」完全同一個錯誤類型，只是先前沒被發現。
+    判定：
+      查不到位置（只有 STID 鍵等）→ 無法否證，放行（不動既有行為）
+      查到位置且含目標鄉鎮        → 放行
+      查到位置但全在別處          → 擋掉（跨區誤配）
+    """
+    if not county or not town: return True
+    locs = _swcb_name_locs(nm)
+    if not locs: return True
+    if (county, town) in locs: return True
+    # ★ 不同鄉鎮不等於不同站：代表站常在鄰近鄉鎮。以距離判斷才分得出
+    #   「就近取站」與「同名不同站」。
+    for (c2, t2) in locs:
+        d = _twn_dist_km(county, town, c2, t2)
+        if d is not None and d <= MAX_STN_KM: return True
+        if d is None:
+            GEO_NO_COORD[0] += 1
+            return True                    # 查不到座標 → 無法否證，放行
+    return False
+
+
+def resolve_station_etr2(names, swcb_etr2, county='', town='', strict_geo=False):
+    """依序嘗試把「官方代表站名」對到即時 ETR2 值。
+
+    決策目的是「給官方未來發布紅黃的建議」，所以寧可用同鄉鎮的鄰近站
+    也不要退回鄉鎮聚合值——但模糊比對必須有地理約束，否則會跨區誤配
+    （例：「大武」→隔縣「大武山」、「太平」→「太平山」）。
+
+    層級（先到先用，回傳第一個命中）：
+      1 exact   代表站原名精確命中
+      2 norm    去機關代碼/序號後命中（太平山(1)w → 太平山）
+      3 near_t  同鄉鎮內名稱相似（子字串或 difflib≥0.72）
+      4 near_c  同縣市內名稱相似（同上，較寬鬆的地理範圍）
+    回傳 (etr2, tier, matched_name)；全不中回 (None, '', '')。
+
+    strict_geo=True（鄉鎮官方 ETR2 用）：
+      跳過第 1、2 層 —— 那是全臺字典直查、沒有地理約束，而且呼叫端（鄉鎮聚合）
+      在呼叫本函式之前已經做過同樣的直查，重做一次只是把跨縣市誤配的風險
+      再帶進來一遍。
+      同時跳過第 4 層 near_county：鄉鎮官方 ETR2 要對外當警戒依據，拿同縣市
+      「別的鄉鎮」的站當代表站並不正確；寧可少報也不要報錯地方。
+      → 只保留第 3 層 near_town（同鄉鎮內消歧），這正是「寒溪→寒溪s」要的那層。
+    """
+    import difflib
+    cands = [n for n in names if n]
+    if not strict_geo:
+        # 1 精確（★ 加地理閘門：站名全臺唯一但站在別縣市時不可採用。
+        #   大崩那條路徑也走這裡，先前同樣沒有約束。）
+        for n in cands:
+            if n in swcb_etr2 and _geo_ok(n, county, town):
+                return swcb_etr2[n], 'exact', n
+        # 2 正規化（同上）
+        for n in cands:
+            k = _stn_key2(n)
+            if k and k in swcb_etr2 and _geo_ok(k, county, town):
+                return swcb_etr2[k], 'norm', k
+
+    def _best(pool):
+        """pool = {站名: ETR2}；回傳最相似者（需通過門檻）。"""
+        best, best_score, best_nm = None, 0.0, ''
+        for n in cands:
+            kn = _stn_key2(n)
+            if not kn: continue
+            for pn, pv in pool.items():
+                kp = _stn_key2(pn)
+                if not kp: continue
+                if kn == kp:
+                    return pv, 1.0, pn
+                # 子字串：短名須≥2字，避免單字誤配
+                if len(kn) >= 2 and len(kp) >= 2 and (kn in kp or kp in kn):
+                    sc = 0.9
+                else:
+                    sc = difflib.SequenceMatcher(None, kn, kp).ratio()
+                if sc > best_score:
+                    best, best_score, best_nm = pv, sc, pn
+        return (best, best_score, best_nm) if best_score >= 0.72 else (None, 0.0, '')
+
+    # 3 同鄉鎮
+    if county and town:
+        v, sc, nm = _best(SWCB_STN_LOC.get((county, town), {}))
+        if v is not None: return v, 'near_town', nm
+    # 4 同縣市（strict_geo 下不啟用，見上方說明）
+    if county and not strict_geo:
+        pool = {}
+        for (c, t), d in SWCB_STN_LOC.items():
+            if c == county: pool.update(d)
+        v, sc, nm = _best(pool)
+        if v is not None: return v, 'near_county', nm
+    return None, '', ''
+
+
+def load_hourly_series():
+    """讀 fetch_qpesums_hourly.py 寫的 rain_hourly.json（本腳本只讀不寫）。
+    回傳 (series dict, meta dict)；缺檔／壞檔回 (None, meta)。"""
+    meta = {'available': False, 'hours': 0, 'gap_count': None, 'updated': '',
+            'warm': {}, 'reason': ''}
+    if not os.path.exists(HOURLY_FILE):
+        meta['reason'] = f'尚無 {HOURLY_FILE}（每小時腳本還沒跑過或未部署）'
+        print(f"逐時序列：{meta['reason']}")
+        return None, meta
+    try:
+        with open(HOURLY_FILE, encoding='utf-8') as f:
+            ser = json.load(f)
+        assert isinstance(ser, dict) and 'hours' in ser
+    except Exception as e:
+        meta['reason'] = f'讀取失敗：{e}'
+        print(f"逐時序列：{meta['reason']}")
+        return None, meta
+    hrs = ser.get('hours') or []
+    meta.update({'available': bool(hrs), 'hours': len(hrs),
+                 'gap_count': ser.get('gap_count'), 'updated': ser.get('updated', '')})
+    # 各項判定所需的最短序列長度——未達者一律回「資料不足」，不回「未達標」
+    meta['warm'] = {'r2h': len(hrs) >= 2, 'r3h': len(hrs) >= 3,
+                    'no_abate': len(hrs) >= 2,
+                    'release_2stage': len(hrs) >= 6, 'release_1stage': len(hrs) >= 12,
+                    'self_etr2': len(hrs) >= 168}
+    print(f"逐時序列：{len(hrs)} 小時（缺格 {ser.get('gap_count')}，更新 {ser.get('updated','—')}）"
+          f"｜可用判定：" + "、".join(k for k, v in meta['warm'].items() if v) or "（暖機中）")
+    if len(hrs) < 12:
+        print(f"  ⚠ 暖機中：解除判定需12h、自算ETR2需168h；未達前相關欄位回 None＋reason")
+    return ser, meta
+
+
+def hourly_metrics(ser, meta, station_names):
+    """由逐時序列算出技術指引判定所需的量。station_names 為候選代表站名（依序試）。
+
+    回傳 dict，欄位語意：
+      r1h/r2h/r3h      近1/2/3小時累積雨量（mm）；None＝序列不足或對不到站
+      no_abate         降雨無減緩趨勢（★代理判斷，見下）
+      adj_level/adj_mm 警戒基準值動態調降級別與調降量（依原警戒值決定，見 apply_dynamic_adj）
+      rel_2stage       符合二階段調降標準：連續6h平均<4mm 且最大時雨≤10mm
+      rel_1stage       符合一階段解除標準：連續12h平均<10mm
+      reissue_th1      再發布門檻1：時雨量≥40mm 或 連續2h每小時>20mm
+      reissue_th2      再發布門檻2：24h累積≥200mm（豪雨標準）
+      reason           不可判定時的原因字串（前端顯示「資料不足」而非「未達標」）
+
+    ★「降雨無減緩趨勢」官方未給量化定義，此處以代理判斷：
+        近1h≥4mm（＝官方雨場持續門檻）且 近1h ≥ 前1h×0.6
+      前端必須標明為代理判斷，不可顯示成官方判定。
+    """
+    out = {k: None for k in ('r1h', 'r2h', 'r3h', 'no_abate', 'rel_2stage', 'rel_1stage',
+                             'reissue_th1', 'reissue_th2')}
+    out['reason'] = ''
+    out['station'] = ''
+    if not ser or not meta.get('available'):
+        out['reason'] = meta.get('reason') or '逐時序列尚未建立'
+        return out
+    hrs = ser.get('hours') or []
+    cwa = ser.get('cwa') or {}
+    # 對站：精確 → 強化正規化
+    keys = [n for n in station_names if n]
+    latest = cwa.get(hrs[-1], {}) if hrs else {}
+    stn = next((n for n in keys if n in latest), None)
+    if stn is None:
+        norm = {_stn_key2(k): k for k in latest}
+        stn = next((norm[_stn_key2(n)] for n in keys if _stn_key2(n) in norm), None)
+    if stn is None:
+        out['reason'] = '逐時序列中對不到代表站'
+        return out
+    out['station'] = stn
+
+    def val(h):
+        v = (cwa.get(h) or {}).get(stn)
+        return None if v is None else float(v)
+
+    def window(n):
+        """最近 n 小時的時雨量序列（時間升冪）；有任一小時缺格→回 None。"""
+        need = hrs[-n:] if len(hrs) >= n else None
+        if not need or len(need) < n: return None
+        vs = [val(h) for h in need]
+        return None if any(v is None for v in vs) else vs
+
+    w1, w2, w3 = window(1), window(2), window(3)
+    if w1: out['r1h'] = round(w1[-1], 1)
+    if w2: out['r2h'] = round(sum(w2), 1)
+    if w3: out['r3h'] = round(sum(w3), 1)
+
+    # 降雨無減緩（代理判斷）
+    if w2:
+        cur, prev = w2[-1], w2[-2]
+        out['no_abate'] = bool(cur >= 4.0 and cur >= prev * 0.6)
+    # 解除標準
+    w6, w12 = window(6), window(12)
+    if w6:
+        out['rel_2stage'] = bool(sum(w6) / 6.0 < 4.0 and max(w6) <= 10.0)
+    if w12:
+        out['rel_1stage'] = bool(sum(w12) / 12.0 < 10.0)
+    # 再發布門檻
+    if w1: out['reissue_th1'] = bool(w1[-1] >= 40.0)
+    if w2 and not out['reissue_th1']:
+        out['reissue_th1'] = bool(all(v > 20.0 for v in w2))
+    w24 = window(24)
+    if w24: out['reissue_th2'] = bool(sum(w24) >= 200.0)
+
+    miss = [k for k in ('rel_2stage', 'rel_1stage') if out[k] is None]
+    if miss: out['reason'] = f"序列不足或有缺格（{len(hrs)}h）：{'、'.join(miss)} 無法判定"
+    return out
+
+
+def apply_dynamic_adj(alert, r3h, r2h):
+    """警戒基準值動態調整機制（技術指引三-(三)-3）。
+
+      一級：近3h ≥200mm → 原值≤400 調降100；原值≥450 調降150
+      二級：近3h ≥150mm → 原值≤400 調降 50；原值≥450 調降100
+      三級：近2h ≥100mm → 原值≤400 調降 50；原值≥450 維持不變
+    取最先成立者（一級優先）。回傳 (調整後警戒值, 級別, 調降量)。
+    r3h/r2h 為 None（序列不足）→ 不調整並回級別 None，前端顯示「資料不足」。
+
+    ★ 門檻為「大於等於」：依水保署系統註3之原文（3hr累積雨量>=200mm）。
+      本函式原以嚴格大於實作，恰為 200.0mm 時官方會調降而系統不會；
+      防災判定於邊界值應從寬，故對齊官方寫法。
+    """
+    if not alert or alert <= 0: return alert, None, 0
+    if r3h is None and r2h is None: return alert, None, 0
+    lo = alert <= 400
+    if r3h is not None and r3h >= 200:
+        d = 100 if lo else 150
+        return max(0, alert - d), 1, d
+    if r3h is not None and r3h >= 150:
+        d = 50 if lo else 100
+        return max(0, alert - d), 2, d
+    if r2h is not None and r2h >= 100:
+        d = 50 if lo else 0
+        return max(0, alert - d), 3, d
+    return alert, 0, 0      # 0 = 已判定且無需調整（區別於 None = 無法判定）
+
+
+def slope_est(etr2, alert, qpf24, qpf_night=None):
+    """依技術指引推估紅／黃（**推估側專用**；現況紅黃一律以官方發布為準）。
+
+    官方黃色警戒標準（技術指引三-(二)）：
+      警戒值≦350mm → 實際降雨量已達警戒值 30%，且該值加預測雨量 > 警戒值
+      警戒值≧400mm → 實際降雨量已達警戒值 40%，且該值加預測雨量 > 警戒值
+    官方紅色警戒標準：實際降雨量已達警戒基準值（另需近3h>30mm 且降雨無減緩
+      ——此兩項屬「現況」判定，推估側無從得知未來的實測時雨量，故不套用）。
+    入夜前示警（技術指引三-(四)）：已發布黃警地區，實際＋夜間預測雨量可能達警戒值。
+
+    回傳 dict；alert 無效時所有判定回 None（不猜，不以 False 冒充「未達標」）。"""
+    if not alert or alert <= 0 or etr2 is None:
+        return {'pct': None, 'fc_etr2': None, 'fc_pct': None,
+                'est_yellow_now': None, 'est_red_fc': None,
+                'yellow_th': None, 'reached_th': None, 'night_warn': None}
+    q24 = qpf24 or 0.0
+    fc  = etr2 + q24
+    th_ratio = 0.30 if alert <= 350 else 0.40      # 350<x<400 不存在（級距為50mm）
+    reached_th = etr2 >= alert * th_ratio
+
+    # 兩個語意不同、可同時成立的推估旗標——刻意不合併成單一「推估等級」：
+    #   est_yellow_now：此刻已符合官方「黃色警戒發布標準」
+    #                   （實際達警戒值 th_ratio，且實際＋預測 > 警戒值）
+    #   est_red_fc    ：未來24h預測有效累積雨量達警戒值 → 可能達紅色警戒
+    est_yellow_now = reached_th and fc > alert
+    est_red_fc     = fc >= alert
+    return {
+        'pct':     round(etr2 / alert, 4),
+        'fc_etr2': round(fc, 1),
+        'fc_pct':  round(fc / alert, 4),
+        'est_yellow_now': est_yellow_now,
+        'est_red_fc':     est_red_fc,
+        'yellow_th':  round(th_ratio, 2),
+        'reached_th': reached_th,
+        # 入夜前示警：實際＋夜間(19–06)預測雨量可能達警戒值（None＝無夜間QPF可用）
+        'night_warn': None if qpf_night is None else (etr2 + qpf_night) >= alert,
+    }
+
+
+def load_ls_warn():
+    """載入大崩警戒區明細（代表站＋靜態警戒值；未來推估側需要代表站）。
+    回傳 zones list；缺檔回 []。"""
+    if not os.path.exists(LS_WARN_FILE):
+        print(f"警告：找不到 {LS_WARN_FILE}，大崩未來推估將停用（現況仍走官方警戒）")
+        return []
+    with open(LS_WARN_FILE, encoding='utf-8') as f:
+        d = json.load(f)
+    zones = d.get('zones', [])
+    n = sum(z.get('n_zones', 1) for z in zones)
+    print(f"大崩警戒區明細：{len(zones)} 列／{n} 處潛勢區（{d.get('source','')[:24]}…）")
+    return zones
+
+
+def load_slope_warn():
+    """載入官方坡地警戒區明細（改法B：逐警戒區代表站+警戒值）。"""
+    if not os.path.exists(SLOPE_WARN_FILE):
+        print(f"警告：找不到 {SLOPE_WARN_FILE}，ETR2 聚合退回舊法（鎮內取最大）")
+        return None
+    with open(SLOPE_WARN_FILE, encoding='utf-8') as f:
+        d = json.load(f)
+    tw = d.get('townships', {})
+    n_reg = sum(len(v) for v in tw.values())
+    print(f"坡地警戒區明細：{len(tw)} 鄉鎮、{n_reg} 警戒區（官方代表站對齊）")
+    return tw
+
+def load_all_townships():
+    """載入全台368個行政區的座標清單（不依賴是否有觀測站回報資料）"""
+    if not os.path.exists(ALL_TOWNSHIPS_FILE):
+        print(f"警告：找不到 {ALL_TOWNSHIPS_FILE}，將只處理有觀測站的鄉鎮")
+        return []
+    with open(ALL_TOWNSHIPS_FILE, encoding='utf-8') as f:
+        rows = json.load(f)
+    print(f"全台行政區清單：{len(rows)} 個")
+    return rows
+
+# ── 觀測站 ────────────────────────────────────────
+def fetch_obs():
+    if not CWA_API_KEY: return {}
+    print("抓取觀測站...")
+    raw = None
+    for attempt in range(2):
+        try:
+            r = cwa_get(OBS_URL, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=30)
+            r.raise_for_status(); raw = r.json(); break
+        except Exception as e:
+            if attempt == 0: print(f"  第1次失敗，重試：{e}")
+            else: print(f"  失敗：{e}"); return {}
+    if raw is None: return {}
+
+    def gp(re, key):
+        # Past6Hr 大寫 H
+        for k in [key, key.replace('hr','Hr'), key.replace('Hr','hr')]:
+            v = re.get(k,{}).get('Precipitation')
+            if v is not None:
+                try:
+                    f=float(v); return f if f>=0 else 0.0
+                except: pass
+        return 0.0
+
+    stations = {}
+    # ★ 外層有兩種：API 的 records.Station（實務常見），
+    #   以及檔案下載版的 cwaopendata.dataset.Station。兩種都接受，
+    #   否則改用檔案來源時會解析出 0 站。
+    _recs = (raw.get('records') or {}).get('Station')
+    if not _recs:
+        _ds = (raw.get('cwaopendata') or {}).get('dataset') or {}
+        _recs = _ds.get('Station') or _ds.get('station') or []
+    if isinstance(_recs, dict):
+        _recs = [_recs]
+    for st in (_recs or []):
+        geo = st.get('GeoInfo',{})
+        coords = geo.get('Coordinates',[{}])
+        # ★ 一個測站有 TWD67 與 WGS84 兩組座標，必須取 WGS84
+        #   （Leaflet 用 WGS84；兩者在臺灣差約 800m，取錯會整批偏移）。
+        lat,lng = 0.0,0.0
+        for c in coords:
+            if (c.get('CoordinateName') or '').upper() != 'WGS84':
+                continue
+            lv=c.get('StationLatitude',0); lo=c.get('StationLongitude',0)
+            if lv and lo: lat=float(lv); lng=float(lo); break
+        if not lat:                       # 沒有 WGS84 才退回第一組
+            for c in coords:
+                lv=c.get('StationLatitude',0); lo=c.get('StationLongitude',0)
+                if lv and lo: lat=float(lv); lng=float(lo); break
+        # ★ 官方已提供測站海拔，不需再用 DTM 推算
+        try:
+            _alt = float(geo.get('StationAltitude'))
+        except (TypeError, ValueError):
+            _alt = None
+        re = st.get('RainfallElement',{})
+        stations[st.get('StationId','')] = {
+            'name': st.get('StationName',''),
+            'lat':lat,'lng':lng,'alt':_alt,
+            'county':geo.get('CountyName',''),
+            'township':geo.get('TownName',''),
+            'rain_now':  gp(re,'Now'),
+            'rain_1h':   gp(re,'Past1hr'),
+            'rain_3h':   gp(re,'Past3hr'),   # 紅警「近3h>30mm」與動態調降門檻需要
+            'rain_6h':   gp(re,'Past6Hr'),
+            'rain_12h':  gp(re,'Past12hr'),
+            'rain_24h':  gp(re,'Past24hr'),
+            'rain_2d':   gp(re,'Past2days'),
+            'rain_3d':   gp(re,'Past3days'),
+        }
+    nonzero = sum(1 for s in stations.values() if s['rain_24h']>0)
+    print(f"  {len(stations)} 站，有24h雨量：{nonzero}")
+    return stations
+
+def apply_official_etr2(out_towns, now_tpe, history=None):
+    """以水保署官方現值為準，覆寫鄉鎮 ETR2，並掛上官方歷史。
+
+    ★★ 2026-10-06（使用者指定：觀測值一律用官方資料，ETR2 用水保署的，
+       沒有緩衝空間）。
+
+    為什麼要覆寫而不是「自己算一份」：
+      同一份官方來源，本檔的 agg_obs 與 fetch_qpesums_hourly.py 的
+      write_etr2_now() 各有一套聚合實作。實跑證明兩套會給出不同答案
+      （同一時刻：南澳鄉 51% vs 82.6%）。兩套實作就是兩套錯誤機會。
+      etr2_now.json 由每 10 分鐘的腳本產出、逐官方警戒單元取指定代表站、
+      且有「超過 300% 拒寫」的防呆 —— 它是正確的那一套。
+      所以這裡直接採用它，agg_obs 的結果只當它不存在時的退路。
+
+    同時掛上 etr2_hist（官方歷史，由 fetch_qpesums_hourly.py 維護）。
+    本函式只讀不寫歷史檔 —— 一個寫入者，避免兩支程式打架。
+    """
+    base = now_tpe.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+
+    def seg_key(dt):
+        return dt.replace(hour=(dt.hour // 6) * 6, minute=0, second=0,
+                          microsecond=0).strftime('%Y-%m-%dT%H')
+
+    # ── 官方現值 ──
+    off = {}
+    if os.path.exists(ETR2_NOW_FILE):
+        try:
+            with open(ETR2_NOW_FILE, encoding='utf-8') as f: _d = json.load(f)
+            off = _d.get('townships') or _d.get('towns') or \
+                  {k: v for k, v in _d.items() if isinstance(v, dict) and 'etr2' in v}
+        except Exception as e:
+            print(f"  讀取 {ETR2_NOW_FILE} 失敗：{e}")
+    n_fix, n_same, diffs = 0, 0, []
+    for t in out_towns:
+        k = f"{t.get('county','')}{t.get('township','')}"
+        o = off.get(k)
+        if not isinstance(o, dict) or o.get('etr2') is None: continue
+        # ★★ 單位：etr2_now.json 的 pct 是「比值」(0.358)，
+        #   而 data.json 的 etr2_pct 在組裝時（見 _pct_raw*100 那行）已轉成
+        #   「百分比」(35.8)。先前我直接把比值寫進百分比欄位 → 100 倍低報，
+        #   log 顯示為「本檔 3580.0% → 官方 35.8%」。兩邊必須換算到同一單位
+        #   才能比較，也才能覆寫。
+        off_pct = (o.get('pct') * 100) if o.get('pct') is not None else None
+        mine_p = t.get('etr2_pct')
+        if mine_p is not None and off_pct is not None and abs(mine_p - off_pct) > 1.0:
+            diffs.append((abs(mine_p - off_pct), k, mine_p, off_pct,
+                          t.get('etr2'), o.get('etr2'), o.get('station')))
+            n_fix += 1
+        else:
+            n_same += 1
+        # 一律以官方為準（含分子、分母、代表站）
+        t['etr2'] = o['etr2']
+        if off_pct is not None: t['etr2_pct'] = round(off_pct, 1)
+        if o.get('alert'): t['etr2_alert'] = o['alert']
+        t['etr2_src'] = 'swcb'
+        t['etr2_station'] = o.get('station') or t.get('etr2_station')
+    if off:
+        print(f"  官方 ETR2 覆寫：{len(off)} 個鄉鎮有官方現值"
+              f"（與本檔聚合一致 {n_same}、不一致 {n_fix}）")
+        if diffs:
+            diffs.sort(reverse=True)
+            print(f"    ⚠ 不一致代表兩套聚合有一套是錯的，以官方為準。前 6 筆：")
+            for d in diffs[:6]:
+                print(f"       {d[1]}　本檔 {d[2]:.1f}%（{d[4]}）"
+                      f"→ 官方 {d[3]:.1f}%（{d[5]}，{d[6]}）")
+    else:
+        print(f"  ⚠ 沒有 {ETR2_NOW_FILE}，鄉鎮 ETR2 退回本檔自算"
+              f"（請確認 fetch_qpesums_hourly.py 有在跑）")
+
+    # ── 一致性檢查：觀測累積雨量必須與官方 ETR2 對得起來 ──
+    #   ★★ 使用者指定（2026-10-06）：「如果某地 ETR2% 只有 50%、警戒值 500，
+    #   代表前期雨量累積起來也只有 250 左右；若顯示的累積雨量對不起來，
+    #   就應該要進行確認並排除狀況。」
+    #   物理上的必然關係：ETR2 = 今日×1.0 + 昨日×0.7 + 前日×0.5 + …
+    #   所以 **ETR2 一定 ≥ 今日雨量**（權重 1.0 是最大的一項）。
+    #   今日觀測雨量若超過官方 ETR2，只有三種可能，每一種都必須查：
+    #     ① 我們的觀測對到了別的站（例如距離判準放太寬）
+    #     ② 官方 ETR2 用的代表站與我們的觀測站不同地點（山區常見）
+    #     ③ 官方值過期（ETR2 沒跟上這一輪的雨）
+    #   這裡只標示不修改 —— 觀測是 CWA 的、ETR2 是水保署的，兩邊都是官方，
+    #   我們沒有立場改任何一邊，但必須讓矛盾看得見。
+    _bad = []
+    for t in out_towns:
+        e = t.get('etr2')
+        d0 = (t.get('daily_rain') or [None])[0]
+        if e is None or d0 is None: continue
+        if d0 > e * 1.05 + 5:          # 容許捨入與時間差
+            _bad.append((d0 - e, f"{t.get('county','')}{t.get('township','')}",
+                         d0, e, t.get('etr2_pct'), t.get('etr2_station')))
+    if _bad:
+        _bad.sort(reverse=True)
+        print(f"  ⚠ 一致性：{len(_bad)} 個鄉鎮「今日觀測雨量 > 官方 ETR2」"
+              f"（物理上不可能，ETR2 必 ≥ 今日雨量）")
+        print(f"     鄉鎮              今日觀測  官方ETR2  ETR2%   官方代表站")
+        for r in _bad[:10]:
+            print(f"     {r[1]:<16} {r[2]:>7.1f} {r[3]:>8.1f} "
+                  f"{(r[4] or 0)*100:>6.1f}%  {r[5] or ''}")
+        if len(_bad) > 10:
+            print(f"     …共 {len(_bad)} 個")
+        print(f"     → 多半是我們的觀測對到了官方代表站以外的站；"
+              f"請看 station_audit.json 的 sid_blocked／sid_by_distance")
+
+    # ── 官方歷史 ──
+    #  ★★ 2026-10-07：過去的 ETR2 不需要重建，也不該留白 —— 正確的資料
+    #  一直都在 rain_hourly.json 的 swcb 區塊裡：逐小時、逐站的官方 ETR2
+    #  （由 fetch_qpesums_hourly.py 每 10 分鐘寫入，保留最多 168 小時）。
+    #  先前我讓過去段留白，是因為沒去用這份資料 —— 使用者指出
+    #  「我們已經確定過是有正確資料的，留白沒有解決問題」，那是對的。
+    #  聚合方式與 write_etr2_now()／agg_obs 完全相同：逐官方警戒單元取
+    #  其指定代表站的 ETR2，鄉鎮取百分比最高的單元。
+    hist = {}
+    if os.path.exists(ETR2_HISTORY_FILE):
+        try:
+            with open(ETR2_HISTORY_FILE, encoding='utf-8') as f: _r = json.load(f)
+            hist = {k: v for k, v in _r.items() if not k.startswith('_')}
+        except Exception as e:
+            print(f"  讀取 {ETR2_HISTORY_FILE} 失敗：{e}")
+
+    NSEG = 32
+    _segkeys = [seg_key(base + timedelta(hours=6 * i)) for i in range(-NSEG, 4)]
+
+    # 由 rain_hourly.json 的逐小時站級官方 ETR2 重建鄉鎮逐段歷史（較精細，優先）
+    n_hr = 0
+    _fill_stat = {'filled': 0, 'refused': 0, 'gaps': 0, 'units': 0, 'norain': 0}
+    _calc_stat = {'exact': 0, 'approx': 0, 'refused': 0, 'why': {}, 'sealed': 0, 'unc': 0.0}
+    #  base 是「今天 00:00」，不是現在 —— 用它當未來段的界線會把 06:00
+    #  之後、現在之前的段也擋掉。比較基準必須是當下時刻。
+    _now_naive = now_tpe.replace(tzinfo=None)
+    try:
+        _sw = load_slope_warn() or {}
+        if _sw and os.path.exists(HOURLY_FILE):
+            with open(HOURLY_FILE, encoding='utf-8') as f: _ser = json.load(f)
+            #  ★★ 2026-10-09：官方 API 值（swcb）優先，缺的小時以官方公式自算值
+            #    （swcb_calc）遞補。自算值＝官方權重 Σ W[i]xR[i] 套在官方 CWA
+            #    時雨量上，是 ETR2 的定義本身，不是估算。
+            #    先前只讀 swcb，水保署 API 單獨失敗的小時就整個空白 ——
+            #    而那些小時的時雨量明明抓到了。
+            _swcb_h = _ser.get('swcb') or {}
+            _calc_h = {}        # （逐時版自算已移除，見 fetch_qpesums_hourly 的說明）
+            _n_api = _n_calc = 0
+            _merged = {}
+            for _hk in set(_swcb_h) | set(_calc_h):
+                _row = dict(_calc_h.get(_hk) or {})
+                _src = {k: 'calc' for k in _row}
+                for _k, _v in (_swcb_h.get(_hk) or {}).items():
+                    _row[_k] = _v; _src[_k] = 'api'
+                if _row:
+                    _merged[_hk] = (_row, _src)
+            # 每個 6h 段取「段內最後一個有資料的小時」
+            _by_seg, _src_seg = {}, {}
+            for _hk in sorted(_merged.keys()):
+                try:
+                    _d = datetime.strptime(_hk, '%Y-%m-%dT%H')
+                except Exception:
+                    continue
+                _sk = _d.replace(hour=(_d.hour // 6) * 6).strftime('%Y-%m-%dT%H')
+                _by_seg[_sk], _src_seg[_sk] = _merged[_hk]   # 後蓋前＝段內最後一筆
+            for _sk, _sm in _src_seg.items():
+                _n_api  += sum(1 for v in _sm.values() if v == 'api')
+                _n_calc += sum(1 for v in _sm.values() if v == 'calc')
+            if _n_calc:
+                print(f"  ETR2 來源：官方 API {_n_api} 筆、官方公式自算 {_n_calc} 筆"
+                      f"（自算＝Σ W[i]xR[i] 套在官方時雨量上，非估算）")
+
+            #  ★★ 2026-10-09：逐站、逐 6h 段的觀測雨量 —— ETR2 補值遞迴的輸入。
+            #    要求該段 6 小時至少有 5 小時有值，否則段總量會低估，
+            #    補出來的上升幅度不足。覆蓋不足就記為 None（由殘差吸收）。
+            _cwa_h = _ser.get('cwa') or {}
+            _rs, _rc = {}, {}
+            for _hk, _row in _cwa_h.items():
+                try:
+                    _d = datetime.strptime(_hk, '%Y-%m-%dT%H')
+                except Exception:
+                    continue
+                _sk = _d.replace(hour=(_d.hour // 6) * 6).strftime('%Y-%m-%dT%H')
+                for _st, _v in (_row or {}).items():
+                    if _v is None: continue
+                    try: _f = float(_v)
+                    except Exception: continue
+                    _rs.setdefault(_st, {}); _rc.setdefault(_st, {})
+                    _rs[_st][_sk] = _rs[_st].get(_sk, 0.0) + _f
+                    _rc[_st][_sk] = _rc[_st].get(_sk, 0) + 1
+            _rain_seg = {_st: {_sk: _v for _sk, _v in _m.items()
+                               if _rc[_st].get(_sk, 0) >= 5}
+                         for _st, _m in _rs.items()}
+
+            #  逐「官方警戒單元」建序列 → 補缺口 → 再聚合成鄉鎮。
+            #  必須在單元層補，不能在鄉鎮層補：鄉鎮值是「百分比最高的單元」，
+            #  而最高的那個單元會隨時間換人，鄉鎮層序列不是單一物理量，
+            #  對它套遞迴式沒有意義。
+            _agg = {}     # town -> {segkey: (pct, value, is_fill)}
+            for _town, _regs in _sw.items():
+                for _r2 in _regs:
+                    _a = _r2.get('alert')
+                    if not _a or _a <= 0: continue
+                    _names = [_r2.get('station'), _r2.get('station_norm'),
+                              _stn_key(_r2.get('station') or '')]
+                    _es, _rn = [], []
+                    for _sk in _segkeys:
+                        _stv = _by_seg.get(_sk) or {}
+                        _v = None
+                        for _nm in _names:
+                            if _nm and _nm in _stv: _v = _stv[_nm]; break
+                        _es.append(_v)
+                        _rv = None
+                        for _nm in _names:
+                            if _nm and _nm in _rain_seg and _sk in _rain_seg[_nm]:
+                                _rv = _rain_seg[_nm][_sk]; break
+                        _rn.append(_rv)
+                    #  ★★ 2026-10-09：官方 API 沒有的段，用官方公式由 obs_history
+                    #    的逐日觀測算出來。這不是估算 —— ETR2 的定義就是
+                    #    「近 7 日日雨量的官方固定權重和」，而日雨量是主排程
+                    #    每輪維護的官方觀測（16 天、1300+ 站）。
+                    #    （上一版改用逐時資料，需要 168h/每日 90% 覆蓋，
+                    #      實跑只有 34h、缺格 130，等於從未生效。）
+                    _sid = SWCB_UNIT_SID.get((_town, _r2.get('station') or ''))
+                    if _sid and history:
+                        for _i, _sk in enumerate(_segkeys):
+                            if _es[_i] is not None: continue
+                            try:
+                                _end = datetime.strptime(_sk, '%Y-%m-%dT%H') + timedelta(hours=6)
+                            except Exception:
+                                continue
+                            if _end > _now_naive:
+                                continue            # 未來段不補（只補已經過去的時刻）
+                            _v2, _ex, _why = calc_etr2_at(_sid, history, _end)
+                            if _v2 is not None:
+                                _es[_i] = _v2
+                                _calc_stat['exact' if _ex else 'approx'] += 1
+                            elif _why:
+                                _calc_stat['why'][_why.split('，')[0][:24]] = \
+                                    _calc_stat['why'].get(_why.split('，')[0][:24], 0) + 1
+                                _calc_stat['refused'] += 1
+                    #  ★ 最後封口：過去段不得留洞（見 seal_etr2_series 的說明）
+                    if _sid and history:
+                        _es, _nf, _unc = seal_etr2_series(
+                            _es, _segkeys, _sid, history, _now_naive)
+                        if _nf:
+                            _calc_stat['sealed'] += _nf
+                            _calc_stat['unc'] = max(_calc_stat['unc'], _unc)
+                    if not any(v is not None for v in _es):
+                        continue
+                    #  ★★ 2026-10-09：資料路徑**不做**遞迴補值。
+                    #    使用者：「有數據就要如實彙整，不應該出現空白，
+                    #    也不應該用虛線加註說明的方式處理。」
+                    #    缺口的正解是把 ETR2 算出來（官方公式套官方時雨量，
+                    #    見 fetch_qpesums_hourly.backfill_swcb_calc），
+                    #    不是在兩個錨點之間內插一條看起來合理的線。
+                    #    遞迴式在這裡只用來「檢查」—— 官方值彼此是否符合
+                    #    衰減律，不符合代表對站或資料有問題，印出來讓人看見。
+                    _fill_stat['units'] += 1
+                    _chk = fill_etr2_series(_es, _rn)[2]
+                    _fill_stat['gaps'] += _chk['gaps']
+                    _fill_stat['refused'] += len(_chk['refused'])
+                    for _i, _sk in enumerate(_segkeys):
+                        if _es[_i] is None: continue
+                        _p = _es[_i] / _a
+                        _cur = _agg.setdefault(_town, {}).get(_sk)
+                        if _cur is None or _p > _cur[0]:
+                            _agg[_town][_sk] = (_p, _es[_i], False)
+            for _town, _m in _agg.items():
+                for _sk, (_p, _v, _isf) in _m.items():
+                    hist.setdefault(_town, {})[_sk] = round(_v, 1)
+                    n_hr += 1
+            if n_hr:
+                print(f"  官方 ETR2 歷史：由 {HOURLY_FILE} 逐小時站值重建 {n_hr} 筆"
+                      f"（{len(_by_seg)} 個 6h 段、{_fill_stat['units']} 個警戒單元）")
+            if _calc_stat['exact'] or _calc_stat['approx'] or _calc_stat['refused']:
+                print(f"  官方公式補算（Σ W[i]xR[i]，由 {HISTORY_FILE} 逐日官方觀測）："
+                      f"精確 {_calc_stat['exact']} 段、"
+                      f"近似 {_calc_stat['approx']} 段（當日量 ≤{DAILY_R0_TOL}mm）、"
+                      f"無法補 {_calc_stat['refused']} 段")
+                for _w, _n in sorted(_calc_stat['why'].items(), key=lambda kv: -kv[1])[:3]:
+                    print(f"     無法補的原因：{_w}　{_n} 段")
+            if _calc_stat['sealed']:
+                print(f"  日內封口：{_calc_stat['sealed']} 段（由當日 00:00 累積＝0 與"
+                      f" 24:00＝日總量兩個精確錨點夾住內插；"
+                      f"不確定上界 {_calc_stat['unc']:.1f}mm）")
+            elif history:
+                print(f"  ⚠ 官方公式補算 0 段 —— 代表代表站站號解析或逐日歷史有問題，"
+                      f"請查 SWCB_UNIT_SID（{len(SWCB_UNIT_SID)} 筆）與 {HISTORY_FILE}")
+            if _fill_stat['gaps']:
+                print(f"  ⚠ ETR2 序列仍有 {_fill_stat['gaps']} 個內部缺口"
+                      f"（{_fill_stat['units']} 個警戒單元中）"
+                      f" → 代表那些小時連時雨量都不足以自算，須查 10 分鐘排程")
+            if _fill_stat['refused']:
+                print(f"  ⚠ {_fill_stat['refused']} 個缺口兩端的官方值不符合衰減律"
+                      f"（E(s+1) 應 ≈ E(s)x0.7^(1/4)+R）→ 對站或資料可能有問題")
+    except Exception as e:
+        print(f"  由逐時序列重建 ETR2 歷史失敗（不影響本輪）：{e}")
+    n_town = 0
+    for t in out_towns:
+        t['etr2_hist_base'] = NSEG
+        _tk = f"{t.get('county','')}{t.get('township','')}"
+        rec = hist.get(_tk) or {}
+        if not rec:
+            t['etr2_hist'] = None; continue
+        arr = [rec.get(seg_key(base + timedelta(hours=6 * i)))
+               for i in range(-NSEG, 4)]
+        t['etr2_hist'] = arr if any(v is not None for v in arr) else None
+        #  ★ 不再輸出 etr2_hist_fill：資料路徑已無推算值，
+        #    每一段都是官方 API 值或官方公式自算值，兩者同等權威。
+        if t['etr2_hist']: n_town += 1
+    # ★★ 2026-10-09：逐段涵蓋率。圖上出現缺口時，必須能一眼看出是哪幾段
+    #   沒有官方歷史 —— 否則只能從圖面猜。缺口＝該段所有鄉鎮都沒有值，
+    #   成因通常是 rain_hourly.json 那幾個小時沒抓到（10 分鐘腳本失敗或
+    #   水保署 API 當時沒回）。
+    _per_seg = []
+    for i in range(-NSEG, 4):
+        _k = seg_key(base + timedelta(hours=6 * i))
+        _n = sum(1 for t in out_towns
+                 if (t.get('etr2_hist') or [None])[min(NSEG + i,
+                     len(t.get('etr2_hist') or [1]) - 1)] is not None) \
+             if any(t.get('etr2_hist') for t in out_towns) else 0
+        _per_seg.append((i, _k, _n))
+    _recent = [r for r in _per_seg if -8 <= r[0] <= 0]
+    _holes = [r for r in _recent if r[2] == 0]
+    print("  官方 ETR2 歷史逐段涵蓋（近 2 天）：")
+    print("     " + "　".join(f"{r[1][-2:]}時:{r[2]}" for r in _recent))
+    if _holes:
+        print(f"  ⚠ 有 {len(_holes)} 個 6h 段完全沒有官方歷史"
+              f"（{'、'.join(r[1] for r in _holes)}）")
+        print(f"     → 圖上這幾段會留白。成因多半是 rain_hourly.json 那幾小時"
+              f"沒抓到；等 etr2_history.json 累積足夠就會補上")
+    _cov = sum(1 for t in out_towns
+               if t.get('etr2_hist')
+               and sum(1 for v in t['etr2_hist'] if v is not None) >= 8)
+    if hist:
+        print(f"  官方 ETR2 歷史：{n_town} 個鄉鎮有過去值（{_cov} 個涵蓋 ≥2 天）")
+    else:
+        print(f"  官方 ETR2 歷史尚未累積（由 fetch_qpesums_hourly.py 產生）；"
+              f"過去時段的 ETR2% 會留白，不以觀測回推冒充")
+
+
+def update_history(stations, now_tpe):
+    """
+    日累積歷史 v3（權威來源版）
+      - 今天：直接使用 O-A0002 的 Now 欄位（本日00時起累積）——日曆日的權威觀測值，
+        不做任何滾動窗估計。
+      - 過去日：由「該日最後一次執行」寫入的 Now 值自然定版（23時值≈全日）。
+        跨日後**絕不覆寫**既有記錄；僅在完全缺值時（新站/斷檔/首次部署）
+        才以滾動差分補值：昨天≈rain_24h、前天≈rain_2d-rain_24h、大前天≈rain_3d-rain_2d。
+    """
+    today = now_tpe.strftime('%Y-%m-%d')
+    y1 = (now_tpe-timedelta(days=1)).strftime('%Y-%m-%d')
+    y2 = (now_tpe-timedelta(days=2)).strftime('%Y-%m-%d')
+    y3 = (now_tpe-timedelta(days=3)).strftime('%Y-%m-%d')
+
+    history = json.load(open(HISTORY_FILE)) if os.path.exists(HISTORY_FILE) else {}
+    for sid,st in stations.items():
+        if sid not in history: history[sid]={}
+        rec = history[sid]
+        r_now = st.get('rain_now', 0.0) or 0.0
+        r24h  = st.get('rain_24h', 0.0) or 0.0
+        r2d   = st.get('rain_2d',  0.0) or 0.0
+        r3d   = st.get('rain_3d',  0.0) or 0.0
+
+        # 過去日：只補缺值，絕不覆寫（既有記錄是該日 Now 的日終值，為權威）
+        if y1 not in rec: rec[y1] = round(r24h, 1)
+        if y2 not in rec: rec[y2] = max(0.0, round(r2d - r24h, 1))
+        if y3 not in rec: rec[y3] = max(0.0, round(r3d - r2d, 1))
+
+        # ★★ 跨日定版（2026-10-02 修正）
+        #   原本的致命假設是「該日最後一次執行寫入的 Now 值 ≈ 全日雨量」。
+        #   這只有在當天 23 時那一輪成功跑完才成立。排程延遲或失敗時，
+        #   該日就永遠凍結在中途值 —— 例如最後一輪是 19 時，而主要降雨
+        #   發生在 19~24 時，該日觀測就被低估一大截，而且跨日後
+        #   「絕不覆寫」的規則會讓它永遠錯下去。
+        #   觀測是校驗的絕對基準，這種錯會讓所有模式的分數跟著失真。
+        #   對策：跨日後的前幾輪用 rain_24h 把昨天定版。
+        #   00:0x 執行時，rain_24h 涵蓋「昨天 00:0x ~ 今天 00:0x」，
+        #   與日曆日只差幾分鐘，遠比凍結在白天的值準確。
+        #   取 max 是為了安全：若既有值本來就完整，不會被改小。
+        if now_tpe.hour <= DAY_FINALIZE_HOUR and rec.get('FINAL') != y1:
+            rec[y1] = max(rec.get(y1, 0.0) or 0.0, round(r24h, 1))
+            rec['FINAL'] = y1          # 定版標記（非日期鍵，不影響日值查詢）
+
+        # 今天：本日00時起累積（權威值，直接覆蓋更新）
+        rec[today] = round(r_now, 1)
+
+    cutoff = (now_tpe-timedelta(days=16)).strftime('%Y-%m-%d')   # 保留16天：過去7日視圖的ETR2需回推7+7天雨齡尾巴
+    # ★ 'FINAL' 是定版標記不是日期，字串比較下 'F' > '2' 會被保留，
+    #   但這裡寫明白，避免日後有人改了保留邏輯就把標記洗掉。
+    for sid in history:
+        history[sid] = {d: v for d, v in history[sid].items()
+                        if d == 'FINAL' or d > cutoff}
+    with open(HISTORY_FILE,'w',encoding='utf-8') as f:
+        json.dump(history,f,ensure_ascii=False,separators=(',',':'))
+    print(f"  歷史更新：{len(history)} 站，今日={today}（今日累積=Now權威值）")
+    return history
+
+def calc_etr2(sid, history, now_tpe):
+    """
+    ETR2 = R0 + 0.7×R1 + 0.5×R2 + 0.4×R3 + 0.3×R4 + 0.2×R5 + 0.1×R6
+    R0 = 當天(0-24h)累積雨量，R1 = 前一天(25-48h)，...R6 = 前6天
+    """
+    if sid not in history: return None
+    dvals = get_daily_rain_array(sid, history, now_tpe, days=7)   # 含今天去重疊
+    etr2 = sum(ETR2_WEIGHTS[i] * dvals[i] for i in range(7))
+    return round(etr2, 1)
+
+def calc_etr2_at(sid, history, end_dt):
+    """指定時刻的 ETR2（官方公式，由 obs_history 的逐日觀測算出）。
+
+    end_dt＝該 6h 段的**結束**時刻。段末若落在 00:00，代表的是前一日的
+    24:00 —— 當日量正好是整日總量，結果精確。
+
+    ★★ 2026-10-09：為什麼改用逐日歷史
+      先前的自算走 rain_hourly.json 的逐時資料，需要 168 小時、每日覆蓋
+      ≥90%。實際 log 顯示序列只有 34 小時、缺格 130，那個條件從未成立。
+      obs_history.json 保留 16 天逐站日雨量、由主排程維護，而官方公式
+      要的本來就是日雨量 —— 逐時只在「當日累積到某時刻」這一項才需要。
+
+    ★ 缺日不得當成 0：get_daily_rain_array() 用 .get(key, 0.0)，
+      沒有紀錄的那天會被算成沒下雨，ETR2 因此被**低估**。
+      對警戒系統而言低估是危險的方向，所以這裡缺日一律回 None。
+    回傳 (etr2, exact, reason)
+    """
+    rec = (history or {}).get(sid)
+    if not rec:
+        return None, False, '無該站歷史'
+    at_midnight = (end_dt.hour == 0)
+    base = (end_dt - timedelta(days=1)).date() if at_midnight else end_dt.date()
+    days = []
+    for i in range(7):
+        d = (base - timedelta(days=i)).strftime('%Y-%m-%d')
+        v = rec.get(d)
+        days.append(None if v is None else float(v))
+    if at_midnight:
+        #  段末＝該日 24:00 → 當日累積就是整日總量，精確
+        return etr2_from_daily(days, r0_partial=days[0]) if days[0] is not None \
+               else (None, False, '當日無日雨量')
+    return etr2_from_daily(days)
+
+
+def get_daily_rain_array(sid, history, now_tpe, days=15):
+    """
+    回傳過去 N 天的逐日觀測雨量陣列（給前端做未來ETR2%滾動計算用）
+    array[0] = 今天, array[1] = 昨天, ...（預設15天：過去7日視圖的ETR2需用到13-14天前觀測）
+    """
+    if sid not in history: return [0.0]*days
+    daily = history[sid]
+    # 'FINAL' 是定版標記，不是某一天的雨量；以日期鍵查詢不會取到它，
+    #   這裡保留註解提醒結構裡有這個非日期鍵。
+    return [
+        daily.get((now_tpe-timedelta(days=i)).strftime('%Y-%m-%d'), 0.0)
+        for i in range(days)
+    ]
+
+def enrich_stations_with_etr2(excel_stations, obs, all_stations, alert_val):
+    """
+    把 Excel 靜態表的測站清單跟即時觀測站資料做站名比對
+    比對策略（依序嘗試）：
+      1. 精確比對
+      2. 正規化比對：去除 s/w/S/W/(1)/(2) 等後綴
+      3. 部分包含比對：其中一邊包含另一邊的核心名稱
+    """
+    import re as _re
+    station_etr2  = obs.get('station_etr2', {})
+    station_by_nm = obs.get('station_etr2_name', {})   # ★ 以站名為鍵（不經站號）
+    station_daily = obs.get('station_daily', {})
+    obs_station_ids = obs.get('stations', [])
+
+    # 若 obs 是空字典（該鄉鎮完全無觀測站資料），直接回傳原站清單（無ETR2%）
+    if not obs_station_ids:
+        # ★ 早退路徑同樣要帶座標與海拔欄位，否則該鄉鎮的測站在前端
+        #   會缺 sid/lat/lng/elev，海拔散佈圖與測站底圖就取不到它們。
+        return [{'name': st.get('name',''), 'sid': '', 'lat': None, 'lng': None,
+                 'elev': None, 'alert_val': st.get('alert_val'),
+                 'village': st.get('village',''), 'etr2': None, 'etr2_pct': None,
+                 'daily_rain': [0.0]*15} for st in excel_stations]
+
+    def normalize(name):
+        """去除常見後綴：機構代碼(s/w/S/W)、序號((1)/(2)/1/2)、空白"""
+        n = name.strip()
+        # 去除括號數字後綴，如 (1)(2)(3)
+        n = _re.sub(r'\s*\([0-9]+\)\s*$', '', n)
+        # 去除純數字後綴，如 1, 2
+        n = _re.sub(r'\s*[0-9]+\s*$', '', n)
+        # 去除機構代碼後綴 s/w/S/W
+        n = n.rstrip('sSWw').strip()
+        return n
+
+    # 建立三層比對結構
+    exact_map  = {}   # 精確站名 → 站號
+    normal_map = {}   # 正規化站名 → 站號
+    for sid in obs_station_ids:
+        if sid in all_stations:
+            raw = all_stations[sid].get('name', '').strip()
+            exact_map[raw] = sid
+            nrm = normalize(raw)
+            if nrm and nrm not in normal_map:
+                normal_map[nrm] = sid
+        # 若 sid 不在 all_stations，代表資料結構有問題（通常不應發生）
+
+    unmatched = []
+    enriched = []
+    for st in excel_stations:
+        name = st.get('name', '').strip()
+        sid = None
+
+        # 策略1：精確
+        sid = exact_map.get(name)
+
+        # 策略2：正規化
+        if not sid:
+            sid = normal_map.get(normalize(name))
+
+        # 策略3：部分包含（Excel站名正規化後是CWA站名的子字串，或反之）
+        if not sid:
+            nrm_excel = normalize(name)
+            for cwa_name, cwa_sid in exact_map.items():
+                nrm_cwa = normalize(cwa_name)
+                if nrm_excel and nrm_cwa and (nrm_excel in nrm_cwa or nrm_cwa in nrm_excel):
+                    sid = cwa_sid
+                    break
+
+        if not sid:
+            unmatched.append(name)
+
+        etr2_val = station_etr2.get(sid) if sid else None
+        # ★★ 站號查不到就以站名查。比對池只有「該鄉鎮內」的測站，代表站在
+        #   鄰近鄉鎮時站號不在池子裡（寒溪s 就是這樣一直空白）。
+        #   站名這份由 agg_obs 以靜態表的站名直接寫入，兩邊必然對得上。
+        if etr2_val is None:
+            for _nk in (name, normalize(name), _stn_key(name)):
+                if not _nk: continue
+                _v = station_by_nm.get(_nk)
+                if _v is not None: etr2_val = _v; break
+        # ★ 單位是「百分比」（0~100+），不是比值。
+        #   前端的排行、餘裕圖、色階都以 % 為單位；先前存成 0~1 的比值，
+        #   顯示時會變成 0 或 1 這種無意義的數字。
+        etr2_pct = (round(etr2_val / alert_val * 100, 1)
+                    if (etr2_val is not None and alert_val and alert_val > 0) else None)
+        daily    = station_daily.get(sid, [0.0]*15) if sid else [0.0]*15
+        # ★ 帶上座標與海拔：供前端做「海拔 vs 雨量」散佈圖與測站底圖著色。
+        #   海拔查自 station_elev.json（由 20m DTM 離線產生，見 build_station_elev.py）。
+        _sinfo = (all_stations or {}).get(sid) or {}
+        # 官方 StationAltitude 優先；沒有才用 DTM 對照表
+        _elev = _sinfo.get('alt')
+        if _elev is None:
+            _elev = (STATION_ELEV or {}).get(sid)
+        enriched.append({
+            'name':      name,
+            'sid':       sid or '',
+            'lat':       _sinfo.get('lat') or None,
+            'lng':       _sinfo.get('lng') or None,
+            'elev':      _elev,
+            'alert_val': st.get('alert_val'),
+            'village':   st.get('village', ''),
+            'etr2':      round(etr2_val, 1) if etr2_val is not None else None,
+            'etr2_pct':  etr2_pct,
+            'daily_rain': daily,
+        })
+
+    if obs_station_ids and not exact_map:
+        print(f"    [警告] obs有{len(obs_station_ids)}個站號但all_stations查無對應，站名比對完全失效")
+        print(f"    obs_station_ids前3個: {obs_station_ids[:3]}")
+        print(f"    all_stations共{len(all_stations)}個，前3個key: {list(all_stations.keys())[:3]}")
+
+    if unmatched:
+        print(f"    [未匹配測站 {len(unmatched)}個]: {', '.join(unmatched[:8])}{'...' if len(unmatched)>8 else ''}")
+    # ★ 診斷：測站 ETR2% 的填充率。實測全為 None，需知道卡在哪一關
+    #   （站名沒比對到 sid、或 station_etr2 本身是空的、或缺 alert_val）。
+    _n = len(enriched)
+    _withSid = sum(1 for e in enriched if e.get('sid'))
+    _withEtr = sum(1 for e in enriched if e.get('etr2_pct') is not None)
+    if _n and not _withEtr:
+        print(f"    [測站ETR2 診斷] {_n} 站：比對到站號 {_withSid}、"
+              f"station_etr2 有 {len(station_etr2)} 筆、alert_val={alert_val}")
+    return enriched
+
+def _cty_norm(x):
+    """縣市／鄉鎮名正規化：台↔臺 互通，去空白。
+
+    水保署與中央氣象署的行政區用字並非總是一致，一個「台東縣 vs 臺東縣」
+    就會讓整個縣對不到，而且是靜默的。
+    """
+    return (x or '').strip().replace('台', '臺')
+
+
+def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=None,
+            debris=None):
+    # 建立站名→sid 索引（供改法B用官方代表站名查即時ETR2）
+    # ★★ 2026-10-04 修正：原本只有「全臺站名→第一個遇到的 sid」，而且
+    #   去後綴鍵是無條件 setdefault —— 這正是 line ~720 在水保署索引上修掉的
+    #   「兩站塌成一鍵」，在這裡卻沒修。後果有兩層，都會直接影響使用者看到的數字：
+    #     ① 1572 行的 CWA 退路會用別縣市的站去算該鄉鎮 ETR2
+    #     ② 1590 行會把官方 ETR2 掛到錯的站號上 → 前端測站排行列出錯的站
+    #   改法：以 (縣市, 鄉鎮, 站名) 為主索引；全臺站名索引保留但記錄撞名，
+    #   撞名者不得用全臺索引解析（寧可少報也不要掛錯站）。
+    name2sid = {}
+    name2sid_loc = {}
+    _nm_ids = {}
+    for sid, st in stations.items():
+        nm = st.get('name', '').strip()
+        if not nm: continue
+        _c0, _t0 = st.get('county', ''), st.get('township', '')
+        for _k in (nm, nm.rstrip('sSWw').strip()):
+            if not _k: continue
+            _nm_ids.setdefault(_k, set()).add(sid)
+            name2sid.setdefault(_k, sid)
+            if _c0 and _t0:
+                name2sid_loc.setdefault((_c0, _t0, _k), sid)
+    # ★ 鄉鎮中心：以該鄉鎮所有測站的平均座標代表（供距離判準用）
+    TWN_CENTER.clear()
+    GEO_NO_COORD[0] = 0
+    _acc = {}
+    for sid, st in stations.items():
+        _la, _lo = st.get('lat'), st.get('lon') or st.get('lng')
+        if not _la or not _lo: continue
+        _k = (_cty_norm(st.get('county')), _cty_norm(st.get('township')))
+        if not _k[0] or not _k[1]: continue
+        a = _acc.setdefault(_k, [0.0, 0.0, 0])
+        a[0] += _la; a[1] += _lo; a[2] += 1
+    for _k, a in _acc.items():
+        if a[2]: TWN_CENTER[_k] = (a[0] / a[2], a[1] / a[2])
+    print(f"    [測站索引] 鄉鎮中心座標：{len(TWN_CENTER)} 個鄉鎮"
+          f"（距離判準門檻 {MAX_STN_KM:.0f} km）")
+
+    _nm_amb = {k for k, v in _nm_ids.items() if len(v) > 1}
+    if _nm_amb:
+        print(f"    [測站索引] 站名撞名 {len(_nm_amb)} 組，"
+              f"僅以 (縣市,鄉鎮,站名) 解析：{sorted(_nm_amb)[:6]}"
+              f"{'…' if len(_nm_amb) > 6 else ''}")
+    _sid_block = []
+    _sid_amb = []      # 撞名靠距離消歧成功的
+
+    def _sid_dist(sid, county, township):
+        _st = stations.get(sid) or {}
+        _la, _lo = _st.get('lat'), _st.get('lon') or _st.get('lng')
+        _ctr = TWN_CENTER.get((_cty_norm(county), _cty_norm(township)))
+        if not _la or not _lo or not _ctr: return None
+        return _haversine_km((_la, _lo), _ctr)
+
+    def _pick_sid(nm, county, township):
+        """把代表站名解析成站號。
+
+        ★★ 判準是「距離」，不是行政區相同。警戒區的代表站本來就常在鄰近
+        鄉鎮甚至跨縣市（就近取站），要求同鄉鎮會把正確配對大量擋掉
+        （實跑 1200 筆）。要擋的是「同名但其實是不同的站」，那個用距離才分得出。
+
+        層級：
+          1 同鄉鎮同名（最可靠，直接用）
+          2 名稱全臺唯一 → 採用，但距離超過 MAX_STN_KM 才擋（那是同名不同站）
+          3 名稱撞名 → 取距離最近且在門檻內的那一個（武陵／關山靠這層消歧）
+        回傳 sid 或 None；被擋掉的記在 _sid_block。
+        """
+        for _k in (nm, _stn_key(nm)):
+            if not _k: continue
+            sid = name2sid_loc.get((county, township, _k))
+            if sid: return sid
+
+        for _k in (nm, _stn_key(nm)):
+            if not _k: continue
+            if _k in _nm_amb: continue        # 撞名留給第 3 層以距離消歧
+            sid = name2sid.get(_k)
+            if not sid: continue
+            d = _sid_dist(sid, county, township)
+            if d is None or d <= MAX_STN_KM:
+                return sid                    # 查不到座標→無法否證，放行
+            _st = stations.get(sid) or {}
+            _sid_block.append({'county': county, 'town': township,
+                               'station': nm, 'key': _k, 'sid': sid,
+                               'km': round(d, 1),
+                               'sid_at': f"{_st.get('county','')}{_st.get('township','')}"})
+
+        # 3 撞名：取最近且在門檻內
+        for _k in (nm, _stn_key(nm)):
+            if not _k or _k not in _nm_amb: continue
+            best, bestd = None, None
+            for sid in _nm_ids.get(_k, ()):
+                d = _sid_dist(sid, county, township)
+                if d is None: continue
+                if bestd is None or d < bestd: best, bestd = sid, d
+            if best is not None and bestd <= MAX_STN_KM:
+                _sid_amb.append({'county': county, 'town': township,
+                                 'station': nm, 'sid': best,
+                                 'km': round(bestd, 1)})
+                return best
+            if best is not None:
+                _st = stations.get(best) or {}
+                _sid_block.append({'county': county, 'town': township,
+                                   'station': nm, 'key': _k, 'sid': best,
+                                   'km': round(bestd, 1),
+                                   'sid_at': f"{_st.get('county','')}{_st.get('township','')}"})
+        return None
+
+    town={}
+    for sid,st in stations.items():
+        key=st['county']+st['township']
+        if key not in town:
+            town[key]={'county':st['county'],'township':st['township'],
+                       'stations':[],'rain_24h':0.0,'rain_6h':0.0,
+                       'rain_2d':0.0,'rain_3d':0.0,'etr2':None,
+                       'daily_rain':[0.0]*15, 'station_etr2':{},
+                       # ★★ 以「代表站名」為鍵的 ETR2（2026-10-05）。
+                       #   為什麼需要這一份：station_etr2 以站號為鍵，而
+                       #   enrich_stations_with_etr2() 的比對池只有「該鄉鎮內」的
+                       #   氣象署測站。代表站若在鄰近鄉鎮（30km 內，很常見），
+                       #   站號就不在它的池子裡，查不到 → 測站 ETR2% 空白。
+                       #   這正是寒溪s一直沒有 ETR2% 的原因。
+                       #   改以站名為鍵，兩邊用的是同一個東西（靜態表的站名），
+                       #   由構造上一致，不必再繞站號這一圈。
+                       'station_etr2_name':{}}
+        td=town[key]; td['stations'].append(sid)
+        # 雨量觀測：所有站都可以貢獻（用於顯示觀測雨量）
+        td['rain_24h']=max(td['rain_24h'],st['rain_24h'])
+        td['rain_6h'] =max(td['rain_6h'], st['rain_6h'])
+        td['rain_2d'] =max(td['rain_2d'], st['rain_2d'])
+        td['rain_3d'] =max(td['rain_3d'], st['rain_3d'])
+        # 逐日雨量：所有站都可以貢獻（供前端顯示）
+        st_daily = get_daily_rain_array(sid, history, now_tpe, days=15)
+        td['daily_rain'] = [max(a,b) for a,b in zip(td['daily_rain'], st_daily)]
+        if 'station_daily' not in td: td['station_daily'] = {}
+        td['station_daily'][sid] = st_daily
+
+    # ── ETR2 計算（改法B：逐官方警戒區用指定代表站，鎮內取最高 ETR2%）──
+    if slope_warn:
+        n_aligned = 0; n_swcb = 0; n_cwa = 0
+        # ★ 稽核用：記錄哪些鄉鎮的代表站是靠地理解析才對到的，
+        #   以及完全對不到的。靜默落空是這次問題的根源，必須看得見。
+        _resolved_by_tier = {}
+        _resolve_log = []
+        _miss_log = []
+        _designated = set()      # (縣市, 鄉鎮, 站名)：官方警戒單元指定的代表站
+        _geo_block = []          # 被地理閘門擋下的跨縣市誤配（本來會灌錯值）
+        _extra_rank = []         # 補進排行的非代表站（不影響鄉鎮官方 ETR2）
+        _cwa_only = []           # ETR2 非官方值、以 CWA 觀測自算的鄉鎮（應為 0）
+        # ★★ 官方潛勢溪流（權威來源）：(縣,鄉) → [該鄉鎮的所有警戒單元]
+        #   每條都自帶 AlertValue 與 ETR2，pct 由水保署欄位直接算出，
+        #   不經任何站名比對 —— 靜態表過期或站名撞名都影響不到它。
+        # ★ debris（逐潛勢溪流）不再參與鄉鎮 ETR2 的取值 —— 見下方撤回說明。
+        #   仍保留參數與輸出，供土石流圖層使用。
+        for key, td in town.items():
+            regions = slope_warn.get(key) or []
+            if not regions:
+                td['etr2'] = None; td['etr2_pct'] = None
+                continue
+            best_pct = None; best_etr2 = None; best_av = None
+            detail = []; seen = set(); used_swcb = False; used_cwa = False
+            _c0, _t0 = td['county'], td['township']
+            for reg in regions:
+                stn = (reg.get('station') or '').strip()
+                if not stn: continue
+                _designated.add((td['county'], td['township'], stn))
+                av = reg.get('alert', 0) or 0
+                if isinstance(av, str):
+                    import re as _re
+                    _m = _re.search(r'\d+', av); av = int(_m.group()) if _m else 0
+                # ① 官方值優先（水保署 API）
+                ev = None; src = None
+                if swcb_etr2:
+                    # ★ 先以 (縣市, 鄉鎮, 站名) 精準對站：同名站由地理位置區分。
+                    #   「武陵」在臺中和平(33.7mm)與臺東延平(162mm)各有一站，
+                    #   僅用站名會取到錯的那個，使和平區 ETR2% 由 10% 暴增至 46%。
+                    _c, _t = td['county'], td['township']
+                    for _nm in (stn, reg.get('station_norm')):
+                        if _nm and (_c, _t, _nm) in SWCB_BY_LOC:
+                            ev = SWCB_BY_LOC[(_c, _t, _nm)]; break
+                    # ★★ 地理閘門（2026-10-04）：下面三行是全臺站名直查，
+                    #   沒有地理約束。line ~720 的「唯一站名才建鍵」只擋得住
+                    #   同名多站，擋不住「名稱全臺唯一、但那個站在別縣市」。
+                    #   例：靜態表寫宜蘭大同鄉代表站「桃山」，而水保署集合裡
+                    #   的「桃山」在新竹五峰鄉 —— 直查就把新竹的值當成宜蘭的。
+                    #   這與武陵跨縣市錯誤同一類型，必須一起擋。
+                    for _k in (stn,
+                               reg.get('station_norm') or _stn_key(stn),
+                               _stn_key(stn)):
+                        if ev is not None or not _k: continue
+                        _cand = swcb_etr2.get(_k)
+                        if _cand is None: continue
+                        if _geo_ok(_k, _c, _t):
+                            ev = _cand
+                        else:
+                            _geo_block.append({'county': _c, 'town': _t,
+                                               'station': stn, 'key': _k,
+                                               'etr2': _cand,
+                                               'found_at': sorted(
+                                                   f'{a}{b}' for a, b
+                                                   in _swcb_name_locs(_k))})
+                    # ★★ 2026-10-04 修正（使用者回報：宜蘭大同鄉本系統 36%、
+                    #   水保署官方 46%，差在「寒溪s」沒被算進去）。
+                    #   上面三行只做字典直查。站名在全臺撞名時（寒溪/寒溪s、
+                    #   武陵/武陵w 等 6 組）刻意不建正規化鍵——那條規則本身是對的
+                    #   （避免跨縣市對錯站），但它製造了「靜默落空」：
+                    #   對不到就當作沒有這個站，鄉鎮 ETR2 因此被低估。
+                    #   對預警系統來說，低估比對錯更危險。
+                    #   改用 resolve_station_etr2()：它有地理約束（同鄉鎮→同縣市），
+                    #   在鄉鎮範圍內消歧，既不會跨區誤配，也不會靜默漏掉。
+                    #   這個函式本來就存在，只是先前只用在大崩那條路徑。
+                    if ev is None:
+                        _rv, _tier, _mn = resolve_station_etr2(
+                            [stn, reg.get('station_norm') or ''], swcb_etr2,
+                            county=_c, town=_t, strict_geo=True)
+                        if _rv is not None:
+                            ev = _rv
+                            _resolved_by_tier[_tier] = _resolved_by_tier.get(_tier, 0) + 1
+                            _resolve_log.append({'county': _c, 'town': _t,
+                                                 'want': stn, 'matched': _mn,
+                                                 'tier': _tier, 'etr2': _rv})
+                    if ev is not None: src = 'swcb'; used_swcb = True
+                # ★ 不論官方值有沒有，都記下該單元代表站的站號 ——
+                #   過去時段的補算需要它，而站號解析只有 _pick_sid 一份實作
+                _usid = _pick_sid(stn, _c, _t)
+                if _usid: SWCB_UNIT_SID[(_c + _t, stn)] = _usid
+                # ② 備援：以 CWA 觀測自算（該官方指定站）
+                if ev is None:
+                    sid = _usid
+                    if sid:
+                        ev = calc_etr2(sid, history, now_tpe)
+                        if ev is not None: src = 'cwa'; used_cwa = True
+                if ev is None:
+                    _miss_log.append({'county': td['county'], 'town': td['township'],
+                                      'village': reg.get('village', ''), 'station': stn})
+                    continue
+                # ★分母用「該單元的官方警戒值」（與官方警戒分析總表一致）
+                pct = round(ev/av, 4) if av > 0 else None
+                sig = (reg.get('village',''), stn)
+                if sig not in seen:
+                    seen.add(sig)
+                    detail.append({'village': reg.get('village',''), 'station': stn,
+                                   'alert': av, 'etr2': ev, 'etr2_pct': pct, 'src': src})
+                # ★ 同時填入測站級 ETR2。先前只有 else 分支（無對照表的退路）
+                #   會填，主路徑不填，於是每個鄉鎮的 station_etr2 都是 0 筆，
+                #   前端測站排行的 ETR2% 永遠是空的。
+                _sid = _pick_sid(stn, td['county'], td['township'])
+                if _sid:
+                    _prev = td['station_etr2'].get(_sid)
+                    if _prev is None or ev > _prev:
+                        td['station_etr2'][_sid] = ev
+                # ★ 同時以站名為鍵（含正規化鍵），不經站號
+                for _nk in (stn, _stn_key(stn)):
+                    if not _nk: continue
+                    _p2 = td['station_etr2_name'].get(_nk)
+                    if _p2 is None or ev > _p2:
+                        td['station_etr2_name'][_nk] = ev
+                if pct is not None and (best_pct is None or pct > best_pct):
+                    best_pct = pct; best_etr2 = ev; best_av = av
+            td['etr2'] = best_etr2
+            td['etr2_pct'] = best_pct
+            td['etr2_alert'] = best_av          # 該最高單元的官方警戒值（前端算%用）
+            td['etr2_src'] = ('swcb' if (used_swcb and not used_cwa)
+                              else 'mixed' if (used_swcb and used_cwa)
+                              else 'cwa' if used_cwa else None)
+            # ══════════════════════════════════════════════════
+            #  ★★ 2026-10-06 撤回：此處原本把 fetch_debris_alerts() 的
+            #  「該鄉鎮所有潛勢溪流」併進來取最大值（2026-10-05 加入）。
+            #  以水保署 2026-10-06 07:00 官方表核對後確認那是錯的：
+            #    · 官方南澳鄉的警戒單元只有 東澳／金岳國小s／南澳／武塔w／
+            #      樟林w／大濁水w，最大值是 東澳 202/400 = 50.5%。
+            #      我們卻用了「西帽山」330.4 得到 82.6% —— 西帽山根本不是
+            #      南澳鄉任何一個官方警戒單元的代表站。
+            #    · 官方大同鄉寒溪村的代表站是「寒溪s」(222/550=40.4%)，
+            #      而「寒溪」是冬山鄉大進村的站(189/600)。兩個不同的站。
+            #      fetch_debris_alerts() 用 max(STRT1, STRT2) 取較大者，
+            #      取到了錯的那一站 —— 官方是用「雨量來源」欄指定的主站，
+            #      不是取大的。
+            #  鄉鎮 ETR2% 的定義回到原本正確的路徑：逐官方警戒單元 ×
+            #  該單元指定的代表站。測站漏接的問題改由「更新靜態表」解決
+            #  （slope_warning_stations.json 已由官方表重新產生，
+            #    501 → 758 個單元，寒溪s 等漏掉的站都在裡面）。
+            # ══════════════════════════════════════════════════
+            td['slope_regions'] = detail
+
+            # ★★ 把「該鄉鎮內水保署有值、但不是任何警戒單元代表站」的測站
+            #   也補進測站排行（使用者要求：不應出現明明有測站卻沒列入排行）。
+            #   ⚠ 只補 station_etr2（排行用），絕不動 td['etr2']／etr2_pct ——
+            #   鄉鎮 ETR2 的定義是「各官方警戒單元代表站取最高」，擅自把非代表站
+            #   納入會讓我們的數字與水保署官方總表不一致，那比漏列更嚴重。
+            for _nm, _v in (SWCB_STN_LOC.get((_c0, _t0)) or {}).items():
+                if _v is None: continue
+                _s2 = _pick_sid(_nm, _c0, _t0)
+                if not _s2: continue
+                if td['station_etr2'].get(_s2) is None:
+                    td['station_etr2'][_s2] = _v
+                    _extra_rank.append({'county': _c0, 'town': _t0,
+                                        'station': _nm, 'etr2': _v})
+                for _nk in (_nm, _stn_key(_nm)):
+                    if not _nk: continue
+                    if td['station_etr2_name'].get(_nk) is None:
+                        td['station_etr2_name'][_nk] = _v
+
+            if best_pct is not None:
+                n_aligned += 1
+                if used_swcb: n_swcb += 1
+                else:
+                    n_cwa += 1
+                    # ★ 使用者要求知道是哪幾個：ETR2 依規定應一律來自水保署，
+                    #   這些是官方對不到代表站、退回以 CWA 觀測自算的鄉鎮。
+                    _cwa_only.append({'county': _c0, 'town': _t0,
+                                      'etr2': best_etr2, 'pct': best_pct,
+                                      'stations': sorted({d.get('station')
+                                                          for d in detail})})
+        print(f"  鄉鎮聚合（逐官方警戒單元）：{n_aligned} 個鄉鎮有 ETR2%"
+              f"（含水保署官方值 {n_swcb}、純CWA自算 {n_cwa}）")
+
+        # ══════════════════════════════════════════════════
+        #  測站涵蓋稽核（使用者指定：不可出現「明明有測站卻沒被使用」）
+        #  ★ 這段只讀不改，純粹把「看不見的落空」攤出來。
+        #    宜蘭大同鄉本系統 36%／官方 46% 的差異就是這類落空造成的。
+        # ══════════════════════════════════════════════════
+        if _resolved_by_tier:
+            print(f"  [稽核] 靠地理解析才對到的代表站：{_resolved_by_tier}")
+            for r in _resolve_log[:8]:
+                print(f"         {r['county']}{r['town']} 要「{r['want']}」"
+                      f"→ 對到「{r['matched']}」（{r['tier']}）ETR2 {r['etr2']}")
+            if len(_resolve_log) > 8:
+                print(f"         …共 {len(_resolve_log)} 筆")
+        if _geo_block:
+            print(f"  [稽核] ⚠ 擋下跨縣市誤配：{len(_geo_block)} 筆"
+                  f"（站名相同但站在別處，直查會灌錯值）")
+            for r in _geo_block[:8]:
+                print(f"         {r['county']}{r['town']} 「{r['station']}」"
+                      f"→ 鍵「{r['key']}」ETR2 {r['etr2']} 實際在 {r['found_at']}")
+            if len(_geo_block) > 8:
+                print(f"         …共 {len(_geo_block)} 筆")
+        if _sid_block:
+            print(f"  [稽核] ⚠ 擋下站號跨區誤配：{len(_sid_block)} 筆"
+                  f"（站名相同但 CWA 站在別處，會掛錯站或用錯站算 ETR2）")
+            for r in _sid_block[:8]:
+                print(f"         {r['county']}{r['town']} 「{r['station']}」"
+                      f"→ 站號 {r['sid']} 實際在 {r['sid_at']}"
+                      f"（{r.get('km','?')} km，超過 {MAX_STN_KM:.0f} km）")
+            if len(_sid_block) > 8:
+                print(f"         …共 {len(_sid_block)} 筆")
+        if GEO_NO_COORD[0]:
+            print(f"  [稽核] 查不到鄉鎮座標而放行：{GEO_NO_COORD[0]} 次"
+                  f"（無法以距離否證，維持原行為；數字大表示 TWN_CENTER 覆蓋不足）")
+        if _sid_amb:
+            print(f"  [稽核] 撞名站以距離消歧成功：{len(_sid_amb)} 筆")
+            for r in _sid_amb[:5]:
+                print(f"         {r['county']}{r['town']} 「{r['station']}」"
+                      f"→ 站號 {r['sid']}（{r['km']} km）")
+        if _miss_log:
+            print(f"  [稽核] ⚠ 代表站完全對不到 ETR2：{len(_miss_log)} 筆"
+                  f"（這些警戒單元不會進入該鄉鎮的最大值）")
+            for r in _miss_log[:8]:
+                print(f"         {r['county']}{r['town']} {r['village']} 「{r['station']}」")
+            if len(_miss_log) > 8:
+                print(f"         …共 {len(_miss_log)} 筆")
+
+        # 水保署有值、但不屬於任何警戒單元代表站的測站（永遠不會被納入鄉鎮最大值）
+        _used_names = set(_designated)
+        for r in _resolve_log:          # 靠地理解析對到的實際站名也算已使用
+            _used_names.add((r['county'], r['town'], r['matched']))
+        _orphan = []
+        for (c, t), d in SWCB_STN_LOC.items():
+            for nm, v in d.items():
+                if (c, t, nm) not in _used_names:
+                    _orphan.append({'county': c, 'town': t, 'station': nm, 'etr2': v})
+        _orphan.sort(key=lambda x: -(x['etr2'] or 0))
+        if _cwa_only:
+            print(f"  ⚠ 以 CWA 觀測自算 ETR2（非水保署官方值）：{len(_cwa_only)} 個鄉鎮")
+            print(f"     依規定 ETR2 應一律取自水保署；這些是官方對不到代表站的退路，"
+                  f"數值與官方不保證一致")
+            for r in _cwa_only:
+                print(f"     {r['county']}{r['town']}　ETR2 {r['etr2']}"
+                      f"（{round((r['pct'] or 0)*100,1)}%）　代表站 {r['stations']}")
+        if _extra_rank:
+            print(f"  [稽核] 補進測站排行的非代表站：{len(_extra_rank)} 站"
+                  f"（有值卻沒列入排行的情況已消除；鄉鎮官方 ETR2 不受影響）")
+        if _orphan:
+            print(f"  [稽核] 水保署有 ETR2 但非任何警戒單元代表站：{len(_orphan)} 站")
+            print(f"         （依官方定義不計入鄉鎮值，但已補進測站排行）")
+            for r in _orphan[:8]:
+                print(f"         {r['county']}{r['town']} 「{r['station']}」ETR2 {r['etr2']}")
+            if len(_orphan) > 8:
+                print(f"         …共 {len(_orphan)} 站")
+        try:
+            with open('station_audit.json', 'w', encoding='utf-8') as _f:
+                json.dump({'generated': now_tpe.isoformat(),
+                           'resolved_by_tier': _resolved_by_tier,
+                           'resolved': _resolve_log,
+                           'unmatched': _miss_log,
+                           'geo_blocked': _geo_block,
+                           'sid_blocked': _sid_block,
+                           'sid_by_distance': _sid_amb,
+                           'added_to_ranking': _extra_rank,
+                           'cwa_self_computed': _cwa_only,
+                           'not_representative': _orphan},
+                          _f, ensure_ascii=False, indent=1)
+            print(f"  [稽核] 已寫 station_audit.json"
+                  f"（地理解析 {len(_resolve_log)}／對不到 {len(_miss_log)}"
+                  f"／非代表站 {len(_orphan)}）")
+        except Exception as _e:
+            print(f"  [稽核] station_audit.json 寫入失敗：{_e}")
+    else:
+        # 退回舊法：鎮內所有登記站取最大（相容無對照表時）
+        etr2_valid = set()
+        for info in alert_table.values():
+            for st in info.get('stations', []):
+                nm = st.get('name','').strip()
+                if nm:
+                    etr2_valid.add(nm); etr2_valid.add(nm.rstrip('sSWw').strip())
+        for sid, st in stations.items():
+            key = st['county']+st['township']
+            if key not in town: continue
+            nm = st.get('name','').strip()
+            if nm in etr2_valid or nm.rstrip('sSWw').strip() in etr2_valid:
+                ev = calc_etr2(sid, history, now_tpe)
+                if ev is not None:
+                    town[key]['etr2'] = max(town[key]['etr2'] or 0.0, ev)
+                    town[key]['station_etr2'][sid] = ev
+                    for _nk in (nm, _stn_key(nm)):
+                        if _nk: town[key]['station_etr2_name'][_nk] = ev
+        for key, td in town.items():
+            ai = alert_table.get(key, {}); av = ai.get('alert_val', 0)
+            td['etr2_pct'] = round(td['etr2']/av, 4) if td['etr2'] and av > 0 else None
+        print(f"  鄉鎮聚合（舊法退回）：{len(town)} 個鄉鎮")
+    return town
+
+# ── PoP 各縣市鄉鎮端點 ───────────────────────────
+def fetch_pop_county(county, ep_code, is_3day):
+    """抓單一縣市的鄉鎮 PoP 資料（逐縣市備援路徑；主要路徑為打包檔）"""
+    url = f"{BASE_URL}/{ep_code}"
+    try:
+        r = cwa_get(url, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=15)
+        if r.status_code==404: return {}
+        r.raise_for_status(); raw=r.json()
+    except Exception as e: return {}
+    return _extract_pop_wind(raw, county, is_3day)
+
+
+def _extract_pop_wind(raw, county, is_3day):
+    """由 API JSON（或打包 XML 轉出的同構 dict）解析 PoP 與風力。
+
+    ★ 打包檔與逐縣市共用此函式，確保兩條路徑的欄位判讀完全一致
+      （值鍵、">= N" 格式、空 StartTime 等坑都只需修一處）。
+    回傳 {鄉鎮: [{start,end,pop,hours}]}；副作用：填充 WIND_FCST[county]。
+    """
+    pop_map={}
+    try:
+        rec = raw.get('records',{})
+        locs_wrap = rec.get('Locations', rec.get('locations',[]))
+        if not locs_wrap: return {}
+        locs = locs_wrap[0].get('Location', locs_wrap[0].get('location',[]))
+
+        # 目標欄位名稱（已確認）
+        target_3d = '3小時降雨機率'   # F-D0047 奇數端點
+        target_7d = '12小時降雨機率'  # F-D0047 偶數端點
+        target = target_3d if is_3day else target_7d
+
+        for loc in locs:
+            name = loc.get('LocationName', loc.get('locationName',''))
+            we_list = loc.get('WeatherElement', loc.get('weatherElement',[]))
+            segs=[]
+            for we in we_list:
+                en = we.get('ElementName', we.get('elementName',''))
+                if en != target: continue
+                times = we.get('Time', we.get('time',[]))
+                for t in times:
+                    start = t.get('StartTime', t.get('startTime',
+                            t.get('DataTime',  t.get('dataTime',''))))
+                    end   = t.get('EndTime',   t.get('endTime', start))
+                    ev    = t.get('ElementValue', t.get('elementValue',[{}]))
+                    if isinstance(ev,list): ev=ev[0] if ev else {}
+                    # F-D0047 的 ElementValue 結構可能是：
+                    # {"Value":"70","Measures":"%"} 或 {"Probability":"70"}
+                    v = None
+                    for k in ['ProbabilityOfPrecipitation','Value','value',
+                              'Probability','probability','MaxCI','MinCI']:
+                        candidate = ev.get(k)
+                        if candidate is not None and candidate != '' and candidate != ' ':
+                            v = candidate; break
+                    try: pop=float(v) if v is not None else None
+                    except: pop=None
+
+                    hours = 3 if is_3day else 12
+                    segs.append({'start':start,'end':end,'pop':pop,'hours':hours})
+            # ★ 鍵改為「縣市+鄉鎮」：全臺有 8 組同名鄉鎮（中正區×2、東區×4、
+            #   北區×3、中山區/信義區/西區/大安區/南區各×2），以純鄉鎮名為鍵
+            #   會互相覆蓋，實測 368 個鄉鎮只剩 357 個 —— 11 個鄉鎮的降雨機率
+            #   被別縣市的值取代，且完全無跡可循。
+            #   同時保留純鄉鎮名鍵（僅在尚未存在時寫入）以相容舊呼叫端。
+            if segs:
+                pop_map[county + name] = segs
+                pop_map.setdefault(name, segs)
+
+            # ── 風速／蒲福風級（與 PoP 同一次請求，不額外呼叫 API）──
+            #   F-D0047 逐 3 小時提供「風速」與「蒲福風級」；逐 12 小時為「最大風速」。
+            #   ★ 整份 F-D0047 規格**沒有陣風欄位**（已核對官方產品說明文件
+            #     F-D0047-001_093.pdf），鄉鎮級只有平均風。陣風另由
+            #     「颱風警報期間各地區風力預測」提供，且僅警報期間有值。
+            #   ★ 不以 ElementName 比對（其實際字串未經證實，猜錯就整批無資料）。
+            #     改為掃描所有元素，看 ElementValue 內是否含 WindSpeed／BeaufortScale
+            #     這兩個「值欄位名」——官方文件已明列，比元素名稱可靠。
+            # ★ 風向是**獨立的元素**（WindDirection），與風速不在同一個
+            #   WeatherElement 裡。先前把 wd 寫在風速的迴圈內，
+            #   風向元素會因為沒有 WindSpeed 而在 `continue` 被丟掉，
+            #   風速元素又讀不到 WindDirection —— 於是 wd 永遠是 None。
+            #   故先單獨掃一遍風向，以 start 時間為鍵，再併進風速序列。
+            _wd_by_start = {}
+            for we in we_list:
+                for t in we.get('Time', we.get('time', [])):
+                    def _f0(*keys):
+                        for k in keys:
+                            v = t.get(k)
+                            if v not in (None, '', ' '): return v
+                        return ''
+                    _st = _f0('StartTime', 'startTime', 'DataTime', 'dataTime')
+                    _ev = t.get('ElementValue', t.get('elementValue', [{}]))
+                    if isinstance(_ev, list): _ev = _ev[0] if _ev else {}
+                    for k in ('WindDirection', 'windDirection'):
+                        if k in _ev:
+                            _d = _wind_dir_deg(_ev.get(k))
+                            if _d is not None and _st:
+                                _wd_by_start[_st] = _d
+                            break
+
+            wsegs = []
+            for we in we_list:
+                for t in we.get('Time', we.get('time',[])):
+                    # ★ 不可用 dict.get 的預設值串接：StartTime 這個鍵**存在但為空字串**
+                    #   時（逐 3 小時資料只填 DataTime），get 的預設值不會生效，
+                    #   導致 start 取到空值、32 個時間點全部撞成同一鍵而只剩 1 筆。
+                    def _first(*keys):
+                        for k in keys:
+                            v = t.get(k)
+                            if v not in (None, '', ' '): return v
+                        return ''
+                    start = _first('StartTime', 'startTime', 'DataTime', 'dataTime')
+                    end   = _first('EndTime', 'endTime') or start
+                    ev    = t.get('ElementValue', t.get('elementValue',[{}]))
+                    if isinstance(ev, list): ev = ev[0] if ev else {}
+                    ws = bf = None
+                    # ★ 只認 WindSpeed／BeaufortScale 這兩個專屬鍵。
+                    #   絕不可退回通用的 'Value'：那會把同一位置的溫度、濕度、
+                    #   降雨機率等其他元素的數值誤當成風速。
+                    # ★ 風速與風級都可能是 ">= 11"、">=6" 這類字串（風勢強時官方
+                    #   以區間下界表示）。實測連江縣 F-D0047-081 即為此格式。
+                    #   若直接 float() 會解析失敗 → 整筆丟棄 → 風愈大的離島反而無資料。
+                    _ge = False
+                    for k in ('WindSpeed', 'windSpeed'):
+                        if k in ev:
+                            ws = _numstr(ev.get(k))
+                            # ★ ">= 11" 是官方的「下界」寫法，代表至少 11、實際可能更大。
+                            #   只存 11 會讓強風處顯示得比官網的「≥6 級」還保守，故另記旗標。
+                            _ge = '>' in str(ev.get(k) or '')
+                            break
+                    for k in ('BeaufortScale', 'beaufortScale'):
+                        if k in ev:
+                            _b = _numstr(ev.get(k))
+                            bf = int(_b) if _b is not None else None
+                            break
+                    # 風向由上方預先掃出的對照表取得（同一時間點）
+                    wd = _wd_by_start.get(start)
+                    if ws is None and bf is None: continue
+                    # ★ 逐 3 小時資料只有 DataTime（時間點），無 EndTime。
+                    #   若 end 等於 start，前端「落在區間內」的判斷會永遠不成立，
+                    #   導致取不到當前時段的風力。故補上該筆的有效區間長度。
+                    if end == start and start:
+                        try:
+                            from datetime import datetime as _dt, timedelta as _td
+                            _t = _dt.fromisoformat(start)
+                            end = (_t + _td(hours=(3 if is_3day else 12))).isoformat()
+                        except Exception:
+                            pass
+                    _seg = {'start':start, 'end':end, 'ws':ws, 'bf':bf, 'wd':wd}
+                    if _ge: _seg['ge'] = True
+                    wsegs.append(_seg)
+            # ── 溫度（與風力同一次請求；F-D0047 逐3小時有 Temperature）──
+            #   ★ 只認 Temperature／MaxTemperature／MinTemperature 三個專屬鍵，
+            #     不可退回通用 'Value'（會把濕度、體感溫度等誤當氣溫）。
+            tsegs = []
+            for we in we_list:
+                for t in we.get('Time', we.get('time', [])):
+                    def _f2(*keys):
+                        for k in keys:
+                            v = t.get(k)
+                            if v not in (None, '', ' '): return v
+                        return ''
+                    st = _f2('StartTime','startTime','DataTime','dataTime')
+                    en = _f2('EndTime','endTime') or st
+                    ev = t.get('ElementValue', t.get('elementValue', [{}]))
+                    if isinstance(ev, list): ev = ev[0] if ev else {}
+                    tv = tmax = tmin = None
+                    for k in ('Temperature','temperature'):
+                        if k in ev: tv = _numstr(ev.get(k)); break
+                    for k in ('MaxTemperature','maxTemperature'):
+                        if k in ev: tmax = _numstr(ev.get(k)); break
+                    for k in ('MinTemperature','minTemperature'):
+                        if k in ev: tmin = _numstr(ev.get(k)); break
+                    if tv is None and tmax is None and tmin is None: continue
+                    if en == st and st:
+                        try:
+                            from datetime import datetime as _dt2, timedelta as _td2
+                            en = (_dt2.fromisoformat(st) +
+                                  _td2(hours=(3 if is_3day else 12))).isoformat()
+                        except Exception:
+                            pass
+                    tsegs.append({'start': st, 'end': en, 't': tv,
+                                  'tmax': tmax, 'tmin': tmin})
+            if tsegs:
+                _td_ = {}
+                for x in tsegs:
+                    k = x['start']
+                    if k not in _td_ or (_td_[k].get('t') is None and x.get('t') is not None):
+                        _td_[k] = x
+                # ★ 不可直接指定：72hr 與 Weekday 會互相覆蓋（見 _merge_res_series）
+                _merge_res_series(TEMP_FCST, county, name, list(_td_.values()), is_3day)
+
+            # 同一時段可能被多個元素重複掃到，依 start 去重（保留有 bf 者）
+            if wsegs:
+                # ★ 同一 start 的多筆要「合併」而非「取代」：
+                #   風速與風向來自不同元素，若只保留有 bf 的那筆，
+                #   帶 wd 的筆會被整個丟掉 —— 那正是前端拿不到風向的原因。
+                #   逐欄補齊：各欄位取第一個非 None 的值。
+                dedup = {}
+                for w in wsegs:
+                    k = w['start']
+                    if k not in dedup:
+                        dedup[k] = dict(w)
+                    else:
+                        for _f in ('ws', 'bf', 'wd', 'end', 'ge'):
+                            if dedup[k].get(_f) is None and w.get(_f) is not None:
+                                dedup[k][_f] = w[_f]
+                # ★ 不可直接指定：72hr 與 Weekday 會互相覆蓋（見 _merge_res_series）
+                _merge_res_series(WIND_FCST, county, name, list(dedup.values()), is_3day)
+    except Exception as e:
+        pass
+    return pop_map
+
+# 全臺打包檔：一次下載內含 22 縣市 × 368 鄉鎮的預報，取代 44 次逐縣市呼叫。
+#   ★ 為何值得：逐縣市呼叫時，任一縣市請求失敗該縣市就整批無資料（離島尤其
+#     容易，先前金門澎湖連江即因此全無風力）。打包檔只有一次成敗，可靠得多。
+#   ★ 注意：檔內的 TAIWAN_*.xml 是「縣市級」預報，**不含鄉鎮**；
+#     鄉鎮級資料在 22 個以縣市代碼命名的檔（如 09007_72hr_CH.xml）。
+BUNDLE_URL = f"{BASE_URL}/F-D0047-093"
+
+
+def _parse_pop_wind_xml(xml_text, county):
+    """解析單一縣市的鄉鎮預報 XML，回傳 (pop3d, pop7d) 並順帶填 WIND_FCST。
+
+    與 fetch_pop_county 共用同一套欄位判讀規則（值鍵、">= N"、空 StartTime），
+    差別僅在資料來源是 XML 而非 API JSON。
+    """
+    import xml.etree.ElementTree as ET
+    txt = re.sub(r'\sxmlns="[^"]+"', '', xml_text, count=1)
+    try:
+        root = ET.fromstring(txt)
+    except Exception as e:
+        print(f"    {county} XML 解析失敗：{e}")
+        return {}, {}
+    locs = []
+    for loc in root.iter('Location'):
+        we_list = []
+        for we in loc.findall('WeatherElement'):
+            times = []
+            for t in we.findall('Time'):
+                ev = t.find('ElementValue')
+                evd = {c.tag: (c.text or '') for c in ev} if ev is not None else {}
+                times.append({'DataTime': t.findtext('DataTime') or '',
+                              'StartTime': t.findtext('StartTime') or '',
+                              'EndTime': t.findtext('EndTime') or '',
+                              'ElementValue': [evd]})
+            we_list.append({'ElementName': we.findtext('ElementName') or '', 'Time': times})
+        locs.append({'LocationName': loc.findtext('LocationName') or '',
+                     'WeatherElement': we_list})
+    return {'records': {'Locations': [{'Location': locs}]}}
+
+
+def fetch_all_pop_bundle(counties_needed):
+    """以打包檔一次取得全臺鄉鎮 PoP 與風力。成功回 (pop3d, pop7d)，失敗回 None。"""
+    if not CWA_API_KEY:
+        return None
+    import io as _io, zipfile as _zip
+    print("抓取全臺打包預報（F-D0047-093）...")
+    # ★ 實測遇過 HTTP 500（CWA 端暫時性錯誤）。打包檔是主要路徑，
+    #   失敗會退回 44 次逐縣市呼叫（較慢且較脆弱），故值得重試兩次。
+    # ★ 同為檔案型資料集，須先解析 ProductURL（直接要 ZIP 會 HTTP 500）
+    _burl = _resolve_product_url('F-D0047-093')
+    zf = None
+    for _try in range(3):
+        try:
+            if _burl:
+                r = cwa_get(_burl, timeout=180)
+            else:
+                r = cwa_get(f"{FILEAPI}/F-D0047-093",
+                                 params={"Authorization": CWA_API_KEY,
+                                         "downloadType": "WEB", "format": "ZIP"},
+                                 timeout=180)
+            if r.status_code == 200:
+                zf = _zip.ZipFile(_io.BytesIO(r.content))
+                break
+            print(f"    HTTP {r.status_code}（{_try+1}/3）")
+            # ★ 500 為 CWA 端伺服器錯誤，短時間重試通常無效；
+            #   直接退回逐縣市（實測仍可取得 725 鄉鎮），省去 10 秒等待。
+            if r.status_code == 500 and _try == 0:
+                print("    （HTTP 500 為伺服器端錯誤，不再重試）")
+                break
+        except Exception as e:
+            print(f"    打包檔取得失敗（{_try+1}/3）：{e}")
+        if _try < 2:
+            time.sleep(5)
+    if zf is None:
+        print("    打包檔三次皆失敗 → 改用逐縣市抓取")
+        return None
+
+    # 縣市代碼 → 縣市名（由檔內 LocationsName 取得，不必自行維護對照表）
+    names = [n for n in zf.namelist() if n.endswith('_CH.xml')
+             and not n.startswith('TAIWAN')]
+    pop3d_all, pop7d_all = {}, {}
+    n_ok = 0
+    for nm in names:
+        is3 = '_72hr_' in nm
+        is7 = '_Weekday_' in nm
+        if not (is3 or is7):
+            continue
+        try:
+            txt = zf.read(nm).decode('utf-8', 'replace')
+        except Exception:
+            continue
+        m = re.search(r'<LocationsName>([^<]+)</LocationsName>', txt)
+        county = (m.group(1).strip() if m else '').replace('台', '臺')
+        if not county:
+            continue
+        raw = _parse_pop_wind_xml(txt, county)
+        got = _extract_pop_wind(raw, county, is3)
+        if is3: pop3d_all.update(got)
+        else:   pop7d_all.update(got)
+        n_ok += 1
+    if not pop3d_all:
+        print("    打包檔未解析出資料 → 改用逐縣市抓取")
+        return None
+    print(f"  打包檔：{n_ok} 份檔案、PoP3d {len(pop3d_all)} 鄉鎮、"
+          f"PoP7d {len(pop7d_all)} 鄉鎮、風力 "
+          f"{sum(len(v) for v in WIND_FCST.values())} 鄉鎮")
+    # ★ 風向的抓取狀況：風場動畫全靠這個欄位，抓不到就是空的
+    _nwd = sum(1 for _c in WIND_FCST.values() for _segs in _c.values()
+               if any(_x.get('wd') is not None for _x in (_segs or [])))
+    print(f"    風向（WindDirection）：{_nwd} 個鄉鎮有值"
+          + ("　⚠ 風場動畫將無法顯示" if _nwd == 0 else ""))
+    return pop3d_all, pop7d_all
+
+
+def fetch_all_pop(counties_needed):
+    """抓所有需要縣市的 PoP，合併成鄉鎮層級。
+
+    ★ 優先用打包檔（一次下載涵蓋全臺 368 鄉鎮）；失敗才逐縣市抓。
+      逐縣市時任一縣市失敗即該縣市全無資料，打包檔則只有一次成敗。
+    """
+    if not CWA_API_KEY: return {}, {}
+    bundled = fetch_all_pop_bundle(counties_needed)
+    if bundled:
+        return bundled
+    print(f"抓取 PoP（逐縣市備援，{len(counties_needed)} 個縣市）...")
+    pop3d_all, pop7d_all = {}, {}
+    for county in sorted(counties_needed):
+        ep3 = COUNTY_EP_3D.get(county)
+        ep7 = COUNTY_EP_7D.get(county)
+        if ep3:
+            m3 = fetch_pop_county(county, ep3, True)
+            pop3d_all.update(m3)
+        if ep7:
+            m7 = fetch_pop_county(county, ep7, False)
+            pop7d_all.update(m7)
+    print(f"  PoP3d：{len(pop3d_all)} 鄉鎮，PoP7d：{len(pop7d_all)} 鄉鎮")
+    # 印一個範例確認結構
+    if pop3d_all:
+        k=next(iter(pop3d_all)); s=pop3d_all[k]
+        print(f"  [除錯] {k} 共{len(s)}時段，第一段：start={s[0]['start']} pop={s[0]['pop']} hrs={s[0]['hours']}")
+    return pop3d_all, pop7d_all
+
+def now_tpe_naive():
+    """現在的臺灣時間（naive）。"""
+    from datetime import timezone as _tz
+    return datetime.now(_tz.utc).astimezone(_tz(timedelta(hours=8))).replace(tzinfo=None)
+
+
+def _tpe_naive(s):
+    """ISO 字串 → 臺灣時間 naive datetime（有時區就換算，沒有就視為臺灣時間）。"""
+    from datetime import timezone as _tz
+    dt = datetime.fromisoformat(str(s).replace('Z', '+00:00'))
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(_tz(timedelta(hours=8))).replace(tzinfo=None)
+    return dt
+
+
+def get_pop_6h_series(township_name, pop3d, pop7d, base_time, num_segs=28, county=''):
+    """
+    取鄉鎮的 6h PoP 序列（共 num_segs 個 6h 時段 = 7天）；第 0 段＝base_time 當日 00:00。
+    逐 3 小時（72hr）：落在同一個 6h 段的取最大值（保守側）
+    逐 12 小時（Weekday）：p6 = 1−√(1−p12)，只補逐 3 小時沒涵蓋的段
+    回傳 list of float or None，長度=num_segs
+
+    ★★ 2026-11-08 重寫（兩個時間錯位）：
+      ① 逐 3 小時原本「依陣列位置」兩兩合併成第 0、1、2…段，完全不看資料的時間。
+         F-D0047 第一筆通常是發布後下一個整 3 小時（例如 06:00），
+         於是 06–12 時的降雨機率被放進 00–06 時那一段。
+      ② 逐 12 小時把已帶 +08:00 的時間再加 8 小時，且 aware 減 naive 必拋例外
+         → 被 except 吞掉 → 第 4~7 天的降雨機率**從來沒有填進去過**（線上 159 個
+         鄉鎮第 13 段以後全是 None）。
+      ③ 段的原點必須是當日 00:00（所有模式陣列都從今天 00 時起），
+         不是 6 小時取整的 base_time。
+      一律改為依每筆資料的實際起始時間落段。
+
+    ★ 優先以「縣市+鄉鎮」查詢（同名鄉鎮不會互相取值）；
+      未提供 county 時退回純鄉鎮名，維持舊呼叫端相容。
+    """
+    result = [None] * num_segs
+    seg0 = base_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    if getattr(seg0, 'tzinfo', None) is not None:
+        seg0 = _tpe_naive(seg0.isoformat())
+
+    def _pick(m):
+        if county:
+            v = m.get(county + township_name)
+            if v: return v
+        return m.get(township_name, [])
+
+    def _idx(rec):
+        st = rec.get('start') or ''
+        if not st:
+            return None
+        try:
+            return int((_tpe_naive(st) - seg0).total_seconds() // 21600)
+        except Exception:
+            return None
+
+    for rec in _pick(pop3d) or []:
+        p = rec.get('pop')
+        k = _idx(rec)
+        if p is None or k is None or not (0 <= k < num_segs):
+            continue
+        result[k] = p if result[k] is None else max(result[k], p)
+    filled3 = {k for k, v in enumerate(result) if v is not None}
+
+    for rec in _pick(pop7d) or []:
+        p12 = rec.get('pop')
+        k = _idx(rec)
+        if p12 is None or k is None:
+            continue
+        pop6 = round((1 - math.sqrt(max(0, 1 - p12 / 100))) * 100, 1)
+        for kk in (k, k + 1):                 # 12 小時拆成兩個 6 小時
+            if 0 <= kk < num_segs and kk not in filled3 and result[kk] is None:
+                result[kk] = pop6
+    return result
+
+# ── Open-Meteo ────────────────────────────────────
+# 逐時警特報掃描結果快取：{model: {key: warn_seg[64]}}（每模式獨立，前端依所選模式取用）
+WARN_SEG_CACHE = {}
+HOURLY_CACHE = {}    # key -> 前48h逐時QPF（best_match）
+PAST48_CACHE = {}    # key -> 過去48h逐時模式回算（前天+昨天，圖表歷史段用）
+
+def fetch_openmeteo_model(townships, model='best_match'):
+    """
+    抓取 Open-Meteo 多模式預報（涵蓋全部15天，從現在起）
+    model: 'best_match' / 'ecmwf_ifs' / 'gfs_seamless' / 'jma_seamless' / AI 模式
+    """
+    # ★ 模式分兩類，前端也分開呈現：
+    #   物理模式 —— 傳統數值天氣預報，可直接取代/併入既有綜合
+    #   AI 模式  —— 資料驅動，對超出訓練分布的極端降雨傾向低估，
+    #                需經偏差校正後才納入融合（校正上限放寬）
+    model_names = {
+        'best_match':    'Open-Meteo Best（ECMWF+GFS）',
+        # ── 物理模式 ──
+        'ecmwf_ifs':     'ECMWF IFS HRES 9km',   # ★ 官方物理、9km、前90h逐時
+        'ecmwf_ifs025':  'ECMWF IFS 0.25°',      # 舊版：25km、3h、延遲2小時
+        'gfs_seamless':  'NOAA GFS',
+        'jma_seamless':  'JMA（日本氣象廳）',
+        # ── 僅校驗、不進融合 ──
+        'icon_seamless':        'DWD ICON（僅校驗）',
+        'kma_seamless':         'KMA 韓國（僅校驗）',
+        'gem_seamless':         'GEM 加拿大（僅校驗）',
+        'ukmo_seamless':        'UK Met Office（僅校驗）',
+        'meteofrance_seamless': 'Météo-France（僅校驗）',
+        'cma_grapes_global':    'CMA GRAPES（僅校驗）',
+        'bom_access_global':    'BOM ACCESS（僅校驗）',
+        # ── AI 模式 ──
+        'ecmwf_aifs025_single': 'ECMWF AIFS（AI）',
+        'gfs_graphcast025':     'GFS GraphCast（AI）',
+    }
+    # AI 模式清單（供偏差校正放寬上限、前端分組）
+    AI_MODELS = {'ecmwf_aifs025_single', 'gfs_graphcast025'}
+    label = model_names.get(model, model)
+    print(f"  抓取 {label}...")
+    lats=[t.get('lat',0) for t in townships]
+    lngs=[t.get('lng',0) for t in townships]
+
+    params = {
+        'latitude':       ','.join(str(x) for x in lats),
+        'longitude':      ','.join(str(x) for x in lngs),
+        'hourly':         'precipitation',
+        'forecast_days':  16,
+        'timezone':       'Asia/Taipei',
+    }
+    if model != 'best_match':
+        params['models'] = model
+
+    for attempt in range(3):
+        try:
+            r = cwa_get(OPENMETEO, params=params, timeout=120)
+            if r.status_code == 429:
+                wait = 5 * (attempt+1)
+                print(f"    429限流，等待{wait}秒後重試...")
+                time.sleep(wait)
+                continue
+            r.raise_for_status(); raw=r.json()
+            break
+        except Exception as e:
+            print(f"    失敗（嘗試{attempt+1}/3）：{e}")
+            if attempt == 2:
+                return {}, {}, {}
+            time.sleep(3)
+    else:
+        return {}, {}, {}
+
+    result={}
+    result_max_hourly={}  # 每個6h段內的「最大單一小時雨量」，供強度分級用
+    result_hourly={}      # 前96小時逐時值（IFS HRES 前90h為原生逐時）
+    data_list = raw if isinstance(raw,list) else [raw]
+    for i, loc in enumerate(data_list):
+        key = f"{lats[i]:.4f}_{lngs[i]:.4f}"
+        hourly = loc.get('hourly',{})
+        precip = hourly.get('precipitation',[])
+        segs_6h = []
+        max_hourly_6h = []
+        for j in range(0, len(precip), 6):
+            chunk = [v for v in precip[j:j+6] if v is not None]
+            segs_6h.append(round(sum(chunk), 1))
+            max_hourly_6h.append(round(max(chunk), 1) if chunk else 0.0)
+        result[key] = segs_6h[:64]
+        result_max_hourly[key] = max_hourly_6h[:64]
+        # ★ 保留前 90 小時的逐時值：IFS HRES 在此區間是原生逐時，
+        #   其餘模式由 Open-Meteo 內插。前端逐時檢視需要這份資料。
+        result_hourly[key] = [round(v, 1) if v is not None else None
+                              for v in precip[:96]]
+
+        # 逐時掃描 CWA 警特報條件（每個模式都算，供前端依所選模式顯示對應等級）
+        # 大雨: 24h≥100 或 1h≥40；豪雨: 24h≥200 或 3h≥100
+        # 大豪雨: 24h≥350 或 3h≥200；超大豪雨: 24h≥500
+        pv = [v if v is not None else 0.0 for v in precip]
+        if model == 'best_match':
+            HOURLY_CACHE[key] = [round(v,1) for v in pv[:96]]  # 逐時QPF 96h（今天00起）
+        warn_hourly = []
+        r3 = 0.0; r24 = 0.0
+        for h in range(len(pv)):
+            r3  += pv[h] - (pv[h-3]  if h >= 3  else 0.0)
+            r24 += pv[h] - (pv[h-24] if h >= 24 else 0.0)
+            r1 = pv[h]
+            if r24 >= 500:               lv = 4
+            elif r24 >= 350 or r3 >= 200: lv = 3
+            elif r24 >= 200 or r3 >= 100: lv = 2
+            elif r24 >= 100 or r1 >= 40:  lv = 1
+            else:                         lv = 0
+            warn_hourly.append(lv)
+        warn_seg = [max(warn_hourly[j:j+6]) if warn_hourly[j:j+6] else 0
+                    for j in range(0, len(warn_hourly), 6)]
+        WARN_SEG_CACHE.setdefault(model, {})[key] = warn_seg[:64]
+    n = len(next(iter(result.values()),[]))
+    print(f"    {len(result)} 個點，各 {n} 個6h時段")
+    return result, result_max_hourly, result_hourly
+
+# ★ 要抓的模式清單。物理與 AI 分開，前端也依此分組呈現。
+# ── 模式分三類 ────────────────────────────────────────
+# OM_PHYSICAL / OM_AI：進入 FORMOSA 融合加權的成員。
+# OM_VERIFY_ONLY：★ 只抓取與校驗、不進融合。
+#   用意：新模式在還沒有足夠校驗樣本前，貿然納入加權可能稀釋準確度；
+#   先讓它跑一段時間、累積 POD/FAR/CSI，確認表現再決定是否升級為融合成員。
+#   ICON 也放這裡 —— 它偏差比長期偏高（實測山區 3.16），
+#   先前直接移除，改為保留觀察，資料仍可查但不影響融合結果。
+OM_PHYSICAL = ['best_match', 'ecmwf_ifs', 'gfs_seamless', 'jma_seamless']
+OM_AI       = ['ecmwf_aifs025_single', 'gfs_graphcast025']
+# ★ 分兩組（依實測差異性）：
+#   A 組＝候選群，表現若穩定可望納入 FORMOSA，每輪都抓。
+#   B 組＝差異性過大者（ICON/KMA/CMA/BOM），偏差比動輒 5.0 或 0.4，
+#     短期內不會納入融合，改為低頻抓取以減輕 Open-Meteo 限流壓力。
+OM_VERIFY_A = [
+    'gem_seamless',           # GEM（加拿大）
+    'ukmo_seamless',          # UK Met Office —— 目前 CSI 最佳
+    'meteofrance_seamless',   # Météo-France ARPEGE
+]
+OM_VERIFY_B = [
+    'icon_seamless',          # DWD ICON（德國）—— 偏差比常達 5.0
+    'kma_seamless',           # KMA（韓國）
+    'cma_grapes_global',      # CMA GRAPES（中國）—— 偏差比常低於 0.5
+    'bom_access_global',      # BOM ACCESS（澳洲）
+]
+OM_VERIFY_ONLY = OM_VERIFY_A + OM_VERIFY_B
+# ★ 僅校驗模式改為「輪流抓取」：13 個模式對單一 IP 壓力過大，
+#   實測 Open-Meteo 回 429 限流，ICON／KMA／BOM 常整批失敗。
+#   依日期輪替，每輪只抓其中 3 支 —— 校驗本來就是逐日累積，
+#   隔天補齊不影響統計，反而讓每支都拿得到完整資料。
+def _verify_only_today():
+    """A 組每輪都抓（候選納入融合，需要連續樣本）；
+    B 組輪流，每輪 1 支（差異性大、短期不會納入，降低限流壓力）。
+
+    ★ 若日後 B 組某支表現轉好要納入 FORMOSA，把它移到 OM_VERIFY_A
+      即可恢復每日抓取 —— 這是刻意留的切換點。
+    """
+    import datetime as _dt
+    picks = list(OM_VERIFY_A)
+    if OM_VERIFY_B:
+        doy = _dt.date.today().toordinal()
+        picks.append(OM_VERIFY_B[doy % len(OM_VERIFY_B)])
+    return picks
+
+OM_MODELS   = OM_PHYSICAL + OM_AI + _verify_only_today()
+
+
+def fetch_openmeteo(townships):
+    """抓取所有 Open-Meteo 模式 → (totals, max_hourly, hourly)。
+
+    ★ ecmwf_ifs（IFS HRES 9km）取代舊的 ecmwf_ifs025：
+      同為 ECMWF 官方物理模式，但解析度 9km vs 25km、前 90 小時原生逐時、
+      且無 open-data 版的 2 小時額外延遲。純升級，沒有取捨。
+    ★ AI 模式（AIFS、GraphCast）另行標記：它們對超出訓練分布的極端降雨
+      傾向低估，需經偏差校正才納入融合。
+    """
+    print(f"抓取 Open-Meteo（{len(townships)} 個鄉鎮，{len(OM_MODELS)} 個模式）...")
+    all_results, all_max_hourly, all_hourly = {}, {}, {}
+    for i, model in enumerate(OM_MODELS):
+        if i > 0:
+            time.sleep(4)  # ★ 由 2 秒加長為 4 秒：13 個模式時 2 秒仍會觸發 429
+        result, max_hourly, hourly = fetch_openmeteo_model(townships, model)
+        if not result and model in ('ecmwf_ifs',):
+            # IFS HRES 若不可用，退回 0.25° 版本（至少有 ECMWF 資料）
+            print("    IFS HRES 無回應 → 退回 ECMWF IFS 0.25°")
+            time.sleep(2)
+            result, max_hourly, hourly = fetch_openmeteo_model(townships, 'ecmwf_ifs025')
+        all_results[model] = result
+        all_max_hourly[model] = max_hourly
+        all_hourly[model] = hourly
+    # ★★ 2026-11-08：整個模式「所有點、所有時段恰為 0」而其他模式明明有雨
+    #   ＝上游沒送資料被填成 0，不是「預報不下雨」（實測 GraphCast 兩週指紋不變、
+    #   BOM 全臺 16 天全 0）。0 會在地圖、排行、校驗裡宣告「確定不下雨」，
+    #   與偽造資料同一類錯誤，只是方向相反。一律清空＝無資料，並在 log 講出來。
+    dead = dead_zero_models(all_results)
+    for m in dead:
+        print(f"    ⚠ {m}：所有點全時段恰為 0、其他模式有雨 → 視為上游無資料（清空）")
+        all_results[m], all_max_hourly[m], all_hourly[m] = {}, {}, {}
+    return all_results, all_max_hourly, all_hourly
+
+
+DEAD_ZERO_OTHERS_MM = 100.0   # 至少 2 個其他模式全區總量超過此值才判定
+
+
+def dead_zero_models(all_results):
+    """回傳「全部恰為 0、但至少 2 個其他模式總量 > 100mm」的模式鍵。全區皆乾時不會誤判。"""
+    tot, zero, npt = {}, {}, {}
+    for m, res in (all_results or {}).items():
+        s, z, n = 0.0, True, 0
+        for segs in (res or {}).values():
+            n += 1
+            for v in segs or []:
+                if v is None: continue
+                s += v
+                if v != 0: z = False
+        tot[m], zero[m], npt[m] = s, z, n
+    return [m for m in tot if npt[m] >= 50 and zero[m]
+            and sum(1 for o in tot if o != m and tot[o] > DEAD_ZERO_OTHERS_MM) >= 2]
+
+
+# ── F-B0046 未來1小時雷達定量降雨預報（~1.4km 格點，每10分鐘更新）──
+#   走 fileapi（datastore 對此格點產品會 404，同 O-A0038/F-C0041）。
+#   fileapi 直接回內含格點數值的 JSON（頂層 cwaopendata），不需二段式。
+FB0046_URL = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi/F-B0046-001"
+
+def fetch_radar_qpf_1h(townships):
+    """抓 F-B0046 未來1h雷達QPF格點 → 取各鄉鎮最近格點值。
+    回傳 (town_vals: {county+township: mm}, datetime_str)；失敗回 ({}, '')。"""
+    print("抓取 F-B0046 未來1h雷達定量降雨預報...")
+    for attempt in range(3):
+        try:
+            r = cwa_get(FB0046_URL, params={'Authorization': CWA_API_KEY,
+                             'downloadType': 'WEB', 'format': 'JSON'}, timeout=60)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}"); 
+                if attempt < 2: time.sleep(3); continue
+                return {}, ''
+            doc = json.loads(r.content.decode('utf-8', 'replace'))
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return {}, ''
+            time.sleep(3)
+    else:
+        return {}, ''
+    # 解析格點
+    try:
+        # 相容大小寫（datastore 版多為小寫 dataset）
+        root = doc.get('cwaopendata', doc)
+        ds = root.get('dataset') or root.get('Dataset') or {}
+        info = ds.get('datasetInfo') or ds.get('DatasetInfo') or {}
+        ps = info.get('parameterSet') or info.get('ParameterSet') or {}
+        lon0 = float(ps.get('StartPointLongitude', 118.0))
+        lat0 = float(ps.get('StartPointLatitude', 20.0))
+        res  = float(ps.get('GridResolution', 0.0125))
+        nx   = int(ps.get('GridDimensionX', 441))
+        ny   = int(ps.get('GridDimensionY', 561))
+        dtstr = ps.get('DateTime', '')
+        conts = ds.get('contents') or ds.get('Contents') or {}
+        content = conts.get('content') or conts.get('Content') or ''
+        if isinstance(content, dict):
+            content = content.get('#text') or content.get('ContentText') or ''
+        import re as _re
+        nums = _re.findall(r'-?\d+\.?\d*[Ee][+-]?\d+', str(content))
+        vals = [float(x) for x in nums]
+        if len(vals) < nx*ny*0.5:
+            print(f"    格點數異常：{len(vals)}（期望 {nx*ny}）"); return {}, dtstr
+        # 實際左下角 = StartPoint - res/2（log 註明第一點為 117.975/19.975）
+        gl0 = lon0 - res/2
+        gb0 = lat0 - res/2
+        town_vals = {}
+        for t in townships:
+            lat = t.get('lat'); lng = t.get('lng')
+            if lat is None or lng is None: continue
+            gx = round((lng - gl0) / res)
+            gy = round((lat - gb0) / res)
+            if 0 <= gx < nx and 0 <= gy < ny:
+                v = vals[gy*nx + gx]
+                town_vals[f"{t['county']}{t['township']}"] = round(v, 1) if v >= 0 else None
+        n_rain = sum(1 for v in town_vals.values() if v and v > 0)
+        print(f"    雷達QPF：{len(town_vals)} 鄉鎮取值，{n_rain} 個有雨（時間 {dtstr}）")
+        return town_vals, dtstr
+    except Exception as e:
+        print(f"    解析失敗：{e}"); return {}, ''
+
+
+
+# O-A0038-001 是網格「檔案型」產品，走 fileapi 路徑（datastore 會 404）
+QPESUMS_URL  = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi/O-A0038-001"
+QPESUMS_HIST = "qpesums_history.json"
+# 網格參數（CWA QPESUMS 標準網格；若首跑log顯示筆數不符再調整）
+QP_LON0, QP_LAT0, QP_D, QP_NX, QP_NY = 118.0, 20.0, 0.0125, 441, 561
+
+def fetch_qpesums_grid():
+    """二段式：fileapi 後設資料（GeoInfo+Resource.ProductURL）→ 下載實際網格檔。"""
+    global QP_LON0, QP_LAT0, QP_D, QP_NX, QP_NY
+    if not CWA_API_KEY:
+        return None
+    try:
+        r = cwa_get(QPESUMS_URL, params={'Authorization': CWA_API_KEY,
+                                              'downloadType':'WEB','format':'JSON'}, timeout=90)
+        r.raise_for_status()
+        ds = r.json().get('cwaopendata', {}).get('dataset', {})
+        geo = ds.get('GeoInfo', {}) or {}
+        res = ds.get('Resource', {}) or {}
+        def _num(d, *names):
+            for n in names:
+                v = d.get(n)
+                if v is not None:
+                    try: return float(v)
+                    except (ValueError, TypeError): pass
+            return None
+        lon0 = _num(geo, 'BottomLeftLongitude', 'LowerLeftLongitude', 'MinLongitude')
+        lat0 = _num(geo, 'BottomLeftLatitude',  'LowerLeftLatitude',  'MinLatitude')
+        dres = _num(geo, 'GridResolution', 'Resolution', 'CellSize')
+        nx   = _num(geo, 'GridDimensionX', 'NumberOfColumns', 'Columns', 'Nx')
+        ny   = _num(geo, 'GridDimensionY', 'NumberOfRows', 'Rows', 'Ny')
+        if lon0 is not None: QP_LON0 = lon0
+        if lat0 is not None: QP_LAT0 = lat0
+        if dres is not None and dres > 0: QP_D = dres
+        if nx: QP_NX = int(nx)
+        if ny: QP_NY = int(ny)
+        if isinstance(res, list): res = res[0] if res else {}
+        url = res.get('ProductURL') if isinstance(res, dict) else (res if isinstance(res, str) else None)
+
+        # ── 修復 v6.1：優先嘗試「內嵌網格」──
+        # 有版本的 O-A0038-001 直接把網格放在 dataset 內（Contents/Content/ContentText），
+        # ProductURL 反而指向非網格內容（7/20 事件：下載後僅解析出52值）。
+        # 策略：遞迴找出 dataset 中最長字串，若數值token數達標即為網格。
+        def _longest_str(o, best=''):
+            if isinstance(o, dict):
+                for v in o.values(): best = _longest_str(v, best)
+            elif isinstance(o, list):
+                for v in o: best = _longest_str(v, best)
+            elif isinstance(o, str) and len(o) > len(best):
+                best = o
+            return best
+        blob = _longest_str(ds)
+        if blob and len(blob) > 100000:
+            vals = []
+            for tok in blob.replace(',', ' ').split():
+                try: v = float(tok)
+                except ValueError: continue
+                vals.append(None if v < 0 else v)
+            print(f"    QPESUMS 內嵌網格：{len(vals)} 值（期望 {QP_NX*QP_NY}）")
+            if QP_NX*QP_NY*0.9 <= len(vals) <= QP_NX*QP_NY:
+                return vals
+            if len(vals) > QP_NX*QP_NY:
+                print(f"    內嵌值多於網格數，取尾端網格段")
+                return vals[-QP_NX*QP_NY:]
+        if not url:
+            print("    QPESUMS 找不到 ProductURL 且無內嵌網格")
+            return None
+        print(f"    QPESUMS ProductURL：{str(url)[:100]}")
+        r2 = cwa_get(url, timeout=120)
+        r2.raise_for_status()
+        data = r2.content
+        print(f"    下載：{len(data)} bytes，Content-Type={r2.headers.get('Content-Type','?')[:40]}，開頭={data[:60]!r}")
+        if data[:2] == b'PK':
+            import zipfile, io
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                text = z.read(z.namelist()[0]).decode('utf-8', errors='replace')
+        elif data[:2] == b'\x1f\x8b':
+            import gzip as _gz
+            text = _gz.decompress(data).decode('utf-8', errors='replace')
+        else:
+            text = data.decode('utf-8', errors='replace')
+        vals = []
+        for tok in text.replace(',', ' ').split():
+            try:
+                v = float(tok)
+            except ValueError:
+                continue
+            vals.append(None if v < 0 else v)
+        print(f"    QPESUMS 網格：{len(vals)} 值（期望 {QP_NX*QP_NY}）")
+        if len(vals) < QP_NX*QP_NY*0.9 or len(vals) > QP_NX*QP_NY:
+            return None
+        return vals
+    except Exception as e:
+        print(f"    QPESUMS 失敗：{e}")
+        return None
+
+def qpesums_at(vals, lat, lng):
+    """取最近格點的 1h 雨量（None=範圍外或無效）。網格：lon-major 逐列由南向北。"""
+    if not vals: return None
+    ix = round((lng - QP_LON0) / QP_D)
+    iy = round((lat - QP_LAT0) / QP_D)
+    if ix < 0 or ix >= QP_NX or iy < 0 or iy >= QP_NY: return None
+    idx = iy * QP_NX + ix
+    return vals[idx] if idx < len(vals) else None
+
+def load_qpesums_history():
+    """讀每小時累積腳本維護的歷史（{key: {iso_hour: mm}}），合成各鄉鎮 24h。"""
+    if not os.path.exists(QPESUMS_HIST):
+        return {}
+    try:
+        with open(QPESUMS_HIST, encoding='utf-8') as f:
+            hist = json.load(f)
+    except Exception:
+        return {}
+    out = {}
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    cutoff = (now - timedelta(hours=24)).strftime('%Y-%m-%dT%H')
+    for key, hours in hist.items():
+        vals = [v for h, v in hours.items() if h >= cutoff and v is not None]
+        if vals:
+            out[key] = round(sum(vals), 1)
+    return out
+
+
+def _neighbor_daily_rain(lat, lng, out_towns, days=15, k=4, max_km=25.0):
+    """由鄰近「有觀測」的鄉鎮做距離加權內插，補無測站鄉鎮的逐日雨量。
+
+    ★ 為何需要：368 個鄉鎮中約 200 個沒有 CWA 觀測站，其 daily_rain 原本
+      落到 [0.0]*15 —— 「無測站」被寫成「雨量 0」，在圖上與真的沒下雨
+      無法分辨（實例：高雄鳥松/前金/鹽埕、臺中中區、臺南東區）。
+      QPESUMS 網格已停用，故改用鄰近鄉鎮內插。
+    ★ 這是推估值，非觀測：回傳的 dict 會標記 est=True，前端須標示。
+    回傳 (list, n_used)；找不到足夠鄰居回 (None, 0)。
+    """
+    if lat is None or lng is None:
+        return None, 0
+    cand = []
+    for t in out_towns:
+        dr = t.get('daily_rain')
+        if not dr or not any((x or 0) > 0 for x in dr):
+            continue
+        tlat, tlng = t.get('lat'), t.get('lng')
+        if tlat is None or tlng is None:
+            continue
+        dy = (tlat - lat) * 110.574
+        dx = (tlng - lng) * 111.320 * math.cos(math.radians((tlat + lat) / 2))
+        d = math.hypot(dy, dx)
+        if d <= max_km:
+            cand.append((d, dr))
+    if not cand:
+        return None, 0
+    cand.sort(key=lambda x: x[0])
+    cand = cand[:k]
+    out, wsum = [0.0] * days, 0.0
+    for d, dr in cand:
+        w = 1.0 / max(0.5, d) ** 2          # 反距離平方加權
+        wsum += w
+        for i in range(days):
+            v = dr[i] if i < len(dr) else None
+            out[i] += (v or 0.0) * w
+    if wsum <= 0:
+        return None, 0
+    return [round(x / wsum, 1) for x in out], len(cand)
+
+
+def _daily_rain_or_qpesums(obs, county, township, qp_daily, days=15):
+    """取逐日雨量：優先用測站觀測，缺測站或全 0 時改用 QPESUMS 格點。
+
+    ★ 「無測站」不等於「沒下雨」。測站觀測為空或全 0，但 QPESUMS 有值時，
+      以 QPESUMS 補上，避免圖上顯示成 0mm 而與實際降雨不符。
+    """
+    arr = (obs or {}).get('daily_rain')
+    has_obs = bool(arr) and any((x or 0) > 0 for x in arr)
+    if has_obs:
+        return arr
+    qp = qp_daily.get(county + township)
+    if qp:
+        # QPESUMS 缺值以 0 補（該小時無回波），長度對齊
+        return [(0.0 if x is None else x) for x in (qp + [0.0] * days)[:days]]
+    return arr if arr else [0.0] * days
+
+
+def load_qpesums_daily(days=15):
+    """由 QPESUMS 逐時歷史合成各鄉鎮的逐日雨量（[0]=今天，[1]=昨天…）。
+
+    ★ 為何需要：town{} 只由「有觀測站的鄉鎮」建立，沒有雨量站的鄉鎮
+      daily_rain 會取到預設的 [0.0]*15 —— 「無測站」被寫成「雨量 0」，
+      在圖上與真的沒下雨無法分辨（實例：臺南柳營/佳里、高雄鳥松/前金/鹽埕）。
+      QPESUMS 是雷達整合網格，逐鄉鎮都有值，正好補上這個缺口。
+    回傳 {縣市+鄉鎮: [d0..d14]}；無檔案回 {}。
+    """
+    if not os.path.exists(QPESUMS_HIST):
+        return {}
+    try:
+        with open(QPESUMS_HIST, encoding='utf-8') as f:
+            hist = json.load(f)
+    except Exception:
+        return {}
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    # 各日的日期字串（本地時間 00-24 時）
+    day_keys = [(now - timedelta(days=d)).strftime('%Y-%m-%d') for d in range(days)]
+    out = {}
+    for key, hours in hist.items():
+        arr = [None] * days
+        for h, v in hours.items():
+            if v is None:
+                continue
+            dk = h[:10]
+            if dk in day_keys:
+                i = day_keys.index(dk)
+                arr[i] = (arr[i] or 0.0) + v
+        if any(x is not None for x in arr):
+            out[key] = [None if x is None else round(x, 1) for x in arr]
+    return out
+
+
+def load_qpesums_p48():
+    """QPESUMS 逐時觀測 → 每鄉鎮過去48h逐時序列（[0]=48小時前，[47]=上一完整小時；缺值None）。
+    官方觀測資料（O-A0038-001雷達整合網格），供前端逐時圖過去段——絕不以模式回算充當觀測。"""
+    if not os.path.exists(QPESUMS_HIST):
+        return {}
+    try:
+        with open(QPESUMS_HIST, encoding='utf-8') as f:
+            hist = json.load(f)
+    except Exception:
+        return {}
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    # 槽 i 對應的小時鍵：now-48+i（取整小時；最後一槽=上一完整小時）
+    keys = [(now - timedelta(hours=48-i)).strftime('%Y-%m-%dT%H') for i in range(48)]
+    out = {}
+    for tkey, hours in hist.items():
+        arr = [hours.get(k) for k in keys]
+        if any(v is not None for v in arr):
+            out[tkey] = [None if v is None else round(v,1) for v in arr]
+    return out
+
+
+# ── 系集強弱降雨比值（縣級） ──────────────────────
+ENSEMBLE_API = "https://ensemble-api.open-meteo.com/v1/ensemble"
+
+def compute_warn_seg_from_hourly(hourly):
+    """從逐時降雨陣列算 CWA 警特報逐段等級（與各模式主掃描同標準）。
+    回傳 warn_seg[≤64]。供 hi/lo 等「由 best 逐時×比值」衍生的模式即時計算。"""
+    if not hourly:
+        return []
+    pv = [v if v is not None else 0.0 for v in hourly]
+    warn_hourly = []
+    r3 = 0.0; r24 = 0.0
+    for h in range(len(pv)):
+        r3  += pv[h] - (pv[h-3]  if h >= 3  else 0.0)
+        r24 += pv[h] - (pv[h-24] if h >= 24 else 0.0)
+        r1 = pv[h]
+        if r24 >= 500:               lv = 4
+        elif r24 >= 350 or r3 >= 200: lv = 3
+        elif r24 >= 200 or r3 >= 100: lv = 2
+        elif r24 >= 100 or r1 >= 40:  lv = 1
+        else:                         lv = 0
+        warn_hourly.append(lv)
+    return [max(warn_hourly[j:j+6]) if warn_hourly[j:j+6] else 0
+            for j in range(0, len(warn_hourly), 6)][:64]
+
+
+def fetch_ensemble_ratios(townships):
+    """
+    以縣級代表點抓 ECMWF 系集（51成員），計算全預報期各6h段的
+    強降雨放大倍率（前25%成員均值/中位數）與弱降雨縮小倍率（後25%/中位數）。
+    回傳 {county: {'hi':[N], 'lo':[N]}}；失敗回空dict（前端退回qpf_best）。
+    """
+    print("抓取 ECMWF 系集（縣級代表點，全期）...")
+    # 縣級代表點：縣內鄉鎮座標平均
+    county_pts = {}
+    for t in townships:
+        c = t.get('county'); lat = t.get('lat'); lng = t.get('lng')
+        if not c or not lat: continue
+        county_pts.setdefault(c, []).append((lat, lng))
+    counties = sorted(county_pts.keys())
+    lats = [sum(p[0] for p in county_pts[c])/len(county_pts[c]) for c in counties]
+    lngs = [sum(p[1] for p in county_pts[c])/len(county_pts[c]) for c in counties]
+
+    params = {
+        'latitude':  ','.join(f"{x:.4f}" for x in lats),
+        'longitude': ','.join(f"{x:.4f}" for x in lngs),
+        'hourly':    'precipitation',
+        'models':    'ecmwf_ifs',      # IFS HRES 9km（原 0.25°）
+        'forecast_days': 15,   # ECMWF 系集支援 15 天（全期強/弱降雨情境）
+        'timezone':  'Asia/Taipei',
+    }
+    for attempt in range(3):
+        try:
+            r = cwa_get(ENSEMBLE_API, params=params, timeout=120)
+            if r.status_code == 429:
+                time.sleep(5*(attempt+1)); continue
+            r.raise_for_status(); raw = r.json()
+            break
+        except Exception as e:
+            print(f"    系集失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return {}
+            time.sleep(3)
+    else:
+        return {}
+
+    ratios = {}
+    data_list = raw if isinstance(raw, list) else [raw]
+    for i, loc in enumerate(data_list):
+        if i >= len(counties): break
+        hourly = loc.get('hourly', {})
+        # 蒐集所有成員的降雨序列（key: precipitation_memberXX 或 precipitation）
+        members = []
+        for k, v in hourly.items():
+            if k.startswith('precipitation') and isinstance(v, list):
+                members.append([x if x is not None else 0.0 for x in v])
+        if len(members) < 10:
+            continue
+        # 段數：以最短成員長度為準（15天=60段；不足則有多少算多少）
+        n_hours = min(len(m) for m in members)
+        n_seg = min(60, n_hours // 6)
+        hi_arr, lo_arr = [], []
+        for sg in range(n_seg):
+            seg_sums = sorted(sum(m[sg*6:(sg+1)*6]) for m in members)
+            n = len(seg_sums)
+            q = max(1, n//4)
+            med = seg_sums[n//2]
+            top_mean = sum(seg_sums[-q:]) / q
+            bot_mean = sum(seg_sums[:q]) / q
+            if med < 1.0:
+                # 段雨量太小，比值無意義 → 不放大不縮小
+                hi_arr.append(1.0); lo_arr.append(1.0)
+            else:
+                hi_arr.append(round(min(3.0, max(1.0, top_mean/med)), 2))
+                lo_arr.append(round(max(0.1, min(1.0, bot_mean/med)), 2))
+        ratios[counties[i]] = {'hi': hi_arr, 'lo': lo_arr}
+    print(f"    系集比值：{len(ratios)} 縣市（各 {n_seg if ratios else 0} 段，全期）")
+    return ratios
+
+
+def apply_hourly_ratio(hourly, county, ens_ratios, kind):
+    """逐時QPF × 縣級系集比值（比值以6h段為單位，套用至段內各小時；全期）。"""
+    r = ens_ratios.get(county, {}).get(kind)
+    if not r or not hourly:
+        return list(hourly)
+    nseg = len(r)
+    return [round(v * r[min(h//6, nseg-1)], 1) for h, v in enumerate(hourly)]
+
+
+def apply_ensemble_ratio(qpf, maxh, county, ens_ratios, kind):
+    """qpf_best × 縣級系集比值（全期各段）。超出比值長度的段維持原值。回傳新陣列。"""
+    r = ens_ratios.get(county, {}).get(kind)
+    if not r:
+        return list(qpf), list(maxh)
+    nseg = len(r)
+    q2 = [round(v*r[i], 1) if i < nseg and v else v for i, v in enumerate(qpf)]
+    m2 = [round(v*r[i], 1) if i < nseg and v else v for i, v in enumerate(maxh)]
+    return q2, m2
+
+
+# ── 昨日模式偏差比（動態偏差比 v1，顯示層） ────────
+def fetch_models_yesterday(townships):
+    """抓四個模式各自的昨日 24h 雨量，供誤差追蹤逐來源比對。
+
+    ★ 與 fetch_model_yesterday 的差別：後者只取 best_match 一個模式（供
+      既有的 bias_24h 使用），此處一次取四個模式，用於建立
+      「逐來源 × 逐地形」的誤差表。以 models 參數一次帶回，不增加請求數。
+    回傳 {key: {'best':x, 'ecmwf':x, 'gfs':x, 'icon':x}}
+    """
+    print("抓取四模式昨日回算（誤差追蹤基準）...")
+    lats = [t.get('lat', 0) for t in townships]
+    lngs = [t.get('lng', 0) for t in townships]
+    # ★ 含 AI 模式：AIFS 與 GraphCast 也要追蹤誤差，
+    #   它們對極端降雨傾向低估，偏差比會明顯 >1，正好由校正處理。
+    # ★ 含「僅校驗」模式：它們不進融合，但要累積 POD/FAR/CSI 供評估
+    MODELS = {'best': 'best_match', 'ecmwf': 'ecmwf_ifs',
+              'gfs': 'gfs_seamless', 'jma': 'jma_seamless',
+              'aifs': 'ecmwf_aifs025_single', 'graphcast': 'gfs_graphcast025',
+              'icon': 'icon_seamless', 'kma': 'kma_seamless',
+              'gem': 'gem_seamless', 'ukmo': 'ukmo_seamless',
+              'mf': 'meteofrance_seamless', 'cma': 'cma_grapes_global',
+              'bom': 'bom_access_global'}
+    out = {}
+    for tag, mid in MODELS.items():
+        params = {
+            'latitude':  ','.join(str(x) for x in lats),
+            'longitude': ','.join(str(x) for x in lngs),
+            'hourly':    'precipitation',
+            'past_days': 2,
+            'forecast_days': 1,
+            'models':    mid,
+            'timezone':  'Asia/Taipei',
+        }
+        raw = None
+        for attempt in range(2):
+            try:
+                r = cwa_get(OPENMETEO, params=params, timeout=120)
+                if r.status_code == 429:
+                    time.sleep(5 * (attempt + 1)); continue
+                r.raise_for_status(); raw = r.json(); break
+            except Exception as e:
+                if attempt == 1:
+                    print(f"    {tag} 失敗（不影響其他模式）：{e}")
+        if raw is None:
+            continue
+        for i, loc in enumerate(raw if isinstance(raw, list) else [raw]):
+            key = f"{lats[i]:.4f}_{lngs[i]:.4f}"
+            precip = loc.get('hourly', {}).get('precipitation', [])
+            if len(precip) < 48:
+                continue
+            out.setdefault(key, {})[tag] = round(
+                sum(v or 0.0 for v in precip[24:48]), 1)
+    if out:
+        _n = {m: sum(1 for v in out.values() if m in v) for m in MODELS}
+        print(f"    四模式昨日值：{_n}")
+    return out
+
+
+def fetch_model_yesterday(townships):
+    """
+    抓 best_match 昨日24h模式雨量（past_days=1），供計算
+    bias_24h = 昨日觀測 / 昨日模式。回傳 {key: model_yday_sum}。
+    """
+    print("抓取模式昨日回算（偏差比基準）...")
+    lats=[t.get('lat',0) for t in townships]
+    lngs=[t.get('lng',0) for t in townships]
+    params = {
+        'latitude':  ','.join(str(x) for x in lats),
+        'longitude': ','.join(str(x) for x in lngs),
+        'hourly':    'precipitation',
+        'past_days': 2,
+        'forecast_days': 1,
+        'timezone':  'Asia/Taipei',
+    }
+    for attempt in range(3):
+        try:
+            r = cwa_get(OPENMETEO, params=params, timeout=120)
+            if r.status_code == 429:
+                time.sleep(5*(attempt+1)); continue
+            r.raise_for_status(); raw = r.json()
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return {}
+            time.sleep(3)
+    else:
+        return {}
+    out = {}
+    global PAST48_CACHE
+    PAST48_CACHE = {}
+    data_list = raw if isinstance(raw, list) else [raw]
+    for i, loc in enumerate(data_list):
+        key = f"{lats[i]:.4f}_{lngs[i]:.4f}"
+        precip = loc.get('hourly', {}).get('precipitation', [])
+        # past_days=2：[0:24]=前天, [24:48]=昨天, [48:]=今天以後
+        p48 = [round(v,1) if v is not None else 0.0 for v in precip[:48]]
+        PAST48_CACHE[key] = p48
+        out[key] = round(sum(p48[24:48]), 1)   # 昨日24h（偏差比基準）
+    print(f"    {len(out)} 個點（含過去48h逐時回算）")
+    return out
+
+
+def calc_bias_24h(daily_rain, model_yday):
+    """昨日觀測/昨日模式偏差比。門檻：模式≥10mm才有意義；限幅[0.2,8]。"""
+    obs_yday = daily_rain[1] if len(daily_rain) > 1 else 0.0
+    if model_yday is None or model_yday < 10.0:
+        return None
+    return round(max(0.2, min(8.0, obs_yday / model_yday)), 2)
+
+
+# ══════════════════════════════════════════════════════════
+#  誤差追蹤（CMPF 第二階段）
+#  ★ 目的：累積「逐來源 × 逐地形 × 逐前置時間」的預測誤差，
+#    作為第三階段動態加權的依據。
+#  ★ 方法對應 NOAA National Blend of Models：以分析場（此處為測站觀測）
+#    校正各模式，並依地形相似性分群 —— NBM 稱之為 supplemental locations。
+#  ★ 現階段只累積與呈現，不回饋修正預測；待樣本足夠再啟用加權。
+STATION_ELEV_FILE = "station_elev.json"   # 測站海拔（由 20m DTM 離線產生）
+STATION_ELEV = {}
+TOWN_POLYS_FILE = "town_polys.json"   # 鄉鎮界（供雷達格點聚合，由 index.html 抽出）
+TERRAIN_FILE = "terrain_zones_official.json"   # 地形分類（山區/淺山/沿海/平地）
+SKILL_FILE = "model_skill.json"
+VERIFY_FILE = "verify.json"      # 逐日校驗（列聯表 + POD/FAR/CSI）
+VERIFY_KEEP_DAYS = 60            # 保留 60 天，供選日期回溯
+
+# ══════════════════════════════════════════════════════════
+#  預報存檔（forecast_log.json）
+# ══════════════════════════════════════════════════════════
+# ★ 為什麼非建不可，而且愈早愈好：
+#   ① 目前的「校驗」其實只驗到極短預報。fetch_models_yesterday 是重新去抓
+#      各模式「對昨天的回算」，那是最新一報回頭看昨天，不是幾天前真的
+#      發布過的那一報。所以現在所有模式的分數，講的都是 lead time 接近 0
+#      的表現 —— 「這個模式準」這句話目前只在最短預報成立。
+#   ② 要知道 D+1 跟 D+5 誰準（權重本來就該分 lead time），必須有當時
+#      真的發布過什麼的紀錄。
+#   ③ 型態一致性（同一有效日、相鄰兩報之間雨區有沒有搬家）同樣需要它。
+#   ④ 這份資料無法回補 —— 今天沒存，今天的預報就永遠拿不回來了。
+#      這是它比其他項目急迫的真正理由，不是因為它最有效。
+FORECAST_LOG_FILE = "forecast_log.json"
+FORECAST_LOG_KEEP = 12           # 保留 12 天的發布（足夠比對 D+7 與相鄰報次）
+FORECAST_LOG_DAYS = 7            # 每次存未來 7 個完整日曆日
+#  ★★ 2026-10-09：補上 'cwa'（中央氣象署官方 QPF）。
+#    CWA 的值來自官方 PNG 判讀，Open-Meteo 沒有它，所以沒有「昨日回算」
+#    可抓 —— 先前整個校驗與排行因此完全看不到 CWA。
+#    改由預報存檔取當初發布的值來校驗：這其實是更正確的驗證方式
+#    （驗的是「當時真的發布了什麼」，不是事後重抓）。
+#    ★ 用 qpf_cwa_q（可加量）不是 qpf_cwa（色帶下界）——
+#      後者是類別身分，拿去跟觀測量比會系統性低估。
+FCLOG_MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'gc',
+                'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom', 'cwa')
+FCLOG_FIELD = {'cwa': 'qpf_cwa_q'}   # 逐模式的欄位覆寫（CWA 用可加量）
+#  ★★ 2026-10-09：同一個模式在兩處叫不同名字 —— 存檔叫 'gc'（欄位 qpf_gc），
+#    校驗與前端叫 'graphcast'。目前 fclog_values_for 只被 'cwa' 用到，所以
+#    還沒出事；但哪天有人用 'graphcast' 去查存檔就會靜默拿到空的。
+#    這跟「CWA 從來沒出現在排行」是同一類缺陷（鍵名分歧），一起補掉。
+FCLOG_ALIAS = {'graphcast': 'gc'}    # 校驗／前端名 → 存檔名
+FCLOG_MIN_COV = {'cwa': 0.05}        # 逐模式的最低覆蓋率（CWA 僅部分鄉鎮有判讀）
+FCLOG_WET_MIN = 2.0              # 全島平均低於此值的日子不計型態（小雨日的型態是雜訊）
+
+
+def _fclog_town_key(t):
+    return (t.get('county') or '') + (t.get('township') or '')
+
+
+def update_forecast_log(out_towns, base_dt, now_tpe):
+    """把「這一報對未來各日曆日的預報」存檔，供 lead time 校驗與型態一致性。
+
+    結構：{'towns': [鄉鎮鍵...],
+           'issues': {發布日: {有效日: {模式: [各鄉鎮日總雨量]}}}}
+    ★ 逐段對齊：segs[i] 涵蓋 base_dt + 6i 起的 6 小時，base_dt 已對齊
+      0/6/12/18 時，故每一段必定完整落在某一個日曆日內。
+      只存「四段都有」的完整日，否則半天的總量會污染比較。
+    """
+    log = {'towns': [], 'issues': {}}
+    if os.path.exists(FORECAST_LOG_FILE):
+        try:
+            with open(FORECAST_LOG_FILE, encoding='utf-8') as f:
+                log = json.load(f) or log
+        except Exception:
+            log = {'towns': [], 'issues': {}}
+    log.setdefault('towns', [])
+    log.setdefault('issues', {})
+
+    towns = [_fclog_town_key(t) for t in out_towns]
+    if log['towns'] and log['towns'] != towns:
+        # 鄉鎮清單變了（新增／改名）→ 舊紀錄的索引對不上，整份重來比對錯安全
+        print("  預報存檔：鄉鎮清單有變動，重建索引（捨棄舊紀錄）")
+        log = {'towns': towns, 'issues': {}}
+    log['towns'] = towns
+
+    issue = now_tpe.strftime('%Y-%m-%d')
+    # ★★ 2026-11-08：陣列第 0 段是「今天 00:00」（Open-Meteo timezone=Asia/Taipei
+    #   的 forecast 從當地 00 時起；cwa_overlay 用 today00；前端 SEG_EPOCH 也是
+    #   BASE_TIME 當日 00 時）。base_dt 卻是 6 小時取整的 06/12/18 時 ——
+    #   拿它當第 0 段，06 時以後的每一輪都會把日曆日標錯 6~18 小時。
+    #   一律以 base_dt 當日 00:00 為準（test_forecast_log.py 守門）。
+    _seg0 = base_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    # 每個日曆日對應哪幾個 6h 段
+    day_segs = {}
+    for i in range(64):
+        d = (_seg0 + timedelta(hours=6 * i)).strftime('%Y-%m-%d')
+        day_segs.setdefault(d, []).append(i)
+    # 只要未來的、且四段齊全的日子
+    days = [d for d, ss in sorted(day_segs.items())
+            if len(ss) == 4 and d > issue][:FORECAST_LOG_DAYS]
+
+    rec = {}
+    for d in days:
+        segs = day_segs[d]
+        per_model = {}
+        for m in FCLOG_MODELS:
+            #  ★ CWA 要用可加量 qpf_cwa_q（色帶上界÷窗段數），
+            #    不是 qpf_cwa（色帶下界＝類別身分，拿去跟觀測量比會低估）
+            fld = FCLOG_FIELD.get(m, 'qpf_' + m)
+            vec = []
+            okn = 0
+            for t in out_towns:
+                arr = t.get(fld) or []
+                #  ★ 4 段有任一段沒有值 → 這天沒有完整預報，存 None。
+                #    先前把缺段當 0 加總：CWA 只發布到某段為止時，日量被低估，
+                #    校驗時就變成「CWA 少報」—— 那是程式替官方編的 0。
+                if len(arr) > segs[-1] and all(arr[i] is not None for i in segs):
+                    v = sum(arr[i] for i in segs)
+                    vec.append(round(v, 1)); okn += 1
+                else:
+                    vec.append(None)
+            #  ★ CWA 來自官方 PNG 判讀，只涵蓋判讀得到的鄉鎮（實測 32~49/368），
+            #    用 80% 門檻會讓它永遠存不進去 —— 那正是它從來沒出現在
+            #    任何排行的原因之一。改為逐模式門檻，樣本少就讓樣本數去說。
+            if okn >= len(out_towns) * FCLOG_MIN_COV.get(m, 0.8):
+                per_model[m] = vec
+        if per_model:
+            rec[d] = per_model
+    if rec:
+        log['issues'][issue] = rec
+
+    # ★ 逐日逐鄉鎮觀測也存進同一份檔：驗證腳本才不必再去湊第二個資料來源，
+    #   而且觀測與預報的鄉鎮索引保證一致（分開存最容易錯位）。
+    #   daily_rain[1] ＝昨天（見 get_daily_rain_array）。
+    log.setdefault('obs', {})
+    yday = (now_tpe - timedelta(days=1)).strftime('%Y-%m-%d')
+    ov = [((t.get('daily_rain') or [None, None])[1]) for t in out_towns]
+    if sum(1 for v in ov if v is not None) >= len(out_towns) * 0.5:
+        log['obs'][yday] = [None if v is None else round(float(v), 1) for v in ov]
+
+    cut = (now_tpe - timedelta(days=FORECAST_LOG_KEEP)).strftime('%Y-%m-%d')
+    log['issues'] = {k: v for k, v in log['issues'].items() if k >= cut}
+    log['obs'] = {k: v for k, v in (log.get('obs') or {}).items() if k >= cut}
+    log['updated'] = now_tpe.isoformat()
+    try:
+        with open(FORECAST_LOG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(log, f, ensure_ascii=False, separators=(',', ':'))
+        _nd = sum(len(v) for v in log['issues'].values())
+        print(f"  預報存檔：本報存 {len(rec)} 個有效日，"
+              f"累積 {len(log['issues'])} 報 / {_nd} 筆（保留 {FORECAST_LOG_KEEP} 天）")
+    except Exception as e:
+        print(f"  預報存檔寫入失敗：{e}")
+    return log
+
+
+def _corr(a, b):
+    """兩個等長向量的 Pearson 相關；樣本不足或無變異回 None。"""
+    xs = [(x, y) for x, y in zip(a, b) if x is not None and y is not None]
+    n = len(xs)
+    if n < 30:
+        return None
+    mx = sum(x for x, _ in xs) / n
+    my = sum(y for _, y in xs) / n
+    sxx = sum((x - mx) ** 2 for x, _ in xs)
+    syy = sum((y - my) ** 2 for _, y in xs)
+    if sxx <= 1e-9 or syy <= 1e-9:
+        return None
+    sxy = sum((x - mx) * (y - my) for x, y in xs)
+    return sxy / math.sqrt(sxx * syy)
+
+
+def _norm_pattern(v):
+    """去掉振幅只留型態：除以自身的空間平均。
+
+    ★ 使用者明確允許「雨量逐次調整」，不允許的是雨區搬家。
+      不先去振幅的話，一個正確把雨量翻倍的模式會被判成不穩定。
+    """
+    xs = [x for x in v if x is not None]
+    if not xs:
+        return None, 0.0
+    mean = sum(xs) / len(xs)
+    if mean < 1e-6:
+        return None, mean
+    return [None if x is None else x / mean for x in v], mean
+
+
+def forecast_consistency(log, valid_date, obs_vec=None):
+    """同一有效日、相鄰兩報之間的空間型態變化。
+
+    回傳 {模式: {'jump': 1-r, 'excess': 相對共識的超額, 'gain': 修正是否往觀測靠}}
+
+    ★ 判讀方式（使用者提出、這裡照著實作）：
+      天氣翻盤本來就會發生，但通常大家會一起翻，差別在時間早晚。
+      所以關鍵不是「有沒有翻」，而是「別人沒翻你翻了」或「大家翻了你沒翻」。
+      故 jump 要減掉當日全體模式的中位數，得到 excess。
+    ★ 但只看 excess 會罰錯人：率先翻對的模式正是最好的模式。
+      所以同時記 gain＝corr(新報, 觀測) − corr(舊報, 觀測)，
+      excess 大且 gain 為正＝領先，excess 大且 gain 為負＝亂報。
+      兩者要一起看，缺一個就會把領先者當成亂報。
+    """
+    issues = sorted(k for k, v in (log.get('issues') or {}).items()
+                    if valid_date in (v or {}))
+    if len(issues) < 2:
+        return {}
+    prev_i, new_i = issues[-2], issues[-1]
+    out = {}
+    for m in FCLOG_MODELS:
+        a = (log['issues'][prev_i][valid_date] or {}).get(m)
+        b = (log['issues'][new_i][valid_date] or {}).get(m)
+        if not a or not b or len(a) != len(b):
+            continue
+        pa, ma = _norm_pattern(a)
+        pb, mb = _norm_pattern(b)
+        if pa is None or pb is None or max(ma, mb) < FCLOG_WET_MIN:
+            continue                      # 小雨日不計
+        r = _corr(pa, pb)
+        if r is None:
+            continue
+        d = {'jump': round(1 - r, 4), 'lead_prev': (
+                datetime.strptime(valid_date, '%Y-%m-%d')
+                - datetime.strptime(prev_i, '%Y-%m-%d')).days}
+        if obs_vec:
+            ra, rb = _corr(a, obs_vec), _corr(b, obs_vec)
+            if ra is not None and rb is not None:
+                d['gain'] = round(rb - ra, 4)
+        out[m] = d
+    if not out:
+        return {}
+    js = sorted(v['jump'] for v in out.values())
+    med = js[len(js) // 2]
+    for v in out.values():
+        v['excess'] = round(v['jump'] - med, 4)
+    return out
+# ★ 有效降水門檻（使用者指定）：1mm。
+#   0.1mm 只是「有無降水」，防災判讀用 1mm 才有意義。
+RAIN_THRESHOLD = 1.0
+# 命中／誤報／漏報的誤差判準（使用者指定）：
+#   命中 = 兩邊都有雨且相對誤差 ≤30%
+#   誤報 = 預測有、實際沒有（或誤差 30–60%）
+#   漏報 = 預測沒有、實際有（或誤差 >60%）
+HIT_TOL, MISS_TOL = 0.30, 0.60
+SKILL_KEEP_DAYS = 45        # 保留天數：短期權重看7天、長期基準看30天，留餘裕
+
+
+def _verify_class(obs, mod):
+    """分類單一比對：hit / false（誤報）/ miss（漏報）/ correct_neg（正確無雨）。
+
+    ★ 判準（使用者指定）：
+      命中 —— 兩邊都有雨，且相對誤差在 30% 內
+      誤報 —— 預測有、實際沒有；或兩邊都有雨但誤差 30~60%（偏高側）
+      漏報 —— 預測沒有、實際有；或兩邊都有雨但誤差 >60%
+    以觀測為分母計算相對誤差；觀測為 0 時無法計算比例，直接依有無判定。
+    """
+    o_rain = obs >= RAIN_THRESHOLD
+    m_rain = mod >= RAIN_THRESHOLD
+    if not o_rain and not m_rain:
+        return 'correct_neg'
+    if m_rain and not o_rain:
+        return 'false'          # 預測有、實際沒有
+    if o_rain and not m_rain:
+        return 'miss'           # 預測沒有、實際有
+    # 兩邊都有雨 → 看相對誤差
+    err = abs(mod - obs) / max(obs, 1e-9)
+    if err <= HIT_TOL:
+        return 'hit'
+    if err <= MISS_TOL:
+        return 'false' if mod > obs else 'miss'
+    return 'miss' if mod < obs else 'false'
+
+
+# ★ 門檻驗證（依使用者討論後採用）：
+#   主指標 —— 日累積 × 多門檻 ETS，門檻取 ETR2 實際警戒帶 80/200/350mm。
+#     ETS 扣掉「隨機猜也會中」的部分，乾季不會虛高，跨季節可比。
+#   輔助 —— 時雨量 × 40mm 門檻 SEDI。短延時強降雨是土石流啟動因子，
+#     且 40mm/h 以上屬罕見事件，CSI/ETS 會退化到 0，只有 SEDI 不會。
+#   參考 —— 既有的日累積相對誤差 30%，保留當基線以銜接先前記錄。
+# ★ 加上 10／50：頻率偏差的型態要能逐門檻看 —— 融合在低門檻必然偏高
+#   （任一成員報雨，平均就容易越過 1mm），在高門檻則因平滑而偏低。
+#   只看 ≥1mm 的偏差比會誤判成「融合最不準」。
+DAILY_THRESHOLDS  = [10, 50, 80, 200, 350]     # mm／日，比照特報與警戒帶
+HOURLY_THRESHOLD  = 40                 # mm／時，短延時強降雨
+
+
+def _contingency(obs, mod, thr):
+    """單一門檻的列聯表分類：兩邊是否跨過該門檻。"""
+    o, m = (obs >= thr), (mod >= thr)
+    if o and m:        return 'hit'
+    if m and not o:    return 'false'
+    if o and not m:    return 'miss'
+    return 'correct_neg'
+
+
+def _ets(c):
+    """Equitable Threat Score：扣除隨機命中後的 CSI。
+
+    hits_random = (hit+false)(hit+miss) / N
+    ETS = (hit − hits_random) / (hit + miss + false − hits_random)
+    範圍 −1/3 ~ 1；0 代表與亂猜無異。
+    """
+    h, m, f = c.get('hit', 0), c.get('miss', 0), c.get('false', 0)
+    n = h + m + f + c.get('correct_neg', 0)
+    if n == 0:
+        return None
+    hr = (h + f) * (h + m) / n
+    den = h + m + f - hr
+    return round((h - hr) / den, 3) if abs(den) > 1e-9 else None
+
+
+def _sedi(c):
+    """Symmetric Extremal Dependence Index：罕見事件不退化的指標。
+
+    以命中率 H 與誤報率 F 表示：
+      SEDI = [log F − log H − log(1−F) + log(1−H)]
+             / [log F + log H + log(1−F) + log(1−H)]
+    範圍 −1 ~ 1；門檻極端時仍有鑑別力，這是 CSI/ETS 做不到的。
+    H 或 F 落在 0／1 時公式無定義，回 None 而不強行外插。
+    """
+    import math
+    h, m, f = c.get('hit', 0), c.get('miss', 0), c.get('false', 0)
+    cn = c.get('correct_neg', 0)
+    if (h + m) == 0 or (f + cn) == 0:
+        return None
+    H = h / (h + m)          # hit rate
+    F = f / (f + cn)         # false alarm rate
+    if not (0 < H < 1) or not (0 < F < 1):
+        return None
+    num = math.log(F) - math.log(H) - math.log(1 - F) + math.log(1 - H)
+    den = math.log(F) + math.log(H) + math.log(1 - F) + math.log(1 - H)
+    return round(num / den, 3) if abs(den) > 1e-9 else None
+
+
+def _verify_scores(c):
+    """由列聯表算 POD / FAR / CSI / 偏差比。
+
+    POD（命中率）= hit / (hit + miss)       —— 實際有雨時抓到的比例
+    FAR（誤報率）= false / (hit + false)     —— 報有雨中報錯的比例
+    CSI（成功指數）= hit / (hit + miss + false) —— 綜合指標，不受正確無雨灌水
+    偏差比 = (hit + false) / (hit + miss)   —— >1 報太多、<1 報太少
+    """
+    h, m, f = c.get('hit', 0), c.get('miss', 0), c.get('false', 0)
+    def _r(x, d):
+        return round(x / d, 3) if d else None
+    return {
+        'POD': _r(h, h + m),
+        'FAR': _r(f, h + f),
+        'CSI': _r(h, h + m + f),
+        'BIAS': _r(h + f, h + m),
+        # ★ ETS 只能用純門檻表（thr1）算；主表已依相對誤差重新歸類，不是 2×2 列聯表
+        'ETS': _ets(c['thr1']) if isinstance(c.get('thr1'), dict) else None,
+        'SEDI': _sedi(c),
+    }
+
+
+def _verify_summary(vf, days=7):
+    """近 N 日的校驗彙整（全臺），供前端不必另載 verify.json 就能顯示概況。"""
+    if not vf or not vf.get('days'):
+        return None
+    ks = sorted(vf['days'].keys())[-days:]
+    agg = {}
+    for k in ks:
+        for m, c in (vf['days'][k].get('全臺') or {}).items():
+            a = agg.setdefault(m, {'hit': 0, 'miss': 0, 'false': 0, 'correct_neg': 0})
+            for kk in ('hit', 'miss', 'false', 'correct_neg'):
+                a[kk] += c.get(kk, 0)
+            if isinstance(c.get('thr1'), dict):          # ETS 用的純門檻表
+                t1 = a.setdefault('thr1', {'hit': 0, 'miss': 0, 'false': 0, 'correct_neg': 0})
+                for kk in t1:
+                    t1[kk] += c['thr1'].get(kk, 0)
+    return {'days': len(ks), 'from': ks[0] if ks else None, 'to': ks[-1] if ks else None,
+            'scores': {m: _verify_scores(c) for m, c in agg.items()},
+            'counts': agg}
+
+
+# ★ 時雨量強度分級（CWA 短延時強降雨標準）
+#   <20 無、20~40 顯著、40~80 強（大雷雨）、≥80 極強
+HOURLY_BANDS = [(20, '無'), (40, '顯著'), (80, '強'), (float('inf'), '極強')]
+
+
+def _obs_max_hourly_yday(ser, station_names, now_tpe):
+    """昨日（00~23 時）該鄉鎮各站的最大單一小時雨量。
+
+    ★ 來源：rain_hourly.json 的 cwa[時間][站名]。
+      時間鍵格式為 'YYYY-MM-DD HH'（由 fetch_qpesums_hourly.py 寫入）。
+      取昨日整天所有小時、所有對到的站，回傳其中最大值。
+      沒有任何一小時對到站就回 None（不以 0 充數 —— 那會被當成
+      「觀測無強降雨」而汙染誤報統計）。
+    """
+    if not ser:
+        return None
+    hrs = ser.get('hours') or []
+    cwa = ser.get('cwa') or {}
+    if not hrs or not cwa:
+        return None
+    yday = (now_tpe - timedelta(days=1)).strftime('%Y-%m-%d')
+    keys = [n for n in (station_names or []) if n]
+    if not keys:
+        return None
+    best = None
+    for hk in hrs:
+        if not str(hk).startswith(yday):
+            continue
+        rec = cwa.get(hk) or {}
+        if not rec:
+            continue
+        # 對站：精確 → 正規化
+        norm = None
+        for n in keys:
+            v = rec.get(n)
+            if v is None:
+                if norm is None:
+                    norm = {_stn_key2(k): k for k in rec}
+                hit = norm.get(_stn_key2(n))
+                v = rec.get(hit) if hit else None
+            if v is None:
+                continue
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if best is None or fv > best:
+                best = fv
+    return best
+
+
+def _fcst_max_hourly_yday(t, model):
+    """昨日的預測最大時雨量。maxh_* 是逐 6h 段的段內最大值，
+    昨日對應段索引 -4 ~ -1（相對今天 00 時），取其中最大。
+
+    ★ 只有 best／ecmwf／gfs 有抓 maxh（其他模式後端未取，
+      硬要涵蓋得多打 API，目前已在被限流，故先做這三個）。
+    """
+    arr = t.get('maxh_' + model)
+    if not isinstance(arr, list) or not arr:
+        return None
+    # maxh 陣列以「今天 00 時」為 index 0，昨日是負索引 → 取開頭前 4 段
+    # （fetch 時已對齊，昨日的段不在陣列內時回 None）
+    vals = [v for v in arr[:4] if v is not None and isinstance(v, (int, float))]
+    return max(vals) if vals else None
+
+
+def fclog_values_for(valid_date, model):
+    """從預報存檔取「當初發布、對 valid_date 的預報」逐鄉鎮值。
+
+    ★★ 2026-10-09：CWA 的校驗來源。
+      其他模式用 model_yday（向 Open-Meteo 重抓昨日預報），但 CWA 的值
+      來自官方 PNG 判讀，Open-Meteo 沒有它 —— 先前整個校驗與排行
+      因此完全看不到 CWA（VF_MODELS 與 MODELS 都沒列它）。
+      改用預報存檔：驗的是「當時真的發布了什麼」，比事後重抓更正確。
+    回傳 {鄉鎮鍵: 日雨量}；沒有資料回 {}。
+    """
+    if not os.path.exists(FORECAST_LOG_FILE):
+        return {}
+    try:
+        with open(FORECAST_LOG_FILE, encoding='utf-8') as f:
+            log = json.load(f) or {}
+    except Exception:
+        return {}
+    model = FCLOG_ALIAS.get(model, model)      # 鍵名分歧在這裡收斂
+    towns = log.get('towns') or []
+    issues = sorted(k for k, v in (log.get('issues') or {}).items()
+                    if valid_date in (v or {}))
+    if not towns or not issues:
+        return {}
+    #  取最接近有效日的那一報（lead time 最短＝最公平的比較基準）
+    for ik in reversed(issues):
+        arr = (log['issues'][ik][valid_date] or {}).get(model)
+        if arr and len(arr) == len(towns):
+            return {towns[i]: arr[i] for i in range(len(towns))
+                    if arr[i] is not None}
+    return {}
+
+
+def _vf_add(day, scope, m, obs, mv):
+    """把一筆（觀測, 預報）累計進 day[scope][m]；回傳該格 dict。
+
+    ★ update_verify 與 CWA 歷史回補共用這一份 —— 兩邊各寫一套累計規則，
+      日後改了一邊，排行上的 CWA 就會用另一把尺量。
+    """
+    obs, mv = float(obs), float(mv)
+    d = day.setdefault(scope, {}).setdefault(m, {
+        'hit': 0, 'miss': 0, 'false': 0, 'correct_neg': 0})
+    d[_verify_class(obs, mv)] += 1
+    # ★ 量的指標：列聯表只看「有沒有越過門檻」，這裡累計誤差供 MAE／RMSE／偏差
+    am = d.setdefault('amt', {'n': 0, 'ae': 0.0, 'se': 0.0,
+                              'err': 0.0, 'obs': 0.0, 'mod': 0.0})
+    _e = mv - obs
+    am['n'] += 1
+    am['ae'] += abs(_e)
+    am['se'] += _e * _e
+    am['err'] += _e
+    am['obs'] += obs
+    am['mod'] += mv
+    # ★ 降雨發生與否（10mm）：專門抓包牌式亂報
+    od = d.setdefault('occ10', {'hit': 0, 'miss': 0, 'false': 0, 'correct_neg': 0})
+    od[_contingency(obs, mv, 10.0)] += 1
+    # ★ 2026-11-08：純 1mm 門檻列聯表（ETS 用）。
+    #   主表 hit/false/miss 依「相對誤差 30%／60%」重新歸類過（使用者指定的命中判準），
+    #   那已不是 2×2 列聯表 —— 兩邊都有雨卻被歸成誤報／漏報，隨機命中的期望值
+    #   公式就不成立，ETS 會系統性變成負值（隨機資料實測約 −0.25，應為 0）。
+    #   這就是「ETS 全模式負值」的根因。ETS 一律改用純門檻表計算。
+    t1 = d.setdefault('thr1', {'hit': 0, 'miss': 0, 'false': 0, 'correct_neg': 0})
+    t1[_contingency(obs, mv, RAIN_THRESHOLD)] += 1
+    # ★ 多門檻 ETS（主指標）
+    for thr in DAILY_THRESHOLDS:
+        td = d.setdefault(f'thr{thr}', {'hit': 0, 'miss': 0, 'false': 0, 'correct_neg': 0})
+        td[_contingency(obs, mv, thr)] += 1
+    return d
+
+
+def cwa_pairs_from_archive(valid_date, archive_dir='archive'):
+    """由快照（archive/YYYYMMDDHH.json）重建「當時真的發布過的」CWA 日預報與觀測。
+
+    ★ 為什麼可以、而且應該回補：快照是每輪原封不動存下的 data.json，
+      裡面的 qpf_cwa_q 就是那一刻系統上發布的官方定量降水（可加量）。
+      這與 forecast_log 記錄的是同一個東西，只是 forecast_log 從未被
+      workflow commit（每輪都從空檔開始），所以 CWA 一天都沒驗過。
+    ★ 規則與即時校驗一致：
+      - 預報＝有效日前一天最後一份「有 CWA 判讀」的快照，取有效日 4 段的和；
+        4 段有任一段沒有官方值 → 該鄉鎮不列入（不把缺段當 0）。
+      - 觀測＝有效日隔天最後一份快照的 daily_rain[1]；推估值（鄰站／QPESUMS）不列入。
+      - 只用有 qpf_cwa_q 的快照（舊版只有色帶下界 qpf_cwa，語意不同，不混用）。
+    回傳 {縣市鄉鎮: (obs, fc)}；不足以比對時回 {}。
+    """
+    try:
+        vd = datetime.strptime(valid_date, '%Y-%m-%d')
+    except Exception:
+        return {}
+    if not os.path.isdir(archive_dir):
+        return {}
+    prev = (vd - timedelta(days=1)).strftime('%Y%m%d')
+    nxt = (vd + timedelta(days=1)).strftime('%Y%m%d')
+    files = sorted(os.listdir(archive_dir))
+
+    def _load(fn):
+        try:
+            with open(os.path.join(archive_dir, fn), encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    fc = {}
+    for fn in reversed([f for f in files if f.startswith(prev) and f.endswith('.json')]):
+        d = _load(fn)
+        if not d: continue
+        T = d.get('townships') or []
+        if sum(1 for t in T if any(v is not None for v in (t.get('qpf_cwa_q') or []))) < len(T) * FCLOG_MIN_COV['cwa']:
+            continue
+        try:
+            # ★ 陣列第 0 段＝base_time 當日 00:00（不是 base_time 本身，見 update_forecast_log）
+            base = datetime.fromisoformat(str(d.get('base_time'))[:10] + 'T00:00:00')
+        except Exception:
+            continue
+        idx = [i for i in range(64)
+               if (base + timedelta(hours=6 * i)).strftime('%Y-%m-%d') == valid_date]
+        if len(idx) != 4:
+            continue
+        for t in T:
+            q = t.get('qpf_cwa_q') or []
+            if len(q) <= idx[-1] or any(q[i] is None for i in idx):
+                continue
+            fc[(t.get('county') or '') + (t.get('township') or '')] = round(sum(q[i] for i in idx), 1)
+        break
+    if not fc:
+        return {}
+    for fn in reversed([f for f in files if f.startswith(nxt) and f.endswith('.json')]):
+        d = _load(fn)
+        if not d: continue
+        out = {}
+        for t in d.get('townships') or []:
+            k = (t.get('county') or '') + (t.get('township') or '')
+            if k not in fc or t.get('obs_src') in ('neighbor', 'qpesums'):
+                continue
+            ob = (t.get('daily_rain') or [None, None])
+            ob = ob[1] if len(ob) > 1 else None
+            if ob is None:
+                continue
+            out[k] = (float(ob), fc[k])
+        if out:
+            return out
+    return {}
+
+
+def backfill_cwa_verify(vf, zones, archive_dir='archive'):
+    """verify.json 中缺 CWA 的日子，用快照回補（只補缺的，不覆寫既有）。回傳補了幾天。"""
+    n = 0
+    #  ★ 試過但快照裡沒有 CWA 的日子記下來，不要每輪重讀（快照每份約 7MB）
+    tried = set(vf.get('cwa_backfill_tried') or [])
+    for dk, day in sorted((vf.get('days') or {}).items()):
+        if 'cwa' in (day.get('全臺') or {}) or dk in tried:
+            continue
+        pairs = cwa_pairs_from_archive(dk, archive_dir)
+        #  有效日隔天的快照還沒出現（＝觀測還沒齊）時不記為已試，下輪再來
+        nxt = (datetime.strptime(dk, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y%m%d')
+        if not pairs:
+            if os.path.isdir(archive_dir) and any(f.startswith(nxt) for f in os.listdir(archive_dir)):
+                tried.add(dk)
+            continue
+        for k, (ob, mv) in pairs.items():
+            zone = zones.get(k) or '平地'
+            for scope in ('全臺', zone):
+                _vf_add(day, scope, 'cwa', ob, mv)
+        n += 1
+    keep = set((vf.get('days') or {}).keys())
+    vf['cwa_backfill_tried'] = sorted(d for d in tried if d in keep)
+    return n
+
+
+def update_verify(out_towns, zones, now_tpe, hourly_ser=None, prev_weights=None,
+                  prev_skill=None):
+    """逐日校驗：以 1mm 有效降水為門檻，比對昨日各模式與實際觀測。
+
+    ★ 與既有誤差追蹤（model_skill）互補：
+      model_skill 看「量」的偏差（偏差比、MAE），用於融合加權；
+      verify      看「有無」的判斷品質（POD/FAR/CSI），用於評估可信度。
+      兩者共用同一批樣本，在同一個流程算完，不重複抓資料。
+    結構：{"days": {"2026-09-01": {"全臺": {"ecmwf": {hit,miss,false,correct_neg}},
+                                   "山區": {...}}}}
+    """
+    yday = (now_tpe - timedelta(days=1)).strftime('%Y-%m-%d')
+    vf = {'days': {}}
+    if os.path.exists(VERIFY_FILE):
+        try:
+            with open(VERIFY_FILE, encoding='utf-8') as f:
+                vf = json.load(f) or {'days': {}}
+        except Exception:
+            vf = {'days': {}}
+    vf.setdefault('days', {})
+
+    # ★ 校驗涵蓋所有模式（含僅校驗者）；融合加權另在 update_model_skill 處理
+    MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
+              'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom',
+              'blend',          # ★ 融合結果本身也要被校驗
+              'cwa')            # ★ 中央氣象署官方 QPF（由預報存檔取值）
+    _yday = (now_tpe - timedelta(days=1)).strftime('%Y-%m-%d')
+    _cwa_yday = fclog_values_for(_yday, 'cwa')
+    if _cwa_yday:
+        print(f"    CWA 校驗取自預報存檔：{len(_cwa_yday)} 個鄉鎮有當初發布的值")
+    else:
+        print(f"    ⚠ CWA 無當初發布的值可校驗（預報存檔尚未累積到 {_yday}；"
+              f"部署後才開始累積，不會回溯）")
+    day = {}
+    n_used = 0
+    for t in out_towns:
+        key = (t.get('county') or '') + (t.get('township') or '')
+        zone = zones.get(key) or '平地'
+        obs = (t.get('daily_rain') or [None, None])[1]      # [1] = 昨天
+        if obs is None:
+            continue
+        if t.get('obs_src') in ('neighbor', 'qpesums'):     # 推估值不列入校驗
+            continue
+        # 昨日觀測最大時雨量（供時雨量強度驗證；每個鄉鎮算一次）
+        _stn_names = [st.get('name') for st in (t.get('stations') or [])
+                      if isinstance(st, dict) and st.get('name')]
+        _obs_mh = _obs_max_hourly_yday(hourly_ser, _stn_names, now_tpe)
+        for m in MODELS:
+            mv = (_blend_yday(t, zone, prev_weights, prev_skill) if m == 'blend'
+                  else _cwa_yday.get(key) if m == 'cwa'
+                  else (t.get('model_yday') or {}).get(m))
+            if mv is None:
+                continue
+            # 全臺與逐地形各記一份（累計規則與歷史回補共用 _vf_add，確保同一把尺）
+            for scope in ('全臺', zone):
+                d = _vf_add(day, scope, m, obs, mv)
+                # ★ 時雨量強度（輔助指標，SEDI）：只有 best/ecmwf/gfs 有 maxh
+                if m in ('best', 'ecmwf', 'gfs') and _obs_mh is not None:
+                    _fc_mh = _fcst_max_hourly_yday(t, m)
+                    if _fc_mh is not None:
+                        hd = d.setdefault('hourly40', {'hit': 0, 'miss': 0,
+                                                       'false': 0, 'correct_neg': 0})
+                        hd[_contingency(float(_obs_mh), float(_fc_mh),
+                                        HOURLY_THRESHOLD)] += 1
+            n_used += 1
+
+    if not day:
+        print("  校驗：昨日無可比對樣本")
+        return vf
+
+    vf['days'][yday] = day
+    #  ★ 2026-11-08：forecast_log.json 從未被 workflow commit，CWA 一天都沒驗過。
+    #    缺 CWA 的日子由快照回補（只補缺的；當天已有即時值就不動）。
+    try:
+        _nb = backfill_cwa_verify(vf, zones)
+        if _nb:
+            print(f"    CWA 校驗：由 archive 快照回補 {_nb} 天（當時實際發布的官方值）")
+    except Exception as _e:
+        print(f"    CWA 回補略過：{_e}")
+    cut = (now_tpe - timedelta(days=VERIFY_KEEP_DAYS)).strftime('%Y-%m-%d')
+    vf['days'] = {k: v for k, v in vf['days'].items() if k >= cut}
+    vf['updated'] = now_tpe.isoformat()
+    vf['threshold'] = RAIN_THRESHOLD
+    try:
+        with open(VERIFY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(vf, f, ensure_ascii=False, separators=(',', ':'))
+        sc = {m: _verify_scores(day['全臺'][m]) for m in day.get('全臺', {})}
+        # 門檻分數另計（ETS 為主指標）
+        for m2 in day.get('全臺', {}):
+            for thr in DAILY_THRESHOLDS:
+                td = day['全臺'][m2].get(f'thr{thr}')
+                if td:
+                    sc[m2][f'ETS{thr}'] = _ets(td)
+                    sc[m2][f'SEDI{thr}'] = _sedi(td)
+            # 時雨量強度（僅 best/ecmwf/gfs）
+            hd = day['全臺'][m2].get('hourly40')
+            if hd:
+                sc[m2]['SEDI_H40'] = _sedi(hd)
+                sc[m2]['ETS_H40'] = _ets(hd)
+                sc[m2]['N_H40'] = hd['hit'] + hd['miss'] + hd['false']
+        best_m = max(sc, key=lambda m: (sc[m].get('CSI') or -1)) if sc else None
+        print(f"  校驗（≥{RAIN_THRESHOLD}mm）：{yday} 比對 {n_used} 筆，"
+              f"累積 {len(vf['days'])} 天")
+        for m in sorted(sc):
+            s_ = sc[m]
+            _h40 = s_.get('SEDI_H40')
+            _e80 = s_.get('ETS80')
+            _mk = '★' if m == 'blend' else ' '
+            print(f"  {_mk} {m:10s} POD {s_['POD']}　FAR {s_['FAR']}　"
+                  f"CSI {s_['CSI']}　ETS {s_['ETS']}　偏差比 {s_['BIAS']}"
+                  + (f"　ETS@80mm {_e80}" if _e80 is not None else "")
+                  + (f"　SEDI@40mm/h {_h40}" if _h40 is not None else ""))
+        if best_m:
+            print(f"    昨日 CSI 最佳：{best_m}")
+        # ★ 融合是否贏過單一最好的模式 —— 這是判斷加權方式好壞的唯一依據
+        try:
+            _bl = sc.get('blend') or {}
+            _singles = {k: v for k, v in sc.items() if k != 'blend'}
+            _bs = max(_singles.items(), key=lambda kv: (kv[1].get('CSI') or -1))
+            _bc, _sc2 = _bl.get('CSI'), (_bs[1].get('CSI') or 0)
+            if _bc is not None:
+                _verdict = ('融合勝出' if _bc > _sc2 else
+                            '融合落後' if _bc < _sc2 else '持平')
+                print(f"    ★ FORMOSA 自我校驗：融合 CSI {_bc}　"
+                      f"最佳單模式 {_bs[0]} {_sc2}　→ {_verdict}")
+        except Exception as _e:
+            pass
+    except Exception as e:
+        print(f"  校驗寫入失敗：{e}")
+    return vf
+
+
+# ★ FORMOSA 自我校驗（使用者指定）：
+#   先前 13 個模式都有校驗，唯獨融合結果沒有 —— 等於無法回答
+#   「融合到底有沒有贏過單一最好的模式」。
+#   做法：用昨日各模式的回算值，依「昨日採用的權重」合成融合值，
+#   再和其他模式一起進校驗。權重取自上一輪 data.json 的 adaptive_blend，
+#   沒有就退回等權重；這樣評的才是當時真正播出去的那組權重。
+AI_YDAY_TAGS = ('aifs', 'graphcast')
+
+
+# ★★★ 2026-10-11：偏差校正分量級（與前端 index.html 的 biasFactor 同一條公式）。
+#   校正倍率＝Σ觀測÷Σ模式，是在有雨量體積的視窗上估的（衰減加權還依雨量加權，
+#   等於由大雨事件決定）。無差別套用在毛毛雨上沒有依據，而且校驗門檻正好是
+#   1mm —— 實測乾日會把跨過 1mm 的鄉鎮從 49 個變成 82 個，融合的誤報率
+#   因此比它的每一個成員都高。量小不校正、量大照舊全額上修。
+BIAS_TAPER_LO = 1.0     # mm/6h 以下不校正（≈日 4mm）
+BIAS_TAPER_HI = 7.5     # mm/6h 以上全額校正（≈日 30mm，連續降雨仍完整上修）
+
+
+def bias_factor(v0, bias, n, is_ai=False, span=1):
+    """span＝這個值涵蓋幾個 6h 段（日累積用 4）。門檻依 span 等比放大，
+    否則用 6h 的 2/10mm 去判日累積，等於幾乎每天都全額校正。"""
+    if not bias or not n or n < 10 or v0 is None:
+        return 1.0
+    full = max(0.5, min(3.0 if is_ai else 2.0, bias))
+    lo, hi = BIAS_TAPER_LO * span, BIAS_TAPER_HI * span
+    w = max(0.0, min(1.0, (abs(v0) - lo) / (hi - lo)))
+    return 1.0 + (full - 1.0) * w
+
+
+def _blend_yday(t, zone, weights, prev_skill=None):
+    """昨日的 FORMOSA 融合值 —— 必須與實際播出的那一套邏輯一致。
+
+    ★ 先前這裡是「把 model_yday 全部等權平均」，與前端 _blendQpf 完全是
+      兩回事：沒有排除清單、沒有偏差校正、沒有佐證原則。等於我們在校驗
+      一個從來沒有播出過的、比實際粗糙得多的版本 —— 融合的偏差比因此
+      被高估，也讓「FORMOSA 最貼近觀測」這句話拿不出證據。
+      更糟的是取不到權重時會退回「13 個模式等權」，把已判定亂報而排除的
+      ICON 與 CMA 也算進去。
+
+    這裡逐項對齊前端 _blendQpf：
+      ① 排除清單 ADAPT_BLOCK（cma / icon）
+      ② 自適應權重；取不到時只在「未被排除」的模式間等權
+      ③ 逐地形偏差校正 v×clamp(bias, 0.5, cap)，AI 模式 cap 3.0、物理 2.0
+      ④ 佐證原則：唯一一個遠高於中位數者降權至 0.35
+
+    ★ 刻意不移植的兩項，理由是校驗的誠信：
+      ‧ 觀測佐證剔除（_noRainEvidence）用的是「發布當下的雷達與實測」。
+        在事後校驗裡最接近的替代品就是被比對的那個觀測值本身 ——
+        拿答案去篩選預報，分數會憑空變好，那不是校驗是作弊。
+      ‧ CWA 仲裁需要 CWA 的昨日官方值，model_yday 裡沒有這個欄位。
+      兩項都會讓實際播出的版本「比這裡算出來的更好」，所以目前的
+      校驗結果是 FORMOSA 的保守下限，對外引用不會高估。
+    """
+    mv = t.get('model_yday') or {}
+    if not mv:
+        return None
+    # ① 排除清單（與實際播出一致）
+    cand = {m: v for m, v in mv.items() if m not in ADAPT_BLOCK and v is not None}
+    if not cand:
+        return None
+    # ② 權重：取不到自適應權重時，只在未被排除者之間等權
+    w = (weights or {}).get(zone) or {}
+    wt = {m: w[m] for m in cand if (w.get(m) or 0) > 0}
+    if not wt:
+        wt = {m: 1.0 for m in cand}
+    # ③ 逐地形偏差校正（用上一輪的誤差表，也就是發布當下所用的那一組）
+    zs = ((prev_skill or {}).get(zone) or {})
+    vals = {}
+    for m in wt:
+        v = float(cand[m])
+        sv = (zs.get(m) or {})
+        sv = sv.get('decay') or sv.get('short') or {}
+        b, n = sv.get('bias'), sv.get('n')
+        if b and n and n >= 10:
+            #  ★ 分量級校正，與前端 biasFactor 同一條公式。
+            #    model_yday 是日累積 → span=4（4 個 6h 段）。
+            v *= bias_factor(v, b, n, m in AI_YDAY_TAGS, span=4)
+        vals[m] = v
+    if not vals:
+        return None
+    # ④ 佐證原則：只有一個模式遠高於中位數 → 降權但不歸零
+    ss = sorted(vals.values())
+    med = ss[len(ss) // 2]
+    highs = [m for m, v in vals.items() if v > max(50.0, med * 3)]
+    if len(highs) == 1:
+        wt[highs[0]] *= 0.35
+    sw = sum(wt[m] for m in vals)
+    if sw <= 0:
+        return None
+    return round(sum(vals[m] * wt[m] for m in vals) / sw, 2)
+
+
+def update_model_skill(out_towns, zones, now_tpe, prev_weights=None, prev_skill=None):
+    """把「昨日各模式預測 vs 實際觀測」記入誤差追蹤表。
+
+    結構：{"days": {"2026-09-01": {"山區": {"ecmwf": {"n":31,"sum_obs":..,
+                                                     "sum_mod":..,"sum_ae":..}}}}}
+      n       樣本數（該地形有效比對的鄉鎮數）
+      sum_obs 觀測總量、sum_mod 模式總量 → 相除得偏差比（系統性高估/低估）
+      sum_ae  絕對誤差總和 → 除以 n 得 MAE（離散程度）
+    ★ 只納入「模式或觀測其一 ≥10mm」的樣本：無雨日的比值沒有意義，
+      全部納入會被大量 0/0 稀釋成 1.0，看不出真實偏差。
+    """
+    yday = (now_tpe - timedelta(days=1)).strftime('%Y-%m-%d')
+    skill = {'days': {}}
+    if os.path.exists(SKILL_FILE):
+        try:
+            with open(SKILL_FILE, encoding='utf-8') as f:
+                skill = json.load(f) or {'days': {}}
+        except Exception:
+            skill = {'days': {}}
+    skill.setdefault('days', {})
+
+    # ★ 涵蓋全部模式（含原本「僅校驗」者）：
+    #   自適應融合要能評估 UKMO、Météo-France 等是否值得納入，
+    #   前提是它們也有誤差記錄。先前只追蹤 6 個融合成員，
+    #   其餘模式永遠沒有偏差比與 MAE，自適應機制根本看不到它們。
+    #   是否真的納入融合，由 build_adaptive_blend 依 7 天表現決定。
+    MODELS = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast',
+              'icon', 'kma', 'gem', 'ukmo', 'mf', 'cma', 'bom',
+              'blend')          # ★ 融合結果本身也要被校驗
+    day = {}
+    n_used = 0
+    for t in out_towns:
+        key = (t.get('county') or '') + (t.get('township') or '')
+        zone = zones.get(key) or '平地'
+        obs = (t.get('daily_rain') or [None, None])[1]      # [1] = 昨天
+        if obs is None:
+            continue
+        # 推估補值的鄉鎮不列入校驗（那本身就是推估，不是觀測）
+        if t.get('obs_src') in ('neighbor', 'qpesums'):
+            continue
+        for m in MODELS:
+            mv = (_blend_yday(t, zone, prev_weights, prev_skill) if m == 'blend'
+                  else (t.get('model_yday') or {}).get(m))
+            if mv is None:
+                continue
+            # ★ 無雨日加回來（使用者指定）：先前兩邊都 <10mm 就跳過，
+            #   正確報「沒雨」的模式拿不到任何分數，而包牌模式在乾燥處的
+            #   誤報（觀測 0、預報 80）卻照算 —— 等於只懲罰、不獎勵。
+            #   無雨日對總量比沒有影響（兩邊都加 0），但會讓 MAE 反映
+            #   「整體」準確度：報對乾燥的模式 MAE 下降，包牌的維持高檔。
+            d = day.setdefault(zone, {}).setdefault(m, {
+                'n': 0, 'sum_obs': 0.0, 'sum_mod': 0.0, 'sum_ae': 0.0})
+            d['n'] += 1
+            d['sum_obs'] += obs
+            d['sum_mod'] += mv
+            d['sum_ae'] += abs(obs - mv)
+            n_used += 1
+    if not day:
+        print("  誤差追蹤：昨日無足夠降雨樣本（雨量偏低時不計）")
+        return skill
+
+    for z in day:
+        for m in day[z]:
+            for k in ('sum_obs', 'sum_mod', 'sum_ae'):
+                day[z][m][k] = round(day[z][m][k], 1)
+    skill['days'][yday] = day
+
+    cut = (now_tpe - timedelta(days=SKILL_KEEP_DAYS)).strftime('%Y-%m-%d')
+    skill['days'] = {k: v for k, v in skill['days'].items() if k >= cut}
+    skill['updated'] = now_tpe.isoformat()
+    try:
+        with open(SKILL_FILE, 'w', encoding='utf-8') as f:
+            json.dump(skill, f, ensure_ascii=False, separators=(',', ':'))
+        _zs = '、'.join(f"{z}{sum(v['n'] for v in day[z].values())}" for z in sorted(day))
+        print(f"  誤差追蹤：{yday} 記錄 {n_used} 筆比對（{_zs}），"
+              f"累積 {len(skill['days'])} 天")
+    except Exception as e:
+        print(f"  誤差追蹤寫入失敗：{e}")
+    return skill
+
+
+# ★ 自適應模式選用（依使用者設計）：
+#   逐地形評估各模式，分四類後給不同權重 ——
+#     准   偏差比接近 1 且 MAE 小      → 權重最高
+#     多報 趨勢對但量偏高（偏差比 >1）  → 納入但權重降低，並做偏差校正
+#     少報 趨勢對但量偏低（偏差比 <1）  → 同上
+#     亂報 偏差比極端或 MAE 過大        → 直接排除，但仍持續校驗
+#   各地形獨立判定，選用的模式與權重都可能不同。
+#   ★ 排除不等於停止追蹤：被排除的模式照樣記錄誤差與 POD/FAR/CSI，
+#     表現轉好時會自動回到融合（這是刻意設計的回收機制）。
+MODEL_TIERS = {
+    'good':  {'bias': (0.80, 1.25), 'w': 1.00, 'label': '準'},
+    'over':  {'bias': (1.25, 2.50), 'w': 0.45, 'label': '多報'},
+    'under': {'bias': (0.40, 0.80), 'w': 0.45, 'label': '少報'},
+    # 其餘（偏差比 <0.40 或 >2.50）一律排除
+}
+# ★ 衰減加權參數（融合權重用）
+HEAVY_MM = 50.0           # 大雨事件門檻（mm/日）：致災尺度的表現另外統計
+HEAVY_MIN_N = 15          # 大雨樣本數門檻：不足就不單獨下判斷
+DECAY_HALFLIFE = 10.0     # 半衰期（天）：約一個天氣型態的持續長度
+DECAY_MAX_DAYS = 45       # 回溯上限：再舊的不看，避免跨季節
+DECAY_EFF_DAYS = 7.0      # 有效雨量折算天數：與 7 天窗的門檻可比
+ADAPT_MIN_N = 20          # 樣本數門檻：不足就不下判斷
+# ★ 雨量體積門檻（實測補上的一道關）：
+#   偏差比是 Σ觀測 ÷ Σ模式，兩個都接近 0 時比值毫無意義。
+#   實例：沿海地區整週只下 8.0mm，ICON 報 7.5mm → 偏差比 1.07 被判「準」，
+#   但同一週山區觀測 621.5mm、ICON 只報 59.7mm（偏差比 10.41）。
+#   樣本「筆數」夠不代表有雨可評，必須看雨量體積。
+ADAPT_MIN_OBS = 100.0     # 該地形近 7 天的觀測總量（mm）
+ADAPT_MIN_MOD = 20.0      # 模式的預報總量（mm）：幾乎沒報雨也無從評起
+# ★ 使用者判定排除的模式（立即生效，不等資料累積）。
+#   自動的降雨型態篩選需要「有沒有下」的列聯表，那份資料部署後才開始
+#   累積；既有的 80mm 門檻表抓不到 CMA（近 7 天它沒報過 ≥80mm）。
+#   在自動篩選有足夠資料前，由使用者依觀察直接排除。
+#   日後自動篩選也判定它包牌時，這份清單可以移除，結果不變。
+ADAPT_BLOCK = ('cma', 'icon')
+# 原本就在 FORMOSA 裡的核心成員（樣本不足時仍保留）
+ADAPT_CORE = ('best', 'ecmwf', 'gfs', 'jma', 'aifs', 'graphcast')
+ADAPT_MAE_CAP = 60.0      # MAE 上限（mm）：再準的偏差比也救不了離譜的誤差
+
+
+# ★ 降雨型態技術（逐地形、近 7 天）：由 verify.json 的列聯表彙整。
+#   優先用 occ10（10mm 發生與否，新增）；舊資料沒有時退回 thr80。
+#   verify.json 保留 60 天，所以 thr80 部署當下就有歷史可用，不必等。
+PATTERN_DAYS = 7
+PATTERN_FAR_MAX = 0.75     # 誤報率上限：超過視為包牌
+PATTERN_ETS_MIN = 0.05     # ETS 下限：低於此與亂猜無異
+PATTERN_MIN_FC = 8         # 預報有雨次數門檻（算誤報率所需）
+PATTERN_MIN_OB = 5         # 實際有雨次數門檻（算 ETS 所需）
+# ★★ 2026-10-11：觀測涵蓋率門檻。
+#   同一地形裡，「實際有雨次數」ob 不該隨模式而變 —— 觀測又不會因為
+#   換個模式就改變。實測 2026-10-11：山區各模式 ob=49，gem 只有 2；
+#   平地各模式 ob=19，gem 是 0。因為 gem 抓取常失敗，它只在少數幾天
+#   有資料，於是：
+#     ① 它的分數是在一個又小又不具代表性的子集上算的；
+#     ② fc/ob 達不到上面兩道門檻 → 包牌與 ETS 篩選對它完全失效；
+#     ③ 偏差比在那個小子集上剛好漂亮 → 拿到全場最高權重 1.2。
+#   「資料愈少愈不會被擋，還愈受信任」是完全顛倒的。
+#   改以同地形的 ob 最大值為基準，涵蓋率不足者視為無從評比。
+PATTERN_MIN_OBCOV = 0.6
+
+
+def zone_pattern_skill(vf, now_tpe, days=PATTERN_DAYS):
+    """回傳 {地形: {模式: {far, ets, fc, ob, src}}}"""
+    out = {}
+    if not vf:
+        return out
+    cut = (now_tpe - timedelta(days=days)).strftime('%Y-%m-%d')
+    agg = {}
+    for d, scopes in (vf.get('days') or {}).items():
+        if d < cut:
+            continue
+        for z, mmap in (scopes or {}).items():
+            if z == '全臺':
+                continue
+            for m, c in (mmap or {}).items():
+                src = 'occ10' if isinstance(c.get('occ10'), dict) else (
+                      'thr80' if isinstance(c.get('thr80'), dict) else None)
+                if not src:
+                    continue
+                a = agg.setdefault(z, {}).setdefault(m, {
+                    'hit': 0, 'miss': 0, 'false': 0, 'correct_neg': 0, 'src': set()})
+                for k in ('hit', 'miss', 'false', 'correct_neg'):
+                    a[k] += (c[src] or {}).get(k, 0)
+                a['src'].add(src)
+    for z, mmap in agg.items():
+        for m, a in mmap.items():
+            fc = a['hit'] + a['false']
+            ob = a['hit'] + a['miss']
+            out.setdefault(z, {})[m] = {
+                'far': round(a['false'] / fc, 3) if fc else None,
+                'ets': _ets(a),
+                'fc': fc, 'ob': ob,
+                'src': '/'.join(sorted(a['src'])),
+            }
+    return out
+
+
+def build_adaptive_blend(skill_summary, verify_recent=None, pattern=None):
+    """由誤差追蹤產生「逐地形的模式選用與權重」。
+
+    回傳 {地形: {'models': {模式: 權重}, 'excluded': [...], 'note': str}}
+    前端的 FORMOSA 融合直接讀這份，不必自行判斷。
+    """
+    out = {}
+    if not skill_summary:
+        return out
+    # ★ 跨地形總檢（使用者指出的 ICON 情況）：
+    #   某模式在多數地形被判定為離譜／包牌，代表它「整體在亂報」，
+    #   只是剛好在某個地形的數字湊巧接近 —— 那不是準，是巧合。
+    #   先統計各模式在幾個地形不及格，超過半數就全面排除。
+    _bad = {}
+    _zn = 0
+    for _z, _mm in (skill_summary or {}).items():
+        _zn += 1
+        for _m, _v0 in (_mm or {}).items():
+            _v = (_v0 or {}).get('decay') or (_v0 or {}).get('short') or {}
+            _b, _mae = _v.get('bias'), _v.get('mae')
+            _P0 = ((pattern or {}).get(_z) or {}).get(_m) or {}
+            bad = False
+            if _b is not None and (_b < 0.40 or _b >= 2.50):
+                bad = True
+            if _mae is not None and _mae > ADAPT_MAE_CAP:
+                bad = True
+            if _P0.get('fc', 0) >= PATTERN_MIN_FC and (_P0.get('far') or 0) >= PATTERN_FAR_MAX:
+                bad = True
+            if bad:
+                _bad[_m] = _bad.get(_m, 0) + 1
+    _global_bad = {m for m, c in _bad.items() if _zn and c > _zn / 2}
+
+    for zone, mmap in skill_summary.items():
+        picks, excluded, detail = {}, [], []
+        #  ★ 「沒有可比的紀錄」與「有紀錄但表現差」必須分開。
+        #    退回相對最佳時只能從後者挑 —— 前者根本沒有分數可排，
+        #    撈回來等於把剛剛判定無從評比的模式當成最佳。
+        #    （實測：不分開的話，淺山區會把剛以「觀測涵蓋不足」排除的
+        #      gem 又當成「相對最佳#1」撈回去。）
+        nodata = set()
+        #  同地形的觀測事件數基準（觀測與模式無關，各模式應該一致）
+        _obmax = max([((pattern or {}).get(zone) or {}).get(_m, {}).get('ob') or 0
+                      for _m in (mmap or {})] or [0])
+        for m, v0 in (mmap or {}).items():
+            #  ★ 融合不能是自己的成分（自我遞迴）。前端因為沒有 qpf_blend
+            #    這個後端欄位而默默丟掉它，等於「採用 N 個模式」灌水。
+            if m == 'blend':
+                continue
+            if m in ADAPT_BLOCK:
+                excluded.append(m)
+                detail.append(f'{m}=使用者排除')
+                continue
+            if m in _global_bad:
+                excluded.append(m)
+                detail.append(f'{m}=整體亂報（{_bad[m]}/{_zn} 地形不及格）')
+                continue
+            # ★ 改用衰減加權（decay）：每日權重 = 0.5^(天數/10) × 當日雨量。
+            #   固定 7 天窗會被單一事件帶偏，也擋不住乾燥期的失真比值；
+            #   固定「0.6×7天＋0.4×30天」則不論季節都給舊資料四成，
+            #   季節轉換時舊資料仍佔太重。衰減加權讓舊資料漸退，
+            #   而雨量加權讓乾燥期自動回頭參考上一次真正下雨的時候。
+            #   沒有 decay（舊 data 或樣本太少）時退回 7 天窗。
+            v = (v0 or {}).get('decay') or (v0 or {}).get('short') or {}
+            bias = v.get('bias')
+            mae = v.get('mae')
+            n = v.get('n') or 0
+            # 衰減視窗用「有效雨量」（加權後的等效總量），舊視窗用原始總量
+            vol_o = v.get('eobs', v.get('obs'))
+            vol_m = v.get('emod', v.get('mod'))
+            thin = (vol_o is not None and vol_o < ADAPT_MIN_OBS) or \
+                   (vol_m is not None and vol_m < ADAPT_MIN_MOD)
+            if bias is None or n < ADAPT_MIN_N or thin:
+                # ★ 樣本不足時分兩種情況：
+                #   原融合成員（核心 6 個）→ 保留 0.6，避免資料斷一天就把
+                #     整個融合打散。
+                #   新納入的候選（UKMO、GEM…）→ 不納入，必須先用表現證明。
+                #   先前一律給 0.6，連偏差比 5.00 的 ICON 也被拉進融合；
+                #   而 ICON 四天才輪一次，七天內幾乎永遠樣本不足，
+                #   等於永遠以 0.6 混在裡面（違反使用者的要求）。
+                why = (f'雨量太少(觀測{vol_o:.0f}/預報{vol_m:.0f}mm)'
+                       if thin and vol_o is not None else f'樣本不足({n})')
+                if m in ADAPT_CORE:
+                    picks[m] = 0.6
+                    detail.append(f'{m}={why}，核心保留')
+                else:
+                    excluded.append(m); nodata.add(m)
+                    detail.append(f'{m}={why}，暫不納入')
+                continue
+            if mae is not None and mae > ADAPT_MAE_CAP:
+                excluded.append(m)
+                detail.append(f'{m}=MAE過大({mae:.0f})')
+                continue
+            # ★ 降雨型態篩選（使用者指出的包牌問題）：
+            #   偏差比是總量比，多報與少報會互相抵銷，無法反映
+            #   「雨下在哪裡」對不對。先看誤報率與 ETS，不及格直接排除。
+            P = ((pattern or {}).get(zone) or {}).get(m) or {}
+            pf, pe = P.get('far'), P.get('ets')
+            #  ★ 觀測涵蓋率不足 → 這個模式的分數與同儕不是在同一組樣本上算的，
+            #    不可比；而且兩道型態篩選也會因樣本不足而失效。視為無從評比。
+            _ob = P.get('ob') or 0
+            if _obmax >= PATTERN_MIN_OB and _ob < _obmax * PATTERN_MIN_OBCOV:
+                _why = f'觀測涵蓋不足({_ob}/{_obmax} 天，多半是抓取失敗)'
+                if m in ADAPT_CORE:
+                    picks[m] = 0.6
+                    detail.append(f'{m}={_why}，核心保留')
+                else:
+                    excluded.append(m); nodata.add(m)
+                    detail.append(f'{m}={_why}，不納入')
+                continue
+            if P.get('fc', 0) >= PATTERN_MIN_FC and pf is not None and pf >= PATTERN_FAR_MAX:
+                excluded.append(m)
+                detail.append(f'{m}=包牌(誤報率{pf:.2f})')
+                continue
+            if P.get('ob', 0) >= PATTERN_MIN_OB and pe is not None and pe <= PATTERN_ETS_MIN:
+                excluded.append(m)
+                detail.append(f'{m}=型態無技術(ETS {pe:.2f})')
+                continue
+            tier = None
+            for name, cfg in MODEL_TIERS.items():
+                lo, hi = cfg['bias']
+                if lo <= bias < hi:
+                    tier = (name, cfg)
+                    break
+            if tier is None:
+                excluded.append(m)
+                detail.append(f'{m}=偏差比離譜({bias:.2f})')
+                continue
+            name, cfg = tier
+            # 同一層內再依 MAE 微調：MAE 小者權重略高
+            w = cfg['w']
+            if mae is not None:
+                w *= max(0.5, min(1.2, 30.0 / max(10.0, mae)))
+            # 再依降雨型態技術（ETS）微調：型態抓得準的權重略高
+            if P.get('ob', 0) >= PATTERN_MIN_OB and pe is not None:
+                w *= max(0.7, min(1.3, 0.8 + pe))
+            picks[m] = round(w, 3)
+            detail.append(f'{m}={cfg["label"]}({bias:.2f})')
+        # ★ 全數排除時：不退回「所有模式等權重」（那等於把最離譜的也拉進來），
+        #   改為挑「相對最好的」——以 |ln(偏差比)| 為主、MAE 為輔排序，
+        #   取前三名並依名次給遞減權重。
+        #   理由：沒有模式達標時，使用者仍需要一個預報；此時最合理的
+        #   選擇是「錯得最少的那幾個」，而不是全部平均。
+        #  ★ 成員少於 2 個就不是「融合」了。原本只有「一個都不剩」才退回
+        #    相對最佳三名；但剩 1 個時整個地形等於單一模式在決定警戒，
+        #    卻仍掛著 FORMOSA 融合的名字。
+        if len(picks) < 2:
+            import math as _m
+            cand = []
+            for m, v0 in (mmap or {}).items():
+                if m in ADAPT_BLOCK or m == 'blend' or m in nodata:
+                    continue
+                v = (v0 or {}).get('decay') or (v0 or {}).get('short') or {}
+                b = v.get('bias')
+                mae = v.get('mae')
+                if b is None or b <= 0:
+                    continue
+                # 偏差比離 1 的距離（取對數讓 2 倍與 0.5 倍同等嚴重）
+                score = abs(_m.log(b)) + (mae or 50) / 100.0
+                cand.append((score, m, b, mae))
+            cand.sort()
+            #  已達標的那一個保留原權重，只補到 2 個以上 ——
+            #  不可把達標模式的權重一起洗成 0.6/0.4/0.25
+            _fill = [c for c in cand if c[1] not in picks]
+            for rank, (sc, m, b, mae) in enumerate(_fill):
+                if len(picks) >= max(2, min(3, len(cand))):
+                    break
+                picks[m] = round([0.6, 0.4, 0.25][min(rank, 2)], 3)
+                detail.append(f'{m}=相對最佳#{rank+1}({b:.2f})')
+            if picks:
+                excluded = [m for m in (mmap or {})
+                            if m not in picks and m != 'blend']
+                detail.append('達標模式不足 2 個→取相對最佳三名')
+            else:
+                picks = {m: 1.0 for m in (mmap or {})}
+                detail.append('無任何可用樣本→等權重')
+        out[zone] = {'models': picks, 'excluded': excluded,
+                     'note': '、'.join(sorted(detail))}
+    return out
+
+
+def summarize_model_skill(skill, now_tpe):
+    """彙整近期誤差 → {地形: {模式: {bias, mae, n, days}}}。
+
+    bias = Σ觀測 / Σ模式（>1 代表模式低估，<1 代表高估）
+    ★ 分短期(7天)與長期(30天)：短期反應當前天氣型態，長期抓系統性偏差。
+      單用 7 天會被單一事件帶偏，故最終權重取 0.6×短期 + 0.4×長期。
+    """
+    out = {}
+    # ★ 多視窗（使用者指定）：短期反應當前天氣型態，長期抓系統性偏差。
+    #   7／14／30／60 天並存，融合用衰減加權，面板可對照四個視窗。
+    for span, days in (('short', 7), ('w14', 14), ('long', 30), ('w60', 60)):
+        cut = (now_tpe - timedelta(days=days)).strftime('%Y-%m-%d')
+        agg = {}
+        for d, zmap in (skill.get('days') or {}).items():
+            if d < cut:
+                continue
+            for z, mmap in zmap.items():
+                for m, v in mmap.items():
+                    a = agg.setdefault(z, {}).setdefault(m, {
+                        'n': 0, 'sum_obs': 0.0, 'sum_mod': 0.0,
+                        'sum_ae': 0.0, 'days': 0})
+                    a['n'] += v.get('n', 0)
+                    a['sum_obs'] += v.get('sum_obs', 0.0)
+                    a['sum_mod'] += v.get('sum_mod', 0.0)
+                    a['sum_ae'] += v.get('sum_ae', 0.0)
+                    a['days'] += 1
+        for z, mmap in agg.items():
+            for m, a in mmap.items():
+                if a['n'] < 5 or a['sum_mod'] <= 0:
+                    continue      # 樣本太少不給結論
+                out.setdefault(z, {}).setdefault(m, {})[span] = {
+                    'bias': round(max(0.2, min(5.0, a['sum_obs'] / a['sum_mod'])), 3),
+                    'mae': round(a['sum_ae'] / a['n'], 1),
+                    'n': a['n'], 'days': a['days'],
+                    # ★ 雨量體積：判斷「這段期間有沒有雨可以評」用
+                    'obs': round(a['sum_obs'], 1), 'mod': round(a['sum_mod'], 1)}
+
+    # ★ 衰減加權（融合權重改用這一組，short／long 仍保留給校驗面板顯示）
+    #   每日權重 = 0.5^(天數/半衰期) × 該日該地形的觀測雨量
+    #   兩層用意：
+    #   · 指數衰減 —— 季節轉換是漸變不是開關，舊資料應漸退而非硬切。
+    #     半衰期 10 天約等於一個天氣型態的持續長度（一波鋒面、一次西南氣流）。
+    #   · 雨量加權 —— 沒下雨的日子對「大雨會不會低估」幾乎沒有資訊量，
+    #     卻和暴雨日佔一樣份量。乾燥的轉換期因此會自動回頭參考上一次
+    #     真正下雨的時候，而不是拿幾毫米去算比值（ICON 混進沿海的成因）。
+    dagg = {}
+    for d, zmap in (skill.get('days') or {}).items():
+        try:
+            age = (now_tpe.date() - datetime.strptime(d, '%Y-%m-%d').date()).days
+        except Exception:
+            continue
+        if age < 0 or age > DECAY_MAX_DAYS:
+            continue
+        decay = 0.5 ** (age / DECAY_HALFLIFE)
+        for z, mmap in zmap.items():
+            # 當日該地形的觀測量（取各模式共同的觀測總和：以最大者為準）
+            vol = max((v.get('sum_obs', 0.0) for v in mmap.values()), default=0.0)
+            w = decay * max(0.0, vol)
+            for m, v in mmap.items():
+                if not v.get('n'):
+                    continue
+                a = dagg.setdefault(z, {}).setdefault(m, {
+                    'w': 0.0, 'obs': 0.0, 'mod': 0.0, 'ae': 0.0, 'n': 0,
+                    'rawobs': 0.0, 'rawmod': 0.0, 'days': 0,
+                    # 只含衰減、不含雨量的權重：用來估「近期實際有多少雨」
+                    'dw': 0.0, 'dobs': 0.0, 'dmod': 0.0,
+                    # 大雨事件（≥50mm/日）的衰減加權統計
+                    'hw': 0.0, 'hobs': 0.0, 'hmod': 0.0, 'hae': 0.0, 'hn': 0})
+                # ★ 只含衰減的累加器要涵蓋每一天（含無雨日），
+                #   否則「近期有多少雨」會被高估 —— 無雨日若整個跳過，
+                #   分母只剩下雨的那幾天，等效雨量反而比原始總量還大。
+                a['dw']   += decay
+                a['dobs'] += decay * v.get('sum_obs', 0.0)
+                a['dmod'] += decay * v.get('sum_mod', 0.0)
+                a['rawobs'] += v.get('sum_obs', 0.0)
+                a['rawmod'] += v.get('sum_mod', 0.0)
+                if w <= 0:
+                    continue          # 無雨日不參與偏差比／MAE 的加權
+                if v.get('hn'):
+                    a['hw']   += decay
+                    a['hobs'] += decay * v.get('hobs', 0.0)
+                    a['hmod'] += decay * v.get('hmod', 0.0)
+                    a['hae']  += decay * v.get('hae', 0.0)
+                    a['hn']   += v.get('hn', 0)
+                a['w']   += w
+                a['obs'] += w * v.get('sum_obs', 0.0)
+                a['mod'] += w * v.get('sum_mod', 0.0)
+                a['ae']  += w * v.get('sum_ae', 0.0)
+                a['n']   += v.get('n', 0)
+                a['days'] += 1
+    for z, mmap in dagg.items():
+        for m, a in mmap.items():
+            if a['n'] < 5 or a['mod'] <= 0 or a['w'] <= 0:
+                continue
+            out.setdefault(z, {}).setdefault(m, {})['decay'] = {
+                'bias': round(max(0.2, min(5.0, a['obs'] / a['mod'])), 3),
+                'mae': round(a['ae'] / a['w'] / max(1e-9, a['n'] / a['days']), 1)
+                       if a['days'] else None,
+                'n': a['n'], 'days': a['days'],
+                # 體積門檻仍看未加權的原始總量，語意才直觀
+                'obs': round(a['rawobs'], 1), 'mod': round(a['rawmod'], 1),
+                # ★ 有效雨量：加權後的等效總量。體積門檻要看這個，
+                #   不能看 45 天的原始總量 —— 否則一個月前的大雨會讓
+                #   現在的乾燥期「看起來有雨可評」（沿海 ICON 就是這樣
+                #   在衰減視窗下又混進來的）。
+                # 用「只含衰減」的權重估算，不能用含雨量的權重 ——
+                # 那等於用雨量加權再平均雨量，數值會被放大（實測 911→1570）。
+                'eobs': round(a['dobs'] / max(1e-9, a['dw']) * DECAY_EFF_DAYS, 1),
+                'emod': round(a['dmod'] / max(1e-9, a['dw']) * DECAY_EFF_DAYS, 1),
+                'halflife': DECAY_HALFLIFE,
+                # 大雨事件的偏差比與 MAE（樣本足夠時才給）
+                'hbias': (round(max(0.2, min(5.0, a['hobs'] / a['hmod'])), 3)
+                          if a['hmod'] > 0 and a['hn'] >= HEAVY_MIN_N else None),
+                'hmae': (round(a['hae'] / max(1e-9, a['hw']) / max(1, a['hn'] / max(1, a['days'])), 1)
+                         if a['hw'] > 0 and a['hn'] >= HEAVY_MIN_N else None),
+                'hn': a['hn']}
+    return out
+
+
+# ── 颱風期 QPF 格點 ──────────────────────────────
+QPF_TYPHOON = [f"{BASE_URL}/F-C0041-{str(i).zfill(3)}" for i in range(1,9)]
+
+def fetch_gust_forecast():
+    """颱風警報期間各地區風力預測（含陣風）。
+
+    ★ 此資料集**僅在颱風警報發布期間**有內容，平時回空。
+      與 F-D0047 的差異：
+        - F-D0047：368 鄉鎮、逐 3 小時、只有平均風（無陣風）
+        - 本資料集：警戒「地區」尺度（約 20 餘區）、含最大風與陣風
+      兩者空間精細度不同，前端須分開呈現並標示來源，不可混為一談。
+    回傳 {地區名: {'ws': 最大風(m/s), 'gust': 陣風(m/s), 'bf': 蒲福風級}}；
+    無警報或失敗回 {}。
+    """
+    if not CWA_API_KEY:
+        return {}
+    url = f"{BASE_URL}/W-C0034-002"
+    try:
+        r = cwa_get(url, params={"Authorization": CWA_API_KEY, "format": "JSON"},
+                         timeout=20)
+        if r.status_code != 200:
+            return {}
+        raw = r.json()
+    except Exception as e:
+        print(f"    颱風風力預測抓取失敗（不影響其他）：{e}")
+        return {}
+    out = {}
+    try:
+        recs = raw.get('records', {})
+        for key in ('locations', 'Locations', 'location', 'Location'):
+            locs = recs.get(key)
+            if locs: break
+        else:
+            return {}
+        if isinstance(locs, dict): locs = [locs]
+        for wrap in locs:
+            items = wrap.get('location', wrap.get('Location', [])) \
+                    if isinstance(wrap, dict) else []
+            if not items and isinstance(wrap, dict) and wrap.get('locationName'):
+                items = [wrap]
+            for loc in items:
+                nm = (loc.get('locationName') or loc.get('LocationName') or '').strip()
+                if not nm: continue
+                rec = {'ws': None, 'gust': None, 'bf': None}
+                for we in loc.get('weatherElement', loc.get('WeatherElement', [])):
+                    en = (we.get('elementName') or we.get('ElementName') or '')
+                    times = we.get('time', we.get('Time', []))
+                    vals = []
+                    for t in times:
+                        ev = t.get('elementValue', t.get('ElementValue', {}))
+                        if isinstance(ev, list): ev = ev[0] if ev else {}
+                        v = ev.get('value', ev.get('Value'))
+                        try: vals.append(float(v))
+                        except (TypeError, ValueError): pass
+                    if not vals: continue
+                    mx = max(vals)
+                    if '陣風' in en or 'Gust' in en: rec['gust'] = mx
+                    elif '風速' in en or 'Wind' in en: rec['ws'] = mx
+                    elif '風級' in en or 'Beaufort' in en: rec['bf'] = int(mx)
+                if rec['ws'] is not None or rec['gust'] is not None:
+                    out[nm] = rec
+    except Exception as e:
+        print(f"    颱風風力預測解析失敗：{e}")
+        return {}
+    if out:
+        print(f"    颱風風力預測：{len(out)} 個警戒地區")
+    return out
+
+
+def fetch_typhoon_track():
+    """W-C0034-005：西北太平洋及南海活動中熱帶氣旋之過去軌跡與預報路徑。
+    注意：CWA 此資料集欄位一律大寫開頭（TropicalCyclones/AnalysisData/Fix...）。
+    回傳精簡結構陣列；無颱風或失敗回 []。"""
+    def _f(v):
+        try: return float(v)
+        except: return None
+    def _i(v):
+        try: return int(float(v))
+        except: return None
+    def _radius(node):
+        """Circle15ms/Circle25ms → 半徑(km)；象限半徑略過（畫圓即可）。"""
+        if not isinstance(node, dict): return None
+        return _i(node.get('Radius'))
+
+    print("抓取颱風路徑（W-C0034-005）...")
+    doc = None
+    for attempt in range(3):
+        try:
+            r = cwa_get(f"{BASE_URL}/W-C0034-005",
+                             params={'Authorization': CWA_API_KEY, 'format': 'JSON'},
+                             timeout=45)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}")
+                if attempt < 2: time.sleep(3); continue
+                return []
+            doc = json.loads(r.content.decode('utf-8', 'replace'))
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return []
+            time.sleep(3)
+    if not doc: return []
+
+    try:
+        rec = doc.get('records', {}) or {}
+        tcs = rec.get('TropicalCyclones') or {}
+        lst = tcs.get('TropicalCyclone') or []
+        if isinstance(lst, dict): lst = [lst]
+        out = []
+        for ty in lst:
+            ana = (ty.get('AnalysisData') or {}).get('Fix') or []
+            if isinstance(ana, dict): ana = [ana]
+            fcs = (ty.get('ForecastData') or {}).get('Fix') or []
+            if isinstance(fcs, dict): fcs = [fcs]
+            past = []
+            for f in ana:
+                lng, lat = _f(f.get('CoordinateLongitude')), _f(f.get('CoordinateLatitude'))
+                if lng is None or lat is None: continue
+                past.append({
+                    't': f.get('DateTime',''), 'lng': lng, 'lat': lat,
+                    'ws': _i(f.get('MaxWindSpeed')), 'gust': _i(f.get('MaxGustSpeed')),
+                    'p': _i(f.get('Pressure')),
+                    'r15': _radius(f.get('Circle15ms')), 'r25': _radius(f.get('Circle25ms')),
+                })
+            fut = []
+            for f in fcs:
+                lng, lat = _f(f.get('CoordinateLongitude')), _f(f.get('CoordinateLatitude'))
+                if lng is None or lat is None: continue
+                fut.append({
+                    'init': f.get('InitialTime',''), 'fh': _i(f.get('ForecastHour')),
+                    'lng': lng, 'lat': lat,
+                    'ws': _i(f.get('MaxWindSpeed')), 'gust': _i(f.get('MaxGustSpeed')),
+                    'p': _i(f.get('Pressure')),
+                    'mspd': _i(f.get('MovingSpeed')), 'mdir': f.get('MovingDirection',''),
+                    'r15': _radius(f.get('Circle15ms')), 'r25': _radius(f.get('Circle25ms')),
+                    'r70': _i(f.get('Radius70PercentProbability')),
+                })
+            if not past and not fut: continue
+            cur = past[-1] if past else None
+            out.append({
+                'name_en': ty.get('TyphoonName',''),
+                'name_zh': ty.get('CwaTyphoonName',''),
+                'ty_no': ty.get('CwaTyNo',''), 'td_no': ty.get('CwaTdNo',''),
+                'year': ty.get('Year',''),
+                'current': cur, 'past': past, 'forecast': fut,
+            })
+        if out:
+            for t in out:
+                c = t.get('current') or {}
+                print(f"    {t['name_zh']}({t['name_en']}) 編號{t['ty_no']}："
+                      f"現在 {c.get('lat')}N/{c.get('lng')}E 風速{c.get('ws')}m/s "
+                      f"氣壓{c.get('p')}hPa｜過去{len(t['past'])}點、預報{len(t['forecast'])}點")
+        else:
+            print("    目前無活動中熱帶氣旋")
+        return out
+    except Exception as e:
+        print(f"    解析失敗：{e}")
+        return []
+
+
+# ══════════════════════════════════════════════════════════
+#  各國颱風預報路徑（NCDR KML，2026-11-08 使用者指定加入、可自選顯示）
+#  ★ 這裡沒有假設 KML 的分組方式：逐一記錄每個 Placemark 所在的資料夾路徑，
+#    前端依實際出現的分組產生勾選清單。第一次跑會把結構印在 log，
+#    供確認各國／各模式的分組名稱。
+# ══════════════════════════════════════════════════════════
+MULTITY_URLS = {
+    'routes': 'https://satis.ncdr.nat.gov.tw/kml/multityroute.aspx',   # 各國預報路徑
+    'line100': 'https://satis.ncdr.nat.gov.tw/kml/twn100.kml',         # 臺灣外海 100 公里線
+}
+MULTITY_FILE = 'multity.json'
+
+
+def _kml_color(c):
+    """KML 顏色 aabbggrr → #rrggbb；不合法回 None。"""
+    c = (c or '').strip()
+    if len(c) == 8 and re.fullmatch(r'[0-9a-fA-F]{8}', c):
+        return '#' + c[6:8] + c[4:6] + c[2:4]
+    return None
+
+
+def parse_kml(text, depth=0, get=None):
+    """KML 文字 → [{path, name, desc, color, line:[[lon,lat],..] | pt:[lon,lat]}]。
+    NetworkLink 只追一層（避免循環）。"""
+    import xml.etree.ElementTree as ET
+    txt = re.sub(r'\sxmlns(:\w+)?="[^"]+"', '', text)
+    txt = re.sub(r'<(/?)\w+:', r'<\1', txt)
+    root = ET.fromstring(txt.encode('utf-8') if isinstance(txt, str) else txt)
+    styles = {}
+    for st in root.iter('Style'):
+        sid = st.get('id')
+        if not sid: continue
+        lc = st.find('LineStyle/color'); ic = st.find('IconStyle/color')
+        styles['#' + sid] = _kml_color((lc.text if lc is not None else None) or (ic.text if ic is not None else None))
+    for sm in root.iter('StyleMap'):
+        sid = sm.get('id')
+        for pr in sm.findall('Pair'):
+            if (pr.findtext('key') or '') == 'normal':
+                styles['#' + (sid or '')] = styles.get((pr.findtext('styleUrl') or '').strip())
+    out = []
+
+    def coords(s):
+        pts = []
+        for tok in (s or '').split():
+            v = tok.split(',')
+            try: pts.append([round(float(v[0]), 3), round(float(v[1]), 3)])
+            except Exception: pass
+        return pts
+
+    def walk(node, path):
+        for ch in list(node):
+            tag = ch.tag
+            if tag in ('Folder', 'Document'):
+                nm = (ch.findtext('name') or '').strip()
+                walk(ch, path + ([nm] if nm and tag == 'Folder' else []))
+            elif tag == 'Placemark':
+                nm = (ch.findtext('name') or '').strip()
+                desc = re.sub(r'<[^>]+>', ' ', ch.findtext('description') or '')
+                desc = re.sub(r'\s+', ' ', desc).strip()[:300]
+                col = styles.get((ch.findtext('styleUrl') or '').strip())
+                ls = ch.find('LineStyle/color')
+                if ls is not None: col = _kml_color(ls.text) or col
+                for g in ch.iter('LineString'):
+                    out.append({'path': path, 'name': nm, 'desc': desc, 'color': col,
+                                'line': coords(g.findtext('coordinates'))})
+                for g in ch.iter('Point'):
+                    c = coords(g.findtext('coordinates'))
+                    if c: out.append({'path': path, 'name': nm, 'desc': desc, 'color': col, 'pt': c[0]})
+                for g in ch.iter('Polygon'):
+                    out.append({'path': path, 'name': nm, 'desc': desc, 'color': col,
+                                'line': coords(g.findtext('.//outerBoundaryIs/LinearRing/coordinates'))})
+            elif tag == 'NetworkLink' and depth == 0 and get:
+                href = (ch.findtext('Link/href') or ch.findtext('Url/href') or '').strip()
+                nm = (ch.findtext('name') or '').strip()
+                if href:
+                    try:
+                        sub = get(href)
+                        for f in parse_kml(sub, depth + 1, None):
+                            f['path'] = path + ([nm] if nm else []) + f['path']
+                            out.append(f)
+                    except Exception as e:
+                        print(f"    NetworkLink {href} 失敗：{e}")
+    walk(root, [])
+    return out
+
+
+def _http_kml(url):
+    r = cwa_get(url, timeout=30)          # cwa_get 只對 CWA 主機節流，其他主機直通
+    r.raise_for_status()
+    b = r.content
+    if b[:2] == b'PK':                      # KMZ
+        import zipfile, io
+        z = zipfile.ZipFile(io.BytesIO(b))
+        n = next((x for x in z.namelist() if x.lower().endswith('.kml')), None)
+        b = z.read(n) if n else b''
+    for enc in ('utf-8', 'big5', 'cp950'):
+        try: return b.decode(enc)
+        except Exception: pass
+    return b.decode('utf-8', 'replace')
+
+
+def fetch_multity(now_tpe):
+    """抓 NCDR 各國颱風預報路徑與外海 100 公里線 → multity.json。失敗時不覆寫舊檔。"""
+    out = {'fetched': now_tpe.strftime('%Y-%m-%dT%H:%M'), 'source': 'NCDR 颱風資訊（各國預報路徑 KML）',
+           'layers': {}}
+    ok = False
+    for key, url in MULTITY_URLS.items():
+        try:
+            feats = parse_kml(_http_kml(url), 0, _http_kml)
+            out['layers'][key] = feats
+            ok = True
+            grp = {}
+            for f in feats:
+                k = ' / '.join(f['path']) or '(無資料夾)'
+                grp[k] = grp.get(k, 0) + 1
+            print(f"  NCDR {key}：{len(feats)} 個物件，分組 {len(grp)}："
+                  + '；'.join(f'{k}×{v}' for k, v in list(grp.items())[:20]))
+        except Exception as e:
+            print(f"  NCDR {key} 抓取失敗：{e}")
+    if ok:
+        with open(MULTITY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(out, f, ensure_ascii=False, separators=(',', ':'))
+    return out if ok else None
+
+
+def fetch_typhoon_warning():
+    """W-C0034-001：颱風警報單（官方原文）。
+    已實測結構（2026-08-08 白海豚 海警第6報）：
+      records.info[] 每筆＝一份警報單
+        effective / onset / expires          發布、生效、失效時間
+        headline                             「海上颱風警報」/「陸上颱風警報」…
+        description.section[]                {title,value} ← 官方原文段落
+            命名與位置／強度與半徑／移速與預測／颱風動態／警戒區域及事項
+            （條件出現：大雨特報／強風特報／注意事項）
+        description['typhoon-info'][0].section[]
+            警報報數／警報類別(SEA|LAND)／颱風編號／颱風資訊{analysis,prediction}
+        parameter[]  alert_title / severity_level / alert_color / website_color
+        area[]       areaDesc + polygon（警戒海域/陸域）
+    警報單文字**一律照抄不改寫**；系統自算的時間點另外標示。
+    無警報或失敗回 []。"""
+    print("抓取颱風警報單（W-C0034-001）...")
+    doc = None
+    for attempt in range(3):
+        try:
+            r = cwa_get(f"{BASE_URL}/W-C0034-001",
+                             params={'Authorization': CWA_API_KEY, 'format': 'JSON'},
+                             timeout=45)
+            if r.status_code != 200:
+                print(f"    HTTP {r.status_code}")
+                if attempt < 2: time.sleep(3); continue
+                return []
+            doc = json.loads(r.content.decode('utf-8', 'replace'))
+            break
+        except Exception as e:
+            print(f"    失敗（{attempt+1}/3）：{e}")
+            if attempt == 2: return []
+            time.sleep(3)
+    if not doc: return []
+
+    def _sections(node):
+        """{title,value} 陣列 → [{'title':..,'value':..}]（保序、去空）。"""
+        if isinstance(node, dict): node = [node]
+        if not isinstance(node, list): return []
+        out = []
+        for s in node:
+            if not isinstance(s, dict): continue
+            ti = (s.get('title') or s.get('Title') or '').strip()
+            va = s.get('value') if 'value' in s else s.get('Value')
+            if isinstance(va, (dict, list)): continue      # 颱風資訊那種結構化節點另外處理
+            va = (va or '').strip()
+            if ti and va: out.append({'title': ti, 'value': va})
+        return out
+
+    def _struct(node):
+        """從 typhoon-info 的 section 撈出結構化的 analysis / prediction。"""
+        if isinstance(node, dict): node = [node]
+        if not isinstance(node, list): return {}
+        got = {}
+        for s in node:
+            if not isinstance(s, dict): continue
+            for key in ('analysis', 'Analysis', 'prediction', 'Prediction'):
+                if isinstance(s.get(key), dict):
+                    got[key.lower()] = s[key]
+        return got
+
+    try:
+        rec = doc.get('records', {}) or {}
+        infos = rec.get('info') or rec.get('Info') or []
+        if isinstance(infos, dict): infos = [infos]
+        out = []
+        for inf in infos:
+            if not isinstance(inf, dict): continue
+            desc = inf.get('description') or {}
+            nm_zh, nm_en = '', ''
+            if isinstance(desc, str):        # 極少數情形整段是純文字
+                secs, tyinfo, struct = [{'title': '警報內容', 'value': desc.strip()}], [], {}
+            else:
+                secs   = _sections(desc.get('section') or desc.get('Section'))
+                tinode = desc.get('typhoon-info') or desc.get('typhoonInfo') or []
+                if isinstance(tinode, dict): tinode = [tinode]
+                tsec, struct = [], {}
+                for ti in tinode:
+                    if not isinstance(ti, dict): continue
+                    tsec += _sections(ti.get('section') or ti.get('Section'))
+                    struct.update(_struct(ti.get('section') or ti.get('Section')))
+                    nm_zh = nm_zh or (ti.get('cwa_typhoon_name') or '').strip()
+                    nm_en = nm_en or (ti.get('typhoon_name') or '').strip()
+                tyinfo = tsec
+            params = {}
+            pl = inf.get('parameter') or []
+            if isinstance(pl, dict): pl = [pl]
+            for p in pl:
+                if isinstance(p, dict) and p.get('valueName'):
+                    params[str(p['valueName']).strip()] = str(p.get('value', '')).strip()
+            areas = []
+            al = inf.get('area') or []
+            if isinstance(al, dict): al = [al]
+            for a in al:
+                if isinstance(a, dict) and (a.get('areaDesc') or '').strip():
+                    areas.append((a['areaDesc']).strip())   # polygon 刻意不帶（前端不畫警戒海域）
+            meta = {s['title']: s['value'] for s in tyinfo}
+            out.append({
+                'effective': (inf.get('effective') or '').strip(),
+                'onset':     (inf.get('onset') or '').strip(),
+                'expires':   (inf.get('expires') or '').strip(),
+                'headline':  (inf.get('headline') or '').strip(),
+                'sender':    (inf.get('senderName') or '').strip(),
+                'severity_level': params.get('severity_level', ''),
+                'alert_color':    params.get('alert_color', ''),
+                'name_zh': nm_zh, 'name_en': nm_en,
+                'report_no': meta.get('警報報數', ''),
+                'warn_kind': meta.get('警報類別', ''),      # SEA / LAND
+                'ty_no':     meta.get('颱風編號', ''),
+                'sections':  secs,                          # ← 官方原文，前端照抄
+                'analysis':   struct.get('analysis'),
+                'prediction': struct.get('prediction'),
+                'areas': areas,
+                'params': params,
+            })
+        if out:
+            for o in out:
+                print(f"    {o['headline']}第{o['report_no'] or '?'}報"
+                      f"（{o['warn_kind'] or '?'}）發布 {o['effective'][:16]}"
+                      f"｜段落 {len(o['sections'])} 個｜警戒區 {len(o['areas'])} 處")
+        else:
+            print("    目前無颱風警報")
+        return out
+    except Exception as e:
+        print(f"    解析失敗：{e}")
+        return []
+
+
+# 預報員研判之地區雨量區間（豪雨/颱風事件期間發布）
+#   F-C0034-006 → 24hPrecipTable.xml（未來24小時）
+#   F-C0034-007 → AllPrecipTable.xml（事件總雨量）
+#   ★ 不限颱風：實測樣本標題為「0822低壓帶及西南風豪雨事件」，
+#     豪雨事件亦發布，適用範圍比名稱所示更廣。
+#   ★ 內容為縣市級的區間（如 0-80mm），且分 flat／mountain，
+#     正好對應本系統的地形分類：山區/淺山吃 mountain，平地/沿海吃 flat。
+FORECASTER_QPF_EPS = {'24h': 'F-C0034-006', 'total': 'F-C0034-007'}
+
+
+def fetch_forecaster_precip():
+    """預報員研判的地區雨量區間 → {kind: {'title','start','end','areas':{地區:{flat/mountain:[lo,hi]}}}}。
+
+    用途（不覆蓋精細資料）：
+      ○ 當 QPF 的上下界參考、與模式預測比對
+      ○ UI 顯示官方研判供對照
+      ✗ 不用於 ETR2 警戒判定 —— 那有官方逐站警戒值，比縣市級區間精確得多
+    """
+    if not CWA_API_KEY:
+        return {}
+    print("抓取預報員研判雨量區間（F-C0034）...")
+    out = {}
+    for kind, ep in FORECASTER_QPF_EPS.items():
+        url = _resolve_product_url(ep, timeout=60)
+        if not url:
+            continue
+        try:
+            r = cwa_get(url, timeout=60)
+            if r.status_code != 200:
+                print(f"    {ep} 內容 HTTP {r.status_code}")
+                continue
+            txt = r.content.decode('utf-8', 'replace')
+        except Exception as e:
+            print(f"    {ep} 內容取用失敗：{e}")
+            continue
+        rec = _parse_precip_table(txt)
+        if rec and rec.get('areas'):
+            out[kind] = rec
+            n_area = len(rec['areas'])
+            n_mt = sum(1 for v in rec['areas'].values() if 'mountain' in v)
+            print(f"    {kind}：{rec.get('title','')[:24]}｜{n_area} 個地區"
+                  f"（含山區細分 {n_mt}）")
+    if not out:
+        print("    無研判區間（平時不發布，僅豪雨/颱風事件期間）")
+    return out
+
+
+def _parse_precip_table(txt):
+    """解析 24hPrecipTable / AllPrecipTable 的 XML。"""
+    import xml.etree.ElementTree as ET
+    # ★ 這兩份 XML 帶 xsi: 命名空間前綴（xsi:noNamespaceSchemaLocation），
+    #   只清 xmlns 宣告會讓前綴變成未綁定而解析失敗，故連帶屬性一起清。
+    clean = re.sub(r'\s+xmlns(:\w+)?="[^"]*"', '', txt)
+    clean = re.sub(r'\s+\w+:\w+="[^"]*"', '', clean)
+    try:
+        root = ET.fromstring(clean)
+    except Exception as e:
+        print(f"    研判區間 XML 解析失敗：{e}")
+        return None
+    def _txt(tag, parent=None):
+        el = (parent if parent is not None else root).find(f'.//{tag}')
+        return (el.text or '').strip() if el is not None and el.text else ''
+    ti = root.find('.//TextInformation')
+    rec = {'title': _txt('Title', ti) or _txt('BulletinName'),
+           'issue': _txt('IssueTime', ti),
+           'valid': _txt('TitleEdit', ti),
+           'note':  _txt('Annotate', ti),
+           'areas': {}}
+    for a in root.iter('AreaForecastData'):
+        name = (a.get('area') or '').strip()
+        if not name:
+            continue
+        d = {}
+        for p in a.findall('Precipitation'):
+            reg = (p.get('region') or 'flat').strip()
+            try:
+                lo = float((p.findtext('LowerBound') or '').strip())
+                hi = float((p.findtext('UpperBound') or '').strip())
+            except (TypeError, ValueError):
+                continue
+            d[reg] = {'lo': lo, 'hi': hi,
+                      'hl': (p.findtext('IsHighlight') or '').strip() == 'True'}
+        if d:
+            rec['areas'][name] = d
+    return rec
+
+
+def fetch_typhoon_qpf():
+    if not CWA_API_KEY: return []
+    print("抓取颱風 QPF（F-C0041）...")
+    typhoon_segs = []
+    for i, url in enumerate(QPF_TYPHOON):
+        label = f"{i*6}-{(i+1)*6}h"
+        try:
+            r = cwa_get(url, params={"Authorization":CWA_API_KEY,"format":"JSON"}, timeout=20)
+            if r.status_code == 404: continue
+            r.raise_for_status(); raw=r.json()
+            # ★ 實際結構為 cwaopendata.Dataset（使用者提供原始檔實測 2026-09-01）；
+            #   舊寫法用 records.dataset 取不到內容，故颱風期間亦拿不到格點。
+            ds = (raw.get("cwaopendata", {}) or {}).get("Dataset")
+            if ds:
+                ct  = ((ds.get("Contents", {}) or {}).get("Content", {}) or {}).get("ContentText", "")
+                dsi = ds.get("DatasetInfo", {}) or {}
+            else:
+                dataset = raw.get("records", {}).get("dataset", [])
+                if not dataset: continue
+                ct  = dataset[0].get("contents", {}).get("contentText", "")
+                dsi = dataset[0].get("datasetInfo", dataset[0].get("DatasetInfo", {})) or {}
+            if not ct: continue
+            # ★ 2026-11-08：發布時間新鮮度。F-C0041 只在陸上颱風警報期間更新，
+            #   警報解除後檔案仍在（實測 7/12 那一報到 8 月底都還抓得到）。
+            #   舊檔的時段落在過去，平常會被段索引擋掉；但任何一段解析不到 StartTime
+            #   時會退回「現在起第 i 段」—— 那就是把過期颱風雨量蓋到今天。
+            #   超過 12 小時的發布一律不用。
+            _iss = dsi.get("IssueTime", dsi.get("issueTime", ""))
+            try:
+                _iss_dt = _tpe_naive(_iss) if _iss else None
+            except Exception:
+                _iss_dt = None
+            _now_n = now_tpe_naive()
+            if _iss_dt is None or (_now_n - _iss_dt).total_seconds() > 12 * 3600:
+                if i == 0:
+                    print(f"  F-C0041 發布時間 {_iss or '不明'}，超過 12 小時 → 非颱風警報期間，不採用")
+                typhoon_segs = []
+                break
+            st_str = dsi.get("StartTime", dsi.get("startTime", ""))
+            # ★ 內容為 130×130 攤平的 16,900 個以逗號分隔的值（不是每列一行）；
+            #   舊寫法依換行切列，只會得到 1 列。
+            #   格點：第1行 20.8N 起、dlat 0.045；第1列 117.56E 起、dlon 0.049（TWD67）
+            flat = [x for x in ct.replace("\n", ",").split(",") if x.strip()]
+            if len(flat) < 16900: continue
+            pts = []
+            for idx in range(16900):
+                ri, ci = divmod(idx, 130)
+                lat_pt = 20.8 + ri * 0.045
+                lng_pt = 117.56 + ci * 0.049
+                if 21.5 <= lat_pt <= 26.5 and 119 <= lng_pt <= 123:
+                    try: pts.append((lat_pt, lng_pt, float(flat[idx])))
+                    except (TypeError, ValueError): pass
+            typhoon_segs.append({"label":label,"points":pts,"start":st_str})
+        except Exception as e:
+            pass
+    if len(typhoon_segs) >= 4:
+        print(f"  颱風 QPF：{len(typhoon_segs)} 段")
+    else:
+        print(f"  非颱風期間（{len(typhoon_segs)} 段）")
+        typhoon_segs = []
+    return typhoon_segs
+
+# ── CWA 常態性定量降水預報（48h逐6h，預報員修正版）──────────────────
+# 產品說明文件：https://www.cwa.gov.tw/Data/data_catalog/1-2-4.pdf
+#   平時每日4次（05:30/11:30/17:30/23:30 TST），劇烈天氣期間每3h加發
+#   csv：2.5km 格點，經緯 117.56~123.91 / 20.8~26.65，dlon 0.0245 / dlat 0.0226
+#        260x260=67600 值，排列由南至北、由西至東，座標為 TWD67
+#   檔名：[YYYY-MMDD-hhmm]._00[tau].QPF6h.csv（發布時間為 UTC，tau=預報時長）
+# 介接策略（來源探測；成功後記憶於 CWA_QPF_SRC_FILE，之後直取）：
+#   A. fileapi 指標檔 F-C0035-015/017/023/024（JSON 內含 uri → 下載 zip/csv）
+#   B. fileapi ZIP 掃描 F-C0035-013..030（找 zip 內 *QPF6h*.csv）
+CWA_QPF_SRC_FILE = "cwa_qpf_source.json"
+CWA_QPF_PREV_FILE = "cwa_qpf_prev.json"   # 上一輪採用的定量降水窗（補新報有效起點前的空窗）
+CWA_QPF_SRC_DIR = "cwa_qpf_src"      # 判讀所用官方原圖（w0..w3.png＋index.json，每輪覆蓋）
+_CWA_SRC_INDEX = []
+QPF_GRID = dict(lon0=117.56, lat0=20.8, dlon=0.0245, dlat=0.0226, nx=260, ny=260)
+# TWD67 → WGS84 近似位移（TWD67 經度較小約0.0083°、緯度較大約0.0019°；2.5km格點取最近點足夠）
+TWD67_DLON, TWD67_DLAT = 0.00834, -0.00186
+
+def _qpf_parse_csv_text(text):
+    """解析 2.5km QPF csv：跳過檔頭，收集所有數值；回傳 list（長度須=67600）或 None"""
+    n_need = QPF_GRID['nx'] * QPF_GRID['ny']
+    vals = []
+    for line in text.splitlines():
+        toks = line.replace(',', ' ').split()
+        row = []
+        ok = True
+        for tk in toks:
+            try: row.append(float(tk))
+            except ValueError: ok = False; break
+        if ok and row:
+            vals.extend(row)
+    if len(vals) < n_need:
+        return None
+    if len(vals) > n_need:
+        vals = vals[-n_need:]   # 檔頭若含數字，取尾端網格段
+    return [None if v < 0 else v for v in vals]
+
+def _qpf_grid_at(vals, lat, lng):
+    """town WGS84 座標 → TWD67 → 最近格點值（南→北、西→東 排列）"""
+    g = QPF_GRID
+    lon67 = lng - TWD67_DLON
+    lat67 = lat - TWD67_DLAT
+    ix = round((lon67 - g['lon0']) / g['dlon'])
+    iy = round((lat67 - g['lat0']) / g['dlat'])
+    if ix < 0 or ix >= g['nx'] or iy < 0 or iy >= g['ny']: return None
+    idx = iy * g['nx'] + ix
+    return vals[idx] if idx < len(vals) else None
+
+def _qpf_extract_zip(data, now_tpe):
+    """zip bytes → {start_tpe(datetime): vals}；只取 QPF6h 成員，時間窗由檔名推得"""
+    import zipfile, io, re as _re
+    out = {}
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+    except Exception:
+        return out
+    for name in z.namelist():
+        m = _re.search(r'(\d{4})-(\d{2})(\d{2})-(\d{2})(\d{2})\._0*(\d+)\.QPF6h\.csv$', name)
+        if not m: continue
+        yy, mo, dd, hh, mi, tau = map(int, m.groups())
+        issue_utc = datetime(yy, mo, dd, hh, mi, tzinfo=timezone.utc)
+        end_tpe   = issue_utc + timedelta(hours=8) + timedelta(hours=tau)
+        # 發布時刻為 X:30（05:30/11:30/17:30/23:30 TST），tau 自發布起算，
+        # 實際預報窗對齊 6h 日曆邊界（首段=發布+30分起）→ 就近吸附（容差90分）
+        end_naive = end_tpe.replace(tzinfo=None)
+        day0 = end_naive.replace(hour=0, minute=0, second=0, microsecond=0)
+        off  = (end_naive - day0).total_seconds()
+        snap = round(off / 21600) * 21600
+        if abs(off - snap) <= 5400:
+            end_tpe = day0 + timedelta(seconds=snap)
+            end_tpe = end_tpe.replace(tzinfo=timezone.utc)  # 佔位tz，稍後去除
+        start_tpe = end_tpe - timedelta(hours=6)
+        try:
+            text = z.read(name).decode('utf-8', errors='replace')
+        except Exception:
+            continue
+        vals = _qpf_parse_csv_text(text)
+        if vals:
+            out[start_tpe.replace(tzinfo=None)] = vals
+    return out
+
+def _walk_uris(obj, acc):
+    if isinstance(obj, dict):
+        for v in obj.values(): _walk_uris(v, acc)
+    elif isinstance(obj, list):
+        for v in obj: _walk_uris(v, acc)
+    elif isinstance(obj, str) and obj.startswith('http'):
+        acc.append(obj)
+
+_PNG_SENT = {}     # PNG uri → 官方 Sent（本輪掃描所得）
+#  ★ 2026-11-08：每張 12 小時色塊圖的「精確」起訖與判讀值 [{start,end,vals}]。
+#    舊法把窗吸附到 6 小時段（23 時起的窗當 00 時起、08 時起當 06 時起），
+#    最多錯位 2 小時；改為逐小時按重疊比例分配到 6 小時段（cwa_overlay）。
+CWA_PNG_WINDOWS = []
+
+#  CWA 定量降水預報發布班次（臺灣時間，整點部分；實際發布在 :30，Sent 約 :18）
+#    平日 4 報：05、11、17、23 時
+#    加強作業期間另加 02、08、14、20 時，共 8 報
+CWA_QPF_SLOTS = (2, 5, 8, 11, 14, 17, 20, 23)
+
+
+def cwa_gap_windows(prev, cur_issued, first_start, now_h):
+    """上一輪存下的窗（cwa_qpf_prev.json）中，可用來補「新報第一張起點之前、尚未過去」小時者。
+    只取比本次更早的報、起點早於新報第一張、結束晚於現在的窗；實際哪幾小時採用由
+    cwa_split_windows 決定（新報先佔、舊報只補空著的小時）。"""
+    out = []
+    for pw in prev or []:
+        try:
+            ps = datetime.strptime(pw['start'], '%Y-%m-%dT%H:%M:%S')
+            pe = datetime.strptime(pw['end'], '%Y-%m-%dT%H:%M:%S')
+            pi = datetime.strptime(pw['issued'], '%Y-%m-%dT%H:%M:%S')
+        except Exception:
+            continue
+        if pi < cur_issued and ps < first_start and pe > now_h:
+            out.append({'start': ps, 'end': pe, 'vals': pw.get('vals') or {},
+                        'q12': pw.get('q12') or {}, 'issued': pi, 'gap_fill': True})
+    return out
+
+
+def cwa_issued_of(windows):
+    """由各窗（start, order）回推發布班次：issued 欄位優先，否則 start − 12h×order。
+    多張圖班次不一致時取最早者（保守：代表本次資料裡最舊的那一報）。"""
+    out = []
+    for w in windows or []:
+        if w.get('gap_fill'):          # 補空窗用的上一報，不代表本次採用的報
+            continue
+        try:
+            if w.get('issued'):
+                out.append(w['issued'])
+            elif w.get('start') and w.get('order') is not None:
+                st = datetime.strptime(w['start'][:19], '%Y-%m-%dT%H:%M:%S')
+                out.append((st - timedelta(hours=12 * int(w['order']))).strftime('%Y-%m-%dT%H:%M:%S'))
+        except Exception:
+            continue
+    return min(out) if out else None
+
+
+CWA_VALID_OFFSET_H = 3   # 有效時間起點＝發布班次＋3h（05:30 報 → 08:00 起；官方圖標題實測 2026-11-09）
+
+
+def cwa_issue_slot(sent):
+    """官方 Sent → 發布班次（naive 臺灣時間，整點）。
+
+    取「≤ Sent + 30 分」的最後一個班次。Sent 11:18（11:30 那一報）→ 11 時；
+    加強作業 08:18 → 08 時。Sent 不明回 None（呼叫端退回舊法）。
+    """
+    if not sent:
+        return None
+    try:
+        t = _tpe_naive(sent) + timedelta(minutes=30)
+    except Exception:
+        return None
+    best = None
+    for dd in (-1, 0):
+        d0 = (t + timedelta(days=dd)).replace(minute=0, second=0, microsecond=0)
+        for h in CWA_QPF_SLOTS:
+            c = d0.replace(hour=h)
+            if c <= t and (best is None or c > best):
+                best = c
+    return best
+
+
+def fetch_cwa_routine_qpf(now_tpe):
+    """常態 48h 逐6h QPF。成功回傳 {'issue':str, 'segs':{start_tpe: vals}}；失敗回 None
+    v6.1 探測策略（依 7/20 首跑 log 修訂：F-C0035-015/017/023/024 指標檔僅含 PNG uri）：
+      A. 已知來源（cwa_qpf_source.json）直取
+      B. 廣域指標檔掃描 F-C0035-001..030 + F-C0041-001..016（fileapi JSON→列出全部 uri，
+         下載任何 zip 檢視成員名單、csv 逐一嘗試）——一次跑完即可確定 dataid 版圖
+      C. 全部僅圖檔時：下載 QPF PNG 存 qpf_sample.png，以內建四海岬單應性校正判讀
+         （decode_qpf_png，樣張色表已內建）
+    """
+    if not CWA_API_KEY: return None
+    QPF_SEG_SPAN.clear()        # ★ 每輪重算，避免沿用上一輪的窗寬
+    CWA_PNG_WINDOWS.clear()     # ★ 每張圖的精確起訖＋判讀值（cwa_overlay 逐小時分配用）
+    CWA_PNG_REG.clear()
+    towns = load_all_townships()   # PNG 判讀路徑需要鄉鎮座標
+    print("抓取 CWA 常態 QPF（48h逐6h，預報員修正版）...")
+    known = None
+    if os.path.exists(CWA_QPF_SRC_FILE):
+        try:
+            with open(CWA_QPF_SRC_FILE, encoding='utf-8') as f: known = json.load(f)
+        except Exception: known = None
+
+    def _try_zip_bytes(data, did, note=''):
+        segs = _qpf_extract_zip(data, now_tpe)
+        if len(segs) >= 4:
+            with open(CWA_QPF_SRC_FILE, 'w', encoding='utf-8') as f:
+                json.dump({'kind': 'zip', 'id': did, 'note': note[:120]}, f)
+            print(f"    ✓ 常態QPF：{len(segs)} 段（來源 {did} {note[:60]}）")
+            return {'issue': did, 'segs': segs}
+        return None
+
+    scan_ids = ([known['id']] if known and known.get('id') else []) \
+             + [f'F-C0035-{i:03d}' for i in range(1, 31)] \
+             + [f'F-C0041-{i:03d}' for i in range(1, 17)]
+    seen, png_uris = set(), []
+    _PNG_SENT.clear()
+    _scan_ok, _scan_fail = 0, 0
+    for did in scan_ids:
+        if did in seen: continue
+        seen.add(did)
+        try:
+            r = cwa_get(f"{FILEAPI}/{did}", params={'Authorization': CWA_API_KEY,
+                             'downloadType': 'WEB', 'format': 'JSON'}, timeout=20)
+            if r.status_code != 200:
+                _scan_fail += 1
+                continue   # 不存在的 dataid 靜默跳過（避免log爆量）
+            _scan_ok += 1
+            body = r.content
+            if body[:2] == b'PK':          # 直接就是 zip
+                got = _try_zip_bytes(body, did, 'fileapi直出zip')
+                if got: return got
+                import zipfile as _zf, io as _io
+                try:
+                    names = _zf.ZipFile(_io.BytesIO(body)).namelist()[:5]
+                    print(f"    {did}=zip 成員：{names}")
+                except Exception: pass
+                continue
+            try:
+                doc = json.loads(body.decode('utf-8', errors='replace'))
+            except Exception:
+                print(f"    {did}：非JSON（{body[:50]!r}）"); continue
+            uris = []; _walk_uris(doc, uris)
+            if not uris: continue
+            # 完整列出 uri（探測版圖的關鍵情報）
+            for u in uris[:4]:
+                print(f"    {did} uri: {u[:110]}")
+            for u in uris:
+                ul = u.lower()
+                if '.zip' in ul or ('csv' in ul and '.png' not in ul):
+                    r2 = cwa_get(u, timeout=120)
+                    if r2.status_code != 200: continue
+                    if r2.content[:2] == b'PK':
+                        got = _try_zip_bytes(r2.content, did, u.rsplit('/',1)[-1])
+                        if got: return got
+                        import zipfile as _zf, io as _io
+                        try:
+                            names = _zf.ZipFile(_io.BytesIO(r2.content)).namelist()[:6]
+                            print(f"      zip 成員（非QPF6h）：{names}")
+                        except Exception: pass
+                elif '.png' in ul:
+                    # 擷取 ResourceDesc（含羅馬數字 (I)(II)(III)(IV) → 定序時段）
+                    _rdesc = ''
+                    def _find_rdesc(o):
+                        if isinstance(o, dict):
+                            for k, v in o.items():
+                                if k == 'ResourceDesc' and isinstance(v, str): return v
+                                r = _find_rdesc(v)
+                                if r: return r
+                        elif isinstance(o, list):
+                            for it in o:
+                                r = _find_rdesc(it)
+                                if r: return r
+                        return ''
+                    _rdesc = _find_rdesc(doc)
+                    # ★ 2026-11-08：官方送出時間（Sent）才是這張圖真正的發布時刻
+                    _sent = ((doc.get('cwaopendata') or {}).get('Sent') or '') if isinstance(doc, dict) else ''
+                    png_uris.append((did, u, _rdesc))
+                    _PNG_SENT[u] = _sent
+        except Exception as e:
+            print(f"    {did} 例外：{e}")
+
+    print(f"    掃描 {len(seen)} 個 dataid：{_scan_ok} 個有回應、{_scan_fail} 個不存在/失敗")
+    # ── C. 僅圖檔 → 色塊判讀路徑 ──
+    #   收集所有 PNG 候選，優先定量降水預報主圖；下載 ref-size 者逐一判讀，
+    #   依各自時間窗（檔名 _HH_HH）合併成連續 6h 段序列（覆蓋越多窗越好）。
+    print(f"    探測完成：共收集到 {len(png_uris)} 個 PNG uri"
+          + (f"（dataid：{sorted(set(d for d,_,_ in png_uris))[:10]}）" if png_uris else "（完全沒有 PNG——CWA此時段可能未發布定量降水預報圖，或探測範圍/API有問題）"))
+    if png_uris:
+        import struct
+        def _png_score(u):
+            ul = u.lower(); s = 0
+            if 'chfcstprecip' in ul: s += 10
+            if 'qpf' in ul: s += 6
+            if 'precip' in ul: s += 3
+            if 'thumb' in ul or 'small' in ul or 'icon' in ul: s -= 8
+            return -s
+        png_uris.sort(key=lambda du: _png_score(du[1]))
+        # 診斷：列出所有 PNG 候選及其檔名窗（讓 log 揭露 CWA 到底出了哪些時段的圖）
+        import re as _re2
+        print(f"    共 {len(png_uris)} 個 PNG 候選：")
+        for _did, _u, _rd in png_uris[:20]:
+            _fn = _u.rsplit('/',1)[-1]
+            _wm = _re2.search(r'_(\d{1,3})_(\d{1,3})(?:\.png)?$', _fn)
+            _win = f"{_wm.group(1)}-{_wm.group(2)}h" if _wm else (_rd or "無窗標示")
+            print(f"      {_did}: {_fn[:40]} [{_win}]")
+        merged = {}          # start_tpe -> {town_key: val}
+        _merged_iss = {}     # start_tpe -> 該段取自哪一報
+        used_src = []
+        _cwa_windows = []    # 每張圖的真實起訖時段（供前端按鈕標籤）
+        _CWA_SRC_INDEX.clear()
+        try:   # 清掉上一輪原圖，避免本輪少一窗時留下舊報的圖被誤認
+            for _old in os.listdir(CWA_QPF_SRC_DIR):
+                os.remove(os.path.join(CWA_QPF_SRC_DIR, _old))
+        except FileNotFoundError:
+            pass
+        _saved_sample = False
+        for did, u, rdesc in png_uris[:16]:
+            try:
+                r = cwa_get(u, timeout=60)
+                if r.status_code != 200 or r.content[:8] != b'\x89PNG\r\n\x1a\n':
+                    continue
+                w, h = struct.unpack('>II', r.content[16:24])
+                fn = u.rsplit('/',1)[-1]
+                print(f"    PNG候選 {did}：{w}×{h}（{len(r.content)//1024}KB）{fn[:50]} [{rdesc}]")
+                if not _saved_sample:
+                    with open('qpf_sample.png', 'wb') as f: f.write(r.content)
+                    _saved_sample = True
+                if (w, h) != QPF_PNG_REF_SIZE:
+                    continue
+                # 依 ResourceDesc 羅馬數字定序（逐12h）：(I)=第1個12h窗…(IV)=第4個
+                #   CWA定量降水預報發布班次：05/11/17/23時，圖涵蓋「發布時刻起」逐12h。
+                #   以發布時刻為錨（非今天00:00），每張圖固定12h，前端按鈕跟著真實時段走。
+                _roman = {'(I)':0, '(II)':1, '(III)':2, '(IV)':3}
+                _worder = None
+                for _rk, _rv in _roman.items():
+                    if rdesc and _rk in rdesc:
+                        _worder = _rv; break
+                # 發布時刻：★ 2026-11-08 優先以官方 Sent 推定（cwa_issue_slot）。
+                #   舊法用「牆上時鐘最近的 05/11/17/23 時」有兩個錯：
+                #   ① 排程在 11:05 跑時新報（Sent 約 11:18）還沒出，抓到的是 05 時那一報，
+                #      卻被標成 11 時起 —— 整組時段錯位 6 小時；
+                #   ② 加強作業期間每日 8 報（02/08/14/20 時加發）完全不認得，錯位 3 小時。
+                _issue = cwa_issue_slot(_PNG_SENT.get(u)) if _worder is not None else None
+                if _issue is not None:
+                    print(f"    {did} Sent={_PNG_SENT.get(u)} → 發布班次 {_issue:%m/%d %H}:30")
+                if _worder is not None and _issue is None:
+                    _cands = []
+                    for _dh in (-1, 0):
+                        _d = now_tpe.replace(minute=0, second=0, microsecond=0, tzinfo=None) + timedelta(days=_dh)
+                        for _hh in (5, 11, 17, 23):
+                            _cands.append(_d.replace(hour=_hh))
+                    _issue = max([c for c in _cands if c <= now_tpe.replace(tzinfo=None)], default=None)
+                # 該圖真實起訖
+                # ★★ 2026-11-09 根因修正：有效時間不是從發布班次起算。官方圖標題：
+                #   「發布 05:30／有效 08:00~20:00、20:00~08:00、08:00~20:00、20:00~08:00」
+                #   → 起點＝班次 + 3 小時 + 12h×序。原本用「班次 + 12h×序」，整組時段早了 3 小時。
+                #   以標題文字為準（OCR）；讀不到或不合理才用規則，兩者不一致時記錄並採標題。
+                _win_start = (_issue + timedelta(hours=CWA_VALID_OFFSET_H + 12*_worder)
+                              if (_issue and _worder is not None) else None)
+                _tt = cwa_png_title_times(r.content) if _worder is not None else None
+                _time_src = 'rule'
+                if _tt:
+                    _time_src = 'title'
+                    _iss_slot = _tt['issued'].replace(minute=0)
+                    if _win_start is not None and (_tt['start'] != _win_start or _iss_slot != _issue):
+                        print(f"    ⚠ {did} 標題時間（發布 {_tt['issued']:%m/%d %H:%M}、有效 {_tt['start']:%m/%d %H:%M}起）"
+                              f"與規則推算（{_issue:%m/%d %H}時、{_win_start:%m/%d %H:%M}起）不同 → 採標題")
+                    _issue, _win_start = _iss_slot, _tt['start']
+                print(f"    {did} 有效時間 {_win_start:%m/%d %H:%M} 起 12 小時（{'標題' if _time_src == 'title' else '規則推算'}）"
+                      if _win_start is not None else f"    {did} 無法判定有效時間")
+                # 轉段索引（今天00:00起算、吸附6h邊界）供內部陣列定位
+                _wseg = None
+                if _win_start is not None:
+                    _day0 = _win_start.replace(hour=0, minute=0, second=0, microsecond=0)
+                    _off = (_win_start - _day0).total_seconds()
+                    _wseg = int((_day0 - now_tpe.replace(hour=0,minute=0,second=0,microsecond=0,tzinfo=None)).total_seconds()//21600) \
+                            + round(_off/21600)
+                    if _wseg < 0: _wseg = None   # 落在過去則丟棄
+                segs = decode_qpf_png(r.content, did, now_tpe, towns, fname=fn,
+                                      win_seg=_wseg, win_nseg=2)
+                if segs and _win_start is not None:
+                    CWA_PNG_WINDOWS.append({'start': _win_start,
+                                            'end': _win_start + timedelta(hours=12),
+                                            'vals': next(iter(segs.values())),
+                                            'q12': dict(QPF_LAST_Q12),
+                                            'issued': _issue})
+                    _cwa_windows.append({
+                        'start': _win_start.strftime('%Y-%m-%dT%H:%M:%S'),
+                        'end': (_win_start + timedelta(hours=12)).strftime('%Y-%m-%dT%H:%M:%S'),
+                        'seg': _wseg, 'order': _worder,
+                        # ★ 2026-11-08 發布班次（前端據此標示「第 HH 時報」，並偵測系統是否落後官方）
+                        'issued': _issue.strftime('%Y-%m-%dT%H:%M:%S'),
+                        'time_src': _time_src,
+                    })
+                    # ★ 2026-11-08 保存判讀所用的官方原圖（每窗一張，覆蓋舊檔）。
+                    #   先前原圖只在 runner 上用完即丟，使用者回報「熱區與官方圖不一致」時
+                    #   無從比對系統到底讀了哪張圖、讀得對不對。原圖本身是官方公開圖資。
+                    try:
+                        os.makedirs(CWA_QPF_SRC_DIR, exist_ok=True)
+                        _pn = f"w{_worder}.png"
+                        with open(os.path.join(CWA_QPF_SRC_DIR, _pn), 'wb') as _f:
+                            _f.write(r.content)
+                        _CWA_SRC_INDEX.append({'file': _pn, 'dataid': did, 'uri_name': fn,
+                                               'desc': rdesc, 'sent': _PNG_SENT.get(u) or '',
+                                               'issued': _issue.strftime('%Y-%m-%dT%H:%M:%S'),
+                                               'start': _win_start.strftime('%Y-%m-%dT%H:%M:%S'),
+                                               'order': _worder})
+                    except Exception as _e:
+                        print(f"    原圖保存失敗（不影響判讀）：{_e}")
+                if segs:
+                    for st, tv in segs.items():
+                        if st not in merged:      # 先到先得（同窗不重複；不同窗互補）
+                            merged[st] = tv
+                            _merged_iss[st] = _issue
+                    used_src.append(f"{did}:{fn[:24]}")
+            except Exception as e:
+                print(f"    PNG候選 {did} 失敗：{e}")
+        # ★★ 2026-11-08 同一份資料只用同一報。
+        #   實測 23:25 那一輪：氣象署四張圖不是同時換新，第 I、II、IV 張已是 23 時報、
+        #   第 III 張還是 17 時報 → 系統把兩報混在一起：11/09 17~23 時兩報重疊（雨量重複加），
+        #   11/10 05~11 時兩報都沒蓋到（缺）。官方從不會這樣組合。
+        #   規則：只採用最新一報；尚未換新的那幾張本輪不用（該時段顯示無官方資料），
+        #   下一輪（每小時 :23，發布時次另於 :43 補抓）就會補齊。
+        _iss_all = [w['issued'] for w in CWA_PNG_WINDOWS if w.get('issued') is not None]
+        if _iss_all:
+            _newest = max(_iss_all)
+            _stale = [w for w in CWA_PNG_WINDOWS if w.get('issued') != _newest]
+            if _stale:
+                print(f"    ⚠ 官方 {len(_stale)} 張圖仍是舊報（"
+                      + "、".join(f"{w['start']:%m/%d %H}時起" for w in _stale)
+                      + f"），本輪只採用 {_newest:%m/%d %H} 時報；舊報不混用")
+                CWA_PNG_WINDOWS[:] = [w for w in CWA_PNG_WINDOWS if w.get('issued') == _newest]
+                _nk = _newest.strftime('%Y-%m-%dT%H:%M:%S')
+                _cwa_windows[:] = [w for w in _cwa_windows if w.get('issued') == _nk]
+                for _st in [k for k, v in _merged_iss.items() if v != _newest]:
+                    merged.pop(_st, None)
+                for _e in _CWA_SRC_INDEX:
+                    _e['used'] = (_e.get('issued') == _nk)
+        # ★★ 2026-11-09 補「發布到有效起點」之間的空窗。
+        #   官方 05:30 報的第一張從 08:00 起算，05:30~08:00 這段新報不涵蓋；
+        #   這幾個小時的官方預報在上一報（23:30 報 02:00~14:00）裡。上一報的圖官方已撤換、
+        #   下載不到，所以每輪把本輪採用的窗存成 cwa_qpf_prev.json，下一輪只拿來補
+        #   「新報第一張起點之前、且尚未過去」的小時（同一小時新報優先，不會重複加）。
+        if CWA_PNG_WINDOWS:
+            _cur_iss = max(w['issued'] for w in CWA_PNG_WINDOWS if w.get('issued'))
+            _first = min(w['start'] for w in CWA_PNG_WINDOWS)
+            _now_h = now_tpe.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+            try:
+                with open(CWA_QPF_PREV_FILE, encoding='utf-8') as _f:
+                    _prev = json.load(_f).get('windows') or []
+            except Exception:
+                _prev = []
+            _gap = cwa_gap_windows(_prev, _cur_iss, _first, _now_h)
+            for _gw in _gap:
+                CWA_PNG_WINDOWS.append(_gw)
+                _cwa_windows.append({'start': _gw['start'].strftime('%Y-%m-%dT%H:%M:%S'),
+                                     'end': _gw['end'].strftime('%Y-%m-%dT%H:%M:%S'), 'seg': None,
+                                     'order': None, 'issued': _gw['issued'].strftime('%Y-%m-%dT%H:%M:%S'),
+                                     'gap_fill': True, 'time_src': 'cache'})
+            if _gap:
+                print(f"    ✓ {_now_h:%H}:00~{_first:%H}:00 新報未涵蓋 → 以上一報"
+                      f"（{_gap[0]['issued']:%m/%d %H}時）補 {len(_gap)} 張窗的對應小時")
+            try:
+                with open(CWA_QPF_PREV_FILE, 'w', encoding='utf-8') as _f:
+                    json.dump({'saved_at': now_tpe.strftime('%Y-%m-%dT%H:%M:%S'),
+                               'windows': [{'start': w['start'].strftime('%Y-%m-%dT%H:%M:%S'),
+                                            'end': w['end'].strftime('%Y-%m-%dT%H:%M:%S'),
+                                            'issued': w['issued'].strftime('%Y-%m-%dT%H:%M:%S'),
+                                            'vals': w.get('vals') or {}, 'q12': w.get('q12') or {}}
+                                           for w in CWA_PNG_WINDOWS if not w.get('gap_fill')]},
+                              _f, ensure_ascii=False, separators=(',', ':'))
+            except Exception as _e:
+                print(f"    上一報快取寫入失敗：{_e}")
+        if _CWA_SRC_INDEX:
+            try:
+                with open(os.path.join(CWA_QPF_SRC_DIR, 'index.json'), 'w', encoding='utf-8') as _f:
+                    json.dump({'saved_at': now_tpe.strftime('%Y-%m-%dT%H:%M:%S'),
+                               'windows': sorted(_CWA_SRC_INDEX, key=lambda x: x['order'])},
+                              _f, ensure_ascii=False, indent=1)
+            except Exception as _e:
+                print(f"    原圖索引寫入失敗：{_e}")
+        if merged:
+            print(f"    ✓ 常態QPF（PNG單應性判讀）：合併 {len(merged)} 段"
+                  f"（近似，僅級距；來源 {len(used_src)} 張圖）")
+            with open(CWA_QPF_SRC_FILE, 'w', encoding='utf-8') as f:
+                json.dump({'kind': 'png', 'sources': used_src}, f, ensure_ascii=False)
+            return {'issue': 'png:' + ','.join(used_src)[:80], 'segs': merged, 'png': True,
+                    'windows': sorted(_cwa_windows, key=lambda w: w['start'])}
+        if _saved_sample:
+            print(f"    有PNG但無 {QPF_PNG_REF_SIZE[0]}×{QPF_PNG_REF_SIZE[1]} 主圖——已存 qpf_sample.png，"
+                  f"若為改版式請提供以重新定位四海岬")
+    print("    常態QPF：格點資料探測未果（以上 uri 清單請貼給開發者）")
+    return None
+
+# ── QPF PNG 色塊判讀（單應性校正，樣張已內建 F-C0035 定量降水預報 II 色表）──
+# 校正基準：2026/07/20 樣張 QPF_ChFcstPrecip_12_24.png（1245×1500）四海岬像素定位，
+#   單應性（透視變形已修正，非軸對齊——實測仿射殘差達27px、單應性收斂至0）。
+#   H3 由 CAPES 四點解得；不同尺寸/版式的圖需重新定位（見 QPF_PNG_H3 尺寸檢查）。
+# 色表：右側圖例17級實測色（級距下界為代表值，保守）。
+# ★★★ 2026-11-09 根因修正：W 點（國聖港燈塔）原定位 (380,860) 錯了 131 像素，
+#   四點單應性因此整張扭曲——海岸線、縣市界投影到官方圖上平均偏 14 像素（約 5 公里），
+#   北部、中部偏移最大，雨區熱點被讀到隔壁鄉鎮（使用者 11/9 以 05:30 報四張圖比對發現）。
+#   新值是以官方圖上的黑色海岸線＋縣市界（16,628 個界線點）做最佳化求得，
+#   四張圖各自求解結果差 <0.5 像素；96% 界線點落在官方黑線 2 像素內（舊值 <10%）。
+#   之後每張圖仍會跑 _png_register 對位自檢，偏移超過門檻會自動修正並記錄。
+CAPES_PX = {  # 官方圖像素座標（1245×1500）
+    'N': (932.7, 202.8),  'E': (1099.4, 307.0),  'S': (689.4, 1422.8),  'W': (394.3, 991.0),
+}
+CAPES_LL = {
+    'N': (121.5366, 25.2977),  'E': (122.0017, 25.0074),
+    'S': (120.8585, 21.8968),  'W': (120.0358, 23.1008),
+}
+QPF_PNG_REF_SIZE = (1245, 1500)
+# 17級色表 (R,G,B,代表值mm)：<0.5 不著色；級距用「下界」代表（≥110→110、90-110→90…）
+QPF_PNG_BANDS = [
+    (253,201,255, 300), (251,0,255, 200), (201,0,204, 150), (150,0,153, 130),
+    (153,0,0, 110),     (204,0,0, 90),    (255,0,0, 70),     (255,149,0, 50),
+    (255,200,0, 40),    (255,251,3, 30),  (57,255,3, 20),    (5,153,2, 15),
+    (3,99,255, 10),     (5,155,255, 5),   (3,200,255, 2),    (156,252,255, 1),
+    (194,194,194, 0.5),
+]
+# ★★ 色帶上界（2026-10-05，使用者指定「色帶取上界」）。
+#   QPF_PNG_BANDS 的代表值是區間「下界」，那是著色用的級距身分；
+#   但把色帶當可加量累積時必須有一個數，取上界的理由：
+#     ① 24h 加總會等於 CWA 自己公告上界的和（宜蘭 110+70=180），對官方解釋得通
+#     ② 偏保守方向與地圖既有的「取窗內最高色帶防漏報」一致
+#     ③ 取下界會系統性低報，取中值說不出依據
+#   最高帶（≥300）沒有上界，就用 300 自身。
+QPF_BAND_HI = {}
+for _i, (_r, _g, _b, _lo) in enumerate(sorted(QPF_PNG_BANDS, key=lambda x: x[3])):
+    _ordered = sorted({_v for (_, _, _, _v) in QPF_PNG_BANDS})
+    _j = _ordered.index(_lo)
+    QPF_BAND_HI[_lo] = _ordered[_j + 1] if _j + 1 < len(_ordered) else _lo
+
+def qpf_band_hi(v):
+    """色帶下界 → 上界（找不到就原值回傳，絕不放大未知值）。"""
+    if v is None: return None
+    try: return QPF_BAND_HI.get(round(float(v), 1), float(v))
+    except Exception: return v
+
+def cwa_split_windows(tkey, windows, today00, nseg):
+    """把 12 小時色塊窗逐小時分配到 6 小時段 → ({段: 色帶下界}, {段: 可加量})。
+
+    ★ 為什麼要逐小時：官方窗的起點是發布班次（23/05/11/17 時；加強作業
+      另有 02/08/14/20 時），不在 6 小時段的邊界上。舊法把整窗吸附到最近的
+      段邊界（23 時→00 時、08 時→06 時），窗內雨量整塊平移 1~2 小時。
+    ★ 規則：
+      - 可加量：窗內雨量取色帶上界（使用者指定），平均攤在窗的 12 小時，
+        各段拿到「與該窗重疊的小時數 / 12」。
+      - 色帶（著色／回溯用）：與該段重疊的窗中最高的色帶。
+      - 段「有官方值」的條件：從（段起點、最早窗起點）較晚者到段終點，
+        每一小時都有窗覆蓋。最早窗起點之前的小時在發布當下已是過去，不要求。
+      - 唯一的容許：整份預報的「最後 1 小時」。23 時那一報的最後一窗只到
+        後天 23 時，若嚴格要求，明天的日量在每天 00~05 時都會變成無資料。
+        該小時不補任何值（量只算到 23 時，不外插），只是不讓整段被判為缺。
+        中間缺小時、或尾端缺超過 1 小時，一律不算有值。
+    """
+    if not windows:
+        return {}, {}
+    first = min(w['start'] for w in windows)
+    hrs, qs, bands = {}, {}, {}
+    # ★ 2026-11-08 防重複累加：同一小時被兩張窗蓋到（不同報混入）時，只採較新的那一報。
+    #   上游已只留最新一報，這裡是第二道防線——任何情況下同一小時的雨量都不可加兩次。
+    _claimed = set()
+    _order = sorted(windows, key=lambda w: (w.get('issued') or datetime.min), reverse=True)
+    for w in _order:
+        v = (w.get('vals') or {}).get(tkey)
+        if v is None:
+            continue
+        # ★ 2026-11-09 可加量用鄉鎮面積平均（q12）；舊資料沒有才退回色帶上界
+        _q12 = (w.get('q12') or {}).get(tkey)
+        hi = float(_q12) if _q12 is not None else float(qpf_band_hi(v))
+        span_h = (w['end'] - w['start']).total_seconds() / 3600.0 or 12.0
+        t = w['start']
+        while t < w['end']:
+            if t in _claimed:
+                t += timedelta(hours=1)
+                continue
+            _claimed.add(t)
+            idx = int((t - today00).total_seconds() // 21600)
+            if 0 <= idx < nseg:
+                hrs[idx] = hrs.get(idx, 0) + 1
+                qs[idx] = qs.get(idx, 0.0) + hi / span_h
+                bands[idx] = max(bands.get(idx, -1.0), float(v))
+            t += timedelta(hours=1)
+    last = max(w['end'] for w in windows)
+    out_b, out_q = {}, {}
+    for idx in hrs:
+        s0 = today00 + timedelta(hours=6 * idx)
+        s1 = s0 + timedelta(hours=6)
+        need = (s1 - max(s0, first)).total_seconds() / 3600.0
+        tail = max(0.0, (s1 - last).total_seconds() / 3600.0)     # 預報終點之後的小時
+        if need > 0 and hrs[idx] >= need - 1e-9 - (tail if tail <= 1 else 0):
+            out_b[idx] = round(bands[idx], 1)
+            out_q[idx] = round(qs[idx], 2)
+    return out_b, out_q
+
+
+def cwa_overlay(tkey, lat, lng, nseg, routine_seg_map, routine_is_png,
+                routine_span, typhoon_segs, now_tpe, today00):
+    """CWA 官方 QPF 疊合 → (qpf_cwa, qpf_cwa_q, official_segs, band_segs, overwrites)
+
+    ★★ 2026-10-11：抽成共用函式。
+      原本只有「靜態表 159 個鄉鎮」那條分支做這件事，另外 209 個鄉鎮
+      的 qpf_cwa／qpf_cwa_q／band_segs 一律寫死成 []。
+      但 PNG 判讀本來就讀了全部 368 個鄉鎮 —— 官方預報讀進來了，卻在
+      輸出時對 57% 的地圖整個丟掉。使用者回報「CWA 的最終裁量沒有啟動」，
+      這是其中一半的原因：那些鄉鎮的融合裡根本沒有 CWA 這一票。
+      兩份各自實作本身就是問題（改一邊就會分歧），所以合成一份。
+
+    回傳的 overwrites 是 [(idx, value)]：真值段（颱風格點／非 PNG 格點）
+    才需要覆寫 best/ecmwf/gfs；色帶段絕不覆寫任何模式。
+    """
+    by_idx, add, band_idx, real_idx, overwrites = {}, {}, set(), set(), []
+    # (A0) ★ 2026-11-08：常態 PNG ＋ 有精確窗位 → 逐小時按重疊比例分配（cwa_split_windows）
+    if routine_is_png and CWA_PNG_WINDOWS:
+        _b, _q = cwa_split_windows(tkey, CWA_PNG_WINDOWS, today00, nseg)
+        for idx in _q:
+            by_idx[idx] = _b[idx]
+            add[idx] = _q[idx]
+            band_idx.add(idx)
+    # (A) 常態 PNG 色階（類別，僅供著色；可加量另計，絕不覆寫模式）
+    elif routine_seg_map and routine_is_png:
+        for idx, vals in routine_seg_map.items():
+            if not (0 <= idx < nseg):
+                continue
+            v = vals.get(tkey)
+            if v is None:
+                continue
+            by_idx[idx] = round(float(v), 1)
+            band_idx.add(idx)
+            #  可加量＝色帶上界 ÷ 窗段數（色帶下界被複製到窗內每段會重複計算）
+            sp = max(1, int((routine_span or {}).get(idx, 1)))
+            add[idx] = round(float(qpf_band_hi(by_idx[idx])) / sp, 2)
+    elif routine_seg_map and not routine_is_png:
+        # 常態格點（非 PNG，真實數值）→ 可覆寫模式
+        for idx, vals in routine_seg_map.items():
+            if not (0 <= idx < nseg):
+                continue
+            v = _qpf_grid_at(vals, lat, lng)
+            if v is None:
+                continue
+            by_idx[idx] = round(float(v), 1)
+            add[idx] = by_idx[idx]
+            real_idx.add(idx)
+            overwrites.append((idx, by_idx[idx]))
+    # (B) 颱風 F-C0041 精確格點（真實數值，覆寫模式）
+    if typhoon_segs:
+        cur_seg = now_tpe.hour // 6
+        for i, seg in enumerate(typhoon_segs):
+            idx = None
+            sts = seg.get("start") or ""
+            if sts:
+                try:
+                    sd = datetime.fromisoformat(sts.replace('Z', '')).replace(tzinfo=None)
+                    s2 = (sd - today00).total_seconds()
+                    if s2 % 21600 == 0:
+                        idx = int(s2 // 21600)
+                except Exception:
+                    idx = None
+            if idx is None:
+                # ★ 時段解析不到就不用 —— 不可猜成「現在起第 i 段」（可能是過期的颱風雨量）
+                continue
+            if not (0 <= idx < nseg):
+                continue
+            pts = [(p[0], p[1], p[2]) for p in seg["points"]]
+            v = idw(lat, lng, pts, idx) if pts else None
+            if v is None:
+                continue
+            by_idx[idx] = v
+            add[idx] = v
+            real_idx.add(idx)
+            band_idx.discard(idx)
+            overwrites.append((idx, v))
+    qpf_cwa, qpf_cwa_q = [], []
+    if by_idx:
+        mx = max(by_idx)
+        qpf_cwa = [None] * (mx + 1)
+        qpf_cwa_q = [None] * (mx + 1)
+        for idx, v in by_idx.items():
+            qpf_cwa[idx] = v
+            qpf_cwa_q[idx] = add.get(idx)
+    return qpf_cwa, qpf_cwa_q, sorted(real_idx), sorted(band_idx), overwrites
+
+
+# ★ 色帶窗寬側通道：start_tpe → 該色帶窗涵蓋幾個 6h 段（12h 圖=2）。
+#   為什麼用模組級 dict 而不是改 decode_qpf_png 的回傳契約：
+#   呼叫端有多處、且 fetch_cwa_routine_qpf 的 merged 是「先到先得」，
+#   用物件識別反推窗寬在「某窗只有部分段存活」時會算錯（除以 1 等於不除）。
+#   明確記錄才有唯一答案。與 SWCB_STN_LOC 同一個慣例。
+QPF_SEG_SPAN = {}
+
+# ★★ 抓不到資料的模式計數（model_key → 幾個鄉鎮沒有值）。
+#   必須印出來：原本抓不到是用亂數偽造，所以 log 完全看不出有東西壞掉 ——
+#   ICON／KMA／CMA 從來沒被抓取過，卻在 log 裡一聲不響地「有預報」。
+#   沉默的退路是這次事故的放大器，改成有缺就講。
+_QPF_MISS = {}
+
+# 色距容忍：相鄰級距最小色距 45（5mm↔2mm），取其一半再留餘裕 → 半徑 ≤22
+QPF_PNG_TOL = 12          # 每通道容忍（√(12²×3)≈20.8，安全落在半距內）
+QPF_PNG_WINDOW_HOURS = 12 # 定量降水預報(II) 為 12h 有效時段
+
+def _png_solve_homography(px_map, ll_map):
+    """四點 DLT 解 lon/lat→pixel 單應性（回 3×3 list）"""
+    import numpy as _np
+    A = []
+    for k in ['N','E','S','W']:
+        x, y = px_map[k]; lon, lat = ll_map[k]
+        A.append([lon,lat,1,0,0,0,-x*lon,-x*lat,-x])
+        A.append([0,0,0,lon,lat,1,-y*lon,-y*lat,-y])
+    _, _, vt = _np.linalg.svd(_np.array(A))
+    h = vt[-1].reshape(3,3)
+    return (h / h[2,2]).tolist()
+
+def _png_ll2px(H3, lon, lat):
+    w = H3[2][0]*lon + H3[2][1]*lat + H3[2][2]
+    return ((H3[0][0]*lon+H3[0][1]*lat+H3[0][2])/w,
+            (H3[1][0]*lon+H3[1][1]*lat+H3[1][2])/w)
+
+_TOWN_POLYS_CACHE = None
+
+
+def _load_town_polys():
+    """town_polys.json：{縣市鄉鎮: [minlon, minlat, maxlon, maxlat, [環[[lon,lat],...], ...]]}。"""
+    global _TOWN_POLYS_CACHE
+    if _TOWN_POLYS_CACHE is None:
+        _TOWN_POLYS_CACHE = {}
+        try:
+            if os.path.exists(TOWN_POLYS_FILE):
+                with open(TOWN_POLYS_FILE, encoding='utf-8') as f:
+                    _TOWN_POLYS_CACHE = json.load(f) or {}
+        except Exception as e:
+            print(f"    鄉鎮界讀取失敗（色塊判讀退回質心圓）：{e}")
+    return _TOWN_POLYS_CACHE
+
+
+
+# ★★ 對位自檢（2026-11-08 建、2026-11-09 改為完整重新對位）
+#   根因（11/9 查明）：四海岬控制點的 W 點錯 131 像素，單應性整張扭曲，平均偏 14 像素；
+#   舊自檢只找「整張平移」，對扭曲無效（只量到吻合 0.08 卻沒有動作）。
+#   現行做法：把縣市界＋海岸線（qpf_reg_pts.json）投影到官方圖，量「落在官方黑線 2 像素內」
+#   的比例。正常應 ≥0.85；低於 0.80 代表版面變了或控制點錯了 → 以四個控制點的像素位置為
+#   參數重新最佳化（距離場下降法），重新對位後 ≥0.85 才採用；仍不行 → 該張圖不用
+#   （寧可該時段無官方資料，也不放錯位的資料），並寫入 data.json 的 cwa_qpf_reg 供稽核。
+CWA_PNG_REG = []
+QPF_LAST_VOTES = {}     # 最近一張圖各鄉鎮的像素色帶票數（面積比例計算用）
+QPF_LAST_Q12 = {}       # 最近一張圖各鄉鎮 12 小時面積平均雨量（色帶上界×面積比例）
+REG_PTS_FILE = 'qpf_reg_pts.json'
+REG_OK, REG_REFIT_MIN = 0.80, 0.85
+_REG_PTS_CACHE = None
+_REG_CAPES_RUN = None          # 本輪重新對位成功的控制點（同一輪其餘圖沿用）
+
+
+def _reg_boundary_lonlat():
+    global _REG_PTS_CACHE
+    if _REG_PTS_CACHE is None:
+        try:
+            with open(REG_PTS_FILE, encoding='utf-8') as f:
+                _REG_PTS_CACHE = [tuple(p) for p in json.load(f)['pts']]
+        except Exception as e:
+            print(f"    對位自檢點位讀取失敗：{e}")
+            _REG_PTS_CACHE = []
+    return _REG_PTS_CACHE
+
+
+def _reg_dist_map(arr, maxd=25):
+    """官方圖黑色界線（海岸線、縣市界）的距離場（8 鄰接，單位像素，上限 maxd）。"""
+    import numpy as _np
+    a = arr.astype(_np.int16)
+    mx, mn = a.max(axis=2), a.min(axis=2)
+    blk = (mx < 100) & ((mx - mn) < 30)
+    H, W = blk.shape
+    blk[:160, :] = False                     # 標題
+    blk[:, 1150:] = False                    # 色階圖例
+    blk[1250:, :400] = False                 # 署徽
+    blk[150:620, 60:340] = False             # 金門、馬祖、東沙等小框
+    D = _np.full((H, W), maxd, _np.int16)
+    cur = blk.copy(); D[cur] = 0
+    for d in range(1, maxd):
+        nx = cur.copy()
+        nx[1:, :] |= cur[:-1, :]; nx[:-1, :] |= cur[1:, :]
+        nx[:, 1:] |= cur[:, :-1]; nx[:, :-1] |= cur[:, 1:]
+        nx[1:, 1:] |= cur[:-1, :-1]; nx[:-1, :-1] |= cur[1:, 1:]
+        nx[1:, :-1] |= cur[:-1, 1:]; nx[:-1, 1:] |= cur[1:, :-1]
+        D[nx & ~cur] = d
+        cur = nx
+    return D
+
+
+def _reg_eval(D, capes, LL):
+    import numpy as _np
+    H3 = _png_solve_homography(capes, CAPES_LL)
+    h = _np.array(H3)
+    w = h[2, 0] * LL[:, 0] + h[2, 1] * LL[:, 1] + h[2, 2]
+    x = (h[0, 0] * LL[:, 0] + h[0, 1] * LL[:, 1] + h[0, 2]) / w
+    y = (h[1, 0] * LL[:, 0] + h[1, 1] * LL[:, 1] + h[1, 2]) / w
+    Hh, Ww = D.shape
+    xi = _np.clip(_np.rint(x).astype(int), 0, Ww - 1); yi = _np.clip(_np.rint(y).astype(int), 0, Hh - 1)
+    d = D[yi, xi]
+    return float(d.mean()), float((d <= 2).mean()), H3
+
+
+def _reg_refit(D, capes, LL):
+    """以四個控制點像素座標（8 參數）做座標下降，最小化界線點到官方黑線的平均距離。"""
+    keys = ['N', 'E', 'S', 'W']
+    cur = {k: list(capes[k]) for k in keys}
+    best = _reg_eval(D, cur, LL)[0]
+    for step in (64, 32, 16, 8, 4, 2, 1, 0.5):
+        improved = True
+        while improved:
+            improved = False
+            for k in keys:
+                for ax in (0, 1):
+                    for sgn in (1, -1):
+                        trial = {kk: list(v) for kk, v in cur.items()}
+                        trial[k][ax] += sgn * step
+                        c = _reg_eval(D, trial, LL)[0]
+                        if c < best - 1e-4:
+                            best, cur, improved = c, trial, True
+    return {k: tuple(v) for k, v in cur.items()}
+
+
+def _png_register(arr, H3_unused=None):
+    """回傳 (H3 或 None, 指標 dict)。None＝對位失敗，這張圖不可用。"""
+    global _REG_CAPES_RUN
+    import numpy as _np
+    pts = _reg_boundary_lonlat()
+    if len(pts) < 500:
+        return _png_solve_homography(CAPES_PX, CAPES_LL), {'ok': False, 'why': '缺對位點位檔，未自檢'}
+    LL = _np.array(pts, dtype=float)
+    D = _reg_dist_map(arr)
+    capes = _REG_CAPES_RUN or CAPES_PX
+    c0, f0, H3 = _reg_eval(D, capes, LL)
+    info = {'ok': True, 'fit0': round(f0, 3), 'dist0': round(c0, 2), 'refit': False}
+    if f0 >= REG_OK:
+        info['fit'] = info['fit0']
+        return H3, info
+    new = _reg_refit(D, capes, LL)
+    c1, f1, H3n = _reg_eval(D, new, LL)
+    info.update({'refit': True, 'fit': round(f1, 3), 'dist': round(c1, 2),
+                 'capes': {k: [round(v[0], 1), round(v[1], 1)] for k, v in new.items()}})
+    if f1 >= REG_REFIT_MIN:
+        _REG_CAPES_RUN = new
+        print(f"    ⚠ 官方圖版面與控制點不符（吻合 {f0:.2f}）→ 已自動重新對位（吻合 {f1:.2f}），"
+              f"控制點 {info['capes']}；請更新 CAPES_PX")
+        return H3n, info
+    info['ok'] = False
+    print(f"    ✖ 對位失敗（吻合 {f0:.2f}→重新對位後 {f1:.2f}）：這張圖不採用，該時段不放官方值")
+    return None, info
+
+
+def cwa_png_title_times(png_bytes):
+    """從官方圖標題讀「發布時間」與「有效時間」（tesseract）。
+    ★ 2026-11-09 根因修正：系統原本假設時段從發布班次起算（05:30 報＝05~17 時），
+      官方圖標題寫的是 08:00~20:00 —— 有效時間比發布晚 2.5 小時，整組時段錯位 3 小時。
+    回傳 {'issued','start','end'}（naive TST datetime）或 None（讀不到→呼叫端用規則推算）。"""
+    import io, re as _re, subprocess, tempfile
+    try:
+        from PIL import Image as _Im
+        im = _Im.open(io.BytesIO(png_bytes)).convert('L').crop((0, 40, 1000, 150))
+        im = im.resize((im.width * 2, im.height * 2))
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
+            im.save(tf.name)
+        out = subprocess.run(['tesseract', tf.name, '-', '--psm', '6'], capture_output=True,
+                             text=True, timeout=30).stdout
+        os.remove(tf.name)
+    except Exception as e:
+        print(f"    標題時間讀取失敗（{type(e).__name__}），改用規則推算")
+        return None
+    ts = [datetime.strptime(f"{m[0]} {m[1]}", '%Y/%m/%d %H:%M')
+          for m in _re.findall(r'(20\d\d/\d\d/\d\d)\s*(\d\d:\d\d)', out)]
+    if len(ts) != 3:
+        print(f"    標題時間讀取不完整（{len(ts)} 筆）：{out.strip()[:80]!r}")
+        return None
+    iss, st, en = ts
+    if not (en - st == timedelta(hours=12) and timedelta(0) < st - iss <= timedelta(hours=48)):
+        print(f"    標題時間不合理（發布 {iss}、有效 {st}~{en}），改用規則推算")
+        return None
+    return {'issued': iss, 'start': st, 'end': en}
+
+def decode_qpf_png(png_bytes, did, now_tpe, towns, fname='', win_seg=None, win_nseg=2):
+    """CWA 定量降水預報 PNG → 各鄉鎮 QPF 值（單應性 + 質心多點取樣多數決）。
+    需 Pillow。回傳 {start_tpe: {town_key: val}}（鄉鎮字典，非網格）；失敗回 None。
+    ⚠色塊判讀為近似（僅級距、無精確值），12h 圖均分兩個 6h 段。"""
+    try:
+        from PIL import Image
+        import numpy as _np, io as _io
+    except ImportError:
+        print("    需要 Pillow/numpy：workflow 請加 pip install pillow numpy")
+        return None
+    img = Image.open(_io.BytesIO(png_bytes)).convert('RGB')
+    W, H = img.size
+    arr = _np.asarray(img)
+    # 尺寸須與樣張一致才能套用內建像素座標（否則需重新定位）
+    if (W, H) != QPF_PNG_REF_SIZE:
+        print(f"    PNG尺寸 {W}×{H} ≠ 校正基準 {QPF_PNG_REF_SIZE}——無法套用內建四點，略過")
+        print(f"    （若為新版式，請提供新樣張重新定位四海岬像素）")
+        return None
+    try:
+        H3, _reg = _png_register(arr)
+    except Exception as _e:
+        H3, _reg = _png_solve_homography(CAPES_PX, CAPES_LL), {'ok': False, 'why': f'{type(_e).__name__}: {_e}'[:120]}
+    _reg.update({'dataid': did, 'file': fname})
+    CWA_PNG_REG.append(_reg)
+    print(f"    對位自檢：界線吻合 {_reg.get('fit0')}" + (f" → 重新對位 {_reg.get('fit')}" if _reg.get('refit') else ''))
+    if H3 is None:
+        return {}
+    bands = QPF_PNG_BANDS
+    tol2 = QPF_PNG_TOL * QPF_PNG_TOL * 3
+
+    def classify_px(xi, yi):
+        """單像素→級距值；純色才回值，等值線/文字/過渡回 None，白底回 0.0"""
+        if xi < 0 or xi >= W or yi < 0 or yi >= H: return None
+        r, g, b = int(arr[yi,xi,0]), int(arr[yi,xi,1]), int(arr[yi,xi,2])
+        mx, mn = max(r,g,b), min(r,g,b)
+        if mx > 235 and mn > 225: return 0.0          # 白底＝無雨
+        if mx < 55: return None                        # 黑等值線/邊界
+        # ★ 0.5mm 這一級的官方色就是灰色 (194,194,194)，
+        #   會被下面的「低飽和灰＝文字/格線」規則誤殺 → 大片小雨區沒有票，
+        #   該鄉鎮的值改由鄰近的藍色像素決定，於是「明明沒雨卻爆增」。
+        #   故先比對灰色級距，命中就回 0.5，不進入低飽和過濾。
+        if abs(r-194) <= 12 and abs(g-194) <= 12 and abs(b-194) <= 12:
+            return 0.5
+        if (mx-mn) < 22 and 55 <= mx < 230: return None  # 低飽和灰（文字/格線）
+        # ★ 取最近色，且容忍半徑須小於「相鄰級距色距的一半」，
+        #   否則抗鋸齒或壓縮雜訊會讓 2mm 被判成 5mm、5mm 判成 10mm
+        #   （實測相鄰色距最小僅 45，原本 tol=42→半徑 72.7 遠超過）。
+        best, bd = None, tol2 + 1
+        for (br,bg,bb,bv) in bands:
+            d = (r-br)**2 + (g-bg)**2 + (b-bb)**2
+            if d < bd: bd, best = d, bv
+        return best if bd <= tol2 else None            # 非純色（過渡）→ 丟棄
+
+    # 鄉鎮取樣密度：以像素空間半徑 R 內的密集網格取直方圖。
+    # R 依緯度換算（1鄉鎮尺度約 0.03~0.08°，取影像上約 8~14px 半徑掃描）。
+    def town_hist(lon, lat):
+        cx, cy = _png_ll2px(H3, lon, lat)
+        R = 11                       # 像素半徑（涵蓋鄉鎮質心鄰域，避開跨鄉鎮太遠）
+        step = 2
+        votes = {}
+        for dy in range(-R, R+1, step):
+            for dx in range(-R, R+1, step):
+                if dx*dx + dy*dy > R*R: continue      # 圓形鄰域
+                v = classify_px(int(round(cx))+dx, int(round(cy))+dy)
+                if v is not None: votes[v] = votes.get(v, 0) + 1
+        return votes
+
+    # ★★ 2026-11-08（使用者：「色塊判讀不準必須克服」）：改以「鄉鎮界內」取樣。
+    #   舊法在質心周圍固定 11 像素半徑取圓：
+    #     ‧ 小鄉鎮（都會區、離島）圓會跨到鄰鎮，讀到別人的色塊；
+    #     ‧ 大鄉鎮（山區）圓只蓋到質心附近一小塊，遠端的強降雨核心讀不到；
+    #     ‧ 質心落在凹形鄉鎮外面時（例如沿海狹長鄉鎮）整個圓都在鄰鎮。
+    #   改為把鄉鎮界（town_polys.json，與雷達聚合同一份）投影到圖上，只取界內像素；
+    #   取樣間距隨面積調整（每鄉鎮約 400 點上限，控制時間）。
+    #   界內有效像素太少（< 12，例如極小鄉鎮被文字蓋住）才退回質心圓。
+    _polys = _load_town_polys()
+
+    def town_hist_poly(key):
+        g = _polys.get(key)
+        if not g or len(g) < 5:
+            return None
+        votes = {}
+        #  ★ 逐環處理：一個鄉鎮可能有遠方離島（旗津區含東沙、南沙；基隆中正區含彭佳嶼），
+        #    合在一起算外框會讓取樣間距大到主島只剩一兩點。圖外的環直接略過。
+        for ring in g[4] or []:
+            pts = [_png_ll2px(H3, lo, la) for lo, la in ring]
+            if len(pts) < 3:
+                continue
+            xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+            if max(xs) < 0 or min(xs) >= W or max(ys) < 0 or min(ys) >= H:
+                continue
+            area = abs(sum(pts[k][0] * pts[(k + 1) % len(pts)][1]
+                           - pts[(k + 1) % len(pts)][0] * pts[k][1]
+                           for k in range(len(pts)))) / 2.0
+            step = max(1, int((area / 400.0) ** 0.5))
+            y0, y1 = max(0, int(min(ys))), min(H - 1, int(max(ys)) + 1)
+            n = len(pts)
+            for yi in range(y0, y1 + 1, step):
+                yc = yi + 0.5                       # 像素中心
+                cuts = []
+                for k in range(n):
+                    (ax, ay), (bx, by) = pts[k], pts[(k + 1) % n]
+                    if (ay > yc) != (by > yc):
+                        cuts.append(ax + (yc - ay) * (bx - ax) / (by - ay))
+                cuts.sort()
+                for k in range(0, len(cuts) - 1, 2):
+                    xa = max(0, int(cuts[k] + 0.5)); xb = min(W - 1, int(cuts[k + 1] - 0.5))
+                    for xi in range(xa, xb + 1, step):
+                        v = classify_px(xi, yi)
+                        if v is not None:
+                            votes[v] = votes.get(v, 0) + 1
+        #  界內只要有 3 個有效像素就用界內（極小的都會區鄉鎮只有十幾個像素，
+        #  退回質心圓反而會讀到鄰鎮）；完全讀不到才退回質心圓。
+        return votes if sum(votes.values()) >= 3 else None
+
+    # 級距值由小到大（用於限制「跳級」幅度）
+    _BAND_VALS = sorted({bv for (_r, _g, _b, bv) in bands})
+
+    # ★★ 2026-11-09 鄉鎮代表值改法（使用者以 11/9 05:30 報比對：熱區不一致）。
+    #   舊法取「眾數」：鄉鎮內有雨面積不到一半就算 0（需 ≥55%），
+    #   山區零星雨區、大鄉鎮裡的強降雨核心全部消失，熱區因此跟官方圖對不上。
+    #   新法分成兩個量，各管各的用途：
+    #   ① 雨量（可加、累積用）＝鄉鎮面積平均：每個像素取該色帶上界、無雨像素算 0，
+    #      全鄉鎮平均。這才是「這個鄉鎮平均會下多少」，多張圖相加也成立（眾數不能相加）。
+    #   ② 色帶（標示用）＝鄉鎮內雨最大的 10% 面積所在色帶，代表「鄉鎮裡較大雨區的強度」，
+    #      大鄉鎮裡的小核心不會被平均掉而看不見。
+    QPF_TOP_FRAC = 0.10
+
+    def aggregate(votes):
+        if not votes: return None
+        tot = sum(votes.values()); acc = 0
+        for v in sorted(votes, reverse=True):
+            acc += votes[v]
+            if acc >= tot * QPF_TOP_FRAC:
+                return v
+        return 0.0
+
+    def areal_mean(votes):
+        tot = sum(votes.values())
+        if not tot: return None
+        return sum((float(qpf_band_hi(v)) if v else 0.0) * c for v, c in votes.items()) / tot
+
+    town_vals = {}
+    QPF_LAST_VOTES.clear(); QPF_LAST_Q12.clear()
+    n_hit = n_poly = 0
+    for t in towns:
+        lat, lng = t.get('lat'), t.get('lng')
+        if not lat: continue
+        key = f"{t['county']}{t['township']}"
+        hv = town_hist_poly(key)
+        if hv is not None:
+            n_poly += 1
+        else:
+            hv = town_hist(lng, lat)          # 退路：質心圓
+        QPF_LAST_VOTES[key] = hv
+        val = aggregate(hv)
+        if val is None: continue
+        town_vals[key] = val
+        QPF_LAST_Q12[key] = round(areal_mean(hv), 2)
+        if val > 0: n_hit += 1
+    print(f"    PNG判讀（單應性＋鄉鎮界內取樣 {n_poly}／質心圓 {len(towns) - n_poly}）："
+          f"{n_hit}/{len(towns)} 鄉鎮有雨值")
+
+    # ★明確窗位（呼叫端依 ResourceDesc 羅馬數字 (I)(II)(III)(IV) 指定）：
+    #   定量降水預報圖逐12h、共4張=48h。win_seg=該圖起始段索引（今天00:00起算）。
+    #   win_nseg=該圖涵蓋幾段（12h=2段）。色階為類別，套用到窗內每個6h子段。
+    if win_seg is not None:
+        _base00 = now_tpe.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+        seg_vals = dict(town_vals)
+        segs = {}
+        for k in range(win_nseg):
+            _st0 = _base00 + timedelta(hours=6*(win_seg + k))
+            segs[_st0] = seg_vals
+            QPF_SEG_SPAN[_st0] = win_nseg          # ★ 記錄窗寬（累積時要除）
+        print(f"    明確窗位：段 {win_seg}~{win_seg+win_nseg-1}"
+              f"（{_base00 + timedelta(hours=6*win_seg):%m/%d %H:%M} 起 {win_nseg} 段）")
+        return segs
+
+    # 時間窗：檔名如 ...Precip_12_24 表示「發布起 +12h~+24h」。
+    #   解析 _HH_HH → 相對發布時刻的起訖小時；發布時刻取最近的 CWA 發布班次
+    #   （05:30/11:30/17:30/23:30 TST）。無法解析則退回「下一個6h邊界起、12h窗」。
+    import re as _re
+    m = _re.search(r'_(\d{1,3})_(\d{1,3})(?:\.png)?$', fname or '')
+    win_h = QPF_PNG_WINDOW_HOURS
+    if m:
+        h0, h1 = int(m.group(1)), int(m.group(2))
+        # 接受 6~48h 的任何合理窗（6的倍數）；涵蓋 0_12 / 12_24 / 24_48 等各版式
+        if h1 > h0 and (h1 - h0) % 6 == 0 and (h1 - h0) <= 48 and h1 <= 72:
+            win_h = h1 - h0
+            # 發布班次：取今日最近且 ≤ now 的 05:30/11:30/17:30/23:30
+            _cands = []
+            for _dh in (-1, 0):
+                _d = now_tpe.replace(minute=30, second=0, microsecond=0, tzinfo=None) + timedelta(days=_dh)
+                for _hh in (5, 11, 17, 23):
+                    _cands.append(_d.replace(hour=_hh))
+            _issue = max([c for c in _cands if c <= now_tpe.replace(tzinfo=None)], default=None)
+            if _issue is not None:
+                _win_start = _issue + timedelta(hours=h0)
+                # 吸附 6h 日曆邊界（發布在 :30，+偶數h 仍偏移30分）
+                _day0 = _win_start.replace(hour=0, minute=0, second=0, microsecond=0)
+                _off = (_win_start - _day0).total_seconds()
+                _snap = round(_off / 21600) * 21600
+                base = _day0 + timedelta(seconds=_snap)
+                n_seg = max(1, win_h // 6)
+                # 色階為「類別」而非可加量：色帶直接套用到窗內每個 6h 子段
+                #   （不除以段數——除法會破壞色帶身分，害前端對不到官方色）
+                seg_vals = dict(town_vals)
+                segs = {}
+                for k in range(n_seg):
+                    _st0 = base + timedelta(hours=6*k)
+                    segs[_st0] = seg_vals
+                    QPF_SEG_SPAN[_st0] = n_seg     # ★ 記錄窗寬（累積時要除）
+                print(f"    時間窗（檔名 {h0}-{h1}h，{win_h}h窗）："
+                      f"{base.strftime('%m/%d %H:%M')} 起 {n_seg} 段（色階類別）")
+                return segs
+        else:
+            print(f"    檔名窗 {h0}-{h1}h 不合理（差={h1-h0}），退回預設窗")
+    # 退回：下一個 6h 邊界起、12h 窗（色階為類別，直接套用不除段）
+    base = now_tpe.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+    base = base + timedelta(hours=(6 - base.hour % 6) % 6)
+    n_seg = max(1, win_h // 6)
+    seg_vals = dict(town_vals)
+    segs = {}
+    for k in range(n_seg):
+        _st0 = base + timedelta(hours=6*k)
+        segs[_st0] = seg_vals
+        QPF_SEG_SPAN[_st0] = n_seg                 # ★ 記錄窗寬（累積時要除）
+    return segs
+
+# ── 官方警特報（W-C0033-001 各縣市現行天氣警特報）───────────────────
+WARN_PHEN_LEVEL = {'大雨': 1, '豪雨': 2, '大豪雨': 3, '超大豪雨': 4}
+
+def fetch_official_warnings():
+    """回傳 {'fetched':iso, 'counties':{縣市:{'level':1-4,'phenomena':str,'start':..,'end':..}},
+             'others':{縣市:[非降雨類特報名]}}；失敗回 None"""
+    if not CWA_API_KEY: return None
+    try:
+        r = cwa_get(f"{BASE_URL}/W-C0033-001",
+                         params={'Authorization': CWA_API_KEY, 'format': 'JSON'}, timeout=20)
+        r.raise_for_status()
+        raw = r.json()
+        locs = raw.get('records', {}).get('location', [])
+        counties, others = {}, {}
+        for loc in locs:
+            name = loc.get('locationName', '')
+            hz = loc.get('hazardConditions', {}) or {}
+            hazards = hz.get('hazards', [])
+            if isinstance(hazards, dict):  # 有些版本包一層 {'hazard':[...]}
+                hazards = hazards.get('hazard', [])
+            for h in hazards or []:
+                info = h.get('info', {}) or {}
+                phen = info.get('phenomena', '') or ''
+                vt = h.get('validTime', {}) or {}
+                lv = WARN_PHEN_LEVEL.get(phen)
+                if lv:
+                    cur = counties.get(name)
+                    if not cur or lv > cur['level']:
+                        counties[name] = {'level': lv, 'phenomena': phen,
+                                          'start': vt.get('startTime', ''), 'end': vt.get('endTime', '')}
+                elif phen:
+                    others.setdefault(name, [])
+                    if phen not in others[name]: others[name].append(phen)
+        print(f"  官方警特報：{len(counties)} 縣市有豪大雨特報、{len(others)} 縣市有其他特報")
+        return {'fetched': (datetime.now(timezone.utc)+timedelta(hours=8)).strftime('%Y-%m-%dT%H:%M'),
+                'counties': counties, 'others': others}
+    except Exception as e:
+        print(f"  官方警特報抓取失敗：{e}")
+        return None
+
+# ── IDW 空間插值 ──────────────────────────────────
+def idw(lat, lng, pts, seg=None):
+    """pts = [(lat,lng,value), ...]，回傳反距離加權插值結果"""
+    if not pts: return 0.0
+    dists = sorted([(math.sqrt((p[0]-lat)**2+(p[1]-lng)**2), p) for p in pts])[:4]
+    tw, tv = 0.0, 0.0
+    for d, p in dists:
+        v = p[2]
+        if d < 1e-6: return v
+        w = 1.0/d**2
+        tw += w; tv += w*v
+    return round(tv/tw, 1) if tw > 0 else 0.0
+
+# ── 風險分數 S*（ETR2 Risk Score）────────────────────
+def calc_risk_score(etr_pct, qpf_mm, pop_pct, n_hours,
+                    alpha=0.5, beta=0.5, gamma=0.3,
+                    decay_per_6h=4, threshold_per_6h=70):
+    """
+    etr_pct   : ETR2% 現況值（整數，如 110 = 110%）
+    qpf_mm    : 該時窗的 QPF (mm)
+    pop_pct   : 降雨機率（0-100）
+    n_hours   : 預報時窗（3/6/12/24）
+    回傳 S*（float，越大越嚴峻）
+    """
+    if etr_pct is None: return None
+    # 當 PoP 缺失（超過7天預報範圍），用 QPF 量推估合理的 PoP
+    # QPF=0mm → PoP=10%（基底），QPF=50mm → PoP≈90%，中間線性插值
+    if pop_pct is None:
+        if qpf_mm is None or qpf_mm <= 0:
+            pop_pct = 10.0
+        else:
+            pop_pct = min(95.0, 10.0 + qpf_mm * 1.7)  # 約50mm達90%
+
+    # Step 1: L（現況基礎分）
+    if etr_pct < 70:
+        L = 0
+    elif etr_pct < 130:
+        L = (etr_pct - 70) / 30 * 4
+    else:
+        L = 4 + (etr_pct - 130) / 10
+
+    # Step 2: 基準量
+    decay  = decay_per_6h * n_hours / 6      # 自然衰退量
+    t_high = threshold_per_6h * n_hours / 6  # 加劇門檻量
+    net    = qpf_mm - decay                   # 淨雨量
+
+    # Step 3: Mf（未來雨量修正）
+    denom = t_high - decay
+    Mf = max(-1.0, min(1.0, net/denom*2-1)) if denom != 0 else -1.0
+
+    # Step 4: Mp（降雨機率修正）
+    Mp = (pop_pct - 50) / 50
+
+    # Step 5: D（衰退速度修正）
+    D = max(-2.0, min(2.0, net/decay)) if decay != 0 else 0.0
+
+    # Step 6: S*
+    inner = max(0, L + alpha*Mf + beta*Mp + gamma*D)
+    return round(inner * 30, 1)
+
+def get_risk_level(score):
+    if score is None:   return None, '#FFFFFF'
+    if score < 25:      return '無風險', '#FFFFFF'
+    if score < 45:      return '注意',   '#00CC44'
+    if score < 75:      return '警戒',   '#DDDD00'
+    if score < 100:     return '應變',   '#DD2222'
+    return '緊急', '#BB00BB'
+
+# ══════════════════════════════════════════════════
+# 主程式
+# ══════════════════════════════════════════════════
+def main():
+    # ★ 校驗彙整：必須在 main() 開頭就宣告，否則 output 組裝（較前）
+    #   會早於賦值（較後）而拋 UnboundLocalError。
+    _verify_recent = None
+    now_utc=datetime.now(timezone.utc)
+    now_tpe=now_utc+timedelta(hours=8)
+    print('='*52)
+    print(f"台灣降雨監測 v5  {now_tpe.strftime('%Y-%m-%d %H:%M')} TST")
+    print('='*52)
+
+    alert_table = load_static()
+    slope_warn = load_slope_warn()
+    ls_warn    = load_ls_warn()      # 大崩警戒區（代表站；未來推估側用）
+    # 讀上一輪 data.json 的官方 ETR2 → 供前端「這期 vs 前期」趨勢箭頭（同一資料源，可比）
+    prev_etr2 = {}
+    try:
+        if os.path.exists('data.json'):
+            with open('data.json', encoding='utf-8') as _f:
+                _old = json.load(_f)
+            for _t in _old.get('townships', []):
+                _e = _t.get('etr2')
+                if _e is not None:
+                    prev_etr2[f"{_t.get('county','')}{_t.get('township','')}"] = _e
+            print(f"  前期 ETR2（上一輪 data.json）：{len(prev_etr2)} 個鄉鎮")
+    except Exception as _e:
+        print(f"  讀取前期 ETR2 失敗（不影響）：{_e}")
+    swcb_etr2 = fetch_swcb_etr2()   # 站名→官方ETR2 對照
+    hourly_ser, hourly_meta = load_hourly_series()   # 逐時序列（暖機未滿時自動回「資料不足」）
+    time.sleep(1)
+    static_list = list(alert_table.values())
+    # ★ 風力預報須涵蓋全臺 22 縣市，不可只取「有坡地警戒站」的縣市。
+    #   金門、澎湖、連江沒有坡地警戒站，若沿用 alert_table 的縣市集合，
+    #   這三縣市的 PoP 與風力會完全不抓 —— 實測即為三離島全無風力資料的主因。
+    counties_needed = set(COUNTY_EP_3D.keys()) | set(t['county'] for t in static_list)
+
+    # 觀測
+    # 測站海拔對照（離線產生；缺檔不影響其他流程）
+    global STATION_ELEV
+    if os.path.exists(STATION_ELEV_FILE):
+        try:
+            with open(STATION_ELEV_FILE, encoding='utf-8') as _f:
+                STATION_ELEV = json.load(_f)
+            print(f"測站海拔：{len(STATION_ELEV)} 站")
+        except Exception as _e:
+            print(f"測站海拔讀取失敗（不影響其他）：{_e}")
+
+    stations = fetch_obs()
+    history  = update_history(stations,now_tpe) if stations else \
+               (json.load(open(HISTORY_FILE)) if os.path.exists(HISTORY_FILE) else {})
+    # ★★ 2026-10-05：土石流逐潛勢溪流資料提前抓，並傳進 agg_obs。
+    #   原因（寒溪s 兩次沒抓到的真正根因）：
+    #   先前鄉鎮 ETR2 是「靜態警戒區表的代表站名」→「水保署站名索引」做字串比對，
+    #   只要靜態表的站名與官方集合對不上（撞名、改名、新增單元、表過期），
+    #   那個單元就靜默消失。站名比對本身就是個會持續壞掉的介面。
+    #   但水保署同一支 API 的每一條潛勢溪流本身就帶 County/Town/AlertValue/STRT，
+    #   fetch_debris_alerts() 已逐條算好 pct —— 那就是官方鄉鎮總表的構成方式本身。
+    #   直接用它當鄉鎮 ETR2% 的權威來源，站名比對只保留給 CWA 自算退路。
+    debris_alerts = fetch_debris_alerts()
+    town_obs = agg_obs(stations,alert_table,history,now_tpe,slope_warn,swcb_etr2,
+                       debris=debris_alerts)
+
+    # PoP
+    pop3d, pop7d = fetch_all_pop(counties_needed)
+
+    # 颱風 QPF（先抓，決定 is_typhoon 旗標）
+    typhoon_segs = fetch_typhoon_qpf() if CWA_API_KEY else []
+    typhoon_track = fetch_typhoon_track() if CWA_API_KEY else []
+    typhoon_warn  = fetch_typhoon_warning() if CWA_API_KEY else []
+    # 各國颱風預報路徑（NCDR）：獨立檔 multity.json，失敗不影響主流程
+    try:
+        fetch_multity(now_tpe)
+    except Exception as _e:
+        print(f"  NCDR 各國路徑略過：{_e}")
+    # 颱風警報期間各地區風力預測（含陣風）；平時為空
+    gust_fcst     = fetch_gust_forecast() if CWA_API_KEY else {}
+    # 沿海浪高（僅 120 個沿海預報點）
+    wave_fcst     = fetch_wave_forecast() if CWA_API_KEY else {}
+    # ── 雷達定量降雨（過去1小時實估 + 未來1小時預報）──────
+    #   ★ 用鄉鎮多邊形聚合，取代原本的質心單點取樣
+    #     （單點在該鄉鎮沒回波時就是 null，實測約 60% 鄉鎮為空）。
+    radar_qpe, radar_qpe_time = {}, ''
+    radar_qpf_grid, radar_qpf_time2 = {}, ''
+    _polys = {}
+    if os.path.exists(TOWN_POLYS_FILE):
+        try:
+            with open(TOWN_POLYS_FILE, encoding='utf-8') as _f:
+                _polys = json.load(_f)
+        except Exception as _e:
+            print(f"鄉鎮界讀取失敗（雷達改用質心）：{_e}")
+    if _polys and CWA_API_KEY:
+        _pv = {k: (v[0], v[1], v[2], v[3], v[4]) for k, v in _polys.items()}
+        _v, _m = fetch_radar_grid(RADAR_QPE_EP, '雷達過去1小時定量降雨')
+        if _v:
+            radar_qpe = radar_to_towns(_v, _m, _pv)
+            radar_qpe_time = _m.get('time', '')
+        _v2, _m2 = fetch_radar_grid(RADAR_QPF_EP, '雷達未來1小時定量降雨')
+        if _v2:
+            radar_qpf_grid = radar_to_towns(_v2, _m2, _pv)
+            radar_qpf_time2 = _m2.get('time', '')
+
+    tide_fcst     = fetch_tide_forecast() if CWA_API_KEY else {}
+
+    # 全臺測站清單（供前端測站圖層；只留必要欄位以免 data.json 過大）
+    all_stations_out = {}
+    for _sid, _v in (stations or {}).items():
+        if not isinstance(_v, dict) or not _v.get('lat'):
+            continue
+        _d = (_v.get('daily_rain') or [None])
+        all_stations_out[_sid] = {
+            'n': _v.get('name', ''),
+            'la': round(_v['lat'], 5), 'lo': round(_v['lng'], 5),
+            'e': _v.get('alt'),
+            'c': _v.get('county', ''), 't': _v.get('township', ''),
+            'r': _v.get('rain_24h') if _v.get('rain_24h') is not None else (
+                 _d[0] if _d and _d[0] is not None else None),
+        }
+    if all_stations_out:
+        print(f"全臺測站清單：{len(all_stations_out)} 站（含座標與海拔）")
+    fc_precip     = fetch_forecaster_precip() if CWA_API_KEY else {}
+    # debris_alerts 已於 agg_obs 之前抓取（鄉鎮 ETR2% 的權威來源）
+    # 雙軌：現況紅黃走官方發布值、未來推估自算
+    official_alerts = fetch_official_alerts()
+    ls_alert_vals   = fetch_ls_alert_values()
+    is_typhoon   = len(typhoon_segs) >= 4
+
+    # 常態 CWA QPF（官方預報員修正值；治本預測偏差）——任何時候都跑，
+    # 讓「CWA 模式」隨時有官方定量降水判讀可看（颱風期另有 F-C0041 精確格點，
+    # 兩者段索引不重疊時互補；重疊段以颱風精確值優先，見組裝端）。
+    routine_qpf = None
+    if CWA_API_KEY:
+        try: routine_qpf = fetch_cwa_routine_qpf(now_tpe)
+        except Exception as e: print(f"  常態QPF例外：{e}")
+    # 對齊日曆6h段：idx = (start − 今天00時TST)/6h（qpf_15d[0]=今天00-06 鐵律）
+    _today00 = now_tpe.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    routine_seg_map = {}
+    routine_span = {}          # idx -> 該色帶窗涵蓋幾個 6h 段（累積時要除）
+    routine_is_png = bool(routine_qpf and routine_qpf.get('png'))
+    if routine_qpf:
+        for _st, _vals in routine_qpf['segs'].items():
+            _sec = (_st - _today00).total_seconds()
+            _idx = int(_sec // 21600)
+            if 0 <= _idx < 60 and _sec % 21600 == 0:
+                routine_seg_map[_idx] = _vals
+                # 查不到窗寬就當 1（不除）—— 寧可維持原行為，不要憑猜除法
+                routine_span[_idx] = QPF_SEG_SPAN.get(_st, 1)
+        print(f"  常態QPF對齊段索引：{sorted(routine_seg_map)}"
+              f"{'（PNG鄉鎮字典，近似）' if routine_is_png else ''}")
+
+    # 官方現行警特報（與系統預估對照，落差可視化）
+    official_warn = fetch_official_warnings() if CWA_API_KEY else None
+
+    # Open-Meteo（四個模式）
+    om_all, om_max_hourly_all, om_hourly_all = fetch_openmeteo(static_list)
+    # ★ 預設改用 IFS HRES 9km（原為 0.25°）：解析度提升近 3 倍，
+    #   對臺灣中央山脈的地形雨差異最明顯。
+    om = om_all.get('ecmwf_ifs') or om_all.get('ecmwf_ifs025', {})
+
+    # QPESUMS 網格觀測（1h 即時 + 24h 歷史合成）
+    # QPESUMS（O-A0038）已停用：CWA 該 dataid 現回傳溫度圖而非雨量網格。
+    #   無測站鄉鎮改以雨量站聚合＋模式為準，不再耗時下載無用影像。
+    print("QPESUMS 網格觀測：已停用（CWA 未提供雨量網格）")
+    qp_grid = {}
+    qp_24h  = load_qpesums_history()
+    qp_p48  = load_qpesums_p48()
+    # 逐日雨量備援：無測站鄉鎮改用 QPESUMS 格點，避免「無測站」被寫成「雨量 0」
+    qp_daily = load_qpesums_daily()
+    if qp_daily:
+        print(f"  QPESUMS 逐日：{len(qp_daily)} 鄉鎮（供無測站者補值）")
+    if qp_24h: print(f"    QPESUMS 24h 歷史：{len(qp_24h)} 個鄉鎮")
+    if qp_p48: print(f"    QPESUMS 逐時觀測 p48：{len(qp_p48)} 個鄉鎮")
+
+    # F-B0046 未來1h雷達QPF（高解析銜接，過去觀測與未來6h段之間）
+    # F-B0046 未來1h雷達QPF：完全由每小時腳本寫入獨立的 radar.json，主腳本不碰。
+    #   前端載入時併入 radar.json——兩個 workflow 各寫各檔，永不在 data.json 上撞車。
+    radar_qpf, radar_dt = {}, ''
+
+    # 系集強弱降雨比值（縣級）+ 昨日模式偏差比
+    time.sleep(2)
+    ens_ratios = fetch_ensemble_ratios(static_list)
+    time.sleep(2)
+    model_yday = fetch_model_yesterday(static_list)
+    time.sleep(2)
+    models_yday = fetch_models_yesterday(static_list)
+
+    # 基準時間
+    h=(now_tpe.hour//6)*6
+    base_dt = now_tpe.replace(hour=h,minute=0,second=0,microsecond=0)
+    base_time_str = base_dt.strftime('%Y-%m-%dT%H:%M:%S')
+
+    print('\n組裝資料...')
+    out_towns=[]
+    for key,info in alert_table.items():
+        county=info.get('county',''); township=info.get('township','')
+        lat=info.get('lat'); lng=info.get('lng')
+        alert_v=info.get('alert_val',0); alert_6h=info.get('alert_6h',round(alert_v*0.55,0))
+        if not lat: continue
+
+        obs=town_obs.get(key,{})
+        etr2_val    = obs.get('etr2')
+        # ★ 統一為百分比（0~100+）：先前鄉鎮級與測站級都存比值，
+        #   前端各處再各自乘 100，容易漏改。一律在後端轉好。
+        _pct_raw    = obs.get('etr2_pct')
+        etr2_pct    = (round(_pct_raw * 100, 1) if _pct_raw is not None else None)
+        etr2_src    = obs.get('etr2_src')          # 'swcb'/'mixed'/'cwa'
+        etr2_alert  = obs.get('etr2_alert')        # 最高單元的官方警戒值（前端算%分母）
+        etr2_prev   = prev_etr2.get(key)           # 上一輪官方 ETR2（趨勢比較基準）
+        slope_regions = obs.get('slope_regions')   # 各警戒區明細
+        rain_24h    = obs.get('rain_24h')
+        rain_6h     = obs.get('rain_6h')
+        rain_2d     = obs.get('rain_2d',0.0)
+        rain_3d     = obs.get('rain_3d',0.0)
+
+        # QPF：優先用 Open-Meteo 全程15天，颱風期間用 CWA 格點覆蓋前48h
+        om_key = f"{lat:.4f}_{lng:.4f}"
+
+        def get_qpf_model(model_key):
+            """取特定模式的 64 個 6h QPF；**抓不到就回空陣列**。
+
+            ★★★ 2026-10-11 重大修正（使用者回報「gem 像包牌、到處都在下雨」）
+              原本抓不到時會用亂數偽造一整條雨量序列：
+                  base = 警戒值/20 × U(0.3,1.2)
+                  每段 = base × exp(-i//4×0.06) × U(0.4,1.8)
+              造成的實際後果（由 2026-10-11 07:30 的 data.json 量到）：
+                · ICON／KMA／CMA 根本沒被抓取，159 個有警戒值的鄉鎮**全部**是偽造值；
+                  GEM 抓取失敗（3/3 逾時）時同樣偽造。
+                · 偽造值 16 天全臺總量 12.4 萬 mm，真實模式只有 0～3,827 mm（差 35 倍）。
+                · 偽造值與鄉鎮警戒值正相關（r=+0.36~+0.50），真實模式為負（-0.05~-0.24）；
+                  最大值／警戒值 0.100~0.103，緊貼偽造公式的理論上限 0.108。
+                  也就是說「警戒值愈高的山區鄉鎮，被灌愈多假雨」。
+                · 這些假資料直接進入前端融合（gem 在三個地形都拿到最高權重 1.2），
+                  所以預報到處有雨而實際無雨。
+              防災系統不得在任何情況下編造觀測或預報。抓不到就是沒有，
+              下游（融合、系集離散度、前端）本來就會跳過空陣列。
+            """
+            segs = om_all.get(model_key, {}).get(om_key, [])
+            if not segs:
+                _QPF_MISS[model_key] = _QPF_MISS.get(model_key, 0) + 1
+                return []
+            return segs[:64]
+
+        def get_max_hourly_model(model_key):
+            """取特定模式的 64 個 6h 段內最大時雨量；**抓不到就回空陣列**。
+
+            ★ 原本回 [0.0]*64 —— 那是「沒資料」被寫成「確定沒有大雨」，
+              與上面的偽造是同一類錯誤（只是方向相反）。強度分級會因此
+              把缺資料的模式當成確定不會有強降雨。
+            """
+            arr = om_max_hourly_all.get(model_key, {}).get(om_key, [])
+            return arr[:64] if arr else []
+
+        # 各模式的完整15天QPF（依優先序：CWA > ECMWF > GFS/ICON）
+        qpf_best  = get_qpf_model('best_match')
+        qpf_ecmwf = get_qpf_model('ecmwf_ifs')
+        qpf_gfs   = get_qpf_model('gfs_seamless')
+        #  ★ qpf_best 是全檔的基準序列（daily／qpf_24h／風險分數／系集都用它）。
+        #    它空掉會讓整個鄉鎮失去預報，所以**在真實模式之間**依序退回；
+        #    全部都沒有時留 None，不以 0 充數（0 是「確定不下雨」的宣告）。
+        if not qpf_best:
+            for _alt in (qpf_ecmwf, qpf_gfs):
+                if _alt:
+                    qpf_best = list(_alt)
+                    break
+        if not qpf_best:
+            qpf_best = [None] * 64
+            _QPF_MISS['__base__'] = _QPF_MISS.get('__base__', 0) + 1
+
+        # 各模式對應的「最大時雨量」（強度分級用，不做累積換算）
+        maxh_best  = get_max_hourly_model('best_match')
+        # ★ 2026-11-08：ECMWF 抓取鍵是 'ecmwf_ifs'（HRES 9km）；只有它失敗時才退回 'ecmwf_ifs025'。
+        #   先前這裡寫死舊鍵 'ecmwf_ifs025' —— 正常情況下根本沒抓它，於是永遠是空的。
+        maxh_ecmwf = get_max_hourly_model('ecmwf_ifs') or get_max_hourly_model('ecmwf_ifs025')
+        maxh_gfs   = get_max_hourly_model('gfs_seamless')
+
+        # CWA 官方 QPF 疊合（共用 cwa_overlay，與非靜態表鄉鎮同一份實作）：
+        #   (A) 颱風 F-C0041＝精確格點數值 → 覆蓋各模式（真實數值，有意義）。
+        #   (B) 常態 PNG＝定量降水預報圖「色階類別」→ 僅供 CWA 模式著色，
+        #       絕不轉數字、絕不覆蓋任何模式（色塊判讀本質是類別，硬轉數字會失真）。
+        #   official_segs 只放真值段、band_segs 放色帶段 —— 前端不得以色帶取代模式加權。
+        (qpf_cwa, qpf_cwa_q, _official_segs, _band_segs,
+         _cwa_ow) = cwa_overlay(f"{county}{township}", lat, lng, len(qpf_best),
+                                routine_seg_map, routine_is_png, routine_span,
+                                typhoon_segs if is_typhoon else None,
+                                now_tpe, _today00)
+        for _idx, _v in _cwa_ow:
+            qpf_best[_idx] = qpf_ecmwf[_idx] = qpf_gfs[_idx] = _v
+
+        # 預設用 best_match（CWA優先 > ECMWF > GFS=ICON 的綜合判斷已含在模式選擇邏輯中）
+        qpf15d = qpf_best
+        #  ★ 全段皆 None（完全沒有預報）時回 None，不回 0 ——
+        #    0 會被前端與警戒邏輯讀成「預報不會下雨」。
+        def _dsum(seq):
+            vv = [v for v in seq if v is not None]
+            return round(sum(vv), 1) if vv else None
+        daily  = [_dsum(qpf15d[i*4:(i+1)*4]) for i in range(16)]
+
+        # PoP 序列（28個6h時段=7天）
+        pop_6h = get_pop_6h_series(township, pop3d, pop7d, base_dt, num_segs=28,
+                                   county=county)
+
+        # ETR2%各6h
+        seg_etr_pct = [round(min(qpf15d[i]/alert_6h*100,300),1)
+                       if (alert_6h > 0 and i < len(qpf15d)
+                           and qpf15d[i] is not None) else None
+                       for i in range(8)]
+
+        # S* 風險分數（各6h時段，使用3h或6h QPF + PoP）
+        # etr_pct_now = 現況ETR2%（百分比，如 110 = 110%）
+        # ★★ 2026-10-07 修正：etr2_pct 在上方（_pct_raw * 100）已經轉成百分比，
+        #   這裡再乘一次 100 會變成 3580 這種值。calc_risk_score 的分級是
+        #   「<70 / 70~130 / >130」，吃到 3580 時 L = 4+(3580-130)/10 = 349，
+        #   風險分數整個被放大約 100 倍。這是既有錯誤，與這幾天的改動無關，
+        #   但影響每一個鄉鎮的風險指標，必須一起修。
+        etr_pct_now = etr2_pct
+        risk_score_list = []    # 各時段的 S*
+        risk_level_list = []    # 各時段的等級文字
+        risk_color_list = []    # 各時段的顏色
+        for i, pp in enumerate(pop_6h):
+            qpf_seg = qpf15d[i] if i < len(qpf15d) else None
+            #  沒有預報就算不出風險分數（填 0 等於宣告「不會下雨」）
+            score = (None if qpf_seg is None
+                     else calc_risk_score(etr_pct_now, qpf_seg, pp, n_hours=6))
+            level, color = get_risk_level(score)
+            risk_score_list.append(score)
+            risk_level_list.append(level)
+            risk_color_list.append(color)
+
+        out_towns.append({
+            'county':county,'township':township,
+            'lat':round(lat,4),'lng':round(lng,4),
+            'alert_val':alert_v,'alert_6h':alert_6h,
+            'rain_24h':rain_24h,'rain_6h':rain_6h,
+            'rain_2d':rain_2d,'rain_3d':rain_3d,
+            'etr2':etr2_val,'etr2_pct':etr2_pct,
+            'etr2_src':etr2_src,'etr2_alert':etr2_alert,'etr2_prev':etr2_prev,
+            'slope_regions':slope_regions,
+            'qpf_15d':qpf15d,'daily_qpf':daily,
+            'seg_etr_pct':seg_etr_pct,
+            'qpf_24h': _dsum(qpf_best[:4]),
+            'qpf_48h': _dsum(qpf_best[:8]),
+            'pop_6h':pop_6h,
+            'risk_score': risk_score_list,
+            'risk_level': risk_level_list,
+            'qpf_best':  qpf_best,
+            'qpf_ecmwf': qpf_ecmwf,
+            'qpf_gfs':   qpf_gfs,
+            # ── 新增模式 ──
+            'qpf_jma':   get_qpf_model('jma_seamless'),
+            'qpf_aifs':  get_qpf_model('ecmwf_aifs025_single'),   # AI
+            'qpf_gc':    get_qpf_model('gfs_graphcast025'),       # AI
+            # ★ 僅校驗模式：前端可切換查看，但不進 FORMOSA 融合加權
+            'qpf_icon':  get_qpf_model('icon_seamless'),
+            'qpf_kma':   get_qpf_model('kma_seamless'),
+            'qpf_gem':   get_qpf_model('gem_seamless'),
+            'qpf_ukmo':  get_qpf_model('ukmo_seamless'),
+            'qpf_mf':    get_qpf_model('meteofrance_seamless'),
+            'qpf_cma':   get_qpf_model('cma_grapes_global'),
+            'qpf_bom':   get_qpf_model('bom_access_global'),
+            # 逐時（IFS HRES 前 90h 為原生逐時，其餘為內插）
+            'hourly_ifs': (om_hourly_all.get('ecmwf_ifs') or {}).get(
+                            f"{lat:.4f}_{lng:.4f}"),
+            'qpf_hi':    apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'hi')[0],
+            'qpf_lo':    apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'lo')[0],
+            'maxh_hi':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'hi')[1],
+            'maxh_lo':   apply_ensemble_ratio(qpf_best, maxh_best, county, ens_ratios, 'lo')[1],
+            # 官方值覆蓋的段索引（CWA 常態圖判讀 + 颱風格點）
+            'official_segs': _official_segs,      # 真實數值段（已覆寫模式）
+            'band_segs':      _band_segs,         # 色帶類別段（未覆寫模式）
+            'bias_24h':  calc_bias_24h(obs.get('daily_rain', [0.0]*15), model_yday.get(f"{lat:.4f}_{lng:.4f}")),
+            # 四模式昨日值（供誤差追蹤逐來源比對；前端不直接顯示）
+            'model_yday': models_yday.get(f"{lat:.4f}_{lng:.4f}"),
+            'qpesums_1h':  qpesums_at(qp_grid, lat, lng),
+            'qpesums_24h': qp_24h.get(f"{county}{township}"),
+            'qpf_cwa':   qpf_cwa,                 # 色帶下界（著色用，勿累加）
+            'qpf_cwa_q': qpf_cwa_q,               # 可加量（色帶上界÷窗段數）
+            'qpf_1h_cwa': [],  # CWA無逐時定量降水，維持空（前端逐時圖自動退回）
+            'qpf_1h':    HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
+            'qpf_1h_p48': PAST48_CACHE.get(f"{lat:.4f}_{lng:.4f}", []),
+            'obs_1h_p48': qp_p48.get(f"{county}{township}", []),   # 官方QPESUMS逐時觀測（過去48h）
+            'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'hi'),
+            'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'lo'),
+            # 每模式獨立警特報（前端依所選模式取用；hi/lo 由 best 逐時×系集比值即時算）
+            'warn_seg':       WARN_SEG_CACHE.get('best_match', {}).get(f"{lat:.4f}_{lng:.4f}", []),
+            'warn_seg_ecmwf': _om_alias(WARN_SEG_CACHE, f"{lat:.4f}_{lng:.4f}", 'ecmwf_ifs', 'ecmwf_ifs025'),
+            'warn_seg_gfs':   WARN_SEG_CACHE.get('gfs_seamless', {}).get(f"{lat:.4f}_{lng:.4f}", []),
+            'warn_seg_hi':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'hi')),
+            'warn_seg_lo':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{lat:.4f}_{lng:.4f}", []), county, ens_ratios, 'lo')),
+            'qpf_radar_1h': radar_qpf.get(f"{county}{township}"),   # F-B0046 未來1h雷達QPF(mm)
+            'maxh_best':  maxh_best,
+            'maxh_ecmwf': maxh_ecmwf,
+            'maxh_gfs':   maxh_gfs,
+            'obs_6h':[0.0]*8,
+            'stations':  enrich_stations_with_etr2(info.get('stations', []), obs, stations, alert_v),
+            'daily_rain': _daily_rain_or_qpesums(obs, county, township, qp_daily),  # 觀測優先，無測站改用QPESUMS
+        })
+
+    # 加入「全台所有行政區」中尚未處理的：用 all_townships.json 為基準
+    #   （ETR2 由官方潛勢溪流補，見下方 _ns_etr2）
+    # 確保即使該行政區完全沒有CWA觀測站，也能用座標補上QPF預測資料
+    processed = {t['county']+t['township'] for t in out_towns}
+    all_towns = load_all_townships()
+
+    # 除錯：確認問題鄉鎮在 all_townships.json 裡是否存在，以及 key 是否被誤判為已處理
+    debug_check = [('高雄市','鳥松區'),('高雄市','前金區'),('高雄市','鹽埕區'),
+                   ('彰化縣','芬園鄉'),('臺南市','東區'),
+                   ('臺中市','中區'),('臺中市','東區'),('臺中市','南區'),('臺中市','西區')]
+    print(f"  [除錯] all_townships.json 載入筆數: {len(all_towns)}")
+    print(f"  [除錯] processed 集合大小（靜態表已處理）: {len(processed)}")
+    for c, t in debug_check:
+        key = c + t
+        in_all = any(at['county']==c and at['township']==t for at in all_towns)
+        in_processed = key in processed
+        print(f"  [除錯] {key}: all_townships中={'有' if in_all else '無'}, 已被processed標記={'是' if in_processed else '否'}")
+
+    non_static_list = []  # 待補的行政區清單（含座標）
+
+    for at in all_towns:
+        key = at['county'] + at['township']
+        if key in processed: continue
+        non_static_list.append(at)
+
+    # ★★ 2026-10-05：這條補抓路徑原本一律寫 etr2=None，於是「有官方警戒單元、
+    #   但境內沒有氣象署雨量站」的鄉鎮永遠是空白 —— 跟寒溪s同一類的漏列，
+    #   只是成因不同（不是對不到站，是這個鄉鎮根本沒進 agg_obs 的 town）。
+    #   官方潛勢溪流自帶 County/Town/AlertValue/ETR2，這裡直接用。
+    _ns_deb = {}
+    for _d in (debris_alerts or {}).values():
+        _k = (_cty_norm(_d.get('county')), _cty_norm(_d.get('town')))
+        if _k[0] and _k[1]:
+            _ns_deb.setdefault(_k, []).append(_d)
+
+    def _ns_etr2(cty, twn):
+        """回傳 (etr2, pct, alert, 明細list)；沒有官方單元回 (None,None,None,[])。"""
+        rows = _ns_deb.get((_cty_norm(cty), _cty_norm(twn))) or []
+        best = (None, None, None); det = []
+        for _d in rows:
+            _v, _a = _d.get('etr2'), _d.get('alert')
+            if _v is None or not _a or _a <= 0: continue
+            _p = _d.get('pct')
+            if _p is None: _p = round(_v / _a, 4)
+            det.append({'village': _d.get('vill') or '',
+                        'station': _d.get('station') or '',
+                        'alert': _a, 'etr2': _v, 'etr2_pct': _p, 'src': 'swcb'})
+            if best[1] is None or _p > best[1]: best = (_v, _p, _a)
+        return best[0], best[1], best[2], det
+
+    _ns_filled = 0
+
+    print(f"  非靜態表行政區（含完全無觀測站的）：{len(non_static_list)} 個，補抓 QPF...")
+    non_static_coords = [{'lat': at['lat'], 'lng': at['lng'], 'alert_val': 0} for at in non_static_list]
+
+    if non_static_coords:
+        time.sleep(3)
+        non_static_om, non_static_maxh, non_static_hourly = fetch_openmeteo(non_static_coords)
+    else:
+        non_static_om, non_static_maxh, non_static_hourly = {}, {}, {}
+
+    for i, at in enumerate(non_static_list):
+        key = at['county'] + at['township']
+        avg_lat, avg_lng = at['lat'], at['lng']
+        om_key = f"{avg_lat:.4f}_{avg_lng:.4f}"
+        obs = town_obs.get(key, {})  # 可能完全沒有觀測資料
+
+        #  ★ 與靜態表鄉鎮同一條規則：抓不到回空陣列，不以 0 充數。
+        #    原本回 [0.0]*64 —— 209 個非靜態鄉鎮因此對每個沒抓到的模式
+        #    都送出一票「確定不下雨」，在融合裡會把真實的雨量預報稀釋掉。
+        def get_ns_qpf(model_key):
+            segs = non_static_om.get(model_key, {}).get(om_key, [])
+            if not segs:
+                _QPF_MISS[model_key] = _QPF_MISS.get(model_key, 0) + 1
+                return []
+            return segs[:64]
+        def get_ns_maxh(model_key):
+            arr = non_static_maxh.get(model_key, {}).get(om_key, [])
+            return arr[:64] if arr else []
+
+        qpf_best_ns  = get_ns_qpf('best_match')
+        # ★★ 2026-11-08 根因修正：非靜態表 209 個鄉鎮（全臺 57%）原本取 'ecmwf_ifs025'，
+        #   但主抓取早已改為 'ecmwf_ifs'（舊鍵只在 HRES 失敗時才抓）→ 這 209 個鄉鎮
+        #   ECMWF 永遠是空的；JMA／AIFS／GraphCast 更是整個沒有寫出欄位。
+        #   結果：FORMOSA 在 57% 的地圖上少了 ECMWF/JMA/AIFS 三個主力成員。
+        #   兩條分支改用同一張模式對照表 OM_FIELD_KEYS（test_branch_parity.py 守門）。
+        qpf_ecmwf_ns = (non_static_om.get('ecmwf_ifs', {}).get(om_key)
+                        or non_static_om.get('ecmwf_ifs025', {}).get(om_key) or [])[:64]
+        if not qpf_ecmwf_ns:
+            _QPF_MISS['ecmwf_ifs'] = _QPF_MISS.get('ecmwf_ifs', 0) + 1
+        qpf_gfs_ns   = get_ns_qpf('gfs_seamless')
+        if not qpf_best_ns:
+            for _alt in (qpf_ecmwf_ns, qpf_gfs_ns):
+                if _alt:
+                    qpf_best_ns = list(_alt)
+                    break
+        if not qpf_best_ns:
+            qpf_best_ns = [None] * 64
+            _QPF_MISS['__base__'] = _QPF_MISS.get('__base__', 0) + 1
+        #  ★ CWA 官方疊合：與靜態表鄉鎮走同一份實作。
+        #    原本這 209 個鄉鎮一律寫死 []，等於官方預報對 57% 的地圖沒作用。
+        (qpf_cwa_ns, qpf_cwa_q_ns, _off_segs_ns, _band_segs_ns,
+         _cwa_ow_ns) = cwa_overlay(f"{at['county']}{at['township']}",
+                                   avg_lat, avg_lng, len(qpf_best_ns),
+                                   routine_seg_map, routine_is_png, routine_span,
+                                   typhoon_segs if is_typhoon else None,
+                                   now_tpe, _today00)
+        for _idx, _v in _cwa_ow_ns:
+            for _arr2 in (qpf_best_ns, qpf_ecmwf_ns, qpf_gfs_ns):
+                if _idx < len(_arr2):
+                    _arr2[_idx] = _v
+        def _dsum_ns(seq):
+            vv = [v for v in seq if v is not None]
+            return round(sum(vv), 1) if vv else None
+        daily_ns = [_dsum_ns(qpf_best_ns[d*4:(d+1)*4]) for d in range(16)]
+
+        station_list = [{'name': stations[s]['name'], 'alert_val': None,
+                          'village': f"{at['county']}{at['township']}"}
+                         for s in obs.get('stations', []) if s in stations]
+
+        # ★ 2026-10-06 撤回：此處原本也用 debris 逐潛勢溪流填 ETR2，
+        #   與鄉鎮聚合同一個錯誤來源（會納入非官方代表站）。
+        #   這些鄉鎮不在官方 159 個警戒鄉鎮內，本來就沒有官方 ETR2。
+        _ns_e2 = (None, None, None, [])
+
+        out_towns.append({
+            'county':   at['county'], 'township': at['township'],
+            'lat': avg_lat, 'lng': avg_lng,
+            'alert_val': None, 'alert_6h': None,
+            'rain_24h':  obs.get('rain_24h'),
+            'rain_6h':   obs.get('rain_6h'),
+            'rain_2d':   obs.get('rain_2d', 0.0),
+            'rain_3d':   obs.get('rain_3d', 0.0),
+            'etr2':      _ns_e2[0], 'etr2_pct': _ns_e2[1],
+            'etr2_alert': _ns_e2[2], 'etr2_src': ('swcb' if _ns_e2[0] is not None else None),
+            'slope_regions': _ns_e2[3],
+            'qpf_15d':   qpf_best_ns, 'daily_qpf': daily_ns,
+            'seg_etr_pct': [None]*8,
+            'qpf_24h': _dsum_ns(qpf_best_ns[:4]),
+            'qpf_48h': _dsum_ns(qpf_best_ns[:8]),
+            'pop_6h':   [None]*28,
+            'risk_score': [None]*28, 'risk_level': [None]*28,
+            'obs_6h':   [0.0]*8,
+            'qpf_best':  qpf_best_ns,  'qpf_ecmwf': qpf_ecmwf_ns,
+            'qpf_gfs':   qpf_gfs_ns,
+            # ★ 2026-11-08：與靜態表分支對齊（原本這三個欄位完全沒有寫出）
+            'qpf_jma':   get_ns_qpf('jma_seamless'),
+            'qpf_aifs':  get_ns_qpf('ecmwf_aifs025_single'),   # AI
+            'qpf_gc':    get_ns_qpf('gfs_graphcast025'),       # AI
+            'hourly_ifs': (non_static_hourly.get('ecmwf_ifs') or {}).get(om_key),
+            # ★ 僅校驗模式（同靜態表分支，前端可查看、不進融合）
+            'qpf_icon':  get_ns_qpf('icon_seamless'),
+            'qpf_kma':   get_ns_qpf('kma_seamless'),
+            'qpf_gem':   get_ns_qpf('gem_seamless'),
+            'qpf_ukmo':  get_ns_qpf('ukmo_seamless'),
+            'qpf_mf':    get_ns_qpf('meteofrance_seamless'),
+            'qpf_cma':   get_ns_qpf('cma_grapes_global'),
+            'qpf_bom':   get_ns_qpf('bom_access_global'),
+            'qpf_hi':    apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'hi')[0],
+            'qpf_lo':    apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'lo')[0],
+            'maxh_hi':   apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'hi')[1],
+            'maxh_lo':   apply_ensemble_ratio(qpf_best_ns, get_ns_maxh('best_match'), at['county'], ens_ratios, 'lo')[1],
+            'bias_24h':  None,
+            'qpesums_1h':  qpesums_at(qp_grid, avg_lat, avg_lng),
+            'qpesums_24h': qp_24h.get(f"{at['county']}{at['township']}"),
+            'qpf_cwa':   qpf_cwa_ns,
+            'qpf_cwa_q': qpf_cwa_q_ns,
+            'official_segs': _off_segs_ns,
+            'band_segs': _band_segs_ns,
+            'qpf_1h_cwa': [],
+            'qpf_1h':    HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
+            'qpf_1h_p48': PAST48_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
+            'obs_1h_p48': qp_p48.get(f"{at['county']}{at['township']}", []),
+            'qpf_1h_hi': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'hi'),
+            'qpf_1h_lo': apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'lo'),
+            'maxh_best': get_ns_maxh('best_match'),
+            'maxh_ecmwf': get_ns_maxh('ecmwf_ifs') or get_ns_maxh('ecmwf_ifs025'),
+            'maxh_gfs':  get_ns_maxh('gfs_seamless'),
+            'warn_seg':       WARN_SEG_CACHE.get('best_match', {}).get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
+            'warn_seg_ecmwf': _om_alias(WARN_SEG_CACHE, f"{avg_lat:.4f}_{avg_lng:.4f}", 'ecmwf_ifs', 'ecmwf_ifs025'),
+            'warn_seg_gfs':   WARN_SEG_CACHE.get('gfs_seamless', {}).get(f"{avg_lat:.4f}_{avg_lng:.4f}", []),
+            'warn_seg_hi':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'hi')),
+            'warn_seg_lo':    compute_warn_seg_from_hourly(apply_hourly_ratio(HOURLY_CACHE.get(f"{avg_lat:.4f}_{avg_lng:.4f}", []), at['county'], ens_ratios, 'lo')),
+            'qpf_radar_1h': radar_qpf.get(f"{at['county']}{at['township']}"),   # F-B0046 未來1h雷達QPF(mm)
+            'stations':  station_list,
+            'daily_rain': _daily_rain_or_qpesums(obs, county, township, qp_daily),
+        })
+
+    if _ns_filled:
+        print(f"  [稽核] 無氣象署測站但有官方警戒單元，已補 ETR2：{_ns_filled} 個鄉鎮")
+    # ════════════════════════════════════════════════════════
+    #  警戒研判（雙軌）
+    #    現況紅/黃 ＝ 水保署官方發布值（權威；欄位 off_level / off_report）
+    #    未來推估   ＝ 系統自算（ETR2＋QPF，依技術指引門檻；欄位皆冠 est_）
+    #  兩者刻意分欄，前端不得把推估值顯示成官方警戒。
+    # ════════════════════════════════════════════════════════
+    # 逐鄉鎮 QPF 查表：未來24h、以及夜間(今日19時→明日06時)窗
+    _night_a = now_tpe.replace(hour=19, minute=0, second=0, microsecond=0)
+    if now_tpe.hour >= 19:                     # 已過19時 → 指今晚剩餘至明晨06時
+        _night_a = now_tpe
+    _night_b = (_night_a + timedelta(days=1)).replace(hour=6, minute=0, second=0, microsecond=0)
+    if _night_a.hour < 19 and now_tpe.hour < 6:   # 凌晨執行 → 夜間窗指「現在→今晨06時」
+        _night_a, _night_b = now_tpe, now_tpe.replace(hour=6, minute=0, second=0, microsecond=0)
+
+    _tq, _tqn = {}, {}
+    for _t in out_towns:
+        _k = _t['county'] + _t['township']
+        if _t.get('qpf_24h') is not None: _tq[_k] = _t['qpf_24h']
+        # 夜間窗 QPF：加總與 [_night_a,_night_b) 重疊的 6h 段（段起點 = 今日 00:00 + 6h*i）
+        #   ★ 2026-11-08：原本以 base_dt（6 小時取整）當第 0 段，06 時後的每一輪
+        #     夜間窗都錯位 6~18 小時。所有 QPF 陣列的第 0 段都是今天 00:00。
+        _arr = _t.get('qpf_best') or []
+        _sum, _hit = 0.0, 0
+        for _i, _v in enumerate(_arr[:12]):
+            if _v is None: continue
+            _s = base_dt.replace(hour=0) + timedelta(hours=6 * _i)
+            _e = _s + timedelta(hours=6)
+            if _e <= _night_a or _s >= _night_b: continue
+            _ov = (min(_e, _night_b) - max(_s, _night_a)).total_seconds() / 21600.0
+            if _ov > 0: _sum += _v * _ov; _hit += 1
+        _tqn[_k] = round(_sum, 1) if _hit else None
+    print(f"  夜間窗（入夜前示警用）：{_night_a.strftime('%m/%d %H:%M')} → "
+          f"{_night_b.strftime('%m/%d %H:%M')}，{sum(1 for v in _tqn.values() if v)} 個鄉鎮有夜間QPF")
+
+    _off_d = official_alerts.get('debris', {})
+    _off_l = official_alerts.get('landslide', {})
+    _off_ok = official_alerts.get('ok', False)
+
+    # ── 土石流（逐潛勢溪流）──────────────────────────
+    if debris_alerts:
+        _n_est_y = _n_est_r = _n_night = _n_adj = 0
+        for _no, _d in debris_alerts.items():
+            _key = _d['county'] + _d['town']
+            _q24 = _tq.get(_key)
+            _qn  = _tqn.get(_key)
+            _d['qpf24'] = None if _q24 is None else round(_q24, 1)
+            _d['qpf_night'] = _qn
+            # 逐時量（近1/2/3h、無減緩、解除、再發布門檻）
+            _hm = hourly_metrics(hourly_ser, hourly_meta,
+                                 [_d.get('station'), _stn_key2(_d.get('station') or '')])
+            _d.update({k: _hm[k] for k in
+                       ('r1h', 'r2h', 'r3h', 'no_abate', 'rel_2stage', 'rel_1stage',
+                        'reissue_th1', 'reissue_th2')})
+            _d['hourly_reason'] = _hm['reason']
+            _d['hourly_station'] = _hm['station']
+            # 動態調降（雨場期間以調整後值為研判基準）
+            _adj, _lvl, _dmm = apply_dynamic_adj(_d.get('alert'), _hm['r3h'], _hm['r2h'])
+            _d['alert_adj'] = _adj if _lvl else _d.get('alert')
+            _d['adj_level'] = _lvl
+            _d['adj_mm'] = _dmm
+            if _lvl: _n_adj += 1
+            # 推估以調整後警戒值為基準（官方語意：雨場結束前皆用調整後值）
+            _est = slope_est(_d.get('etr2'), _d['alert_adj'], _q24, _qn)
+            _d.update({k: _est[k] for k in
+                       ('fc_etr2', 'fc_pct', 'est_yellow_now', 'est_red_fc',
+                        'yellow_th', 'reached_th', 'night_warn')})
+            # 官方現況（權威）
+            _o = _off_d.get(_no)
+            _d['off_level']  = _o['level'] if _o else (None if not _off_ok else '')
+            _d['off_report'] = _o['report'] if _o else ''
+            _d['off_updated'] = _o['updated'] if _o else ''
+            # 相容舊前端欄位：red/yellow 改為「官方現況」語意
+            _d['red']    = (_d['off_level'] == 'r') if _off_ok else None
+            _d['yellow'] = (_d['off_level'] == 'y') if _off_ok else None
+            if _est['est_yellow_now']: _n_est_y += 1
+            if _est['est_red_fc']:     _n_est_r += 1
+            if _est['night_warn']:     _n_night += 1
+        _or = sum(1 for _d in debris_alerts.values() if _d.get('off_level') == 'r')
+        _oy = sum(1 for _d in debris_alerts.values() if _d.get('off_level') == 'y')
+        print(f"  土石流｜官方現況 紅{_or}/黃{_oy} 條"
+              f"（{'官方值' if _off_ok else '★官方取用失敗，現況為 None'}）")
+        print(f"        ｜推估 符合黃警發布標準 {_n_est_y} 條、未來24h可能達紅 {_n_est_r} 條、"
+              f"入夜前示警 {_n_night} 條、動態調降 {_n_adj} 條")
+
+    # ── 大規模崩塌（逐警戒區）────────────────────────
+    #   警戒值優先用官方 API（會自動含新增潛勢區），缺才退回靜態明細表。
+    landslide_alerts = {}
+    if ls_warn or ls_alert_vals:
+        _claimed = set()
+        _rows = []
+        for _z in ls_warn:
+            for _i in _z.get('ids', []):
+                _rows.append((_i, _z)); _claimed.add(_i)
+        # 未顯式標編號的列：以 (縣市,鄉鎮,村里) 認領官方清單中尚未被認領的潛勢區
+        _by_loc = {}
+        for _no, _v in ls_alert_vals.items():
+            _by_loc.setdefault((_v['county'], _v['town']), []).append(_no)
+        for _z in ls_warn:
+            if _z.get('ids'): continue
+            _cand = [n for n in _by_loc.get((_z['county'], _z['town']), []) if n not in _claimed]
+            for _no in _cand[:_z.get('n_zones', 1)]:
+                _rows.append((_no, _z)); _claimed.add(_no)
+        # 官方清單有、但明細表沒對到的（例如新增 6 處）→ 仍納入，代表站留空
+        for _no in ls_alert_vals:
+            if _no not in _claimed: _rows.append((_no, None))
+
+        for _no, _z in _rows:
+            _v = ls_alert_vals.get(_no) or {}
+            _alert = _v.get('alert') or (_z.get('alert') if _z else None)
+            _cty = _v.get('county') or (_z.get('county') if _z else '')
+            _twn = _v.get('town')   or (_z.get('town')   if _z else '')
+            # ETR2：官方代表站優先，依序 精確→正規化→同鄉鎮相似→同縣市相似，
+            #        全不中才退回鄉鎮 ETR2（etr2_src 標明來源層級，前端可辨識可信度）
+            _etr, _src, _stn = None, '', ''
+            if _z:
+                _etr, _tier, _stn = resolve_station_etr2(
+                    [_z.get('station1'), _z.get('station2'),
+                     _z.get('station1_norm'), _z.get('station2_norm')],
+                    swcb_etr2, _cty, _twn)
+                if _etr is not None: _src = _tier
+            if _etr is None:
+                _t = next((t for t in out_towns
+                           if t['county'] == _cty and t['township'] == _twn), None)
+                if _t and _t.get('etr2') is not None:
+                    _etr, _src, _stn = _t['etr2'], 'town', f"{_cty}{_twn}(鄉鎮值)"
+            _key = _cty + _twn
+            _q24, _qn = _tq.get(_key), _tqn.get(_key)
+            _hm = hourly_metrics(hourly_ser, hourly_meta,
+                                 [_stn, _stn_key2(_stn or '')] +
+                                 ([_z.get('station1'), _z.get('station2')] if _z else []))
+            _adj, _lvl, _dmm = apply_dynamic_adj(_alert, _hm['r3h'], _hm['r2h'])
+            _alert_adj = _adj if _lvl else _alert
+            _est = slope_est(_etr, _alert_adj, _q24, _qn)
+            _o = _off_l.get(_no)
+            landslide_alerts[_no] = {
+                'county': _cty, 'town': _twn,
+                'village': (_z.get('village') if _z else ''),
+                'name': _v.get('name', ''),
+                'lat': _v.get('lat'), 'lng': _v.get('lng'),
+                'alert': _alert,
+                'alert_adj': _alert_adj, 'adj_level': _lvl, 'adj_mm': _dmm,
+                'alert_src': 'api' if _v.get('alert') else ('table' if _alert else None),
+                'etr2': None if _etr is None else round(_etr, 1),
+                'etr2_src': _src, 'etr2_src_name': _LS_TIER_NAME.get(_src, _src),
+                'station': _stn,
+                'forest_bureau': bool(_z.get('forest_bureau')) if _z else None,
+                'qpf24': None if _q24 is None else round(_q24, 1),
+                'qpf_night': _qn,
+                'off_level':   _o['level'] if _o else (None if not _off_ok else ''),
+                'off_report':  _o['report'] if _o else '',
+                'off_updated': _o['updated'] if _o else '',
+                'hourly_reason': _hm['reason'], 'hourly_station': _hm['station'],
+                **{k: _hm[k] for k in ('r1h', 'r2h', 'r3h', 'no_abate',
+                                       'rel_2stage', 'rel_1stage',
+                                       'reissue_th1', 'reissue_th2')},
+                **{k: _est[k] for k in ('pct', 'fc_etr2', 'fc_pct', 'est_yellow_now',
+                                        'est_red_fc', 'yellow_th', 'reached_th', 'night_warn')},
+            }
+        _lr = sum(1 for v in landslide_alerts.values() if v['off_level'] == 'r')
+        _ly = sum(1 for v in landslide_alerts.values() if v['off_level'] == 'y')
+        _tiers = {}
+        for v in landslide_alerts.values():
+            _tiers[v['etr2_src'] or 'none'] = _tiers.get(v['etr2_src'] or 'none', 0) + 1
+        print(f"  大規模崩塌｜{len(landslide_alerts)} 處警戒區"
+              f"（警戒值來源 API {sum(1 for v in landslide_alerts.values() if v['alert_src']=='api')}"
+              f"／靜態表 {sum(1 for v in landslide_alerts.values() if v['alert_src']=='table')}）")
+        print(f"        ｜官方現況 紅{_lr}/黃{_ly} 處")
+        print(f"        ｜ETR2 來源：" + "、".join(
+            f"{_LS_TIER_NAME.get(k, k)} {n}處" for k, n in sorted(_tiers.items(), key=lambda x: -x[1])))
+        print(f"        ｜推估 符合黃警發布標準 "
+              f"{sum(1 for v in landslide_alerts.values() if v['est_yellow_now'])} 處、"
+              f"未來24h可能達紅 {sum(1 for v in landslide_alerts.values() if v['est_red_fc'])} 處")
+
+    # ── 雨勢較大地區（縣市級，日累積≥150mm）──────────
+    #   颱風面板用；區分「觀測」與「預測」，不混為一談。
+    heavy_counties = {}
+    for _t in out_towns:
+        _c = _t['county']
+        # daily_rain[0] ＝今天（見 get_daily_rain_array 註解），非 [-1]
+        _dr = _t.get('daily_rain') or []
+        # daily_qpf[i] ＝自 base_time 起第 i 個滾動24h 區塊（非日曆日，故以窗序標示）
+        _dq = _t.get('daily_qpf') or []
+        _obs_today = _dr[0] if _dr else None
+        _cur = heavy_counties.setdefault(_c, {'obs_max': None, 'obs_town': '',
+                                              'fc_max': None, 'fc_town': '', 'fc_win': None})
+        if _obs_today is not None and (_cur['obs_max'] is None or _obs_today > _cur['obs_max']):
+            _cur['obs_max'], _cur['obs_town'] = round(_obs_today, 1), _t['township']
+        for _i, _v in enumerate(_dq[:3]):
+            if _v is None: continue
+            if _cur['fc_max'] is None or _v > _cur['fc_max']:
+                _cur['fc_max'], _cur['fc_town'] = round(_v, 1), _t['township']
+                _cur['fc_win'] = _i          # 0＝未來24h、1＝24–48h、2＝48–72h
+    heavy_rain_counties = {c: d for c, d in heavy_counties.items()
+                           if (d['obs_max'] or 0) >= HEAVY_RAIN_COUNTY_TH
+                           or (d['fc_max'] or 0) >= HEAVY_RAIN_COUNTY_TH}
+    print(f"  雨勢較大地區（日累積≥{HEAVY_RAIN_COUNTY_TH:.0f}mm）："
+          f"{len(heavy_rain_counties)} 縣市 "
+          f"{'、'.join(sorted(heavy_rain_counties)) if heavy_rain_counties else '（無）'}")
+
+    output={
+
+        'base_time':base_time_str,
+        'generated_at':now_tpe.strftime('%Y-%m-%dT%H:%M:%S'),
+        'source':'CWA_OBS+POP' if stations else 'DEMO',
+        'cwa_qpf_active': bool(is_typhoon or routine_seg_map),  # True=前48h已覆蓋CWA官方QPF
+        'radar_qpf_time': radar_dt,   # F-B0046 未來1h雷達QPF 發布時間（空=本次未取得）
+        'typhoon_track': typhoon_track,  # W-C0034-005 颱風過去軌跡＋預報路徑（無颱風＝[]）
+        'typhoon_warn': typhoon_warn,    # W-C0034-001 官方警報單原文（無警報＝[]）
+        # 鄉鎮風力預報（F-D0047，逐3小時）：{縣市:{鄉鎮:[{start,end,ws,bf}]}}
+        #   ws＝風速(m/s)、bf＝蒲福風級（官方直接提供，不需自行換算）
+        #   ★ 官方鄉鎮級預報**無陣風欄位**，故陣風另存於 gust_fcst（僅颱風警報期間有值）
+        'wind_fcst': WIND_FCST,
+        'gust_fcst': gust_fcst,          # 颱風警報期間各地區風力預測（無警報＝{}）
+        # 鄉鎮氣溫預報（F-D0047，逐3小時）：{縣市:{鄉鎮:[{start,end,t,tmax,tmin}]}}
+        'temp_fcst': TEMP_FCST,
+        # 鄉鎮沿海浪高（F-D0047-095，僅 120 個沿海預報點；內陸無值須留白）
+        'wave_fcst': wave_fcst,
+        # 鄉鎮潮汐預報（F-A0021-001）：滿潮/乾潮時刻、潮高(cm,相對當地均潮位)、潮差級別
+        #   ★ 暴潮溢淹風險＝滿潮 × 大浪同時發生，故需與 wave_fcst 併看
+        'tide_fcst': tide_fcst,
+        # ★ 全臺 CWA 測站清單（含座標、海拔、今日累積）：
+        #   townships[].stations 只含「警戒表」裡的站，且站名比對不到就沒座標
+        #   （實測 514/891 無座標）。測站圖層需要的是完整清單，故另行輸出。
+        'all_stations': all_stations_out,
+        # 逐日校驗摘要（完整記錄在 verify.json；此處放近 7 日彙整供前端快速取用）
+        'verify_recent': _verify_recent,
+        # 雷達定量降雨（鄉鎮多邊形聚合；mean=區內平均、max=區內最大）
+        'radar_qpe': radar_qpe, 'radar_qpe_time': radar_qpe_time,
+        'radar_qpf_grid': radar_qpf_grid, 'radar_qpf_time': radar_qpf_time2,
+        # 預報員研判之地區雨量區間（F-C0034，豪雨/颱風事件期間才發布）
+        #   {24h|total: {title, valid, areas:{地區:{flat|mountain:{lo,hi,hl}}}}}
+        #   ★ 縣市級區間，供上下界參考與比對；不覆蓋逐站 ETR2 等精細資料
+        'forecaster_precip': fc_precip,
+        # 雙軌警戒：off_* ＝官方發布（權威）、est_* ＝系統推估（前端須標示）
+        'debris_alerts': debris_alerts,        # 土石流逐潛勢溪流
+        'landslide_alerts': landslide_alerts,  # 大規模崩塌逐警戒區
+        'official_alert_meta': {              # 官方警戒取用狀態（前端據此決定是否顯示「官方」字樣）
+            'ok': official_alerts.get('ok', False),
+            'report_id': official_alerts.get('report_id', ''),
+            'updated': official_alerts.get('updated', ''),
+            'src': SWCB_ALERT_URL,
+        },
+        'heavy_rain_counties': heavy_rain_counties,  # 雨勢較大地區（縣市級，日累積≥150mm）
+        'heavy_rain_th': HEAVY_RAIN_COUNTY_TH,
+        # 逐時序列暖機狀態：前端據此把未達長度的判定顯示為「資料不足」而非「未達標」
+        'hourly_meta': hourly_meta,
+        # 模式：typhoon(精確格點) / typhoon+routine_png(颱風段精確+其餘段圖判讀) /
+        #       routine(格點) / routine_png(全圖判讀近似)
+        'cwa_qpf_mode': (
+            ('typhoon+routine_png' if (routine_seg_map and routine_is_png) else 'typhoon')
+            if is_typhoon else
+            ('routine_png' if routine_is_png else 'routine') if routine_seg_map else None),
+        'cwa_qpf_segs': sorted(routine_seg_map.keys()) if routine_seg_map else [],
+        'cwa_qpf_windows': (routine_qpf.get('windows') if routine_qpf else []) or [],
+        # ★ 2026-11-08 本次採用的官方定量降水預報發布班次（無＝本次沒取得常態 QPF）
+        'cwa_qpf_issued': cwa_issued_of((routine_qpf.get('windows') if routine_qpf else []) or []),
+        'cwa_qpf_reg': list(CWA_PNG_REG),      # ★ 每張官方圖的對位自檢結果（可稽核）
+        'official_warn': official_warn,  # 官方現行警特報（W-C0033-001，縣市級）
+        'township_count':len(out_towns),
+        'townships':out_towns,
+    }
+    # 無站觀測鄉鎮：以 QPESUMS 補 rain_24h（標記來源，前端可辨識）
+    qp_filled = 0
+    for t in out_towns:
+        if t.get('rain_24h') is None and t.get('qpesums_24h') is not None:
+            t['rain_24h'] = t['qpesums_24h']
+            t['obs_src'] = 'qpesums'
+            qp_filled += 1
+    if qp_filled: print(f"  QPESUMS 補值：{qp_filled} 個無站鄉鎮的 rain_24h")
+
+    # ★ 鄰近內插：QPESUMS 已停用，改由「鄰近有觀測的鄉鎮」補無測站者的逐日雨量。
+    #   「無測站」不等於「沒下雨」—— 原本落到 [0.0]*15 會讓圖上顯示 0mm，
+    #   與實際降雨不符（高雄鳥松/前金/鹽埕、臺中中區、臺南東區等約 200 個）。
+    #   ★ 補的是推估值：標記 obs_src='neighbor'，前端須標示為推估。
+    nb_filled = 0
+    for t in out_towns:
+        dr = t.get('daily_rain')
+        has = bool(dr) and any((x or 0) > 0 for x in dr)
+        if has:
+            continue
+        est, n_used = _neighbor_daily_rain(t.get('lat'), t.get('lng'), out_towns)
+        if not est or not any(x > 0 for x in est):
+            continue
+        t['daily_rain'] = est
+        t['obs_src'] = 'neighbor'
+        t['obs_est_n'] = n_used
+        if t.get('rain_24h') is None:
+            t['rain_24h'] = est[0]
+        nb_filled += 1
+    if nb_filled:
+        print(f"  鄰近內插補值：{nb_filled} 個無測站鄉鎮的逐日雨量（推估，前端標示）")
+
+    # ── 誤差追蹤（CMPF 第二階段）──────────────────────
+    #   累積「逐來源 × 逐地形」的預測誤差；現階段只記錄與呈現，
+    #   不回饋修正預測。待樣本足夠（短期7天/長期30天）再啟用動態加權。
+    try:
+        _zones = {}
+        if os.path.exists(TERRAIN_FILE):
+            with open(TERRAIN_FILE, encoding='utf-8') as _f:
+                _tz = json.load(_f)
+            _zones = _tz.get('zones', _tz) if isinstance(_tz, dict) else {}
+        # 昨日採用的權重：取自上一輪 data.json，評的才是當時真正播出的那組
+        _prev_w = {}
+        try:
+            if os.path.exists('data.json'):
+                with open('data.json', encoding='utf-8') as _f:
+                    _pw = json.load(_f).get('adaptive_blend') or {}
+                _prev_w = {z: (v.get('models') or {}) for z, v in _pw.items()}
+        except Exception:
+            _prev_w = {}
+        # 上一輪的逐地形誤差表：偏差校正要用「發布當下」的那一組，
+        #   用今天剛算出來的會是事後諸葛，分數會虛高。
+        _prev_sk = {}
+        try:
+            if os.path.exists('data.json'):
+                with open('data.json', encoding='utf-8') as _f:
+                    _prev_sk = json.load(_f).get('model_skill') or {}
+        except Exception:
+            _prev_sk = {}
+        # ★ 預報存檔：先讀「昨天之前存過的」來算型態一致性，再寫入這一報。
+        #   順序不能顛倒 —— 先寫入會把這一報也算進相鄰兩報的比較裡，
+        #   但這一報還沒有對應的觀測，比出來的數字沒有意義。
+        try:
+            _fclog_old = {'towns': [], 'issues': {}}
+            if os.path.exists(FORECAST_LOG_FILE):
+                with open(FORECAST_LOG_FILE, encoding='utf-8') as _f:
+                    _fclog_old = json.load(_f) or _fclog_old
+            _yd = (now_tpe - timedelta(days=1)).strftime('%Y-%m-%d')
+            _obs_vec = None
+            if (_fclog_old.get('towns') or []) == [_fclog_town_key(t) for t in out_towns]:
+                _obs_vec = [((t.get('daily_rain') or [None, None])[1]) for t in out_towns]
+            _cons = forecast_consistency(_fclog_old, _yd, _obs_vec)
+            if _cons:
+                output['forecast_consistency'] = {'valid': _yd, 'models': _cons}
+                _bad = sorted(_cons.items(),
+                              key=lambda kv: -(kv[1].get('excess') or 0))[:3]
+                print(f"  型態一致性（{_yd}）：" + "、".join(
+                    f"{m} 跳動{v['jump']:.2f}/超額{v.get('excess', 0):+.2f}"
+                    + (f"/修正{v['gain']:+.2f}" if v.get('gain') is not None else "")
+                    for m, v in _bad))
+        except Exception as _e:
+            print(f"  型態一致性計算略過：{_e}")
+        try:
+            update_forecast_log(out_towns, base_dt, now_tpe)
+        except Exception as _e:
+            print(f"  預報存檔略過：{_e}")
+        _skill = update_model_skill(out_towns, _zones, now_tpe, _prev_w, _prev_sk)
+        # 校驗（POD/FAR/CSI）：與誤差追蹤共用同一批樣本
+        _verify = update_verify(out_towns, _zones, now_tpe, hourly_ser, _prev_w, _prev_sk)
+        _verify_recent = _verify_summary(_verify)
+        output['model_skill'] = summarize_model_skill(_skill, now_tpe)
+        # ★ 自適應選用：逐地形決定「用哪些模式、各給多少權重」
+        _pattern = zone_pattern_skill(_verify, now_tpe) if _verify else {}
+        # 前端 F-c 自動算權重要用同一份型態技術（誤報率、ETS），一併輸出
+        output['pattern_skill'] = _pattern
+        output['adaptive_blend'] = build_adaptive_blend(
+            output['model_skill'], _verify_recent, _pattern)
+        for _z, _v in (output['adaptive_blend'] or {}).items():
+            _ms = _v.get('models') or {}
+            _top = sorted(_ms.items(), key=lambda x: -x[1])[:4]
+            print(f"  自適應融合｜{_z}：採用 {len(_ms)} 個模式"
+                  + (f"、排除 {len(_v.get('excluded') or [])} 個" if _v.get('excluded') else "")
+                  + "　" + "、".join(f"{m}×{w}" for m, w in _top))
+        # 累積進度：讓前端能說明「還要多久權重才會分化」
+        _days_all = sorted((_skill.get('days') or {}).keys())
+        _n7 = sum(1 for d in _days_all
+                  if d >= (now_tpe - timedelta(days=7)).strftime('%Y-%m-%d'))
+        _n30 = sum(1 for d in _days_all
+                   if d >= (now_tpe - timedelta(days=30)).strftime('%Y-%m-%d'))
+        output['skill_progress'] = {
+            'days_total': len(_days_all), 'days_7': _n7, 'days_30': _n30,
+            'first': _days_all[0] if _days_all else '',
+            'last': _days_all[-1] if _days_all else '',
+            # 樣本足夠與否：任一地形任一模式的 n≥10 才會啟用差異化權重
+            'active': any(sp.get('n', 0) >= 10
+                          for z in (output['model_skill'] or {}).values()
+                          for m in z.values() for sp in m.values())}
+        if output['model_skill']:
+            for _z, _mm in sorted(output['model_skill'].items()):
+                _parts = []
+                for _m, _sp in sorted(_mm.items()):
+                    #  ★★ 2026-10-11：必須印出「實際用來定權重的那一份」。
+                    #    build_adaptive_blend 用 decay（衰減加權），這裡原本印
+                    #    short（7 天窗），兩者差距可以很大 —— 2026-10-11 的 gem
+                    #    是 short 0.20 / decay 0.88，log 顯示它多報 5 倍，
+                    #    權重卻按「準」給到全場最高 1.2。
+                    #    log 與決策用不同的數字，等於權重無法稽核。
+                    _s = _sp.get('decay') or _sp.get('short') or _sp.get('long')
+                    if _s:
+                        _w7 = _sp.get('short') or {}
+                        _alt = (f"／7天{_w7['bias']:.2f}"
+                                if _w7.get('bias') is not None
+                                and abs(_w7['bias'] - _s['bias']) > 0.3 else '')
+                        _parts.append(f"{_m} 偏差{_s['bias']:.2f}{_alt}"
+                                      f"/MAE{_s['mae']:.0f}/n{_s.get('n', 0)}")
+                if _parts:
+                    print(f"    {_z}（偏差比＝衰減加權，即定權重所用；"
+                          f"與 7 天窗差 >0.3 時並列）：{'、'.join(_parts)}")
+    except Exception as _e:
+        print(f"  誤差追蹤失敗（不影響其他）：{_e}")
+
+    # ★ 模式缺資料一覽（抓不到就是沒有，不再偽造；此處必須讓它可見）
+    if _QPF_MISS:
+        _nt = len(out_towns) or 1
+        #  ★ 分兩類，不可混為一談：
+        #    本輪未排程 —— B 組輪流抓（ICON/KMA/CMA/BOM），這是設計，不是故障。
+        #    抓取失敗 —— 排程要抓卻沒拿到，那才是要追的。
+        _sched, _unsched = [], []
+        for _mk, _c in sorted(_QPF_MISS.items(), key=lambda x: -x[1]):
+            if _mk == '__base__':
+                print(f'  ★★ 基準序列（best/ecmwf/gfs 全無）：{_c} 個鄉鎮完全沒有預報')
+            elif _mk in OM_MODELS:
+                _sched.append((_mk, _c))
+            else:
+                _unsched.append((_mk, _c))
+        if _sched:
+            print('  ⚠ 排程要抓卻失敗（已留空，不偽造、不以 0 充數）：')
+            for _mk, _c in _sched:
+                print(f'     {_mk}：{_c} 個鄉鎮 / {_nt}（{_c/_nt:.0%}）')
+        if _unsched:
+            print('  · 本輪未排程（B 組輪流抓，非故障）：'
+                  + '、'.join(f'{_mk}×{_c}' for _mk, _c in _unsched))
+    output['qpf_missing'] = dict(_QPF_MISS)
+
+    output['ens_active'] = len(ens_ratios) > 0  # 系集比值是否成功抓取
+    # 全臺偏差比摘要（模式昨日≥10mm的鄉鎮之中位數）
+    bias_vals = sorted(t['bias_24h'] for t in out_towns if t.get('bias_24h') is not None)
+    output['bias_24h_median'] = bias_vals[len(bias_vals)//2] if bias_vals else None
+    output['bias_24h_n'] = len(bias_vals)
+
+    # ★ 寫檔前健全性檢查：CWA 開放資料偶發大規模連線失敗（實測 2026-09-01
+    #   幾乎所有請求 Connection reset），此時各欄位會大量為空。若照常寫出，
+    #   等於用殘缺資料覆蓋前一輪的完整資料 —— 對防災系統而言比「不更新」更危險。
+    #   故與前一輪比對關鍵指標，明顯退化就中止寫檔，保留前一份。
+    _prev = None
+    if os.path.exists(OUTPUT_FILE):
+        try:
+            with open(OUTPUT_FILE, encoding='utf-8') as _f:
+                _prev = json.load(_f)
+        except Exception:
+            _prev = None
+
+    def _n_etr2(d):
+        return sum(1 for t in (d.get('townships') or [])
+                   if t.get('etr2_pct') is not None) if d else 0
+
+    # ★ 逐圖層保留：某一層抓取失敗時，沿用前一輪的值而非留空。
+    #   CWA 常有個別產品短暫不可用；整輪中止太粗暴（其他層明明是好的），
+    #   留空又會讓該圖層在前端整個消失。折衷是「保留上一份並標記時間」。
+    if _prev:
+        _keep = []
+        for _k in ('wave_fcst', 'tide_fcst', 'forecaster_precip',
+                   'wind_fcst', 'temp_fcst', 'gust_fcst'):
+            _now_v = output.get(_k)
+            _old_v = _prev.get(_k)
+            _n_now = sum(len(v) for v in _now_v.values()) if isinstance(_now_v, dict) \
+                     and _now_v and isinstance(next(iter(_now_v.values())), dict) \
+                     else len(_now_v or {})
+            _n_old = sum(len(v) for v in _old_v.values()) if isinstance(_old_v, dict) \
+                     and _old_v and isinstance(next(iter(_old_v.values())), dict) \
+                     else len(_old_v or {})
+            if _n_now == 0 and _n_old > 0:
+                output[_k] = _old_v
+                output.setdefault('stale_layers', {})[_k] = _prev.get('base_time', '')
+                _keep.append(f"{_k}({_n_old})")
+        if _keep:
+            print(f"  ⚠ 沿用前一輪資料（本輪該層抓取失敗）：{'、'.join(_keep)}")
+            print(f"    前端會標示為「非本次更新」")
+
+    _cur_etr2 = sum(1 for t in out_towns if t.get('etr2_pct') is not None)
+    _abort = []
+
+    # ★ 絕對門檻優先（不可只用「與前一輪比較」）：
+    #   實測 2026-09-01 連兩輪失敗 —— 第一輪寫出 ETR2=0 的壞資料後，
+    #   第二輪拿它當基準，相對比較就永遠不會觸發，壞資料反而變成新常態。
+    #   靜態警戒表有 159 個鄉鎮，正常情況下絕大多數應有 ETR2 值。
+    _static_n = len(alert_table) if alert_table else 159
+    if _cur_etr2 < max(20, _static_n * 0.25):
+        _abort.append(f"ETR2 鄉鎮數過低：{_cur_etr2}（靜態表 {_static_n}）")
+    if not stations:
+        _abort.append("本輪未取得任何觀測站資料")
+    # PoP 覆蓋率（正常 700+；逐縣市部分失敗時會明顯偏低）
+    if len(pop3d) and len(pop3d) < 300:
+        _abort.append(f"PoP 覆蓋率過低：{len(pop3d)} 鄉鎮")
+    # 風力/氣溫（正常 368）
+    if WIND_FCST and sum(len(v) for v in WIND_FCST.values()) < 200:
+        _abort.append(f"風力預報覆蓋率過低："
+                      f"{sum(len(v) for v in WIND_FCST.values())} 鄉鎮")
+
+    # 其次才是與前一輪的相對比較（抓漸進式退化）
+    if _prev and not _abort:
+        _pe = _n_etr2(_prev)
+        if _pe >= 50 and _cur_etr2 < _pe * 0.3:
+            _abort.append(f"ETR2 鄉鎮數 {_pe} → {_cur_etr2}")
+    if _abort:
+        print("\n★★ 中止寫檔：資料明顯退化，保留前一輪 data.json")
+        for _a in _abort:
+            print(f"   - {_a}")
+        print("   （多為 CWA 開放資料暫時性故障，下次排程會自動恢復）")
+        return
+
+    # ★ 官方 ETR2 為準（覆寫）＋ 掛上官方歷史。必須在寫檔前。
+    try:
+        apply_official_etr2(output.get('townships') or [], now_tpe, history)
+    except Exception as _e:
+        print(f"  官方 ETR2 套用失敗（不影響本輪）：{_e}")
+
+    with open(OUTPUT_FILE,'w',encoding='utf-8') as f:
+        json.dump(output,f,ensure_ascii=False,separators=(',',':'))
+    # ★ 欄位自我檢查：列出本版應有的欄位與其筆數，讓「程式已更新但沒部署」
+    #   或「某支 API 全數失敗」能從 log 一眼看出，不必等前端回報。
+    _chk = [('wind_fcst', WIND_FCST), ('temp_fcst', TEMP_FCST),
+            ('wave_fcst', wave_fcst), ('gust_fcst', gust_fcst),
+            ('tide_fcst', tide_fcst), ('forecaster_precip', fc_precip)]
+    _msg = []
+    for _k, _v in _chk:
+        _n = sum(len(x) for x in _v.values()) if isinstance(_v, dict) and _v \
+             and isinstance(next(iter(_v.values())), dict) else len(_v or {})
+        _msg.append(f"{_k}={_n}")
+    print(f"  新增欄位：{'、'.join(_msg)}")
+    if not wave_fcst:
+        print(f"  ※ wave_fcst 為空：{WAVE_EP} 取用失敗或沿海鄉鎮清單缺漏")
+
+    print(f"\n完成：{OUTPUT_FILE}（{os.path.getsize(OUTPUT_FILE)//1024}KB）")
+    print(f"  鄉鎮：{len(out_towns)}，PoP3d：{len(pop3d)}，PoP7d：{len(pop7d)}")
+    if output['bias_24h_median'] is not None:
+        print(f"  昨日偏差比中位數：{output['bias_24h_median']}（n={output['bias_24h_n']}）")
+
+    # ── 預測快照存檔（校驗資料庫基礎；保留60天） ──
+    try:
+        os.makedirs('archive', exist_ok=True)
+        snap_name = f"archive/{now_tpe.strftime('%Y%m%d%H')}.json"
+        with open(snap_name,'w',encoding='utf-8') as f:
+            json.dump(output,f,ensure_ascii=False,separators=(',',':'))
+        cutoff = (now_tpe - timedelta(days=60)).strftime('%Y%m%d%H')
+        removed = 0
+        for fn in os.listdir('archive'):
+            if fn.endswith('.json') and fn[:-5] < cutoff:
+                os.remove(os.path.join('archive', fn)); removed += 1
+        print(f"  快照：{snap_name}（清除{removed}個過期檔）")
+    except Exception as e:
+        print(f"  快照存檔失敗（不影響主流程）：{e}")
+
+if __name__=='__main__':
+    main()

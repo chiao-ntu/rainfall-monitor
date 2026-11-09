@@ -80,7 +80,7 @@ jobs:
                    terrain_zones_4class.json terrain_relief.json terrain_relief.png \
                    landslide_warning_stations.json coast_dist_final.json \
                    roads_major.geojson roads_detail.geojson shelters.geojson \
-                   transport.json schools.json robots.txt; do
+                   transport.json schools.json facilities.json robots.txt; do
             [ -f "$f" ] && cp "$f" "pub/$f" || true
           done
           [ -d vendor ] && mkdir -p pub/vendor && cp -r vendor/. pub/vendor/ || true
