@@ -1,0 +1,46 @@
+name: 下載官方開放資料（圖層原始檔）
+
+# 下載警政署、健保署、各捷運／臺鐵／高鐵出入口與站內設施等官方資料到 opendata/raw/。
+# 這些資料變動慢：每月 1 日自動跑一次；需要時在 Actions 頁面手動執行（Run workflow）。
+# TDX 金鑰（選填）：Settings → Secrets → Actions 新增 TDX_CLIENT_ID、TDX_CLIENT_SECRET。
+on:
+  schedule:
+    - cron: '17 19 1 * *'      # 每月 2 日 03:17（臺灣時間）
+  workflow_dispatch:
+
+concurrency:
+  group: fetch-opendata
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 下載
+        env:
+          TDX_CLIENT_ID: ${{ secrets.TDX_CLIENT_ID }}
+          TDX_CLIENT_SECRET: ${{ secrets.TDX_CLIENT_SECRET }}
+        run: python fetch_opendata.py
+      - name: 下載結果
+        run: python -c "import json;m=json.load(open('opendata/raw/manifest.json'));[print(k,v.get('status'),v.get('n','')) for g in ('datagov','tdx') for k,v in m[g].items()]"
+      - name: Commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A opendata/raw
+          if git diff --cached --quiet; then echo "無變更"; exit 0; fi
+          git commit -m "官方開放資料下載 $(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M') TST [skip ci]"
+          for i in 1 2 3 4 5; do
+            if git push; then echo "push 成功"; exit 0; fi
+            git pull --rebase --autostash || true
+            sleep $((i * 5))
+          done
+          exit 1
