@@ -81,6 +81,9 @@ jobs:
           # 快照（archive/ 由 fetch_rainfall 自行輪替與清理）
           [ -d archive ] && git add -A archive
           [ -f cwa_qpf_prev.json ] && git add cwa_qpf_prev.json   # 上一報定量降水窗（補新報有效起點前的空窗，跨輪必須保留）
+          # ★ 2026-11-12：大崩警戒值備援（每次 API 成功即覆寫）與水保署 API 停住偵測狀態
+          [ -f ls_alert_backup.json ] && git add ls_alert_backup.json
+          [ -f swcb_state_rain.json ] && git add swcb_state_rain.json
           [ -d cwa_qpf_src ] && git add -A cwa_qpf_src   # 判讀所用的氣象署定量降水預報原圖（每輪覆蓋，供比對）
 
           if git diff --cached --quiet; then

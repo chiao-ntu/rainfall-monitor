@@ -57,6 +57,7 @@ jobs:
           [ -f radar.json ]       && git add radar.json        # 雷達1h獨立檔（每小時刷新）
           [ -f rain_hourly.json ] && git add rain_hourly.json  # 逐時雨量滾動序列 168h
           [ -f etr2_now.json ]    && git add etr2_now.json     # ETR2 官方現值（鄉鎮級）
+          [ -f swcb_state_qpe.json ] && git add swcb_state_qpe.json  # 水保署 API 停住偵測狀態（本流程專屬）
           # ★ 2026-11-08 補上：官方 ETR2 逐段歷史（本腳本是唯一寫入者、每輪先讀回再累加）。
           #   先前漏 commit → 每 10 分鐘歸零，過去曲線只能靠逐時序列重建。
           [ -f etr2_history.json ] && git add etr2_history.json  # 官方 ETR2 逐段歷史
