@@ -1,0 +1,759 @@
+{
+ "saved": "2026-11-12T15:26",
+ "src": "https://246.ardswc.gov.tw/WebService/GetLSCountyTownAlertValueList.ashx",
+ "n": 94,
+ "values": {
+  "新北LL001": {
+   "alert": 800.0,
+   "name": "新北市-石碇區-T001(大崙山)",
+   "county": "新北市",
+   "town": "石碇區",
+   "lat": null,
+   "lng": null
+  },
+  "桃市LL001": {
+   "alert": 850.0,
+   "name": "桃園市-復興區-D021(義興)",
+   "county": "桃園市",
+   "town": "復興區",
+   "lat": null,
+   "lng": null
+  },
+  "桃市LL003": {
+   "alert": 700.0,
+   "name": "桃園市-復興區-D052(上巴陵)",
+   "county": "桃園市",
+   "town": "復興區",
+   "lat": null,
+   "lng": null
+  },
+  "竹縣LL001": {
+   "alert": 400.0,
+   "name": "新竹縣-五峰鄉-D024(茅圃)",
+   "county": "新竹縣",
+   "town": "五峰鄉",
+   "lat": null,
+   "lng": null
+  },
+  "竹縣LL005": {
+   "alert": 350.0,
+   "name": "新竹縣-尖石鄉-D052(梅花)",
+   "county": "新竹縣",
+   "town": "尖石鄉",
+   "lat": null,
+   "lng": null
+  },
+  "竹縣LL003": {
+   "alert": 650.0,
+   "name": "新竹縣-尖石鄉-D077(泰崗)",
+   "county": "新竹縣",
+   "town": "尖石鄉",
+   "lat": null,
+   "lng": null
+  },
+  "竹縣LL002": {
+   "alert": 650.0,
+   "name": "新竹縣-尖石鄉-D097(鎮西堡)",
+   "county": "新竹縣",
+   "town": "尖石鄉",
+   "lat": null,
+   "lng": null
+  },
+  "宜縣LL001": {
+   "alert": 800.0,
+   "name": "宜蘭縣-大同鄉-T002(蘭台)",
+   "county": "宜蘭縣",
+   "town": "大同鄉",
+   "lat": null,
+   "lng": null
+  },
+  "中市LL001": {
+   "alert": 400.0,
+   "name": "臺中市-和平區-D016(達觀)",
+   "county": "臺中市",
+   "town": "和平區",
+   "lat": null,
+   "lng": null
+  },
+  "中市LL007": {
+   "alert": 600.0,
+   "name": "臺中市-和平區-D036(松茂)",
+   "county": "臺中市",
+   "town": "和平區",
+   "lat": null,
+   "lng": null
+  },
+  "中市LL004": {
+   "alert": 600.0,
+   "name": "臺中市-和平區-D052(梨山)",
+   "county": "臺中市",
+   "town": "和平區",
+   "lat": null,
+   "lng": null
+  },
+  "中市LL002": {
+   "alert": 600.0,
+   "name": "臺中市-和平區-T003(新佳陽)",
+   "county": "臺中市",
+   "town": "和平區",
+   "lat": null,
+   "lng": null
+  },
+  "投縣LL001": {
+   "alert": 750.0,
+   "name": "南投縣-仁愛鄉-D066(廬山)",
+   "county": "南投縣",
+   "town": "仁愛鄉",
+   "lat": null,
+   "lng": null
+  },
+  "投縣LL002": {
+   "alert": 350.0,
+   "name": "南投縣-國姓鄉-T002(九份二山)",
+   "county": "南投縣",
+   "town": "國姓鄉",
+   "lat": null,
+   "lng": null
+  },
+  "嘉縣LL001": {
+   "alert": 600.0,
+   "name": "嘉義縣-梅山鄉-T001(幼葉林)",
+   "county": "嘉義縣",
+   "town": "梅山鄉",
+   "lat": null,
+   "lng": null
+  },
+  "嘉縣LL008": {
+   "alert": 800.0,
+   "name": "嘉義縣-阿里山鄉-D098(瀨頭)",
+   "county": "嘉義縣",
+   "town": "阿里山鄉",
+   "lat": null,
+   "lng": null
+  },
+  "嘉縣LL005": {
+   "alert": 700.0,
+   "name": "嘉義縣-番路鄉-D004(隙頂)",
+   "county": "嘉義縣",
+   "town": "番路鄉",
+   "lat": null,
+   "lng": null
+  },
+  "嘉縣LL006": {
+   "alert": 750.0,
+   "name": "嘉義縣-中埔鄉-T002(八寶寮)",
+   "county": "嘉義縣",
+   "town": "中埔鄉",
+   "lat": null,
+   "lng": null
+  },
+  "嘉縣LL004": {
+   "alert": 400.0,
+   "name": "嘉義縣-竹崎鄉-T003(中心崙)",
+   "county": "嘉義縣",
+   "town": "竹崎鄉",
+   "lat": null,
+   "lng": null
+  },
+  "高市LL001": {
+   "alert": 900.0,
+   "name": "高雄市-杉林區-D021(新庄)",
+   "county": "高雄市",
+   "town": "杉林區",
+   "lat": null,
+   "lng": null
+  },
+  "高市LL004": {
+   "alert": 400.0,
+   "name": "高雄市-茂林區-D048(萬山)",
+   "county": "高雄市",
+   "town": "茂林區",
+   "lat": null,
+   "lng": null
+  },
+  "高市LL005": {
+   "alert": 800.0,
+   "name": "高雄市-桃源區-D382(寶山)",
+   "county": "高雄市",
+   "town": "桃源區",
+   "lat": null,
+   "lng": null
+  },
+  "屏縣LL001": {
+   "alert": 800.0,
+   "name": "屏東縣-霧臺鄉-D038(佳暮)",
+   "county": "屏東縣",
+   "town": "霧臺鄉",
+   "lat": null,
+   "lng": null
+  },
+  "屏縣LL002": {
+   "alert": 600.0,
+   "name": "屏東縣-霧臺鄉-T002(阿禮)",
+   "county": "屏東縣",
+   "town": "霧臺鄉",
+   "lat": null,
+   "lng": null
+  },
+  "屏縣LL004": {
+   "alert": 450.0,
+   "name": "屏東縣-來義鄉-T001(來義)",
+   "county": "屏東縣",
+   "town": "來義鄉",
+   "lat": null,
+   "lng": null
+  },
+  "東縣LL002": {
+   "alert": 450.0,
+   "name": "臺東縣-延平鄉-T002(紅葉2)",
+   "county": "臺東縣",
+   "town": "延平鄉",
+   "lat": null,
+   "lng": null
+  },
+  "東縣LL001": {
+   "alert": 450.0,
+   "name": "臺東縣-延平鄉-T001(紅葉1)",
+   "county": "臺東縣",
+   "town": "延平鄉",
+   "lat": null,
+   "lng": null
+  },
+  "東縣LL010": {
+   "alert": 750.0,
+   "name": "臺東縣-太麻里鄉-D003(秀山)",
+   "county": "臺東縣",
+   "town": "太麻里鄉",
+   "lat": null,
+   "lng": null
+  },
+  "東縣LL008": {
+   "alert": 700.0,
+   "name": "臺東縣-太麻里鄉-D029(多良)",
+   "county": "臺東縣",
+   "town": "太麻里鄉",
+   "lat": null,
+   "lng": null
+  },
+  "東縣LL006": {
+   "alert": 450.0,
+   "name": "臺東縣-大武鄉-D021(大鳥1)",
+   "county": "臺東縣",
+   "town": "大武鄉",
+   "lat": null,
+   "lng": null
+  },
+  "東縣LL007": {
+   "alert": 450.0,
+   "name": "臺東縣-大武鄉-D022(大鳥2)",
+   "county": "臺東縣",
+   "town": "大武鄉",
+   "lat": null,
+   "lng": null
+  },
+  "花縣LL002": {
+   "alert": 750.0,
+   "name": "花蓮縣-卓溪鄉-D007(太平)",
+   "county": "花蓮縣",
+   "town": "卓溪鄉",
+   "lat": null,
+   "lng": null
+  },
+  "花縣LL001": {
+   "alert": 450.0,
+   "name": "花蓮縣-卓溪鄉-D010(卓溪)",
+   "county": "花蓮縣",
+   "town": "卓溪鄉",
+   "lat": null,
+   "lng": null
+  },
+  "花縣LL004": {
+   "alert": 600.0,
+   "name": "花蓮縣-玉里鎮-D018(安通)",
+   "county": "花蓮縣",
+   "town": "玉里鎮",
+   "lat": null,
+   "lng": null
+  },
+  "桃市LL004": {
+   "alert": 350.0,
+   "name": "桃園市-復興區-T002(光華)",
+   "county": "桃園市",
+   "town": "復興區",
+   "lat": null,
+   "lng": null
+  },
+  "竹縣LL004": {
+   "alert": 300.0,
+   "name": "新竹縣-尖石鄉-T001(秀巒)",
+   "county": "新竹縣",
+   "town": "尖石鄉",
+   "lat": null,
+   "lng": null
+  },
+  "投縣LL004": {
+   "alert": 350.0,
+   "name": "南投縣-鹿谷鄉-D006(和雅3)",
+   "county": "南投縣",
+   "town": "鹿谷鄉",
+   "lat": null,
+   "lng": null
+  },
+  "東縣LL003": {
+   "alert": 450.0,
+   "name": "臺東縣-金峰鄉-D002(新興)",
+   "county": "臺東縣",
+   "town": "金峰鄉",
+   "lat": null,
+   "lng": null
+  },
+  "新北LL002": {
+   "alert": 400.0,
+   "name": "新北市-汐止區-D003(鵠鵠崙)",
+   "county": "新北市",
+   "town": "汐止區",
+   "lat": null,
+   "lng": null
+  },
+  "苗縣LL002": {
+   "alert": 400.0,
+   "name": "苗栗縣-泰安鄉-D026(中興部落)",
+   "county": "苗栗縣",
+   "town": "泰安鄉",
+   "lat": null,
+   "lng": null
+  },
+  "嘉縣LL003": {
+   "alert": 400.0,
+   "name": "嘉義縣-竹崎鄉-T002(檨子寮)",
+   "county": "嘉義縣",
+   "town": "竹崎鄉",
+   "lat": null,
+   "lng": null
+  },
+  "高市LL003": {
+   "alert": 250.0,
+   "name": "高雄市-六龜區-T001(藤枝林道3.5K)",
+   "county": "高雄市",
+   "town": "六龜區",
+   "lat": null,
+   "lng": null
+  },
+  "花縣LL003": {
+   "alert": 550.0,
+   "name": "花蓮縣-富里鄉-T004(電台山)",
+   "county": "花蓮縣",
+   "town": "富里鄉",
+   "lat": null,
+   "lng": null
+  },
+  "花縣LL007": {
+   "alert": 650.0,
+   "name": "花蓮縣-瑞穗鄉-D024(舞鶴)",
+   "county": "花蓮縣",
+   "town": "瑞穗鄉",
+   "lat": null,
+   "lng": null
+  },
+  "高市LL007": {
+   "alert": 650.0,
+   "name": "高雄市-甲仙區-D047(公館)",
+   "county": "高雄市",
+   "town": "甲仙區",
+   "lat": null,
+   "lng": null
+  },
+  "高市LL006": {
+   "alert": 650.0,
+   "name": "高雄市-甲仙區-D044(內寮坪)",
+   "county": "高雄市",
+   "town": "甲仙區",
+   "lat": null,
+   "lng": null
+  },
+  "嘉縣LL009": {
+   "alert": 1500.0,
+   "name": "嘉義縣-阿里山鄉-D187(二萬坪)",
+   "county": "嘉義縣",
+   "town": "阿里山鄉",
+   "lat": null,
+   "lng": null
+  },
+  "高市LL008": {
+   "alert": 900.0,
+   "name": "高雄市-六龜區-D015(紅水仙)",
+   "county": "高雄市",
+   "town": "六龜區",
+   "lat": null,
+   "lng": null
+  },
+  "宜縣LL003": {
+   "alert": 700.0,
+   "name": "宜蘭縣-大同鄉-D311(太平山莊)",
+   "county": "宜蘭縣",
+   "town": "大同鄉",
+   "lat": null,
+   "lng": null
+  },
+  "宜縣LL002": {
+   "alert": 900.0,
+   "name": "宜蘭縣-大同鄉-F001",
+   "county": "宜蘭縣",
+   "town": "大同鄉",
+   "lat": null,
+   "lng": null
+  },
+  "花縣LL006": {
+   "alert": 450.0,
+   "name": "花蓮縣-光復鄉-D011(溪頭)",
+   "county": "花蓮縣",
+   "town": "光復鄉",
+   "lat": null,
+   "lng": null
+  },
+  "花縣LL005": {
+   "alert": 450.0,
+   "name": "花蓮縣-豐濱鄉-D001(高山)",
+   "county": "花蓮縣",
+   "town": "豐濱鄉",
+   "lat": null,
+   "lng": null
+  },
+  "投縣LL003": {
+   "alert": 350.0,
+   "name": "南投縣-鹿谷鄉-D051(和雅2)",
+   "county": "南投縣",
+   "town": "鹿谷鄉",
+   "lat": null,
+   "lng": null
+  },
+  "屏縣LL003": {
+   "alert": 750.0,
+   "name": "屏東縣-霧臺鄉-T001(大武)",
+   "county": "屏東縣",
+   "town": "霧臺鄉",
+   "lat": null,
+   "lng": null
+  },
+  "苗縣LL001": {
+   "alert": 500.0,
+   "name": "苗栗縣-泰安鄉-D013(大興)",
+   "county": "苗栗縣",
+   "town": "泰安鄉",
+   "lat": null,
+   "lng": null
+  },
+  "桃市LL002": {
+   "alert": 600.0,
+   "name": "桃園市-復興區-D031(雪霧鬧)",
+   "county": "桃園市",
+   "town": "復興區",
+   "lat": null,
+   "lng": null
+  },
+  "高市LL002": {
+   "alert": 750.0,
+   "name": "高雄市-六龜區-D009(竹林)",
+   "county": "高雄市",
+   "town": "六龜區",
+   "lat": null,
+   "lng": null
+  },
+  "嘉縣LL007": {
+   "alert": 900.0,
+   "name": "嘉義縣-阿里山鄉-D001(樂野)",
+   "county": "嘉義縣",
+   "town": "阿里山鄉",
+   "lat": null,
+   "lng": null
+  },
+  "嘉縣LL002": {
+   "alert": 700.0,
+   "name": "嘉義縣-梅山鄉-D017(油車寮)",
+   "county": "嘉義縣",
+   "town": "梅山鄉",
+   "lat": null,
+   "lng": null
+  },
+  "中市LL005": {
+   "alert": 600.0,
+   "name": "臺中市-和平區-D044(梨山4)",
+   "county": "臺中市",
+   "town": "和平區",
+   "lat": null,
+   "lng": null
+  },
+  "中市LL006": {
+   "alert": 600.0,
+   "name": "臺中市-和平區-D045(梨山松柏聚落西側)",
+   "county": "臺中市",
+   "town": "和平區",
+   "lat": null,
+   "lng": null
+  },
+  "中市LL003": {
+   "alert": 600.0,
+   "name": "臺中市-和平區-D050(梨山圓環)",
+   "county": "臺中市",
+   "town": "和平區",
+   "lat": null,
+   "lng": null
+  },
+  "東縣LL009": {
+   "alert": 400.0,
+   "name": "臺東縣-太麻里鄉-T001(華源坑內)",
+   "county": "臺東縣",
+   "town": "太麻里鄉",
+   "lat": null,
+   "lng": null
+  },
+  "東縣LL004": {
+   "alert": 500.0,
+   "name": "臺東縣-達仁鄉-D003(拉里吧1)",
+   "county": "臺東縣",
+   "town": "達仁鄉",
+   "lat": null,
+   "lng": null
+  },
+  "東縣LL005": {
+   "alert": 500.0,
+   "name": "臺東縣-達仁鄉-D004(拉里吧2)",
+   "county": "臺東縣",
+   "town": "達仁鄉",
+   "lat": null,
+   "lng": null
+  },
+  "中市LL008": {
+   "alert": 600.0,
+   "name": "臺中市-和平區-D038",
+   "county": "臺中市",
+   "town": "和平區",
+   "lat": null,
+   "lng": null
+  },
+  "中市LL009": {
+   "alert": 600.0,
+   "name": "臺中市-和平區-D046",
+   "county": "臺中市",
+   "town": "和平區",
+   "lat": null,
+   "lng": null
+  },
+  "竹縣LL006": {
+   "alert": 600.0,
+   "name": "新竹縣-五峰鄉-D009",
+   "county": "新竹縣",
+   "town": "五峰鄉",
+   "lat": null,
+   "lng": null
+  },
+  "投縣LL005": {
+   "alert": 350.0,
+   "name": "南投縣-鹿谷鄉-D050",
+   "county": "南投縣",
+   "town": "鹿谷鄉",
+   "lat": null,
+   "lng": null
+  },
+  "投縣LL006": {
+   "alert": 350.0,
+   "name": "南投縣-鹿谷鄉-D030",
+   "county": "南投縣",
+   "town": "鹿谷鄉",
+   "lat": null,
+   "lng": null
+  },
+  "投縣LL007": {
+   "alert": 700.0,
+   "name": "南投縣-仁愛鄉-D730",
+   "county": "南投縣",
+   "town": "仁愛鄉",
+   "lat": null,
+   "lng": null
+  },
+  "東縣LL011": {
+   "alert": 600.0,
+   "name": "臺東縣-卑南鄉-D015",
+   "county": "臺東縣",
+   "town": "卑南鄉",
+   "lat": null,
+   "lng": null
+  },
+  "花縣LL008": {
+   "alert": 650.0,
+   "name": "花蓮縣-秀林鄉-D027",
+   "county": "花蓮縣",
+   "town": "秀林鄉",
+   "lat": null,
+   "lng": null
+  },
+  "花縣LL009": {
+   "alert": 750.0,
+   "name": "花蓮縣-萬榮鄉-D004",
+   "county": "花蓮縣",
+   "town": "萬榮鄉",
+   "lat": null,
+   "lng": null
+  },
+  "花縣LL010": {
+   "alert": 500.0,
+   "name": "花蓮縣-玉里鎮-D016",
+   "county": "花蓮縣",
+   "town": "玉里鎮",
+   "lat": null,
+   "lng": null
+  },
+  "苗縣LL003": {
+   "alert": 900.0,
+   "name": "苗栗縣-泰安鄉-D011",
+   "county": "苗栗縣",
+   "town": "泰安鄉",
+   "lat": null,
+   "lng": null
+  },
+  "苗縣LL004": {
+   "alert": 500.0,
+   "name": "苗栗縣-泰安鄉-D017",
+   "county": "苗栗縣",
+   "town": "泰安鄉",
+   "lat": null,
+   "lng": null
+  },
+  "高市LL009": {
+   "alert": 600.0,
+   "name": "高雄市-茂林區-D064",
+   "county": "高雄市",
+   "town": "茂林區",
+   "lat": null,
+   "lng": null
+  },
+  "高市LL010": {
+   "alert": 700.0,
+   "name": "高雄市-桃源區-D364",
+   "county": "高雄市",
+   "town": "桃源區",
+   "lat": null,
+   "lng": null
+  },
+  "桃市LL005": {
+   "alert": 850.0,
+   "name": "桃園市-復興區-D046",
+   "county": "桃園市",
+   "town": "復興區",
+   "lat": null,
+   "lng": null
+  },
+  "苗縣LL005": {
+   "alert": 900.0,
+   "name": "苗栗縣-卓蘭鎮-T001",
+   "county": "苗栗縣",
+   "town": "卓蘭鎮",
+   "lat": null,
+   "lng": null
+  },
+  "中市LL010": {
+   "alert": 400.0,
+   "name": "臺中市-和平區-D015",
+   "county": "臺中市",
+   "town": "和平區",
+   "lat": null,
+   "lng": null
+  },
+  "中市LL011": {
+   "alert": 600.0,
+   "name": "臺中市-和平區-D043",
+   "county": "臺中市",
+   "town": "和平區",
+   "lat": null,
+   "lng": null
+  },
+  "新北LL003": {
+   "alert": 900.0,
+   "name": "新北市-坪林區-D001",
+   "county": "新北市",
+   "town": "坪林區",
+   "lat": null,
+   "lng": null
+  },
+  "竹縣LL007": {
+   "alert": 650.0,
+   "name": "新竹縣-五峰鄉-D077",
+   "county": "新竹縣",
+   "town": "五峰鄉",
+   "lat": null,
+   "lng": null
+  },
+  "嘉縣LL010": {
+   "alert": 1500.0,
+   "name": "嘉義縣-竹崎鄉-F001",
+   "county": "嘉義縣",
+   "town": "竹崎鄉",
+   "lat": null,
+   "lng": null
+  },
+  "中市LL013": {
+   "alert": 600.0,
+   "name": "臺中市-和平區-D051",
+   "county": "臺中市",
+   "town": "和平區",
+   "lat": null,
+   "lng": null
+  },
+  "中市LL012": {
+   "alert": 600.0,
+   "name": "臺中市-和平區-T001",
+   "county": "臺中市",
+   "town": "和平區",
+   "lat": null,
+   "lng": null
+  },
+  "投縣LL008": {
+   "alert": 300.0,
+   "name": "南投縣-信義鄉-D847",
+   "county": "南投縣",
+   "town": "信義鄉",
+   "lat": null,
+   "lng": null
+  },
+  "高市LL011": {
+   "alert": 250.0,
+   "name": "高雄市-六龜區-D047",
+   "county": "高雄市",
+   "town": "六龜區",
+   "lat": null,
+   "lng": null
+  },
+  "花縣LL011": {
+   "alert": 600.0,
+   "name": "花蓮縣-萬榮鄉-D012",
+   "county": "花蓮縣",
+   "town": "萬榮鄉",
+   "lat": null,
+   "lng": null
+  },
+  "東縣LL013": {
+   "alert": 1000.0,
+   "name": "臺東縣-卑南鄉-D221",
+   "county": "臺東縣",
+   "town": "卑南鄉",
+   "lat": null,
+   "lng": null
+  },
+  "屏縣LL005": {
+   "alert": 700.0,
+   "name": "屏東縣-三地門鄉-D089",
+   "county": "屏東縣",
+   "town": "三地門鄉",
+   "lat": null,
+   "lng": null
+  },
+  "東縣LL012": {
+   "alert": 650.0,
+   "name": "臺東縣-海端鄉-T001",
+   "county": "臺東縣",
+   "town": "海端鄉",
+   "lat": null,
+   "lng": null
+  }
+ }
+}
