@@ -91,8 +91,14 @@ for no, d in v.items():
         print(f"  {m}{no}: 明細表 {idx[no]} vs API {d['alert']:.0f}")
         assert idx[no] == d['alert'], f"{no} 警戒值不一致"
 
+# ★ 2026-11-12 規則改變（使用者確認）：API 失敗時先用「最近一次成功的官方值」（ls_alert_backup.json），
+#   沒有備援表才回空 dict，由呼叫端退回靜態明細表。
 patch({}, code=404)
-assert F.fetch_ls_alert_values() == {}, "失敗應回空 dict（呼叫端退回靜態表）"
-print("  OK 失敗回空 dict")
+vb = F.fetch_ls_alert_values()
+assert set(vb) == set(v) and all(x.get('src') == 'backup' for x in vb.values()), "失敗時應改用備援表"
+print("  OK 失敗時改用最近一次成功的官方值（備援表）")
+os.remove('ls_alert_backup.json')
+assert F.fetch_ls_alert_values() == {}, "失敗且無備援表應回空 dict（呼叫端退回靜態表）"
+print("  OK 失敗且無備援表回空 dict")
 
 print("\n全部通過")

@@ -324,6 +324,20 @@ def fetch_swcb_hourly():
             if attempt == 2: return {}
             time.sleep(3)
     if not isinstance(data, list): return {}
+    # ★ 2026-11-12：欄位讀取與 API 停住偵測跟主腳本共用同一套規則（不另立一套）。
+    #   同義欄位值不同 → 不採用；整份站值連續 150 分鐘不變 → 判定停住、本輪當作失敗，
+    #   etr2_now.json 不會被舊值覆寫。狀態檔用本流程專屬的 swcb_state_qpe.json。
+    try:
+        import fetch_rainfall as FR
+        pick = FR._row_pick
+        _stale, _msg = FR.swcb_rain_is_stale(data, state_file='swcb_state_qpe.json')
+        print(f"    {_msg}")
+        if _stale:
+            return {}
+    except Exception as e:
+        FR = None
+        print(f"    無法匯入 fetch_rainfall 的共用規則（停住偵測略過）：{e}")
+        pick = lambda row, *n: next((row.get(k) for k in n if row.get(k) not in (None, '')), None)
     # ★★ 以 STID（測站唯一代號）為主鍵，站名僅作備援。
     #   全臺有同名不同站的情形，例如「武陵」：
     #     臺中和平 STID=A0F010（STRT 33.7，警戒值350）
@@ -335,9 +349,9 @@ def fetch_swcb_hourly():
     for row in data:
         if not isinstance(row, dict): continue
         for ik, nk, vk in (('STID1', 'STName1', 'STRT1'), ('STID2', 'STName2', 'STRT2')):
-            nm = (row.get(nk) or '').strip()
-            sid = (row.get(ik) or '').strip()
-            try: v = float(row.get(vk))
+            nm = (pick(row, nk) or '').strip()
+            sid = (pick(row, ik) or '').strip()
+            try: v = float(pick(row, vk))
             except (TypeError, ValueError): continue
             if not nm and not sid: continue
             if sid: by_id[sid] = v
@@ -351,12 +365,12 @@ def fetch_swcb_hourly():
     SWCB_BY_LOC = {}
     for row in data:
         if not isinstance(row, dict): continue
-        cty = (row.get('County') or '').strip()
-        twn = (row.get('Town') or '').strip()
+        cty = (pick(row, 'County', 'CountyName') or '').strip()
+        twn = (pick(row, 'Town', 'TownName', 'Township') or '').strip()
         if not cty or not twn: continue
         for nk, vk in (('STName1', 'STRT1'), ('STName2', 'STRT2')):
-            nm = (row.get(nk) or '').strip()
-            try: v = float(row.get(vk))
+            nm = (pick(row, nk) or '').strip()
+            try: v = float(pick(row, vk))
             except (TypeError, ValueError): continue
             if nm: SWCB_BY_LOC[(cty, twn, nm)] = v
 
@@ -388,6 +402,7 @@ def fetch_swcb_hourly():
         if len(owners) > 1: continue          # ★ 撞名 → 不建立正規化鍵，寧可對不到也不可對錯
         out[k] = out[next(iter(owners))]; n_norm += 1
     skipped = sum(1 for k, o in norm_owner.items() if len(o) > 1 or k in out)
+    if FR: FR._report_row_conflicts('水保署參考雨量站（10 分鐘流程）')
     print(f"    {len(out)} 個站名鍵（正規化鍵 {n_norm} 個，"
           f"因撞名或與實際站名衝突而略過 {skipped} 個）")
     if clash:

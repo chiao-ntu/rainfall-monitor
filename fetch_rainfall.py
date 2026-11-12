@@ -20,21 +20,68 @@ SWCB_RAIN_URL = "https://246.ardswc.gov.tw/webService/GetDebrisRainData.ashx"
 # ★ 定向診斷：列出這些站名／鄉鎮在官方資料中的真實內容。
 #   查個案時改這兩行就好，清空即關閉。放在這裡是因為「抓不到」這類問題
 #   一定要能看到原始資料，不能靠猜。
+def _pick_norm(v):
+    """比較用的正規化：去空白、台→臺；能轉成數字的以數值比較（"450" 與 450.0 視為相同）。"""
+    t = str(v).strip().replace('台', '臺')
+    try: return ('n', float(t))
+    except ValueError: return ('s', t)
+
+
+ROW_PICK_CONFLICTS = {}     # {(欄位名...): 次數}，各 fetch 結束時印出，供背景稽核
+
+
 def _row_pick(row, *names):
     """從 API 回傳列取欄位，名稱容錯（含大小寫不分）。
 
     為什麼需要：同一個檔案裡對同類 ID 曾出現 'DebrisNO' 與 'DebrisNo' 兩種拼法，
     其中一種必然是錯的；錯的那個會讓整批資料靜默消失（回傳空字典，不報錯）。
     外部 API 的欄位名不是我們能控制的，硬編單一拼法就是單點失效。
+
+    ★ 2026-11-12 衝突規則（使用者確認）：不替官方決定哪個對。
+      同義欄位只有一個有值 → 用它；多個有值且相同 → 用它；
+      多個有值但不同 → 回 None（當作沒有這個值），並記入 ROW_PICK_CONFLICTS。
+      先前是「誰先有值就用誰」，兩種拼法同時出現且值不同時不會被發現。
     """
     if not isinstance(row, dict): return None
-    for n in names:
-        if n in row and row[n] not in (None, ''): return row[n]
-    low = {str(k).lower(): v for k, v in row.items()}
-    for n in names:
-        v = low.get(n.lower())
-        if v not in (None, ''): return v
+    want = [n.lower() for n in names]
+    hits = []                                   # (欄位名, 值)，依 names 的順序
+    for n in want:
+        for k, v in row.items():
+            if str(k).lower() == n and v not in (None, '') and not any(k == h[0] for h in hits):
+                hits.append((k, v))
+    if not hits: return None
+    if len({_pick_norm(v) for _, v in hits}) == 1:
+        return hits[0][1]
+    key = tuple(sorted(str(k) for k, _ in hits))
+    ROW_PICK_CONFLICTS[key] = ROW_PICK_CONFLICTS.get(key, 0) + 1
     return None
+
+
+def _row_coord(row, names):
+    """座標欄位（經度或緯度）專用：同 _row_pick，但 0 視同空白（官方以 0 表示未提供）。
+       多個欄位都有非 0 值且不同 → None 並記錄衝突。"""
+    if not isinstance(row, dict): return None
+    want = [n.lower() for n in names]
+    vals = []
+    for k, v in row.items():
+        if str(k).lower() in want:
+            try: f = float(v)
+            except (TypeError, ValueError): continue
+            if f != 0: vals.append((k, f))
+    if not vals: return None
+    if len({round(f, 6) for _, f in vals}) == 1: return vals[0][1]
+    key = tuple(sorted(str(k) for k, _ in vals))
+    ROW_PICK_CONFLICTS[key] = ROW_PICK_CONFLICTS.get(key, 0) + 1
+    return None
+
+
+def _report_row_conflicts(label):
+    """印出（並清空）本次解析遇到的同義欄位衝突。只寫入執行紀錄，不上使用者介面。"""
+    if ROW_PICK_CONFLICTS:
+        print(f"    [欄位衝突] {label}：" + "、".join(
+            f"{'／'.join(k)} {n} 筆" for k, n in ROW_PICK_CONFLICTS.items())
+            + "（值不同 → 該筆不採用該欄位）")
+    ROW_PICK_CONFLICTS.clear()
 
 
 DIAG_STATION_KEYWORDS = ('寒溪',)
@@ -46,6 +93,67 @@ SWCB_LSVAL_URL   = "https://246.ardswc.gov.tw/WebService/GetLSCountyTownAlertVal
 SWCB_EOCINFO_URL = "https://246.ardswc.gov.tw/webService/GetIDisasterInfo.ashx"   # 應變小組開設
 HEAVY_RAIN_COUNTY_TH = 150.0   # 「雨勢較大地區」縣市門檻：任一鄉鎮日累積達此值即納入
 HOURLY_FILE = "rain_hourly.json"   # 由 fetch_qpesums_hourly.py 每小時寫入（本腳本只讀）
+# ★★ 2026-11-12 API 停住偵測（使用者確認）。
+#   水保署 ETR2 API 的回應沒有時間戳。開放資料平臺的匯出檔就停在 2026-09-10 12 時兩個月沒更新，
+#   若即時 API 也這樣停住，系統會一直把舊值當即時值。
+#   判準（實測）：官方 ETR2 含逐時折減，正常每小時都會變；11/9～11/12 共 73 次更新，最長間隔 71 分。
+#   → 全部站值的指紋連續 SWCB_STALE_MIN 分鐘完全不變 → 判定停住，該輪當作 API 失敗
+#     （ETR2 退回以氣象署觀測自算；etr2_now.json 不以舊值覆寫）。
+#   狀態檔每條流程各一份，避免兩個排程同時改同一檔造成 push 衝突。
+#   只記錄在背景（執行紀錄＋狀態檔），不在使用者介面顯示。
+SWCB_STALE_MIN = 150
+SWCB_STATE_FILE = os.environ.get('SWCB_STATE_FILE', 'swcb_state_rain.json')
+_SWCB_STALE_CACHE = {}
+
+
+def swcb_rain_is_stale(data, state_file=None, now=None):
+    """回傳 (停住與否, 說明)。同一次執行內對同一份資料只判一次（多個函式共用結果）。"""
+    import hashlib
+    state_file = state_file or SWCB_STATE_FILE
+    now = now or datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
+    items = []
+    for row in data if isinstance(data, list) else []:
+        for ik, vk in (('STID1', 'STRT1'), ('STID2', 'STRT2')):
+            sid, v = _row_pick(row, ik), _row_pick(row, vk)
+            if sid is not None and v is not None:
+                items.append(f"{sid}={v}")
+    ROW_PICK_CONFLICTS.clear()          # 這裡只是算指紋，衝突由正式解析時回報
+    if not items:
+        return False, '無站值，略過停住偵測'
+    fp = hashlib.sha1('|'.join(sorted(set(items))).encode()).hexdigest()[:16]
+    if (state_file, fp) in _SWCB_STALE_CACHE:
+        return _SWCB_STALE_CACHE[(state_file, fp)]
+    st = {}
+    try:
+        if os.path.exists(state_file):
+            st = json.load(open(state_file, encoding='utf-8')) or {}
+    except Exception:
+        st = {}
+    nows = now.strftime('%Y-%m-%dT%H:%M')
+    if st.get('fp') != fp:
+        st.update(fp=fp, first_seen=nows)
+    st['last_checked'] = nows
+    try:
+        age = (now - datetime.fromisoformat(st['first_seen'])).total_seconds() / 60
+    except Exception:
+        age = 0
+    stale = age >= SWCB_STALE_MIN
+    msg = (f"水保署 ETR2 已連續 {age:.0f} 分鐘完全沒變（正常每小時更新）→ 判定 API 停住，本輪不採用"
+           if stale else f"水保署 ETR2 指紋 {fp}，已維持 {age:.0f} 分鐘（{SWCB_STALE_MIN} 分鐘內正常）")
+    if stale:
+        ev = st.setdefault('stale_events', [])
+        if not ev or ev[-1].get('fp') != fp:
+            ev.append({'fp': fp, 'since': st['first_seen'], 'detected': nows})
+        st['stale_events'] = ev[-20:]
+    st['stale'] = stale
+    try:
+        json.dump(st, open(state_file, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+    except Exception as e:
+        print(f"    停住偵測狀態檔寫入失敗：{e}")
+    _SWCB_STALE_CACHE[(state_file, fp)] = (stale, msg)
+    return stale, msg
+
+
 SWCB_STN_LOC = {}
 # 鄉鎮風力預報：{縣市: {鄉鎮: [{start,end,ws,bf}]}}，由 fetch_pop_county 順帶填充
 WIND_FCST = {}
@@ -933,6 +1041,9 @@ def fetch_debris_alerts():
             if attempt == 2: return {}
             time.sleep(3)
     if not data: return {}
+    _stale, _msg = swcb_rain_is_stale(data)
+    print(f"    {_msg}")
+    if _stale: return {}
 
     # ★★ 2026-10-05：這個函式是鄉鎮 ETR2% 的權威來源，但它比
     #   fetch_swcb_etr2() 多依賴兩個欄位，兩個都是單點失效：
@@ -985,6 +1096,7 @@ def fetch_debris_alerts():
         }
     print(f"    {len(out)} 條潛勢溪流｜達紅色警戒（ETR2≥警戒值）：{n_red} 條"
           f"（原始 {len(data)} 筆）")
+    _report_row_conflicts('土石流潛勢溪流')
     if any(drop.values()):
         print(f"    [丟棄] 無警戒值 {drop['no_alert']}、無站雨量 {drop['no_station_val']}、"
               f"無縣市鄉鎮 {drop['no_loc']}")
@@ -1063,6 +1175,10 @@ def fetch_swcb_etr2():
             time.sleep(3)
     if not data:
         return {}
+    _stale, _msg = swcb_rain_is_stale(data)
+    print(f"    {_msg}")
+    if _stale:
+        return {}
     st_val = {}
     SWCB_STN_LOC.clear()
     SWCB_BY_LOC.clear()
@@ -1117,6 +1233,7 @@ def fetch_swcb_etr2():
           f"（STID＋唯一站名；正規化鍵 {_n_norm} 個，"
           f"同名多站 {_n_amb} 個改以 STID/地理區分）、"
           f"{len(SWCB_STN_LOC)} 個鄉鎮位置索引")
+    _report_row_conflicts('水保署參考雨量站')
     return st_val
 
 
@@ -1173,20 +1290,20 @@ def fetch_official_alerts():
         return out
     for row in data:
         if not isinstance(row, dict): continue
-        lvl = (row.get('AlertLevel') or '').strip().lower()
+        lvl = (_row_pick(row, 'AlertLevel') or '').strip().lower()
         if lvl not in ('y', 'r'): continue
         rec = {
             'level': lvl,
-            'county': (row.get('County') or '').strip(),
-            'town':   (row.get('Town') or '').strip(),
-            'vill':   (row.get('Vill') or '').strip() or None,
-            'name':   (row.get('LandslideName') or '').strip() or None,
-            'updated': (row.get('LastUpdateDate') or '').strip(),
-            'report':  (row.get('ReportID') or '').strip(),
+            'county': (_row_pick(row, 'County') or '').strip(),
+            'town':   (_row_pick(row, 'Town') or '').strip(),
+            'vill':   (_row_pick(row, 'Vill') or '').strip() or None,
+            'name':   (_row_pick(row, 'LandslideName') or '').strip() or None,
+            'updated': (_row_pick(row, 'LastUpdateDate') or '').strip(),
+            'report':  (_row_pick(row, 'ReportID') or '').strip(),
         }
-        typ = (row.get('AlertType') or '').strip().upper()
-        no_d = (row.get('DebrisNo') or '').strip()
-        no_l = (row.get('LandslideID') or '').strip()
+        typ = (_row_pick(row, 'AlertType') or '').strip().upper()
+        no_d = (_row_pick(row, 'DebrisNo') or '').strip()
+        no_l = (_row_pick(row, 'LandslideID') or '').strip()
         if typ == 'D' and no_d and no_d != '-':
             out['debris'][no_d] = rec
         elif typ == 'L' and no_l and no_l != '-':
@@ -1197,40 +1314,112 @@ def fetch_official_alerts():
     dy = sum(1 for v in out['debris'].values()    if v['level'] == 'y')
     lr = sum(1 for v in out['landslide'].values() if v['level'] == 'r')
     ly = sum(1 for v in out['landslide'].values() if v['level'] == 'y')
+    _report_row_conflicts('官方警戒')
     print(f"    官方警戒｜土石流 紅{dr}/黃{dy} 條、大崩 紅{lr}/黃{ly} 處"
           f"（報別 {out['report_id'] or '—'}，更新 {out['updated'] or '—'}）")
     return out
 
 
+LS_ALERT_BACKUP_FILE = 'ls_alert_backup.json'
+LS_STATIC_FILE = 'landslide_warning_stations.json'
+
+
+def _ls_coord_ok(lng, lat, county, town):
+    """座標須落在該潛勢區所寫的縣市鄉鎮界內（容許約 1 公里），否則不採用。"""
+    if lng is None or lat is None:
+        return False
+    polys = _load_town_polys()
+    g = polys.get((county or '').replace('台', '臺') + (town or ''))
+    if not g:
+        return False
+    try:
+        x0, y0, x1, y1, rings = g[0], g[1], g[2], g[3], g[4]
+    except Exception:
+        return False
+    if not (x0 - 0.01 <= lng <= x1 + 0.01 and y0 - 0.01 <= lat <= y1 + 0.01):
+        return False
+    if _pt_in_poly(lng, lat, rings):
+        return True
+    # 界線附近：任一頂點距離 1 公里內也算（海岸、溪流界線的點不誤殺）
+    return any(abs(px - lng) < 0.01 and abs(py - lat) < 0.01 for r in rings for px, py in r)
+
+
 def fetch_ls_alert_values():
     """大規模崩塌潛勢區官方警戒值（GetLSCountyTownAlertValueList.ashx）。
-    逐潛勢區：LSNo / Name / AlertValue / Lng / Lat。新增潛勢區會自動出現，
+    逐潛勢區：LSNo / Name / AlertValue / 經緯度。新增潛勢區會自動出現，
     故本表優先於 landslide_warning_stations.json 的靜態 alert 值。
-    回傳 {LSNo: {...}}；失敗回 {}。"""
+
+    ★ 2026-11-12（使用者確認）：
+      ① 備援表跟著 API 走：每次 API 成功就覆寫 ls_alert_backup.json，並把變動
+         （新增、刪除、警戒值改變）與靜態明細表的落差寫進執行紀錄。
+         API 失敗時先用這份「最近一次成功的官方值」，再不行才退回靜態明細表。
+         （11/12 對照：靜態表「桃市LL004 復興區光華」仍是 300，官方已是 350。）
+      ② 經緯度欄位：官方開放資料用 Longitude/Latitude，API 先前用 Lng/Lat，兩種都收；
+         同時有值且不同 → 該處座標不採用；採用前須落在該潛勢區所寫鄉鎮內。
+    回傳 {LSNo: {...}}；API 與備援皆失敗回 {}。"""
     print("抓取大崩潛勢區官方警戒值...")
     data = _swcb_json(SWCB_LSVAL_URL, "大崩警戒值")
+    prev = {}
+    try:
+        if os.path.exists(LS_ALERT_BACKUP_FILE):
+            prev = json.load(open(LS_ALERT_BACKUP_FILE, encoding='utf-8')) or {}
+    except Exception as e:
+        print(f"    備援表讀取失敗：{e}")
     if not isinstance(data, list):
-        print("    取用失敗 → 改用 landslide_warning_stations.json 靜態警戒值")
+        vals = prev.get('values') or {}
+        if vals:
+            print(f"    取用失敗 → 改用備援表（{prev.get('saved', '?')} 最近一次成功的官方值，{len(vals)} 處）")
+            return {k: dict(v, src='backup') for k, v in vals.items()}
+        print("    取用失敗且無備援表 → 改用 landslide_warning_stations.json 靜態警戒值")
         return {}
-    out = {}
+    out, n_xy_drop = {}, 0
     for row in data:
         if not isinstance(row, dict): continue
-        no = (row.get('LSNo') or '').strip()
+        no = (_row_pick(row, 'LSNo', 'LSNO') or '').strip()
         if not no: continue
-        try: av = float(row.get('AlertValue'))
+        try: av = float(_row_pick(row, 'AlertValue'))
         except (TypeError, ValueError): continue
         if av <= 0: continue
-        def _f(v):
-            try: return float(v)
-            except (TypeError, ValueError): return None
-        out[no] = {
-            'alert': av,
-            'name':  (row.get('Name') or '').strip(),
-            'county': (row.get('County') or '').strip(),
-            'town':   (row.get('Town') or '').strip(),
-            'lat': _f(row.get('Lat')), 'lng': _f(row.get('Lng')),
-        }
+        cty = (_row_pick(row, 'County') or '').strip().replace('台', '臺')
+        twn = (_row_pick(row, 'Town') or '').strip()
+        lng = _row_coord(row, ('Lng', 'Longitude', 'Lon'))
+        lat = _row_coord(row, ('Lat', 'Latitude'))
+        if (lng is not None or lat is not None) and not _ls_coord_ok(lng, lat, cty, twn):
+            n_xy_drop += 1
+            lng = lat = None
+        out[no] = {'alert': av, 'name': (_row_pick(row, 'Name') or '').strip(),
+                   'county': cty, 'town': twn, 'lat': lat, 'lng': lng}
+    _report_row_conflicts('大崩警戒值')
+    if n_xy_drop:
+        print(f"    [座標] {n_xy_drop} 處座標不在所寫鄉鎮內或欄位衝突 → 不採用")
     print(f"    大崩官方警戒值：{len(out)} 處潛勢區")
+    if not out:
+        return {k: dict(v, src='backup') for k, v in (prev.get('values') or {}).items()}
+
+    # ── 與上一份備援表比對，記錄變動 ──
+    pv = prev.get('values') or {}
+    if pv:
+        add = sorted(set(out) - set(pv)); gone = sorted(set(pv) - set(out))
+        chg = [f"{k} {pv[k]['alert']:g}→{out[k]['alert']:g}" for k in sorted(set(out) & set(pv))
+               if pv[k].get('alert') != out[k]['alert']]
+        if add or gone or chg:
+            print(f"    [官方變動] 新增 {add or '無'}；刪除 {gone or '無'}；警戒值改變 {chg or '無'}")
+    # ── 與靜態明細表比對（只記錄，不改動；靜態表另負責代表站對應）──
+    try:
+        lw = json.load(open(LS_STATIC_FILE, encoding='utf-8'))
+        drift = [f"{i} 靜態 {z['alert']:g}／官方 {out[i]['alert']:g}"
+                 for z in lw.get('zones', []) for i in (z.get('ids') or [])
+                 if i in out and z.get('alert') is not None and float(z['alert']) != out[i]['alert']]
+        if drift:
+            print(f"    [靜態表落後] {'、'.join(drift)}（執行時一律以官方值為準）")
+    except Exception as e:
+        print(f"    靜態明細表比對略過：{e}")
+    saved = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%dT%H:%M')
+    try:
+        json.dump({'saved': saved, 'src': SWCB_LSVAL_URL, 'n': len(out), 'values': out},
+                  open(LS_ALERT_BACKUP_FILE, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+    except Exception as e:
+        print(f"    備援表寫入失敗：{e}")
     return out
 
 
@@ -7655,7 +7844,8 @@ def main():
                 'lat': _v.get('lat'), 'lng': _v.get('lng'),
                 'alert': _alert,
                 'alert_adj': _alert_adj, 'adj_level': _lvl, 'adj_mm': _dmm,
-                'alert_src': 'api' if _v.get('alert') else ('table' if _alert else None),
+                'alert_src': (('backup' if _v.get('src') == 'backup' else 'api') if _v.get('alert')
+                              else ('table' if _alert else None)),
                 'etr2': None if _etr is None else round(_etr, 1),
                 'etr2_src': _src, 'etr2_src_name': _LS_TIER_NAME.get(_src, _src),
                 'station': _stn,
@@ -7679,6 +7869,7 @@ def main():
             _tiers[v['etr2_src'] or 'none'] = _tiers.get(v['etr2_src'] or 'none', 0) + 1
         print(f"  大規模崩塌｜{len(landslide_alerts)} 處警戒區"
               f"（警戒值來源 API {sum(1 for v in landslide_alerts.values() if v['alert_src']=='api')}"
+              f"／備援表 {sum(1 for v in landslide_alerts.values() if v['alert_src']=='backup')}"
               f"／靜態表 {sum(1 for v in landslide_alerts.values() if v['alert_src']=='table')}）")
         print(f"        ｜官方現況 紅{_lr}/黃{_ly} 處")
         print(f"        ｜ETR2 來源：" + "、".join(
