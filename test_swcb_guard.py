@@ -128,6 +128,37 @@ json.dump(_st, open('swcb_state_qpe.json', 'w'))
 FR._SWCB_STALE_CACHE.clear()
 ok(QH.fetch_swcb_hourly() == {}, '④10 分鐘流程判定停住 → 回空，etr2_now.json 不會被舊值覆寫')
 
+# ── ⑤ 退路真的能跑：水保署值拿不到（API 故障或判定停住）→ 以氣象署觀測自算 ──
+#   2026-11-13：agg_obs 在 swcb_etr2 為空時直接 UnboundLocalError（_c 只在官方分支內定義），
+#   整輪主排程中止。04:04 水保署停止更新 → 07:25 起主排程連續失敗 7 小時。
+from datetime import timezone as _tz
+_TPE = _tz(timedelta(hours=8)); _now = datetime(2026, 11, 13, 9, 0, tzinfo=_TPE)
+def _st(c, t, nm, lat, lon):
+    return {'name': nm, 'county': c, 'township': t, 'lat': lat, 'lng': lon, 'lon': lon,
+            'rain_now': 0.0, 'rain_1h': 0.0, 'rain_3h': 0.0, 'rain_6h': 0.0,
+            'rain_12h': 0.0, 'rain_24h': 0.0, 'rain_2d': 0.0, 'rain_3d': 0.0}
+_stations = {'C0U01': _st('宜蘭縣', '大同鄉', '松羅', 24.60, 121.50),
+             'C0U02': _st('宜蘭縣', '大同鄉', '寒溪', 24.61, 121.51)}
+_hist = {sid: {(_now - timedelta(days=i)).strftime('%Y-%m-%d'): 20.0 for i in range(10)}
+         for sid in _stations}
+_slope = {'宜蘭縣大同鄉': [{'village': '寒溪村', 'station': '寒溪', 'alert': 200},
+                           {'village': '松羅村', 'station': '松羅', 'alert': 200}]}
+FR.SWCB_STN_LOC.clear(); FR.SWCB_BY_LOC.clear()
+_err = None
+for _sw, _db in (({}, {}), ({}, None), (None, None)):
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            _res = FR.agg_obs(_stations, {}, _hist, _now, slope_warn=_slope, swcb_etr2=_sw, debris=_db)
+    except Exception as e:
+        _err = f'{type(e).__name__}: {e}'; break
+ok(_err is None, f'⑤水保署值全缺時 agg_obs 不會中止（{_err or "正常"}）')
+if _err is None:
+    _tw = {t['county'] + t['township']: t for t in _res} if isinstance(_res, list) else _res
+    _d = _tw.get('宜蘭縣大同鄉') or {}
+    _srcs = {r.get('src') for r in (_d.get('slope_regions') or [])}
+    ok(_d.get('etr2') is not None and _srcs == {'cwa'},
+       f'⑤改以氣象署觀測自算 ETR2（大同鄉 {_d.get("etr2")}，來源 {_srcs}）')
+
 shutil.rmtree(tmp, ignore_errors=True)
 print(f"\n{'FAIL ' + str(len(fails)) if fails else 'ALL PASS'} / {n} 項")
 sys.exit(1 if fails else 0)

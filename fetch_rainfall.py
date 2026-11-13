@@ -2621,11 +2621,17 @@ def agg_obs(stations, alert_table, history, now_tpe, slope_warn=None, swcb_etr2=
                     _m = _re.search(r'\d+', av); av = int(_m.group()) if _m else 0
                 # ① 官方值優先（水保署 API）
                 ev = None; src = None
+                # ★★ 2026-11-13 修正：_c/_t 原本只在下面 if swcb_etr2: 裡面才定義，
+                #   但分支外的 _pick_sid(stn, _c, _t) 也要用。水保署 API 一旦拿不到值
+                #  （API 故障、或被判定停住），swcb_etr2 為空 → UnboundLocalError，
+                #   整輪主流程中止 —— 「退回以氣象署觀測自算」這條退路從來沒能真正執行。
+                #   11/13 04:04 起水保署 ETR2 停止更新，停住偵測 07:25 起生效，主排程因此連續失敗。
+                #   改為每個單元一開始就定義；test_swcb_guard.py ⑤ 實跑退路防止再發生。
+                _c, _t = td['county'], td['township']
                 if swcb_etr2:
                     # ★ 先以 (縣市, 鄉鎮, 站名) 精準對站：同名站由地理位置區分。
                     #   「武陵」在臺中和平(33.7mm)與臺東延平(162mm)各有一站，
                     #   僅用站名會取到錯的那個，使和平區 ETR2% 由 10% 暴增至 46%。
-                    _c, _t = td['county'], td['township']
                     for _nm in (stn, reg.get('station_norm')):
                         if _nm and (_c, _t, _nm) in SWCB_BY_LOC:
                             ev = SWCB_BY_LOC[(_c, _t, _nm)]; break
