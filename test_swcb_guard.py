@@ -159,6 +159,32 @@ if _err is None:
     ok(_d.get('etr2') is not None and _srcs == {'cwa'},
        f'⑤改以氣象署觀測自算 ETR2（大同鄉 {_d.get("etr2")}，來源 {_srcs}）')
 
+# ── ⑥ 潛勢溪流缺值不消失：官方缺 ETR2（或 API 停住）→ 用官方參考站的氣象署觀測自算 ──
+#   2026-11-26：南投信義 10 條、新竹峨眉 3 條因參考站暫無水保署值而整條從系統消失。
+_rows = copy.deepcopy([r for r in RAIN if r['DebrisNO'] in ('投縣DF194', '竹縣DF033', '宜縣DF135')])
+for r in _rows:
+    if r['DebrisNO'] != '宜縣DF135': r['STRT1'] = ''; r['STRT2'] = ''
+_sids = {str(r[k]) for r in _rows for k in ('STID1', 'STID2')}
+_h = {sid: {(_now - timedelta(days=i)).strftime('%Y-%m-%d'): 30.0 for i in range(10)} for sid in _sids}
+FR.cwa_get = lambda url, **k: R(_rows)
+FR._SWCB_STALE_CACHE.clear(); FR.SWCB_STATE_FILE = 'st_six.json'
+with contextlib.redirect_stdout(io.StringIO()):
+    _o = FR.fetch_debris_alerts(_h, _now)
+ok(set(_o) == {'投縣DF194', '竹縣DF033', '宜縣DF135'},
+   f'⑥參考站缺水保署值的潛勢溪流不再消失（{sorted(_o)}）')
+ok(_o['投縣DF194']['src'] == 'cwa' and _o['投縣DF194']['etr2'] > 0 and _o['投縣DF194']['alert'] == 300,
+   '⑥改以官方參考站的氣象署觀測自算，警戒值仍取官方（300）')
+ok(_o['宜縣DF135']['src'] == 'swcb', '⑥有官方值的照用官方值')
+with contextlib.redirect_stdout(io.StringIO()):
+    _o2 = FR.fetch_debris_alerts()
+ok('投縣DF194' not in _o2 and '宜縣DF135' in _o2, '⑥沒有氣象署觀測可算時才丟棄（不憑空補值）')
+_st = json.load(open('st_six.json')); _st['first_seen'] = '2026-01-01T00:00'; json.dump(_st, open('st_six.json', 'w'))
+FR._SWCB_STALE_CACHE.clear()
+with contextlib.redirect_stdout(io.StringIO()):
+    _o3 = FR.fetch_debris_alerts(_h, _now)
+ok(len(_o3) == 3 and all(v['src'] == 'cwa' for v in _o3.values()),
+   '⑥API 判定停住：潛勢溪流不再整批消失，全部改以氣象署觀測自算')
+
 shutil.rmtree(tmp, ignore_errors=True)
 print(f"\n{'FAIL ' + str(len(fails)) if fails else 'ALL PASS'} / {n} 項")
 sys.exit(1 if fails else 0)

@@ -69,6 +69,9 @@ body{font-family:sans-serif;background:#fff;display:flex;height:100vh;position:r
 .ros-chip{cursor:pointer;border:1px solid #2a4a6a;border-radius:3px;padding:1px 5px;
   color:#9ab8cc;font-size:10px;user-select:none}
 .ros-chip:hover{border-color:#7bd0f0}
+/* ★ 2026-11-26 地形顯示與 index.html 完全一致（使用者指定）：同一組濾鏡、同一套雙層暈渲 */
+.terrain-relief{filter:contrast(1.9) brightness(0.92) saturate(0.9)}
+.terrain-relief-top{filter:grayscale(1) contrast(2.2) brightness(1.15)}
 </style>
 </head>
 <body>
@@ -123,7 +126,15 @@ body{font-family:sans-serif;background:#fff;display:flex;height:100vh;position:r
 //     標籤會跑到外海。此處與主系統的作法一致。
 // ── 地形暈渲疊圖（與 index.html 同一張影像、同一套圖層順序）──
 const TERRAIN_RELIEF = {"bounds":[[21.89400185866543,120.04163169146315],[25.29801742002761,122.00964772678445]],"size":[1200,2254],"azimuth":315.0,"altitude":45.0,"stops":[[100,"#F8F9FA"],[500,"#E9ECEF"],[1500,"#CED4DA"],[3000,"#ADB5BD"],[null,"#6C757D"]]};
-let _terrainOn = false, _terrainOverlay = null;
+let _terrainOn = false, _terrainOverlay = null, _terrainTop = null;
+// ★ 2026-11-26（使用者指定）：地形呈現改成跟 index.html 一樣。
+//   index 的作法是「雙層暈渲」：
+//     下層 terrainPane(392)：暈渲全不透明＋加強對比濾鏡，夾在白底與鄉鎮色塊之間；
+//     上層 terrainTopPane(397)：同一張影像去飽和後以色彩增值（multiply）壓在色塊上，
+//       山脊河谷的明暗才明顯，色塊色相不會被洗淡。
+//   色塊與邊框也比照 index：地形開啟時色塊不透明（1.0）、未塗色處純白，邊框 #8e8e8e。
+//   先前這頁只有一層、透明度 0.9、色塊降到 0.64 讓地形透出來，所以畫面偏灰、立體感弱。
+const TERR_TOP_OP = 0.86;      // 與 index.html 相同
 function toggleTerrainLayer(){
   _terrainOn = !_terrainOn;
   const b = document.getElementById('btn-terrain');
@@ -132,18 +143,24 @@ function toggleTerrainLayer(){
     b.style.color = _terrainOn ? '#f0dcb0' : '#d8c090';
   }
   if(!_terrainOn){
-    if(_terrainOverlay){ try{ map.removeLayer(_terrainOverlay); }catch(e){}
-                         _terrainOverlay = null; }
+    if(_terrainOverlay){ try{ map.removeLayer(_terrainOverlay); }catch(e){} _terrainOverlay = null; }
+    if(_terrainTop){ try{ map.removeLayer(_terrainTop); }catch(e){} _terrainTop = null; }
   } else {
-    // 專屬 pane：夾在白色背景與鄉鎮色塊之間（同 index.html 的 392）
     if(!map.getPane('terrainPane')){
       map.createPane('terrainPane');
       map.getPane('terrainPane').style.zIndex = 392;
       map.getPane('terrainPane').style.pointerEvents = 'none';
     }
+    if(!map.getPane('terrainTopPane')){
+      map.createPane('terrainTopPane');
+      const tp2 = map.getPane('terrainTopPane');
+      tp2.style.zIndex = 397;          // townPane(395) 之上
+      tp2.style.pointerEvents = 'none';
+      tp2.style.mixBlendMode = 'multiply';
+    }
     if(!_terrainOverlay){
       _terrainOverlay = L.imageOverlay('terrain_relief.png', TERRAIN_RELIEF.bounds, {
-        opacity: 0.9, pane: 'terrainPane', interactive: false});
+        opacity: 1, pane: 'terrainPane', interactive: false, className: 'terrain-relief'});
       _terrainOverlay.on('error', ()=>{
         console.warn('terrain_relief.png 載入失敗（需與本檔放在同一目錄）');
         const b2 = document.getElementById('btn-terrain');
@@ -151,6 +168,11 @@ function toggleTerrainLayer(){
       });
     }
     _terrainOverlay.addTo(map);
+    if(!_terrainTop){
+      _terrainTop = L.imageOverlay('terrain_relief.png', TERRAIN_RELIEF.bounds, {
+        opacity: TERR_TOP_OP, pane: 'terrainTopPane', interactive: false,
+        className: 'terrain-relief-top'}).addTo(map);
+    }
   }
   // ★ 統一走 refreshStyles：它同時處理渲染模式與地形疊圖的樣式，
   //   各自設定會互相覆蓋（先前地形開啟後渲染層的樣式就被蓋掉）。
@@ -835,11 +857,12 @@ function refreshStyles(){
     //   ② 地形疊圖開啟時色塊稍淡、邊框加深，讓下層暈渲透出來
     //      且色相仍可辨識
     layer.setStyle({
-      fillColor:c||'#f8f8f8',
+      // ★ 地形開啟時比照 index.html：色塊不透明、未塗色處純白，起伏由上層陰影表現
+      fillColor:c || (_terrainOn ? '#FFFFFF' : '#f8f8f8'),
       // 渲染模式：著色鄉鎮改由內插色帶層顯示（金馬在範圍外，維持原色）
       fillOpacity:_hideFill ? 0.02
-                 : (c ? (_terrainOn ? 0.64 : 0.78) : (_terrainOn ? 0.0 : 0.03)),
-      color:_terrainOn ? '#3a3a3a' : '#5a5a5a',
+                 : (c ? (_terrainOn ? 1.0 : 0.78) : (_terrainOn ? 1.0 : 0.03)),
+      color:_terrainOn ? '#8e8e8e' : '#5a5a5a',
       weight:_hideFill ? 0.35 : 0.4,
       opacity:0.45,
       stroke:true,
@@ -1141,8 +1164,8 @@ function renderInterpolated(){
   const url=cv.toDataURL();
   const _tp=map.getPane('townPane');
   if(_tp) _tp.style.filter='';  // 防禦：確保無殘留模糊濾鏡（舊版曾設blur）
-  // ★ 地形疊圖開啟時降低不透明度，讓下層暈渲透出來（原本 1.0 全蓋住）
-  const _op = (typeof _terrainOn !== 'undefined' && _terrainOn) ? 0.72 : 1.0;
+  // ★ 2026-11-26 比照 index.html：不再靠半透明透出地形，起伏由上方色彩增值層表現
+  const _op = 1.0;
   if(_interpOverlay){ _interpOverlay.setUrl(url); _interpOverlay.setOpacity(_op); }
   else{
     _interpOverlay=L.imageOverlay(url, INTERP_BOUNDS,

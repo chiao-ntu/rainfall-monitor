@@ -14356,7 +14356,7 @@ function renderDebrisLayer(){
            (a.qpf24 != null ? `<br>未來24h QPF ${a.qpf24} mm → 預測 ${a.fc_etr2} mm` : '') +
            `<br>近1/2/3h ${a.r1h ?? '—'}/${a.r2h ?? '—'}/${a.r3h ?? '—'} mm` +
            (a.hourly_reason ? `<br><span style="color:#c8a">逐時：${a.hourly_reason}</span>` : '') +
-           (a.station ? `<br>參考站：${a.station}` : '')
+           (a.station ? `<br>參考站：${a.station}${a.src === 'cwa' ? '<span style="color:#8a9aaa">（水保署 ETR2 暫缺，以氣象署觀測自算）</span>' : ''}` : '')
          : '<br><span style="color:#889">無即時雨量資料</span>') +
       (info.TRes_Class ? `<br>保全戶：${info.TRes_Class}｜風險 ${info.Risk||'—'}` : '');
 
@@ -16798,8 +16798,8 @@ function _disasterHits(){
   // 量綱正確版：各門檻用對應統計量比對（舊版誤用視窗「累積」比 1h/3h 門檻造成假超標）
   //   1h  → 視窗內最大時雨量（maxh_當前模式）
   //   3h  → 視窗內最大3h估計（max(時雨量×2.2, 段值×0.6)，與警特報判準一致）
-  //   12h → 視窗內最大12h滑動（相鄰兩個6h段和）
-  // 過去視窗：僅有日累積觀測（無逐時分辨率）→ 只以日累積對照 12h 門檻並標注
+  //   6h  → 視窗內最大 6 小時（第三時窗依 2026-09 列表由 12h 改為 6h）
+  // 過去視窗：有逐時觀測時算滾動 1／3／6h；超出逐時範圍才以日累積對照 6h 門檻並標注 †
   const hits = [];
   const qpfField = MODEL_FIELD[forecastModel] || 'qpf_best';
   const maxhField = 'maxh_' + qpfField.replace('qpf_','');
@@ -16911,7 +16911,7 @@ function updateDisasterPanel(){
     byDistrict[d][h.z.county][h.z.township].push(h);
   });
 
-  let h = `<div style="font-size:9px;color:#c89878;margin-bottom:4px">依當前時段${srcTag}累積雨量，顯示達 1h/3h/12h 任一警戒值之站點</div>`;
+  let h = `<div style="font-size:9px;color:#c89878;margin-bottom:4px">依當前時段${srcTag}累積雨量，顯示達 1h/3h/6h 任一注意值之站點</div>`;
   DISTRICT_ORDER.forEach(district=>{
     const cMap = byDistrict[district];
     if(!cMap) return;
@@ -16926,7 +16926,7 @@ function updateDisasterPanel(){
         cMap[county][township].forEach(({z,rain,met})=>{
           const isNew = _prevDisasterSet && !_prevDisasterSet.has(z.id);
           const metStr = met.map(m=>`${m.win} ${m.val!=null?m.val+'mm':''}≥${m.thr}`).join('、') +
-            (met.some(m=>m.win==='12h†') ? '（†過去日以日累積對照，無逐時分辨率）' : '');
+            (met.some(m=>m.win==='6h†') ? '（†過去日以日累積對照，無逐時分辨率）' : '');
           const isOpen = _disasterDetailOpen === z.id;
           h += `<div style="padding:2px 4px 2px 14px;font-size:9px;border-bottom:1px dotted #2a1810
             ${isNew ? ';background:#3a1808;border-radius:3px;box-shadow:inset 0 0 0 1px #7a3a18' : ''}">

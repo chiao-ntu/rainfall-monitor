@@ -1017,8 +1017,18 @@ def _stn_key(n):
     return _re.sub(r'[A-Za-z]+$', '', (n or '').strip()).strip()
 
 
-def fetch_debris_alerts():
+def fetch_debris_alerts(history=None, now_tpe=None):
     """土石流警戒研判（依官方標準，以水保署 API 逐潛勢溪流計算）。
+
+    ★★ 2026-11-26：缺值不再整條消失（使用者原則：要找出正確的資料，不是留白）。
+      先前兩支參考站都沒有水保署 ETR2 時整條潛勢溪流被丟掉；11/26 實況有 13 條
+      （南投信義神木村、同富村 10 條，參考站新興橋／神木村／和社；新竹峨眉七星村 3 條，
+      參考站峨眉／南庄）因此從系統消失，看起來像官方除名，其實只是站值暫缺。
+      API 被判定停住時更是整批回 {}，1,700 多條全部消失。
+      改法與鄉鎮層級的既有規則一致：官方值優先；官方缺值（或判定停住）時，
+      用同一列官方指定的參考站站號（STID，多為氣象署測站）以氣象署觀測自算 ETR2，
+      標記 src='cwa'。警戒值、參考站仍取自官方同一列，不自行替換。
+      兩站都沒有官方值也沒有氣象署觀測才丟棄（並計數）。
       紅色警戒：實際有效累積雨量(ETR2) ≥ 警戒值 → 強制/勸告撤離
       黃色警戒：預測雨量(ETR2＋未來QPF) ≥ 警戒值 → 疏散避難勸告
     本函式先算「紅色」與「達成率」；黃色需未來QPF，於主流程併入。
@@ -1043,7 +1053,8 @@ def fetch_debris_alerts():
     if not data: return {}
     _stale, _msg = swcb_rain_is_stale(data)
     print(f"    {_msg}")
-    if _stale: return {}
+    # 停住時：警戒值、參考站等靜態欄位仍可用；只是 STRT（ETR2）不可信 → 全部改自算
+    ignore_api_val = bool(_stale)
 
     # ★★ 2026-10-05：這個函式是鄉鎮 ETR2% 的權威來源，但它比
     #   fetch_swcb_etr2() 多依賴兩個欄位，兩個都是單點失效：
@@ -1063,6 +1074,7 @@ def fetch_debris_alerts():
     out = {}
     n_red = 0
     drop = {'no_alert': 0, 'no_station_val': 0, 'no_loc': 0}
+    n_cwa = 0
     for row in data:
         if not isinstance(row, dict): continue
         av = num(pick(row, 'AlertValue', 'Alert', 'AlertVal', 'ALERTVALUE'))
@@ -1070,10 +1082,21 @@ def fetch_debris_alerts():
             drop['no_alert'] += 1; continue
         # 兩支參考站取較高的 ETR2（保守，不漏報）
         cands = []
-        for nk, vk in [('STName1', 'STRT1'), ('STName2', 'STRT2')]:
-            v = num(pick(row, vk))
-            if v is not None:
-                cands.append((v, (pick(row, nk) or '').strip()))
+        if not ignore_api_val:
+            for nk, vk in [('STName1', 'STRT1'), ('STName2', 'STRT2')]:
+                v = num(pick(row, vk))
+                if v is not None:
+                    cands.append((v, (pick(row, nk) or '').strip()))
+        src = 'swcb'
+        if not cands and history and now_tpe is not None:
+            for ik, nk in [('STID1', 'STName1'), ('STID2', 'STName2')]:
+                sid = str(pick(row, ik) or '').strip()
+                if sid and sid in history:
+                    v = calc_etr2(sid, history, now_tpe)
+                    if v is not None:
+                        cands.append((v, (pick(row, nk) or '').strip()))
+            if cands:
+                src = 'cwa'; n_cwa += 1
         if not cands:
             drop['no_station_val'] += 1; continue
         etr2, stn = max(cands)
@@ -1092,10 +1115,13 @@ def fetch_debris_alerts():
             'county': cty, 'town': twn,
             'vill': (pick(row, 'Vill', 'VillName') or '').strip(),
             'alert': av, 'etr2': round(etr2, 1), 'pct': pct,
-            'station': stn, 'red': red, 'no': no,
+            'station': stn, 'red': red, 'no': no, 'src': src,
         }
     print(f"    {len(out)} 條潛勢溪流｜達紅色警戒（ETR2≥警戒值）：{n_red} 條"
           f"（原始 {len(data)} 筆）")
+    if n_cwa:
+        print(f"    [退路] {n_cwa} 條水保署 ETR2 缺值{'（API 判定停住）' if ignore_api_val else ''}"
+              f" → 以官方參考站的氣象署觀測自算")
     _report_row_conflicts('土石流潛勢溪流')
     if any(drop.values()):
         print(f"    [丟棄] 無警戒值 {drop['no_alert']}、無站雨量 {drop['no_station_val']}、"
@@ -7181,7 +7207,7 @@ def main():
     #   但水保署同一支 API 的每一條潛勢溪流本身就帶 County/Town/AlertValue/STRT，
     #   fetch_debris_alerts() 已逐條算好 pct —— 那就是官方鄉鎮總表的構成方式本身。
     #   直接用它當鄉鎮 ETR2% 的權威來源，站名比對只保留給 CWA 自算退路。
-    debris_alerts = fetch_debris_alerts()
+    debris_alerts = fetch_debris_alerts(history, now_tpe)
     town_obs = agg_obs(stations,alert_table,history,now_tpe,slope_warn,swcb_etr2,
                        debris=debris_alerts)
 
